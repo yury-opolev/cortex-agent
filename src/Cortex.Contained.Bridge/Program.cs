@@ -25,7 +25,17 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.Extensions.Options;
 using Serilog;
 
-var builder = WebApplication.CreateBuilder(args);
+// Pin the content root to the app's install directory rather than the current
+// working directory. When the Launcher spawns the Bridge as a child process (MSIX
+// startup task), the inherited CWD is C:\Windows, which would make ASP.NET resolve
+// WebRootPath to C:\Windows\wwwroot — so every static file (the entire web UI) 404s
+// while API endpoints still work. AppContext.BaseDirectory is the published Bridge
+// folder, whose wwwroot is the real one. This also keeps dev (`dotnet run`) correct.
+var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+{
+    Args = args,
+    ContentRootPath = AppContext.BaseDirectory,
+});
 builder.Host.UseWindowsService();
 
 // --- Runtime Data Directory ---

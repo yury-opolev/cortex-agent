@@ -1,0 +1,10 @@
+# Shell scripts and Dockerfiles MUST keep LF in the working tree, even on Windows.
+# With core.autocrlf=true and no rule, a fresh Windows clone checks these out as
+# CRLF. A CRLF shell script COPYed into a Linux Docker image breaks its shebang:
+# the kernel tries to exec `/bin/sh\r` and fails with
+# `exec docker-entrypoint.sh: No such file or directory` (exit 127, crash-loop).
+# Scoped to these globs only, so other files keep their platform-native endings.
+*.sh         text eol=lf
+*.bash       text eol=lf
+Dockerfile   text eol=lf
+*.dockerfile text eol=lf

@@ -90,4 +90,4 @@ cortex.yml
 
 # Playwright MCP session artifacts (screenshots, snapshots, console logs)
 .playwright-mcp/
-build-all.log
+build-*.log
