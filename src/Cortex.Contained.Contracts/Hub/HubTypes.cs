@@ -461,6 +461,9 @@ public sealed record AgentConfigUpdate
 /// <summary>Memory configuration readable/writable at runtime.</summary>
 public sealed record MemoryConfig
 {
+    /// <summary>Whether the built-in memory subsystem is enabled. Default true.</summary>
+    public bool Enabled { get; init; } = true;
+
     /// <summary>
     /// Cosine-similarity threshold (0.0–1.0) for the duplicate guard in IngestAsync.
     /// Set to 0 to disable duplicate detection. Default: 0.90.

@@ -45,6 +45,10 @@ public sealed class BridgeConfig
 /// <summary>Memory service settings persisted on the Bridge host.</summary>
 public sealed class MemorySettingsConfig
 {
+    /// <summary>Master built-in-memory switch. When false, memory tools are hidden,
+    /// fact-extraction + compaction are skipped, and the embeddings sidecar is stopped.</summary>
+    public bool Enabled { get; set; } = true;
+
     /// <summary>
     /// Cosine-similarity threshold (0.0–1.0) for the duplicate guard in IngestAsync.
     /// Set to 0 to disable duplicate detection. Default: 0.90.
