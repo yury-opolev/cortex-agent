@@ -7,7 +7,7 @@ using Microsoft.Extensions.Options;
 namespace Cortex.Contained.Bridge.Auth;
 
 /// <summary>
-/// ASP.NET Core authentication handler that validates the <c>james_session</c> cookie
+/// ASP.NET Core authentication handler that validates the <c>cortex_session</c> cookie
 /// against in-memory sessions managed by <see cref="SessionManager"/>.
 /// </summary>
 public sealed class CortexSessionAuthHandler : AuthenticationHandler<AuthenticationSchemeOptions>

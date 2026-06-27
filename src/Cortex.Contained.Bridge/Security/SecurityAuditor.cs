@@ -171,6 +171,6 @@ public sealed record SecurityAuditOptions
     /// <summary>Whether to check file system permissions.</summary>
     public bool CheckFileSystem { get; init; }
 
-    /// <summary>The data directory to audit (e.g. C:\ProgramData\James).</summary>
+    /// <summary>The data directory to audit (e.g. C:\ProgramData\Cortex).</summary>
     public string? DataDirectory { get; init; }
 }

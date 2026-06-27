@@ -96,11 +96,11 @@ public class TenantConfigTests
     public void BridgeConfig_TenantsSection_CaseInsensitive()
     {
         var config = new BridgeConfig();
-        config.Tenants["James"] = new TenantConfig { Endpoint = "http://localhost:5100" };
+        config.Tenants["Cortex"] = new TenantConfig { Endpoint = "http://localhost:5100" };
 
-        Assert.True(config.Tenants.ContainsKey("james"));
-        Assert.True(config.Tenants.ContainsKey("JAMES"));
-        Assert.Equal("http://localhost:5100", config.Tenants["james"].Endpoint);
+        Assert.True(config.Tenants.ContainsKey("cortex"));
+        Assert.True(config.Tenants.ContainsKey("CORTEX"));
+        Assert.Equal("http://localhost:5100", config.Tenants["cortex"].Endpoint);
     }
 
     [Fact]

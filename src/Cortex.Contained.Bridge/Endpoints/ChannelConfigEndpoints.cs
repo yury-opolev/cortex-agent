@@ -97,7 +97,7 @@ internal static class ChannelConfigEndpoints
             return Results.Ok(new { username = (string?)null, userId = (string?)null, applicationId = (string?)null, searchHint = (string?)null });
         }).RequireAuthorization();
 
-        // Update a channel's enabled state and settings. Persists to james.yml.
+        // Update a channel's enabled state and settings. Persists to cortex.yml.
         // Since channels are registered at DI startup, a restart is required for changes to take effect.
         app.MapPost("/api/channels/{channelType}", (
             string channelType,

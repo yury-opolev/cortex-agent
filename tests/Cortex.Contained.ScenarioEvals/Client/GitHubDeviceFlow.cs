@@ -36,7 +36,7 @@ public static class GitHubDeviceFlow
         var effectiveClientId = string.IsNullOrWhiteSpace(clientId) ? DefaultClientId : clientId;
 
         using var httpClient = new HttpClient();
-        httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("james-scenario-evals/1.0.0");
+        httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("cortex-scenario-evals/1.0.0");
 
         // Step 1: Initiate device flow
         var deviceResponse = await InitiateDeviceFlowAsync(httpClient, effectiveClientId, ct);

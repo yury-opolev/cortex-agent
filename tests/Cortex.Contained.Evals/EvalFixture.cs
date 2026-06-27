@@ -323,7 +323,7 @@ public sealed class EvalMemoryEnv : IDisposable
 
     public EvalMemoryEnv(EvalFixture fixture)
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), "james-evals", Guid.NewGuid().ToString("N"));
+        _tempDir = Path.Combine(Path.GetTempPath(), "cortex-evals", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_tempDir);
 
         Options = new MemoryMcpOptions

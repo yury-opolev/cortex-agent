@@ -1,10 +1,10 @@
 #Requires -RunAsAdministrator
 <#
 .SYNOPSIS
-    Uninstalls the James Bridge Windows Service.
+    Uninstalls the Cortex Bridge Windows Service.
 
 .DESCRIPTION
-    Stops and removes the James Bridge Windows Service, and optionally
+    Stops and removes the Cortex Bridge Windows Service, and optionally
     deletes the installation directory with all published binaries and config.
 
 .PARAMETER ServiceName
@@ -12,7 +12,7 @@
 
 .PARAMETER InstallPath
     The installation directory to optionally delete.
-    Defaults to C:\James\Bridge.
+    Defaults to C:\Cortex\Bridge.
 
 .PARAMETER RemoveFiles
     If specified, deletes the installation directory after removing the service.
@@ -33,7 +33,7 @@
 [CmdletBinding()]
 param(
     [string]$ServiceName = "CortexBridge",
-    [string]$InstallPath = "C:\James\Bridge",
+    [string]$InstallPath = "C:\Cortex\Bridge",
     [switch]$RemoveFiles,
     [switch]$Force
 )

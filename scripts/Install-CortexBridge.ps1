@@ -1,7 +1,7 @@
 #Requires -RunAsAdministrator
 <#
 .SYNOPSIS
-    Installs James Bridge as a Windows Service.
+    Installs Cortex Bridge as a Windows Service.
 
 .DESCRIPTION
     Publishes the Cortex.Contained.Bridge project and registers it as a Windows Service
@@ -9,7 +9,7 @@
 
 .PARAMETER InstallPath
     Directory where the published binaries will be placed.
-    Defaults to C:\James\Bridge.
+    Defaults to C:\Cortex\Bridge.
 
 .PARAMETER ServiceName
     The Windows Service name. Defaults to "CortexBridge".
@@ -25,13 +25,13 @@
     .\Install-CortexBridge.ps1 -HubToken "my-secret-token"
 
 .EXAMPLE
-    .\Install-CortexBridge.ps1 -InstallPath "D:\Services\James" -ServiceName "CortexBridgeDev"
+    .\Install-CortexBridge.ps1 -InstallPath "D:\Services\Cortex" -ServiceName "CortexBridgeDev"
 #>
 
 [CmdletBinding()]
 param(
-    [string]$InstallPath = "C:\James\Bridge",
-    [string]$DataPath = "C:\ProgramData\James",
+    [string]$InstallPath = "C:\Cortex\Bridge",
+    [string]$DataPath = "C:\ProgramData\Cortex",
     [string]$ServiceName = "CortexBridge",
     [string]$DisplayName = "Cortex AI Bridge",
     [string]$HubToken

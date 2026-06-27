@@ -27,7 +27,7 @@ public sealed class AgentHostFactory : WebApplicationFactory<AgentHub>
         // scheduler, memory) must be set; otherwise CORTEX_STATE_PATH falls back
         // to "/app/state" which on Windows resolves to C:\app\state\ and gets
         // shared across all test runs, causing schema drift between versions.
-        var tempRoot = Path.Combine(Path.GetTempPath(), "james-integration-tests", Guid.NewGuid().ToString("N"));
+        var tempRoot = Path.Combine(Path.GetTempPath(), "cortex-integration-tests", Guid.NewGuid().ToString("N"));
         var tempDataPath = Path.Combine(tempRoot, "data");
         var tempStatePath = Path.Combine(tempRoot, "state");
         Directory.CreateDirectory(tempDataPath);

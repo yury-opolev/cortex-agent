@@ -17,7 +17,7 @@ public class SessionManagerTests
     public SessionManagerTests()
     {
         var store = new InMemorySecretStore();
-        var tempDir = Path.Combine(Path.GetTempPath(), "james-test-" + Guid.NewGuid().ToString("N"));
+        var tempDir = Path.Combine(Path.GetTempPath(), "cortex-test-" + Guid.NewGuid().ToString("N"));
         _secretManager = new SecretManager(store, NullLogger<SecretManager>.Instance, tempDir);
         _sessionManager = new SessionManager(_secretManager, NullLogger<SessionManager>.Instance);
     }
@@ -237,7 +237,7 @@ public class CortexSessionAuthHandlerTests
     public CortexSessionAuthHandlerTests()
     {
         var store = new InMemorySecretStore();
-        var tempDir = Path.Combine(Path.GetTempPath(), "james-test-" + Guid.NewGuid().ToString("N"));
+        var tempDir = Path.Combine(Path.GetTempPath(), "cortex-test-" + Guid.NewGuid().ToString("N"));
         var secretManager = new SecretManager(store, NullLogger<SecretManager>.Instance, tempDir);
         _sessionManager = new SessionManager(secretManager, NullLogger<SessionManager>.Instance);
     }

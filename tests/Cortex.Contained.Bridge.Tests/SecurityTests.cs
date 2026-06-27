@@ -47,7 +47,7 @@ public class SecretManagerTests
     public SecretManagerTests()
     {
         _store = new InMemorySecretStore();
-        _tempDir = Path.Combine(Path.GetTempPath(), "james-test-" + Guid.NewGuid().ToString("N"));
+        _tempDir = Path.Combine(Path.GetTempPath(), "cortex-test-" + Guid.NewGuid().ToString("N"));
         _manager = new SecretManager(_store, NullLogger<SecretManager>.Instance, _tempDir);
     }
 
@@ -668,7 +668,7 @@ public class SecurityAuditorTests
     public void Audit_DataDirectoryDoesNotExist_ReturnsInfoFinding()
     {
         var config = CreateValidConfig();
-        var nonExistentDir = Path.Combine(Path.GetTempPath(), "james-nonexistent-" + Guid.NewGuid().ToString("N"));
+        var nonExistentDir = Path.Combine(Path.GetTempPath(), "cortex-nonexistent-" + Guid.NewGuid().ToString("N"));
 
         var findings = _auditor.Audit(config, new SecurityAuditOptions
         {
@@ -683,7 +683,7 @@ public class SecurityAuditorTests
     [Fact]
     public void Audit_SecretsDirectoryExists_ReturnsInfoFinding()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), "james-audit-test-" + Guid.NewGuid().ToString("N"));
+        var tempDir = Path.Combine(Path.GetTempPath(), "cortex-audit-test-" + Guid.NewGuid().ToString("N"));
         var secretsDir = Path.Combine(tempDir, "secrets");
         Directory.CreateDirectory(secretsDir);
 

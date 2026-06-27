@@ -198,7 +198,7 @@ internal static class SettingsEndpoints
                 changed = true;
             }
 
-            // Persist to james.yml if anything changed
+            // Persist to cortex.yml if anything changed
             if (changed)
             {
                 BridgeSettingsWriter.PersistSettingsToYaml(config, cortexConfigPath);

@@ -26,7 +26,7 @@ internal static class BridgeSettingsWriter
         return string.Concat(key.AsSpan(0, 4), "****", key.AsSpan(key.Length - 3));
     }
 
-    /// <summary>Persist current BridgeConfig settings to james.yml.</summary>
+    /// <summary>Persist current BridgeConfig settings to cortex.yml.</summary>
     public static void PersistSettingsToYaml(BridgeConfig config, string yamlPath)
     {
         var sb = new System.Text.StringBuilder();

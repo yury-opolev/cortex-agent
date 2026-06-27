@@ -14,7 +14,7 @@ public class SchedulerServiceTests : IDisposable
 
     public SchedulerServiceTests()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), "james-scheduler-tests-" + Guid.NewGuid().ToString("N")[..8]);
+        _tempDir = Path.Combine(Path.GetTempPath(), "cortex-scheduler-tests-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(_tempDir);
         _messageChannel = new AgentMessageChannel();
         _timeProvider = new FakeTimeProvider(new DateTimeOffset(2026, 3, 11, 12, 0, 0, TimeSpan.Zero));

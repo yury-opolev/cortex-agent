@@ -85,7 +85,7 @@ nunit-*.xml
 *.ggml
 models/
 
-# Legacy: cortex.yml used to be written to content root before being moved to %LOCALAPPDATA%\James
+# Legacy: cortex.yml used to be written to content root before being moved to %LOCALAPPDATA%\Cortex
 cortex.yml
 
 # Playwright MCP session artifacts (screenshots, snapshots, console logs)

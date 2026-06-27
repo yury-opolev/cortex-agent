@@ -1,6 +1,6 @@
 <Project>
   <!--
-    Download speech models during build if not already present in %LOCALAPPDATA%\James\models.
+    Download speech models during build if not already present in %LOCALAPPDATA%\Cortex\models.
     This ensures models are available at runtime without manual downloads.
     Set SkipSpeechModelDownload=true to skip (e.g. in CI where models aren't needed).
   -->
@@ -8,10 +8,9 @@
   <PropertyGroup>
     <!--
       Must match the runtime default used by KokoroTextToSpeech.GetDefaultModelPath
-      and friends (%LOCALAPPDATA%\Cortex\models\). The path was previously \James\
-      from an older project name and downloads landed somewhere the app never
-      looked at; the `Condition` on each DownloadFile means existing installs
-      with files already in \Cortex\ still skip the download.
+      and friends (%LOCALAPPDATA%\Cortex\models\). The `Condition` on each
+      DownloadFile means existing installs with files already present skip
+      the download.
     -->
     <SpeechModelsDir>$([System.Environment]::GetFolderPath(SpecialFolder.LocalApplicationData))\Cortex\models\</SpeechModelsDir>
   </PropertyGroup>

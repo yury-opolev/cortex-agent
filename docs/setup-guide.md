@@ -186,10 +186,10 @@ container whose image or config changed.
 
 ```powershell
 # Install
-.\scripts\Install-JamesBridge.ps1
+.\scripts\Install-CortexBridge.ps1
 
 # Uninstall
-.\scripts\Uninstall-JamesBridge.ps1
+.\scripts\Uninstall-CortexBridge.ps1
 ```
 
 ## Troubleshooting

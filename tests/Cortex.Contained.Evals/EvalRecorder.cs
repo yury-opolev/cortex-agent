@@ -80,7 +80,7 @@ public sealed class EvalRecorder
 
     /// <summary>
     /// Locates <c>tests/Cortex.Contained.Evals/eval-results/</c> by walking up from <see cref="AppContext.BaseDirectory"/>
-    /// until we find the solution root (contains <c>james-contained.sln</c>).
+    /// until we find the solution root (contains <c>cortex-contained.sln</c>).
     /// </summary>
     private static string FindEvalResultsDir()
     {
@@ -89,7 +89,7 @@ public sealed class EvalRecorder
         // Walk up from bin/Debug/net10.0-windows/ to find the repo root
         while (dir is not null)
         {
-            if (File.Exists(Path.Combine(dir.FullName, "james-contained.sln")))
+            if (File.Exists(Path.Combine(dir.FullName, "cortex-contained.sln")))
             {
                 return Path.Combine(dir.FullName, "tests", "Cortex.Contained.Evals", "eval-results");
             }

@@ -23,7 +23,7 @@ public class SchedulerToolTests : IDisposable
 
     public SchedulerToolTests()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), "james-scheduler-tool-tests-" + Guid.NewGuid().ToString("N")[..8]);
+        _tempDir = Path.Combine(Path.GetTempPath(), "cortex-scheduler-tool-tests-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(_tempDir);
         var messageChannel = new AgentMessageChannel();
         _scheduler = new SchedulerService(

@@ -185,7 +185,7 @@ internal static class MemoryEndpoints
                 }
             }
 
-            // Return host-persisted values (from james.yml)
+            // Return host-persisted values (from cortex.yml)
             var mem = config.Memory;
             return Results.Ok(new MemoryConfig
             {
@@ -230,7 +230,7 @@ internal static class MemoryEndpoints
             {
                 await tenantRouter.GetDefaultClient()!.UpdateMemoryConfigAsync(memoryConfig, CancellationToken.None).ConfigureAwait(false);
 
-                // Persist to james.yml so settings survive restarts
+                // Persist to cortex.yml so settings survive restarts
                 config.Memory.DuplicateThreshold = memoryConfig.DuplicateThreshold;
                 config.Memory.CompactionSimilarityThreshold = memoryConfig.CompactionSimilarityThreshold;
                 config.Memory.CompactionEnabled = memoryConfig.CompactionEnabled;

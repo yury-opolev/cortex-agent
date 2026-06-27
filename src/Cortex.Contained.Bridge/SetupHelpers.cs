@@ -130,7 +130,7 @@ public static class SetupHelpers
 
     /// <summary>
     /// Default GitHub OAuth App client ID for the Copilot device flow.
-    /// Users can register their own OAuth App and override this in james.yml.
+    /// Users can register their own OAuth App and override this in cortex.yml.
     /// </summary>
     internal const string DefaultCopilotOAuthClientId = "Ov23li8tweQw6odWQebz"; // shared default GitHub OAuth App — register your own and override in config
 
@@ -240,7 +240,7 @@ public static class SetupHelpers
 
     // ── YAML Generation ────────────────────────────────────────────
 
-    /// <summary>Generate a james.yml config file from a setup request.</summary>
+    /// <summary>Generate a cortex.yml config file from a setup request.</summary>
     public static string GenerateYaml(SetupRequest request)
     {
         var sb = new StringBuilder();
@@ -303,7 +303,7 @@ public static class SetupHelpers
     }
 
     /// <summary>
-    /// Generate a james.yml config file from a fully-resolved list of provider configs
+    /// Generate a cortex.yml config file from a fully-resolved list of provider configs
     /// and an explicit fallback order. Used by the multi-provider save endpoint.
     /// </summary>
     public static string GenerateYaml(
@@ -716,7 +716,7 @@ public sealed class SetupRequest
 
     /// <summary>
     /// OAuth refresh token (only for Anthropic OAuth flow).
-    /// Stored encrypted in DPAPI; never written to james.yml.
+    /// Stored encrypted in DPAPI; never written to cortex.yml.
     /// </summary>
     [JsonPropertyName("refreshToken")]
     public string? RefreshToken { get; set; }

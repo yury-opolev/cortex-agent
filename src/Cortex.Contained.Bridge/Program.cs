@@ -40,7 +40,7 @@ var cortexConfigPath = Path.Combine(cortexDataDir, "cortex.yml");
 // TTS is always in composite/auto mode — no single-engine selection needed.
 
 // --- YAML Configuration Source ---
-// Add james.yml (optional, reload-on-change) from the data directory so env vars / CLI args override
+// Add cortex.yml (optional, reload-on-change) from the data directory so env vars / CLI args override
 builder.Configuration.AddYamlFile(cortexConfigPath, optional: true, reloadOnChange: true);
 
 // --- Structured Logging (Serilog) ---
