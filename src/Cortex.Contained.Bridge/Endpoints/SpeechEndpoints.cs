@@ -391,13 +391,23 @@ internal static class SpeechEndpoints
                 return Results.Json(new { error = "body is required" }, statusCode: 400);
             }
 
-            SpeechToggleApply.Apply(config.Speech, body.SpeechEnabled, body.SttEnabled, body.TtsEnabled);
+            SpeechToggleApply.Apply(config.Speech, body.SpeechEnabled, body.SttEnabled, body.TtsEnabled, body.VoiceIdEnabled);
             BridgeSettingsWriter.PersistSettingsToYaml(config, cortexConfigPath);
 
             var stt = sp.GetRequiredService<Cortex.Contained.Bridge.Speech.SttSidecarLifecycle>();
             var tts = sp.GetRequiredService<Cortex.Contained.Bridge.Speech.DanishTtsLifecycle>();
+            var voiceId = sp.GetRequiredService<Cortex.Contained.Bridge.Speech.VoiceIdSidecarLifecycle>();
             _ = Task.Run(() => stt.ReconcileAsync(SpeechToggles.EffectiveStt(config.Speech), CancellationToken.None));
             _ = Task.Run(() => tts.ReconcileAsync(SpeechToggles.EffectiveTts(config.Speech), CancellationToken.None));
+
+            // Voice-id is reconciled inline (short timeout) so we can tell the UI whether a
+            // live flip succeeded or a restart is needed.
+            var voiceIdEffective = SpeechToggles.EffectiveVoiceId(config.Speech);
+            var voiceIdConfirmed = await voiceId.TryReconcileNowAsync(voiceIdEffective, CancellationToken.None);
+
+            // Push the voice-id flag to every connected agent so enrollment tools hide live.
+            var pusher = sp.GetRequiredService<Cortex.Contained.Bridge.Hosting.CredentialsPusher>();
+            await pusher.PushSpeakerIdConfigAsync(CancellationToken.None);
 
             return Results.Ok(new
             {
@@ -405,6 +415,8 @@ internal static class SpeechEndpoints
                 speechEnabled = config.Speech.Enabled,
                 sttEnabled = SpeechToggles.EffectiveStt(config.Speech),
                 ttsEnabled = SpeechToggles.EffectiveTts(config.Speech),
+                voiceIdEnabled = voiceIdEffective,
+                restartRequired = !voiceIdConfirmed,
             });
         }).RequireAuthorization();
 

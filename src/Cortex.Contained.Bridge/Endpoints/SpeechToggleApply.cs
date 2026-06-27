@@ -5,7 +5,7 @@ namespace Cortex.Contained.Bridge.Endpoints;
 /// <summary>Applies optional speech-toggle updates to a <see cref="SpeechConfig"/>. Null = leave as-is.</summary>
 public static class SpeechToggleApply
 {
-    public static void Apply(SpeechConfig speech, bool? speechEnabled, bool? sttEnabled, bool? ttsEnabled)
+    public static void Apply(SpeechConfig speech, bool? speechEnabled, bool? sttEnabled, bool? ttsEnabled, bool? voiceIdEnabled)
     {
         if (speechEnabled.HasValue)
         {
@@ -20,6 +20,11 @@ public static class SpeechToggleApply
         if (ttsEnabled.HasValue)
         {
             speech.Tts.Enabled = ttsEnabled.Value;
+        }
+
+        if (voiceIdEnabled.HasValue)
+        {
+            speech.VoiceId.Enabled = voiceIdEnabled.Value;
         }
     }
 }

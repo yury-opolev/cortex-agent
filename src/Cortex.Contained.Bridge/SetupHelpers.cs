@@ -1126,6 +1126,9 @@ public sealed class SpeechTogglesRequest
 
     [JsonPropertyName("ttsEnabled")]
     public bool? TtsEnabled { get; set; }
+
+    [JsonPropertyName("voiceIdEnabled")]
+    public bool? VoiceIdEnabled { get; set; }
 }
 
 /// <summary>Built-in-memory enable-toggle request from the settings page.</summary>

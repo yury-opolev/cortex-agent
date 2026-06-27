@@ -9,7 +9,7 @@ public sealed class SpeechToggleApplyTests
     public void Apply_SetsOnlyProvidedFlags()
     {
         var speech = new SpeechConfig(); // all true by default
-        SpeechToggleApply.Apply(speech, speechEnabled: false, sttEnabled: null, ttsEnabled: null);
+        SpeechToggleApply.Apply(speech, speechEnabled: false, sttEnabled: null, ttsEnabled: null, voiceIdEnabled: null);
 
         Assert.False(speech.Enabled);
         Assert.True(speech.Stt.Enabled);   // unchanged (null)
@@ -20,7 +20,7 @@ public sealed class SpeechToggleApplyTests
     public void Apply_UpdatesSubFlags()
     {
         var speech = new SpeechConfig();
-        SpeechToggleApply.Apply(speech, speechEnabled: null, sttEnabled: false, ttsEnabled: true);
+        SpeechToggleApply.Apply(speech, speechEnabled: null, sttEnabled: false, ttsEnabled: true, voiceIdEnabled: null);
 
         Assert.True(speech.Enabled);
         Assert.False(speech.Stt.Enabled);
