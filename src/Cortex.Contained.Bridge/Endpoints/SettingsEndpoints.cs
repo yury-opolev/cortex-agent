@@ -49,8 +49,9 @@ internal static class SettingsEndpoints
                 channels = config.Channels,
                 speech = new
                 {
-                    stt = new { config.Speech.Stt.Engine, config.Speech.Stt.WhisperModelPath, config.Speech.Stt.Language },
-                    tts = new { config.Speech.Tts.Engine, config.Speech.Tts.KokoroVoice, config.Speech.Tts.KokoroModelPath, config.Speech.Tts.WindowsVoiceName, config.Speech.Tts.WindowsSpeechRate },
+                    enabled = config.Speech.Enabled,
+                    stt = new { config.Speech.Stt.Enabled, config.Speech.Stt.Engine, config.Speech.Stt.WhisperModelPath, config.Speech.Stt.Language },
+                    tts = new { config.Speech.Tts.Enabled, config.Speech.Tts.Engine, config.Speech.Tts.KokoroVoice, config.Speech.Tts.KokoroModelPath, config.Speech.Tts.WindowsVoiceName, config.Speech.Tts.WindowsSpeechRate },
                 },
                 maxSubagentRounds = config.MaxSubagentRounds,
             });

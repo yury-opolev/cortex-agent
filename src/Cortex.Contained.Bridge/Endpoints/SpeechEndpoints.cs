@@ -382,6 +382,32 @@ internal static class SpeechEndpoints
             return Results.Ok(new { success = true });
         }).RequireAuthorization();
 
+        // Master + STT + TTS enable toggles. Persists to YAML and converges both sidecars live.
+        app.MapPost("/api/speech/toggles", async (HttpContext ctx, BridgeConfig config, IServiceProvider sp) =>
+        {
+            var body = await ctx.Request.ReadFromJsonAsync<SpeechTogglesRequest>();
+            if (body is null)
+            {
+                return Results.Json(new { error = "body is required" }, statusCode: 400);
+            }
+
+            SpeechToggleApply.Apply(config.Speech, body.SpeechEnabled, body.SttEnabled, body.TtsEnabled);
+            BridgeSettingsWriter.PersistSettingsToYaml(config, cortexConfigPath);
+
+            var stt = sp.GetRequiredService<Cortex.Contained.Bridge.Speech.SttSidecarLifecycle>();
+            var tts = sp.GetRequiredService<Cortex.Contained.Bridge.Speech.DanishTtsLifecycle>();
+            _ = Task.Run(() => stt.ReconcileAsync(SpeechToggles.EffectiveStt(config.Speech), CancellationToken.None));
+            _ = Task.Run(() => tts.ReconcileAsync(SpeechToggles.EffectiveTts(config.Speech), CancellationToken.None));
+
+            return Results.Ok(new
+            {
+                success = true,
+                speechEnabled = config.Speech.Enabled,
+                sttEnabled = SpeechToggles.EffectiveStt(config.Speech),
+                ttsEnabled = SpeechToggles.EffectiveTts(config.Speech),
+            });
+        }).RequireAuthorization();
+
         // Download a TTS provider's model files (provider-based — each provider knows its own download)
         app.MapPost("/api/speech/download-provider/{providerName}", async (string providerName, IServiceProvider sp, IHttpClientFactory httpFactory) =>
         {

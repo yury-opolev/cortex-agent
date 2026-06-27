@@ -1115,6 +1115,19 @@ public sealed class TtsEngineChangeRequest
     public string? Engine { get; set; }
 }
 
+/// <summary>Master/STT/TTS enable-toggle request from the settings page.</summary>
+public sealed class SpeechTogglesRequest
+{
+    [JsonPropertyName("speechEnabled")]
+    public bool? SpeechEnabled { get; set; }
+
+    [JsonPropertyName("sttEnabled")]
+    public bool? SttEnabled { get; set; }
+
+    [JsonPropertyName("ttsEnabled")]
+    public bool? TtsEnabled { get; set; }
+}
+
 /// <summary>Language voice configuration save request.</summary>
 public sealed class LanguageConfigRequest
 {
