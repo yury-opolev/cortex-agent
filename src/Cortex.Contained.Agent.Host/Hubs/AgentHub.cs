@@ -542,7 +542,8 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
             config.ImageDescribeOnStrip,
             config.CompactionPreserveRecentTurns,
             config.OllamaEndpoint,
-            config.OllamaApiKey);
+            config.OllamaApiKey,
+            memoryEnabled: config.Enabled);
 
         return Task.CompletedTask;
     }

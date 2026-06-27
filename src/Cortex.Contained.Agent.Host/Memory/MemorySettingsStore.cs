@@ -31,6 +31,7 @@ public sealed class MemorySettingsStore : IDisposable
     private int? compactionPreserveRecentTurns;
     private string? ollamaEndpoint;
     private string? ollamaApiKey;
+    private bool? memoryEnabled;
     private CancellationTokenSource changeTokenSource = new();
 
     /// <summary>Override for <see cref="MemoryMcpOptions.DuplicateThreshold"/>.</summary>
@@ -96,6 +97,18 @@ public sealed class MemorySettingsStore : IDisposable
         get { lock (this.syncLock) return this.ollamaApiKey; }
     }
 
+    /// <summary>Master built-in-memory switch. Null = never pushed (treated as enabled).</summary>
+    public bool? MemoryEnabled
+    {
+        get { lock (this.syncLock) return this.memoryEnabled; }
+    }
+
+    /// <summary>Effective enablement: true unless explicitly pushed false.</summary>
+    public bool IsMemoryEnabled
+    {
+        get { lock (this.syncLock) return this.memoryEnabled ?? true; }
+    }
+
     /// <summary>
     /// Update all settings and signal that options should be reloaded.
     /// </summary>
@@ -109,7 +122,8 @@ public sealed class MemorySettingsStore : IDisposable
         bool? imageDescribeOnStrip = null,
         int? compactionPreserveRecentTurns = null,
         string? ollamaEndpoint = null,
-        string? ollamaApiKey = null)
+        string? ollamaApiKey = null,
+        bool? memoryEnabled = null)
     {
         CancellationTokenSource oldCts;
         lock (this.syncLock)
@@ -124,6 +138,7 @@ public sealed class MemorySettingsStore : IDisposable
             this.compactionPreserveRecentTurns = compactionPreserveRecentTurns;
             this.ollamaEndpoint = ollamaEndpoint;
             this.ollamaApiKey = ollamaApiKey;
+            this.memoryEnabled = memoryEnabled;
 
             // Swap the CTS so the old change token fires and a new one is ready
             oldCts = this.changeTokenSource;
