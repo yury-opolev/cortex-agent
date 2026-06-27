@@ -335,6 +335,8 @@ builder.Services.AddSingleton<Cortex.Contained.Speech.SpeakerId.FbankExtractor>(
 // broke any host without a voice-id backend (caught by the integration tests).
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Tools.IConversationToolGate,
     Cortex.Contained.Agent.Host.Tools.VoiceOnlyToolGate>();
+builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Tools.IConversationToolGate,
+    Cortex.Contained.Agent.Host.Tools.MemoryDisabledToolGate>();
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Tools.IChannelConversationResolver,
     Cortex.Contained.Agent.Host.Tools.ChannelConversationResolver>();
 
