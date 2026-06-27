@@ -331,6 +331,40 @@ public sealed partial class CredentialsPusher : ICredentialReplisher
     }
 
     /// <summary>
+    /// Pushes the effective voice-id (speaker-id) enable flag to <b>every</b> connected
+    /// tenant's agent so the voice-enrollment tool family is hidden live when voice-id is
+    /// disabled. Mirrors <see cref="PushMemorySettingsAsync"/>: per-tenant failures are
+    /// isolated so one tenant's error doesn't block the others.
+    /// </summary>
+    public async Task PushSpeakerIdConfigAsync(CancellationToken cancellationToken)
+    {
+        var config = new SpeakerIdConfig
+        {
+            Enabled = SpeechToggles.EffectiveVoiceId(this.config.Speech),
+        };
+
+        foreach (var tenantId in this.tenantRouter.GetConnectedTenantIds())
+        {
+            var client = this.tenantRouter.GetClient(tenantId);
+            if (client is not { IsConnected: true })
+            {
+                continue;
+            }
+
+            try
+            {
+                await client.UpdateSpeakerIdConfigAsync(config, cancellationToken).ConfigureAwait(false);
+            }
+#pragma warning disable CA1031 // Individual tenant failures should not block others
+            catch (Exception ex)
+            {
+                this.LogSpeakerIdPushToTenantFailed(tenantId, ex.Message);
+            }
+#pragma warning restore CA1031
+        }
+    }
+
+    /// <summary>
     /// Builds the <see cref="MemoryConfig"/> payload from current config, resolver, and secrets.
     /// Extracted for testability — does not perform any I/O or SignalR calls.
     /// </summary>
@@ -458,6 +492,9 @@ public sealed partial class CredentialsPusher : ICredentialReplisher
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to push memory settings to tenant '{TenantId}': {Error}")]
     private partial void LogMemorySettingsPushToTenantFailed(string tenantId, string error);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to push voice-id config to tenant '{TenantId}': {Error}")]
+    private partial void LogSpeakerIdPushToTenantFailed(string tenantId, string error);
 }
 
 /// <summary>

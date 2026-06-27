@@ -337,6 +337,9 @@ builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Tools.IConversationToo
     Cortex.Contained.Agent.Host.Tools.VoiceOnlyToolGate>();
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Tools.IConversationToolGate,
     Cortex.Contained.Agent.Host.Tools.MemoryDisabledToolGate>();
+builder.Services.AddSingleton<Cortex.Contained.Agent.Host.SpeakerId.SpeakerIdSettingsStore>();
+builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Tools.IConversationToolGate,
+    Cortex.Contained.Agent.Host.Tools.VoiceIdDisabledToolGate>();
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Tools.IChannelConversationResolver,
     Cortex.Contained.Agent.Host.Tools.ChannelConversationResolver>();
 

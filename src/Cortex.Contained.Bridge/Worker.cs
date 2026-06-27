@@ -82,6 +82,9 @@ public sealed partial class Worker : BackgroundService
         // 7. Push persisted memory settings so the agent uses host-side values
         await this.credentialsPusher.PushMemorySettingsAsync(stoppingToken).ConfigureAwait(false);
 
+        // 7b. Push the effective voice-id flag so enrollment tools hide when disabled
+        await this.credentialsPusher.PushSpeakerIdConfigAsync(stoppingToken).ConfigureAwait(false);
+
         // 8. Connect all channels
         await this.channelManager.ConnectAllAsync(stoppingToken).ConfigureAwait(false);
 

@@ -458,6 +458,13 @@ public sealed record AgentConfigUpdate
     public int? MaxSubagentRounds { get; init; }
 }
 
+/// <summary>Pushed speaker-identification (voice-id) settings.</summary>
+public sealed record SpeakerIdConfig
+{
+    /// <summary>Whether voice-id is enabled. Default true.</summary>
+    public bool Enabled { get; init; } = true;
+}
+
 /// <summary>Memory configuration readable/writable at runtime.</summary>
 public sealed record MemoryConfig
 {

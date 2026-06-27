@@ -94,6 +94,7 @@ public sealed partial class TenantConnectionBootstrapper
                 var channelIds = this.ActiveChannelIdsProvider?.Invoke() ?? Array.Empty<string>();
                 await this.credentialsPusher.PushActiveChannelsAsync(channelIds, CancellationToken.None).ConfigureAwait(false);
                 await this.credentialsPusher.PushMemorySettingsAsync(CancellationToken.None).ConfigureAwait(false);
+                await this.credentialsPusher.PushSpeakerIdConfigAsync(CancellationToken.None).ConfigureAwait(false);
             }
             catch (Exception ex)
             {

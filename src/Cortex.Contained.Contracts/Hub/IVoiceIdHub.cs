@@ -36,4 +36,10 @@ public interface IVoiceIdHub
     /// the tenant to Enrolled. No raw audio crosses the hub, only the vector.
     /// </summary>
     Task SubmitVoiceprint(string tenantId, float[] embedding, string modelId);
+
+    /// <summary>
+    /// Bridge pushes the effective voice-id subsystem enable flag so the agent can hide
+    /// the voice-enrollment tool family live when voice-id is disabled. Default-on until pushed.
+    /// </summary>
+    Task UpdateSpeakerIdConfig(SpeakerIdConfig config);
 }

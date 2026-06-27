@@ -94,6 +94,13 @@ public sealed partial class AgentHub
         await this.enrollmentOrchestrator.WriteVoiceprintAsync(tenantId, embedding, modelId, this.Context.ConnectionAborted).ConfigureAwait(false);
     }
 
+    /// <inheritdoc />
+    public Task UpdateSpeakerIdConfig(SpeakerIdConfig config)
+    {
+        this.speakerIdSettingsStore.SetEnabled(config.Enabled);
+        return Task.CompletedTask;
+    }
+
     private static VoiceprintRecord NewRecord(string tenantId, bool featureEnabled = true, float? thresholdOverride = null)
         => new(
             TenantId: tenantId,

@@ -586,6 +586,15 @@ public sealed partial class HubClient : IAsyncDisposable
             cancellationToken).ConfigureAwait(false);
     }
 
+    public async Task UpdateSpeakerIdConfigAsync(SpeakerIdConfig config, CancellationToken cancellationToken)
+    {
+        EnsureConnected();
+        await this.connection!.InvokeAsync(
+            nameof(IAgentHub.UpdateSpeakerIdConfig),
+            config,
+            cancellationToken).ConfigureAwait(false);
+    }
+
     public async Task<CompactConversationResult> CompactConversationAsync(string channelId, CancellationToken cancellationToken)
     {
         EnsureConnected();
