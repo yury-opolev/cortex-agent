@@ -522,7 +522,9 @@ if (voiceConfig is { Enabled: true } && sttRegistered && ttsRegistered)
         // configured the verifier is null and the gate is inert.
         var voiceOptionsWithVerifier = voiceOptions with
         {
-            SpeakerVerifier = sp.GetService<Cortex.Contained.Speech.SpeakerId.ISpeakerVerifier>(),
+            SpeakerVerifier = Cortex.Contained.Bridge.Speech.VoiceIdVerifierSelector.Select(
+                sp.GetService<Cortex.Contained.Speech.SpeakerId.ISpeakerVerifier>(),
+                sp.GetRequiredService<BridgeConfig>().Speech),
             VerificationMetrics = sp.GetRequiredService<Cortex.Contained.Speech.SpeakerId.VerificationMetrics>(),
         };
 
