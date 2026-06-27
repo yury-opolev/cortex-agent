@@ -1,0 +1,58 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Properties inherited from Directory.Build.props -->
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Cortex.Contained.Speech.Tests" />
+    <InternalsVisibleTo Include="Cortex.Contained.Channels.Voice" />
+    <InternalsVisibleTo Include="Cortex.Contained.Channels.Voice.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Concentus" />
+    <PackageReference Include="Concentus.Oggfile" />
+    <PackageReference Include="Microsoft.Extensions.Http" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Options" />
+    <PackageReference Include="SearchPioneer.Lingua" />
+    <PackageReference Include="TorchSharp-cpu" />
+  </ItemGroup>
+
+  <!--
+    ONNX Runtime + Kokoro execution provider, split by platform.
+    Windows (Bridge): DirectML so Kokoro TTS runs on the GPU. DirectML is
+    CUDA-independent, so it coexists with Whisper.net's CUDA runtime without a
+    CUDA-version clash. The DirectML package also supplies the managed
+    Microsoft.ML.OnnxRuntime API used by the SpeakerId ONNX embedder.
+    Non-Windows (Agent.Host Linux container): CPU runtime as before — DirectML
+    is Windows-only.
+  -->
+  <ItemGroup Condition="$([MSBuild]::IsOSPlatform('Windows'))">
+    <PackageReference Include="KokoroSharp" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime.DirectML" />
+  </ItemGroup>
+  <ItemGroup Condition="!$([MSBuild]::IsOSPlatform('Windows'))">
+    <PackageReference Include="KokoroSharp.CPU" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" />
+  </ItemGroup>
+
+  <!--
+    Windows-only dependencies. silero-sharp provides the Silero TTS engine and
+    System.Speech provides the built-in Windows SAPI engine. Both ship through
+    Bridge (Windows-only) and the corresponding source files below are
+    excluded from non-Windows builds so the Agent.Host container build on
+    Linux doesn't fail on missing references.
+  -->
+  <ItemGroup Condition="$([MSBuild]::IsOSPlatform('Windows'))">
+    <ProjectReference Include="..\..\lib\silero-sharp\src\SileroSharp\SileroSharp.csproj" />
+    <PackageReference Include="System.Speech" />
+  </ItemGroup>
+
+  <ItemGroup Condition="!$([MSBuild]::IsOSPlatform('Windows'))">
+    <Compile Remove="Tts\SileroTextToSpeech.cs" />
+    <Compile Remove="Tts\SileroTtsProvider.cs" />
+    <Compile Remove="Tts\WindowsTextToSpeech.cs" />
+    <Compile Remove="Tts\ModelProvisioner.cs" />
+  </ItemGroup>
+
+</Project>

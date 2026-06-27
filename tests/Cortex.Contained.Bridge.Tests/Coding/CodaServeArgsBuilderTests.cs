@@ -1,0 +1,73 @@
+using Cortex.Contained.Bridge.Coding;
+using Cortex.Contained.Contracts.Coding;
+
+namespace Cortex.Contained.Bridge.Tests.Coding;
+
+public sealed class CodaServeArgsBuilderTests
+{
+    [Fact]
+    public void Build_fresh_prompt_session_has_cwd_sessionId_and_default_mode()
+    {
+        var args = CodaServeArgsBuilder.Build("sess-1", "C:\\repos\\cortex", CodingPolicy.Prompt, isResume: false);
+
+        Assert.Contains("serve", args);
+        Assert.Equal("C:\\repos\\cortex", ArgAfter(args, "--cwd"));
+        Assert.Equal("sess-1", ArgAfter(args, "--session-id"));
+        Assert.Equal("default", ArgAfter(args, "--permission-mode"));
+    }
+
+    [Fact]
+    public void Build_yolo_safe_maps_to_yolo_safe_mode()
+    {
+        var args = CodaServeArgsBuilder.Build("s", "C:\\x", CodingPolicy.YoloSafe, isResume: false);
+        Assert.Equal("yolo-safe", ArgAfter(args, "--permission-mode"));
+    }
+
+    [Fact]
+    public void Build_yolo_maps_to_yolo_mode()
+    {
+        var args = CodaServeArgsBuilder.Build("s", "C:\\x", CodingPolicy.Yolo, isResume: false);
+        Assert.Equal("yolo", ArgAfter(args, "--permission-mode"));
+    }
+
+    [Fact]
+    public void Build_resume_passes_same_session_id()
+    {
+        var args = CodaServeArgsBuilder.Build("keep-me", "C:\\x", CodingPolicy.Prompt, isResume: true);
+        Assert.Equal("keep-me", ArgAfter(args, "--session-id"));
+    }
+
+    [Fact]
+    public void Build_with_goal_and_session_memory_adds_flags()
+    {
+        var args = CodaServeArgsBuilder.Build("s", "C:\\x", CodingPolicy.YoloSafe, isResume: false,
+            goal: "all green", sessionMemory: true);
+        Assert.Equal("all green", ArgAfter(args, "--goal"));
+        Assert.Contains("--session-memory", args);
+    }
+
+    [Fact]
+    public void Build_always_forces_telemetry_and_never_pins_model()
+    {
+        var args = CodaServeArgsBuilder.Build("s", "C:\\x", CodingPolicy.Prompt, isResume: false, provider: "github-copilot");
+
+        Assert.Contains("--telemetry", args);
+        Assert.DoesNotContain("--model", args);
+        Assert.Equal("github-copilot", ArgAfter(args, "--provider"));
+    }
+
+    [Fact]
+    public void Build_without_provider_omits_provider_flag_but_keeps_telemetry()
+    {
+        var args = CodaServeArgsBuilder.Build("s", "C:\\x", CodingPolicy.Prompt, isResume: false);
+
+        Assert.DoesNotContain("--provider", args);
+        Assert.Contains("--telemetry", args);
+    }
+
+    private static string ArgAfter(List<string> args, string flag)
+    {
+        var i = args.IndexOf(flag);
+        return i >= 0 && i + 1 < args.Count ? args[i + 1] : "";
+    }
+}

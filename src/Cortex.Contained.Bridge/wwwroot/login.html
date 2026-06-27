@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Cortex — Login</title>
+    <link rel="stylesheet" href="lib/bootstrap/bootstrap.min.css" />
+    <link rel="stylesheet" href="lib/bootstrap-icons/bootstrap-icons.min.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <style>
+        body {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            overflow: auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="setup-container">
+        <div class="setup-header">
+            <h1>Cortex</h1>
+            <p id="login-subtitle">Sign in to continue</p>
+        </div>
+
+        <!-- Set Password (first-time) -->
+        <div id="panel-setup" class="step-panel">
+            <h2>Set a password</h2>
+            <p class="step-desc">Create a password to protect your Cortex web interface. This password is stored securely using Windows DPAPI.</p>
+            <form id="setup-form" autocomplete="off">
+                <div class="form-group">
+                    <label for="new-password">Password</label>
+                    <input type="password" id="new-password" placeholder="Choose a strong password" required minlength="8" autocomplete="new-password" />
+                    <div class="hint">Minimum 8 characters.</div>
+                </div>
+                <div class="form-group">
+                    <label for="confirm-password">Confirm password</label>
+                    <input type="password" id="confirm-password" placeholder="Re-enter your password" required minlength="8" autocomplete="new-password" />
+                </div>
+                <div id="setup-status" class="status-msg"></div>
+                <div class="step-actions">
+                    <span class="spacer"></span>
+                    <button type="submit" class="btn btn-primary">Set Password</button>
+                </div>
+            </form>
+        </div>
+
+        <!-- Login -->
+        <div id="panel-login" class="step-panel">
+            <form id="login-form" autocomplete="off">
+                <div class="form-group">
+                    <label for="login-password">Password</label>
+                    <input type="password" id="login-password" placeholder="Enter your password" required autocomplete="current-password" />
+                </div>
+                <div id="login-status" class="status-msg"></div>
+                <div class="step-actions">
+                    <span class="spacer"></span>
+                    <button type="submit" class="btn btn-primary">Sign in</button>
+                </div>
+            </form>
+        </div>
+
+        <!-- Loading state -->
+        <div id="panel-loading" class="step-panel active" style="text-align:center; padding:32px 0;">
+            <div class="spinner-border spinner-border-sm" role="status"></div>
+        </div>
+    </div>
+
+    <script src="js/login.js"></script>
+</body>
+</html>

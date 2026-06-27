@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Properties inherited from Directory.Build.props (.Tests suffix not used — manual naming) -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <!-- Scenario evals are long-running and require a live Bridge + Agent.
+         They should NOT run in normal CI — only on demand. -->
+    <TestRunnerVisibility>manual</TestRunnerVisibility>
+    <!-- Eval test methods use underscores -->
+    <!-- CA1707: underscores in test names, CA1711: 'Collection' suffix (xUnit convention),
+         CA1848: LoggerMessage delegates overkill for eval code, CA1305: locale-invariant string formatting -->
+    <NoWarn>$(NoWarn);CA1707;CA1711;CA1848;CA1305;CA1861;CA1873;CA1869;CA1859</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" />
+    <PackageReference Include="Microsoft.Data.Sqlite" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Cortex.Contained.Agent.Host\Cortex.Contained.Agent.Host.csproj" />
+    <ProjectReference Include="..\..\src\Cortex.Contained.Contracts\Cortex.Contained.Contracts.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+    <Using Include="Xunit.Abstractions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="appsettings.scenarioevals.json" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Scenarios\*.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

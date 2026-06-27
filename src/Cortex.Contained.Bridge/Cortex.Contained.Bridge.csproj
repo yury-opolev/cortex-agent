@@ -1,0 +1,66 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <!-- Bridge runs as a Windows Service; target windows for DPAPI support -->
+    <TargetFramework>net10.0-windows</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Cortex.Contained.Bridge.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Cortex.Contained.Common\Cortex.Contained.Common.csproj" />
+    <ProjectReference Include="..\Cortex.Contained.Contracts\Cortex.Contained.Contracts.csproj" />
+    <ProjectReference Include="..\Cortex.Contained.Channels.WebChat\Cortex.Contained.Channels.WebChat.csproj" />
+
+    <ProjectReference Include="..\Cortex.Contained.Channels.Voice\Cortex.Contained.Channels.Voice.csproj" />
+    <ProjectReference Include="..\Cortex.Contained.Channels.Discord\Cortex.Contained.Channels.Discord.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" />
+    <PackageReference Include="Microsoft.Data.Sqlite.Core" />
+    <PackageReference Include="SQLite3MC.PCLRaw.bundle" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" />
+    <PackageReference Include="Microsoft.Extensions.Http.Resilience" />
+    <PackageReference Include="Serilog.Extensions.Hosting" />
+    <PackageReference Include="Serilog.Settings.Configuration" />
+    <PackageReference Include="Serilog.Sinks.Console" />
+    <PackageReference Include="Serilog.Sinks.File" />
+    <PackageReference Include="BCrypt.Net-Next" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" />
+    <PackageReference Include="StreamJsonRpc" />
+    <PackageReference Include="Nerdbank.Streams" />
+    <PackageReference Include="Nerdbank.MessagePack" />
+    <!-- Direct ref to force the patched MessagePack (2.5.301) over the vulnerable
+         2.5.198 that StreamJsonRpc pulls transitively. Fixes GHSA-hv8m-jj95-wg3x. -->
+    <PackageReference Include="MessagePack" />
+  </ItemGroup>
+
+  <Import Project="SpeechModels.targets" />
+
+  <!--
+    KokoroSharp needs espeak/ and voices/ content at runtime. The NuGet package copies them
+    to $(OutputPath) on Build (works for dev), but the MSIX install directory is read-restricted.
+    This target copies content to %LOCALAPPDATA%\Cortex\models\kokoro\ where it's always accessible.
+    KokoroTtsProvider configures KokoroSharp to use this path.
+  -->
+  <ItemGroup>
+    <PackageReference Include="KokoroSharp" GeneratePathProperty="true" />
+  </ItemGroup>
+
+  <Target Name="CopyKokoroContentToAppData" AfterTargets="Build" Condition="'$(PkgKokoroSharp)' != ''">
+    <PropertyGroup>
+      <_KokoroAppDataDir>$([System.Environment]::GetFolderPath(SpecialFolder.LocalApplicationData))\Cortex\models\kokoro\</_KokoroAppDataDir>
+    </PropertyGroup>
+    <ItemGroup>
+      <_KokoroContent Include="$(PkgKokoroSharp)\content\**\*" />
+    </ItemGroup>
+    <MakeDir Directories="$(_KokoroAppDataDir)" />
+    <Copy SourceFiles="@(_KokoroContent)"
+          DestinationFiles="@(_KokoroContent->'$(_KokoroAppDataDir)%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
+
+</Project>

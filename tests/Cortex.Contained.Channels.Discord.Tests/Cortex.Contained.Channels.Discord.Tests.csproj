@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Properties inherited from Directory.Build.props -->
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" />
+    <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="NSubstitute" />
+    <!-- Whisper.net (+ CPU native runtime) for the turn-detection replay harness.
+         The production Speech library no longer ships Whisper (STT moved to the
+         whisper-stt sidecar), so this test owns its Whisper dependency directly. -->
+    <PackageReference Include="Whisper.net" />
+    <PackageReference Include="Whisper.net.Runtime" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Cortex.Contained.Channels.Discord\Cortex.Contained.Channels.Discord.csproj" />
+    <ProjectReference Include="..\..\src\Cortex.Contained.Speech\Cortex.Contained.Speech.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="Fixtures/turn-detection/**/*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+    <Using Include="NSubstitute" />
+  </ItemGroup>
+
+</Project>

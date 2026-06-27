@@ -1,0 +1,92 @@
+{
+  "id": "mateo-ruiz",
+  "persona": {
+    "name": "Mateo Ruiz",
+    "background": "Data engineer at MercadoLibre in Buenos Aires. Works on the recommendation pipeline team. Has been coding since university.",
+    "personality": "Methodical, slightly nerdy, loves talking about data systems. Uses some Spanish expressions occasionally. Friendly but direct."
+  },
+  "facts": {
+    "career": [
+      "Works as a data engineer at MercadoLibre",
+      "On the recommendation pipeline team",
+      "Uses Apache Spark and Airflow daily",
+      "Been at MercadoLibre for 3 years"
+    ],
+    "personal": [
+      "Lives in Buenos Aires, Palermo neighborhood",
+      "From Córdoba originally",
+      "Has a partner named Lucía who is a veterinarian",
+      "They have two dogs: a corgi named Byte and a mutt named Pixel"
+    ],
+    "hobbies": [
+      "Dances Argentine tango",
+      "Takes classes at a milonga called La Viruta",
+      "Practices tango every Wednesday and Sunday evening",
+      "Also enjoys brewing mate and has a collection of bombillas"
+    ]
+  },
+  "phases": [
+    {
+      "name": "day-1-career",
+      "segments": [
+        {
+          "type": "conversation",
+          "topic": "Talk about your job and the tech stack you work with",
+          "exchanges": 3,
+          "hints": ["mention MercadoLibre", "mention Spark and Airflow"]
+        },
+        {
+          "type": "conversation",
+          "topic": "Share about your personal life — partner, pets, neighborhood",
+          "exchanges": 3,
+          "hints": ["mention Lucía", "mention Byte and Pixel", "mention Palermo"]
+        }
+      ],
+      "after": ["compact", "compact-memories", "reset-session"]
+    },
+    {
+      "name": "day-2-tango",
+      "segments": [
+        {
+          "type": "conversation",
+          "topic": "Talk about your tango hobby and practice schedule",
+          "exchanges": 3,
+          "hints": ["mention La Viruta", "mention Wednesday and Sunday practice"],
+          "scoring": {
+            "memory_facts": ["MercadoLibre", "Buenos Aires", "Lucía", "Byte", "Pixel"],
+            "label": "day2-memory-check"
+          }
+        }
+      ],
+      "after": ["compact", "compact-memories", "reset-session"]
+    },
+    {
+      "name": "day-3-recall",
+      "segments": [
+        {
+          "type": "conversation",
+          "topic": "Greet the assistant and check if it remembers your job and personal details",
+          "exchanges": 3,
+          "scoring": {
+            "recall_facts": ["MercadoLibre", "Buenos Aires"],
+            "soft_facts": ["data engineer", "Spark", "Lucía", "corgi"],
+            "no_hallucination": true,
+            "naturalness": true,
+            "label": "day3-career-recall"
+          }
+        },
+        {
+          "type": "conversation",
+          "topic": "Ask the assistant about your hobbies to test recall",
+          "exchanges": 2,
+          "scoring": {
+            "recall_facts": ["tango", "La Viruta"],
+            "soft_facts": ["Wednesday", "Sunday", "mate"],
+            "label": "day3-hobby-recall"
+          }
+        }
+      ],
+      "after": ["compact"]
+    }
+  ]
+}

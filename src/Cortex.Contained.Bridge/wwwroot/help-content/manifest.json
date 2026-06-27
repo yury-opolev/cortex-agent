@@ -1,0 +1,46 @@
+{
+  "title": "Cortex Help",
+  "sections": [
+    {
+      "id": "getting-started",
+      "title": "Getting Started",
+      "articles": [
+        { "id": "overview", "title": "What is Cortex?", "file": "getting-started/overview.md" },
+        { "id": "first-run", "title": "First-Run Setup", "file": "getting-started/first-run.md" },
+        { "id": "talking", "title": "Talking to Cortex", "file": "getting-started/talking.md" }
+      ]
+    },
+    {
+      "id": "settings",
+      "title": "Settings Reference",
+      "articles": [
+        { "id": "settings-overview", "title": "Settings Overview", "file": "settings/overview.md" },
+        { "id": "llm-providers", "title": "LLM Providers & Routing", "file": "settings/llm-providers.md" },
+        { "id": "speech-settings", "title": "Speech (STT / TTS)", "file": "settings/speech.md" },
+        { "id": "memory-settings", "title": "Memory Settings", "file": "settings/memory-settings.md" }
+      ]
+    },
+    {
+      "id": "channels",
+      "title": "Channels",
+      "articles": [
+        { "id": "channels-overview", "title": "How Channels Work", "file": "channels/overview.md" },
+        { "id": "webchat", "title": "Web Chat", "file": "channels/webchat.md" },
+        { "id": "discord", "title": "Discord", "file": "channels/discord.md" },
+        { "id": "voice-host", "title": "Local Voice (Host Mic/Speakers)", "file": "channels/voice-host.md" },
+        { "id": "voice-identification", "title": "Voice Identification", "file": "channels/voice-identification.md" }
+      ]
+    },
+    {
+      "id": "concepts",
+      "title": "How It Works",
+      "articles": [
+        { "id": "memory-system", "title": "The Memory System", "file": "concepts/memory-system.md" },
+        { "id": "conversation-compaction", "title": "Conversation Compaction", "file": "concepts/conversation-compaction.md" },
+        { "id": "cross-channel-transfer", "title": "Cross-Channel Transfer", "file": "concepts/cross-channel-transfer.md" },
+        { "id": "scheduler", "title": "Scheduler & Reminders", "file": "concepts/scheduler.md" },
+        { "id": "personality-self-notes", "title": "Personality & Self-Notes", "file": "concepts/personality-self-notes.md" }
+      ]
+    }
+  ]
+}

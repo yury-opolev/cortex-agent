@@ -1,0 +1,75 @@
+<Project>
+  <!--
+    Download speech models during build if not already present in %LOCALAPPDATA%\James\models.
+    This ensures models are available at runtime without manual downloads.
+    Set SkipSpeechModelDownload=true to skip (e.g. in CI where models aren't needed).
+  -->
+
+  <PropertyGroup>
+    <!--
+      Must match the runtime default used by KokoroTextToSpeech.GetDefaultModelPath
+      and friends (%LOCALAPPDATA%\Cortex\models\). The path was previously \James\
+      from an older project name and downloads landed somewhere the app never
+      looked at; the `Condition` on each DownloadFile means existing installs
+      with files already in \Cortex\ still skip the download.
+    -->
+    <SpeechModelsDir>$([System.Environment]::GetFolderPath(SpecialFolder.LocalApplicationData))\Cortex\models\</SpeechModelsDir>
+  </PropertyGroup>
+
+  <!-- ── Download models if missing ────────────────────────── -->
+  <Target Name="DownloadSpeechModels" BeforeTargets="Build" Condition="'$(SkipSpeechModelDownload)' != 'true'">
+
+    <MakeDir Directories="$(SpeechModelsDir)" />
+
+    <!-- Whisper STT -->
+    <DownloadFile SourceUrl="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin"
+                  DestinationFolder="$(SpeechModelsDir)"
+                  DestinationFileName="ggml-base.bin"
+                  Condition="!Exists('$(SpeechModelsDir)ggml-base.bin')" />
+
+    <!-- Whisper STT — large-v3-turbo q8_0 (~874 MB), the runtime default. -->
+    <DownloadFile SourceUrl="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q8_0.bin"
+                  DestinationFolder="$(SpeechModelsDir)"
+                  DestinationFileName="ggml-large-v3-turbo-q8_0.bin"
+                  Condition="!Exists('$(SpeechModelsDir)ggml-large-v3-turbo-q8_0.bin')" />
+
+    <!-- Kokoro TTS -->
+    <DownloadFile SourceUrl="https://github.com/taylorchu/kokoro-onnx/releases/download/v0.2.0/kokoro.onnx"
+                  DestinationFolder="$(SpeechModelsDir)"
+                  DestinationFileName="kokoro-v1.0.onnx"
+                  Condition="!Exists('$(SpeechModelsDir)kokoro-v1.0.onnx')" />
+
+    <!-- LiveKit turn detector (multilingual, v0.4.1-intl): INT8 ONNX model + Qwen2.5 tokenizer + per-language thresholds. -->
+    <MakeDir Directories="$(SpeechModelsDir)turn-detector" />
+    <DownloadFile SourceUrl="https://huggingface.co/livekit/turn-detector/resolve/v0.4.1-intl/onnx/model_q8.onnx"
+                  DestinationFolder="$(SpeechModelsDir)turn-detector"
+                  DestinationFileName="model_q8.onnx"
+                  Condition="!Exists('$(SpeechModelsDir)turn-detector\model_q8.onnx')" />
+    <DownloadFile SourceUrl="https://huggingface.co/livekit/turn-detector/resolve/v0.4.1-intl/tokenizer.json"
+                  DestinationFolder="$(SpeechModelsDir)turn-detector"
+                  DestinationFileName="tokenizer.json"
+                  Condition="!Exists('$(SpeechModelsDir)turn-detector\tokenizer.json')" />
+    <DownloadFile SourceUrl="https://huggingface.co/livekit/turn-detector/resolve/v0.4.1-intl/languages.json"
+                  DestinationFolder="$(SpeechModelsDir)turn-detector"
+                  DestinationFileName="languages.json"
+                  Condition="!Exists('$(SpeechModelsDir)turn-detector\languages.json')" />
+
+    <!-- 3D-Speaker ERes2NetV2 — speaker identification (~70 MB).
+         Opt-in: set EnableSpeakerIdModelDownload=true and provide
+         SpeakerIdModelUrl pointing to your ERes2NetV2 ONNX export
+         (ModelScope URLs require authentication; mirror to your own
+         storage and pass the URL via the property). Without the file
+         the verification gate stays inert (pass-through), matching the
+         Phase 1 fail-open contract.
+
+         Default install path:
+           %LOCALAPPDATA%\Cortex\models\speaker-id\eres2netv2-base.onnx
+         Override with SpeakerId:ModelPath in appsettings.json. -->
+    <MakeDir Directories="$(SpeechModelsDir)speaker-id"
+             Condition="'$(EnableSpeakerIdModelDownload)' == 'true'" />
+    <DownloadFile SourceUrl="$(SpeakerIdModelUrl)"
+                  DestinationFolder="$(SpeechModelsDir)speaker-id"
+                  DestinationFileName="eres2netv2-base.onnx"
+                  Condition="'$(EnableSpeakerIdModelDownload)' == 'true' AND '$(SpeakerIdModelUrl)' != '' AND !Exists('$(SpeechModelsDir)speaker-id\eres2netv2-base.onnx')" />
+  </Target>
+</Project>

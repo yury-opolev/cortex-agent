@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Properties inherited from Directory.Build.props (.Tests suffix → IsTestProject, IsPackable=false) -->
+
+  <PropertyGroup>
+    <!-- Evals are long-running and require external services (LLM API, Ollama).
+         They should NOT run in normal CI — only on demand. -->
+    <TestRunnerVisibility>manual</TestRunnerVisibility>
+    <!-- Windows-only: reads DPAPI-encrypted eval secrets from eval-secrets.json -->
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <!-- Eval test methods use underscores (e.g. Basic_fact_extraction) -->
+    <NoWarn>$(NoWarn);CA1707</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="NSubstitute" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Cortex.Contained.Agent.Host\Cortex.Contained.Agent.Host.csproj" />
+    <ProjectReference Include="..\..\src\Cortex.Contained.Common\Cortex.Contained.Common.csproj" />
+    <ProjectReference Include="..\..\src\Cortex.Contained.Contracts\Cortex.Contained.Contracts.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+    <Using Include="Xunit.Abstractions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="appsettings.eval.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

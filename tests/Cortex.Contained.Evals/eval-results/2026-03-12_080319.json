@@ -1,0 +1,441 @@
+{
+  "timestamp": "2026-03-12T08:03:19.7319395+00:00",
+  "model": "claude-sonnet-4-6",
+  "api": "anthropic-messages",
+  "embeddingModel": "qwen3-embedding:0.6b",
+  "summary": {
+    "totalScenarios": 6,
+    "passed": 6,
+    "failed": 0,
+    "totalLlmCalls": 12,
+    "totalDurationMs": 62071.418099999995
+  },
+  "scenarios": [
+    {
+      "name": "Does not create duplicate memories from repeated mentions",
+      "passed": true,
+      "durationMs": 12319.3969,
+      "memoryCount": 0,
+      "finalMemories": [],
+      "llmCalls": [
+        {
+          "requestId": "1095bf0488c54e3b8c3124138f844862",
+          "conversationId": "memory-extraction",
+          "model": "claude-sonnet-4-6",
+          "temperature": 0,
+          "maxTokens": 2048,
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a memory extraction system. Your job is to identify discrete, important facts\nfrom a conversation between a user and an AI assistant that are worth remembering long-term.\n\nExtract facts that fall into these categories:\n- User preferences, habits, or personal information\n- Decisions made or conclusions reached\n- Important context about projects, tasks, or goals\n- Relationships, names, locations, or other entities\n- Technical preferences or configuration choices\n\nDo NOT extract:\n- Trivial pleasantries or greetings\n- Transient information (e.g. \u0022it\u0027s raining today\u0022)\n- Information the assistant generated that isn\u0027t grounded in the user\u0027s input\n- Duplicate variations of the same fact\n\nFor each fact, provide:\n- \u0022content\u0022: The fact as a clear, self-contained statement\n- \u0022title\u0022: A short 3-5 word label\n- \u0022tags\u0022: 1-3 categorization tags\n\nRespond with a JSON array. If there is nothing worth remembering, respond with an empty array [].\nExample:\n[\n  {\u0022content\u0022: \u0022User\u0027s name is Yury and he lives in Copenhagen\u0022, \u0022title\u0022: \u0022User identity\u0022, \u0022tags\u0022: [\u0022personal\u0022, \u0022location\u0022]},\n  {\u0022content\u0022: \u0022User prefers Claude over GPT for coding tasks\u0022, \u0022title\u0022: \u0022LLM preference\u0022, \u0022tags\u0022: [\u0022preferences\u0022, \u0022technical\u0022]}\n]\n\nRespond ONLY with the JSON array, no other text."
+            },
+            {
+              "role": "user",
+              "content": "Conversation to analyze:\r\n\r\nUser: I live in Copenhagen, Denmark.\r\n\r\nAssistant: Copenhagen is beautiful! How long have you lived there?\r\n\r\n"
+            }
+          ],
+          "responseContent": "[\n  {\u0022content\u0022: \u0022User lives in Copenhagen, Denmark\u0022, \u0022title\u0022: \u0022User location\u0022, \u0022tags\u0022: [\u0022personal\u0022, \u0022location\u0022]}\n]",
+          "responseSuccess": true,
+          "finishReason": "end_turn",
+          "usage": {
+            "promptTokens": 355,
+            "completionTokens": 36,
+            "totalTokens": 391
+          },
+          "durationMs": 2423.5542,
+          "timestamp": "2026-03-12T08:02:22.4163273+00:00"
+        },
+        {
+          "requestId": "eefbafca9b39423fae8a941a1d9040e2",
+          "conversationId": "memory-extraction",
+          "model": "claude-sonnet-4-6",
+          "temperature": 0,
+          "maxTokens": 2048,
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a memory extraction system. Your job is to identify discrete, important facts\nfrom a conversation between a user and an AI assistant that are worth remembering long-term.\n\nExtract facts that fall into these categories:\n- User preferences, habits, or personal information\n- Decisions made or conclusions reached\n- Important context about projects, tasks, or goals\n- Relationships, names, locations, or other entities\n- Technical preferences or configuration choices\n\nDo NOT extract:\n- Trivial pleasantries or greetings\n- Transient information (e.g. \u0022it\u0027s raining today\u0022)\n- Information the assistant generated that isn\u0027t grounded in the user\u0027s input\n- Duplicate variations of the same fact\n\nFor each fact, provide:\n- \u0022content\u0022: The fact as a clear, self-contained statement\n- \u0022title\u0022: A short 3-5 word label\n- \u0022tags\u0022: 1-3 categorization tags\n\nRespond with a JSON array. If there is nothing worth remembering, respond with an empty array [].\nExample:\n[\n  {\u0022content\u0022: \u0022User\u0027s name is Yury and he lives in Copenhagen\u0022, \u0022title\u0022: \u0022User identity\u0022, \u0022tags\u0022: [\u0022personal\u0022, \u0022location\u0022]},\n  {\u0022content\u0022: \u0022User prefers Claude over GPT for coding tasks\u0022, \u0022title\u0022: \u0022LLM preference\u0022, \u0022tags\u0022: [\u0022preferences\u0022, \u0022technical\u0022]}\n]\n\nRespond ONLY with the JSON array, no other text."
+            },
+            {
+              "role": "user",
+              "content": "Conversation to analyze:\r\n\r\nUser: I\u0027ve been in Copenhagen for about 3 years now. I live near N\u00F8rrebro.\r\n\r\nAssistant: N\u00F8rrebro is a great neighborhood! Very lively area.\r\n\r\n"
+            }
+          ],
+          "responseContent": "[\n  {\u0022content\u0022: \u0022User has been living in Copenhagen for about 3 years, near N\u00F8rrebro\u0022, \u0022title\u0022: \u0022Lives in Copenhagen\u0022, \u0022tags\u0022: [\u0022personal\u0022, \u0022location\u0022]}\n]",
+          "responseSuccess": true,
+          "finishReason": "end_turn",
+          "usage": {
+            "promptTokens": 374,
+            "completionTokens": 50,
+            "totalTokens": 424
+          },
+          "durationMs": 5131.3768,
+          "timestamp": "2026-03-12T08:02:29.801453+00:00"
+        }
+      ],
+      "extractionInputs": [
+        {
+          "userMessage": "I live in Copenhagen, Denmark.",
+          "assistantResponse": "Copenhagen is beautiful! How long have you lived there?"
+        },
+        {
+          "userMessage": "I\u0027ve been in Copenhagen for about 3 years now. I live near N\u00F8rrebro.",
+          "assistantResponse": "N\u00F8rrebro is a great neighborhood! Very lively area."
+        }
+      ]
+    },
+    {
+      "name": "Contradicting information updates or replaces old memory",
+      "passed": true,
+      "durationMs": 10756.1221,
+      "memoryCount": 1,
+      "finalMemories": [
+        "User previously preferred Python as their primary programming language but has switched to Rust due to performance requirements."
+      ],
+      "llmCalls": [
+        {
+          "requestId": "7d1e3673bfb546f99952564ac65bdaa4",
+          "conversationId": "memory-extraction",
+          "model": "claude-sonnet-4-6",
+          "temperature": 0,
+          "maxTokens": 2048,
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a memory extraction system. Your job is to identify discrete, important facts\nfrom a conversation between a user and an AI assistant that are worth remembering long-term.\n\nExtract facts that fall into these categories:\n- User preferences, habits, or personal information\n- Decisions made or conclusions reached\n- Important context about projects, tasks, or goals\n- Relationships, names, locations, or other entities\n- Technical preferences or configuration choices\n\nDo NOT extract:\n- Trivial pleasantries or greetings\n- Transient information (e.g. \u0022it\u0027s raining today\u0022)\n- Information the assistant generated that isn\u0027t grounded in the user\u0027s input\n- Duplicate variations of the same fact\n\nFor each fact, provide:\n- \u0022content\u0022: The fact as a clear, self-contained statement\n- \u0022title\u0022: A short 3-5 word label\n- \u0022tags\u0022: 1-3 categorization tags\n\nRespond with a JSON array. If there is nothing worth remembering, respond with an empty array [].\nExample:\n[\n  {\u0022content\u0022: \u0022User\u0027s name is Yury and he lives in Copenhagen\u0022, \u0022title\u0022: \u0022User identity\u0022, \u0022tags\u0022: [\u0022personal\u0022, \u0022location\u0022]},\n  {\u0022content\u0022: \u0022User prefers Claude over GPT for coding tasks\u0022, \u0022title\u0022: \u0022LLM preference\u0022, \u0022tags\u0022: [\u0022preferences\u0022, \u0022technical\u0022]}\n]\n\nRespond ONLY with the JSON array, no other text."
+            },
+            {
+              "role": "user",
+              "content": "Conversation to analyze:\r\n\r\nUser: I\u0027ve completely switched to Rust now. Python was too slow for what I\u0027m building.\r\n\r\nAssistant: Rust is excellent for performance-critical applications! The learning curve is steep but worth it.\r\n\r\n"
+            }
+          ],
+          "responseContent": "[\n  {\u0022content\u0022: \u0022User has switched from Python to Rust due to performance requirements\u0022, \u0022title\u0022: \u0022Language switch to Rust\u0022, \u0022tags\u0022: [\u0022preferences\u0022, \u0022technical\u0022]}\n]",
+          "responseSuccess": true,
+          "finishReason": "end_turn",
+          "usage": {
+            "promptTokens": 375,
+            "completionTokens": 45,
+            "totalTokens": 420
+          },
+          "durationMs": 1644.1565,
+          "timestamp": "2026-03-12T08:02:33.7052984+00:00"
+        },
+        {
+          "requestId": "28c225f03f324532b61b0a8de76cb1ca",
+          "conversationId": "memory-consolidation",
+          "model": "claude-sonnet-4-6",
+          "temperature": 0,
+          "maxTokens": 1024,
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a memory consolidation system. You are given a NEW FACT extracted from a conversation\nand a list of EXISTING MEMORIES that are semantically similar, each with a similarity score.\n\nYour primary goal is to AVOID DUPLICATES. When in doubt, prefer UPDATE or NOOP over ADD.\n\nDecide what to do with the new fact:\n\n- UPDATE: The new fact overlaps with an existing memory \u2014 same person, place, topic, or entity.\n  Merge the information into a single comprehensive memory. Always prefer this when there is ANY\n  topical overlap, even if the details differ. Provide the memory ID and the merged content that\n  combines all details from both old and new.\n- NOOP: The new fact is already fully covered by an existing memory. Do nothing.\n- DELETE: The new fact directly contradicts an existing memory, making it obsolete. Provide the\n  memory ID to delete. The new fact will then be added separately.\n- ADD: The new fact is about a completely different topic, person, or entity than ALL existing\n  memories. Only use ADD when there is truly zero overlap with any existing memory.\n\nImportant guidelines:\n- Even a low similarity score (0.3\u002B) can indicate topical overlap \u2014 look at the actual content.\n- If an existing memory mentions the same person, location, project, preference, or entity as the\n  new fact, use UPDATE to merge, not ADD.\n- When merging (UPDATE), combine all details from both memories into one clear, comprehensive statement.\n\nRespond with a JSON object:\n{\u0022action\u0022: \u0022UPDATE|NOOP|DELETE|ADD\u0022, \u0022memoryId\u0022: \u0022id-if-UPDATE-or-DELETE\u0022, \u0022mergedContent\u0022: \u0022combined-content-if-UPDATE\u0022, \u0022reason\u0022: \u0022brief explanation\u0022}\n\nRespond ONLY with the JSON object, no other text."
+            },
+            {
+              "role": "user",
+              "content": "NEW FACT:\nTitle: Language switch to Rust\nContent: User has switched from Python to Rust due to performance requirements\n\nEXISTING MEMORIES:\n[0] ID=70f61788-f0de-4a4e-806a-0039643af039, Score=0.671, Title=\u0022Language preference\u0022, Content=\u0022User prefers Python as their primary programming language\u0022"
+            }
+          ],
+          "responseContent": "{\u0022action\u0022: \u0022UPDATE\u0022, \u0022memoryId\u0022: \u002270f61788-f0de-4a4e-806a-0039643af039\u0022, \u0022mergedContent\u0022: \u0022User previously preferred Python as their primary programming language but has switched to Rust due to performance requirements.\u0022, \u0022reason\u0022: \u0022The new fact directly overlaps with the existing memory about the user\u0027s programming language preference \u2014 same topic, same person, updated information.\u0022}",
+          "responseSuccess": true,
+          "finishReason": "end_turn",
+          "usage": {
+            "promptTokens": 501,
+            "completionTokens": 96,
+            "totalTokens": 597
+          },
+          "durationMs": 6543.5633,
+          "timestamp": "2026-03-12T08:02:40.4011927+00:00"
+        }
+      ],
+      "extractionInputs": [
+        {
+          "userMessage": "I\u0027ve completely switched to Rust now. Python was too slow for what I\u0027m building.",
+          "assistantResponse": "Rust is excellent for performance-critical applications! The learning curve is steep but worth it."
+        }
+      ]
+    },
+    {
+      "name": "Does not extract facts from trivial/greeting conversations",
+      "passed": true,
+      "durationMs": 3315.6007,
+      "memoryCount": 0,
+      "finalMemories": [],
+      "llmCalls": [
+        {
+          "requestId": "0e817878862e435395a30364ba8fddd9",
+          "conversationId": "memory-extraction",
+          "model": "claude-sonnet-4-6",
+          "temperature": 0,
+          "maxTokens": 2048,
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a memory extraction system. Your job is to identify discrete, important facts\nfrom a conversation between a user and an AI assistant that are worth remembering long-term.\n\nExtract facts that fall into these categories:\n- User preferences, habits, or personal information\n- Decisions made or conclusions reached\n- Important context about projects, tasks, or goals\n- Relationships, names, locations, or other entities\n- Technical preferences or configuration choices\n\nDo NOT extract:\n- Trivial pleasantries or greetings\n- Transient information (e.g. \u0022it\u0027s raining today\u0022)\n- Information the assistant generated that isn\u0027t grounded in the user\u0027s input\n- Duplicate variations of the same fact\n\nFor each fact, provide:\n- \u0022content\u0022: The fact as a clear, self-contained statement\n- \u0022title\u0022: A short 3-5 word label\n- \u0022tags\u0022: 1-3 categorization tags\n\nRespond with a JSON array. If there is nothing worth remembering, respond with an empty array [].\nExample:\n[\n  {\u0022content\u0022: \u0022User\u0027s name is Yury and he lives in Copenhagen\u0022, \u0022title\u0022: \u0022User identity\u0022, \u0022tags\u0022: [\u0022personal\u0022, \u0022location\u0022]},\n  {\u0022content\u0022: \u0022User prefers Claude over GPT for coding tasks\u0022, \u0022title\u0022: \u0022LLM preference\u0022, \u0022tags\u0022: [\u0022preferences\u0022, \u0022technical\u0022]}\n]\n\nRespond ONLY with the JSON array, no other text."
+            },
+            {
+              "role": "user",
+              "content": "Conversation to analyze:\r\n\r\nUser: Hey, how are you?\r\n\r\nAssistant: I\u0027m doing well, thanks for asking! How can I help you today?\r\n\r\n"
+            }
+          ],
+          "responseContent": "[]",
+          "responseSuccess": true,
+          "finishReason": "end_turn",
+          "usage": {
+            "promptTokens": 359,
+            "completionTokens": 4,
+            "totalTokens": 363
+          },
+          "durationMs": 1268.9895,
+          "timestamp": "2026-03-12T08:02:44.0090205+00:00"
+        }
+      ],
+      "extractionInputs": [
+        {
+          "userMessage": "Hey, how are you?",
+          "assistantResponse": "I\u0027m doing well, thanks for asking! How can I help you today?"
+        }
+      ]
+    },
+    {
+      "name": "Within-batch facts about same topic are merged, not duplicated",
+      "passed": true,
+      "durationMs": 14017.2264,
+      "memoryCount": 1,
+      "finalMemories": [
+        "User lives near BIG Herlev Center and shops at multiple nearby grocery stores: REMA 1000 (very close to home), Lidl, F\u00F8tex, and Netto. User is interested in finding weekly discount campaigns from these nearby grocery stores."
+      ],
+      "llmCalls": [
+        {
+          "requestId": "2008215b249b4d729ed391047bb647e6",
+          "conversationId": "memory-extraction",
+          "model": "claude-sonnet-4-6",
+          "temperature": 0,
+          "maxTokens": 2048,
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a memory extraction system. Your job is to identify discrete, important facts\nfrom a conversation between a user and an AI assistant that are worth remembering long-term.\n\nExtract facts that fall into these categories:\n- User preferences, habits, or personal information\n- Decisions made or conclusions reached\n- Important context about projects, tasks, or goals\n- Relationships, names, locations, or other entities\n- Technical preferences or configuration choices\n\nDo NOT extract:\n- Trivial pleasantries or greetings\n- Transient information (e.g. \u0022it\u0027s raining today\u0022)\n- Information the assistant generated that isn\u0027t grounded in the user\u0027s input\n- Duplicate variations of the same fact\n\nFor each fact, provide:\n- \u0022content\u0022: The fact as a clear, self-contained statement\n- \u0022title\u0022: A short 3-5 word label\n- \u0022tags\u0022: 1-3 categorization tags\n\nRespond with a JSON array. If there is nothing worth remembering, respond with an empty array [].\nExample:\n[\n  {\u0022content\u0022: \u0022User\u0027s name is Yury and he lives in Copenhagen\u0022, \u0022title\u0022: \u0022User identity\u0022, \u0022tags\u0022: [\u0022personal\u0022, \u0022location\u0022]},\n  {\u0022content\u0022: \u0022User prefers Claude over GPT for coding tasks\u0022, \u0022title\u0022: \u0022LLM preference\u0022, \u0022tags\u0022: [\u0022preferences\u0022, \u0022technical\u0022]}\n]\n\nRespond ONLY with the JSON array, no other text."
+            },
+            {
+              "role": "user",
+              "content": "Conversation to analyze:\r\n\r\nUser: I have REMA 1000 very close to my home. Lidl, F\u00F8tex, and Netto are also nearby in BIG Herlev Center. I\u0027d love to find their weekly discount campaigns.\r\n\r\nAssistant: I can help you track grocery discounts! I\u0027ll look into weekly campaigns at REMA 1000, Lidl, F\u00F8tex, and Netto near BIG Herlev Center for you.\r\n\r\n"
+            }
+          ],
+          "responseContent": "[\n  {\u0022content\u0022: \u0022User lives near BIG Herlev Center and has REMA 1000 very close to home\u0022, \u0022title\u0022: \u0022User location/nearby stores\u0022, \u0022tags\u0022: [\u0022personal\u0022, \u0022location\u0022]},\n  {\u0022content\u0022: \u0022User shops at REMA 1000, Lidl, F\u00F8tex, and Netto near BIG Herlev Center\u0022, \u0022title\u0022: \u0022Preferred grocery stores\u0022, \u0022tags\u0022: [\u0022preferences\u0022, \u0022location\u0022]},\n  {\u0022content\u0022: \u0022User is interested in finding weekly discount campaigns from nearby grocery stores\u0022, \u0022title\u0022: \u0022Weekly discount interest\u0022, \u0022tags\u0022: [\u0022preferences\u0022, \u0022shopping\u0022]}\n]",
+          "responseSuccess": true,
+          "finishReason": "end_turn",
+          "usage": {
+            "promptTokens": 434,
+            "completionTokens": 150,
+            "totalTokens": 584
+          },
+          "durationMs": 3221.1483,
+          "timestamp": "2026-03-12T08:02:49.2895927+00:00"
+        },
+        {
+          "requestId": "c9e76faff0de445183fb248fd9ad6c69",
+          "conversationId": "memory-consolidation",
+          "model": "claude-sonnet-4-6",
+          "temperature": 0,
+          "maxTokens": 1024,
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a memory consolidation system. You are given a NEW FACT extracted from a conversation\nand a list of EXISTING MEMORIES that are semantically similar, each with a similarity score.\n\nYour primary goal is to AVOID DUPLICATES. When in doubt, prefer UPDATE or NOOP over ADD.\n\nDecide what to do with the new fact:\n\n- UPDATE: The new fact overlaps with an existing memory \u2014 same person, place, topic, or entity.\n  Merge the information into a single comprehensive memory. Always prefer this when there is ANY\n  topical overlap, even if the details differ. Provide the memory ID and the merged content that\n  combines all details from both old and new.\n- NOOP: The new fact is already fully covered by an existing memory. Do nothing.\n- DELETE: The new fact directly contradicts an existing memory, making it obsolete. Provide the\n  memory ID to delete. The new fact will then be added separately.\n- ADD: The new fact is about a completely different topic, person, or entity than ALL existing\n  memories. Only use ADD when there is truly zero overlap with any existing memory.\n\nImportant guidelines:\n- Even a low similarity score (0.3\u002B) can indicate topical overlap \u2014 look at the actual content.\n- If an existing memory mentions the same person, location, project, preference, or entity as the\n  new fact, use UPDATE to merge, not ADD.\n- When merging (UPDATE), combine all details from both memories into one clear, comprehensive statement.\n\nRespond with a JSON object:\n{\u0022action\u0022: \u0022UPDATE|NOOP|DELETE|ADD\u0022, \u0022memoryId\u0022: \u0022id-if-UPDATE-or-DELETE\u0022, \u0022mergedContent\u0022: \u0022combined-content-if-UPDATE\u0022, \u0022reason\u0022: \u0022brief explanation\u0022}\n\nRespond ONLY with the JSON object, no other text."
+            },
+            {
+              "role": "user",
+              "content": "NEW FACT:\nTitle: Preferred grocery stores\nContent: User shops at REMA 1000, Lidl, F\u00F8tex, and Netto near BIG Herlev Center\n\nEXISTING MEMORIES:\n[0] ID=39ed2cc5-5907-4dfe-9d17-799cd9ca0a5a, Score=0.771, Title=\u0022User location/nearby stores\u0022, Content=\u0022User lives near BIG Herlev Center and has REMA 1000 very close to home\u0022"
+            }
+          ],
+          "responseContent": "{\u0022action\u0022: \u0022UPDATE\u0022, \u0022memoryId\u0022: \u002239ed2cc5-5907-4dfe-9d17-799cd9ca0a5a\u0022, \u0022mergedContent\u0022: \u0022User lives near BIG Herlev Center and shops at multiple nearby grocery stores: REMA 1000 (very close to home), Lidl, F\u00F8tex, and Netto\u0022, \u0022reason\u0022: \u0022The new fact overlaps with the existing memory about the user\u0027s location and nearby stores \u2014 same location (BIG Herlev Center) and same store (REMA 1000), with additional stores to merge in.\u0022}",
+          "responseSuccess": true,
+          "finishReason": "end_turn",
+          "usage": {
+            "promptTokens": 539,
+            "completionTokens": 144,
+            "totalTokens": 683
+          },
+          "durationMs": 3223.3344,
+          "timestamp": "2026-03-12T08:02:52.8899922+00:00"
+        },
+        {
+          "requestId": "359cb8a298c24980b36a212f4ee3aef8",
+          "conversationId": "memory-consolidation",
+          "model": "claude-sonnet-4-6",
+          "temperature": 0,
+          "maxTokens": 1024,
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a memory consolidation system. You are given a NEW FACT extracted from a conversation\nand a list of EXISTING MEMORIES that are semantically similar, each with a similarity score.\n\nYour primary goal is to AVOID DUPLICATES. When in doubt, prefer UPDATE or NOOP over ADD.\n\nDecide what to do with the new fact:\n\n- UPDATE: The new fact overlaps with an existing memory \u2014 same person, place, topic, or entity.\n  Merge the information into a single comprehensive memory. Always prefer this when there is ANY\n  topical overlap, even if the details differ. Provide the memory ID and the merged content that\n  combines all details from both old and new.\n- NOOP: The new fact is already fully covered by an existing memory. Do nothing.\n- DELETE: The new fact directly contradicts an existing memory, making it obsolete. Provide the\n  memory ID to delete. The new fact will then be added separately.\n- ADD: The new fact is about a completely different topic, person, or entity than ALL existing\n  memories. Only use ADD when there is truly zero overlap with any existing memory.\n\nImportant guidelines:\n- Even a low similarity score (0.3\u002B) can indicate topical overlap \u2014 look at the actual content.\n- If an existing memory mentions the same person, location, project, preference, or entity as the\n  new fact, use UPDATE to merge, not ADD.\n- When merging (UPDATE), combine all details from both memories into one clear, comprehensive statement.\n\nRespond with a JSON object:\n{\u0022action\u0022: \u0022UPDATE|NOOP|DELETE|ADD\u0022, \u0022memoryId\u0022: \u0022id-if-UPDATE-or-DELETE\u0022, \u0022mergedContent\u0022: \u0022combined-content-if-UPDATE\u0022, \u0022reason\u0022: \u0022brief explanation\u0022}\n\nRespond ONLY with the JSON object, no other text."
+            },
+            {
+              "role": "user",
+              "content": "NEW FACT:\nTitle: Weekly discount interest\nContent: User is interested in finding weekly discount campaigns from nearby grocery stores\n\nEXISTING MEMORIES:\n[0] ID=39ed2cc5-5907-4dfe-9d17-799cd9ca0a5a, Score=0.496, Title=\u0022User location/nearby stores\u0022, Content=\u0022User lives near BIG Herlev Center and shops at multiple nearby grocery stores: REMA 1000 (very close to home), Lidl, F\u00F8tex, and Netto\u0022"
+            }
+          ],
+          "responseContent": "{\u0022action\u0022: \u0022UPDATE\u0022, \u0022memoryId\u0022: \u002239ed2cc5-5907-4dfe-9d17-799cd9ca0a5a\u0022, \u0022mergedContent\u0022: \u0022User lives near BIG Herlev Center and shops at multiple nearby grocery stores: REMA 1000 (very close to home), Lidl, F\u00F8tex, and Netto. User is interested in finding weekly discount campaigns from these nearby grocery stores.\u0022, \u0022reason\u0022: \u0022The new fact about interest in weekly discount campaigns directly relates to the existing memory about the user\u0027s nearby grocery stores \u2014 same topic and same entities.\u0022}",
+          "responseSuccess": true,
+          "finishReason": "end_turn",
+          "usage": {
+            "promptTokens": 540,
+            "completionTokens": 140,
+            "totalTokens": 680
+          },
+          "durationMs": 4721.1302,
+          "timestamp": "2026-03-12T08:02:57.8686119+00:00"
+        }
+      ],
+      "extractionInputs": [
+        {
+          "userMessage": "I have REMA 1000 very close to my home. Lidl, F\u00F8tex, and Netto are also nearby in BIG Herlev Center. I\u0027d love to find their weekly discount campaigns.",
+          "assistantResponse": "I can help you track grocery discounts! I\u0027ll look into weekly campaigns at REMA 1000, Lidl, F\u00F8tex, and Netto near BIG Herlev Center for you."
+        }
+      ]
+    },
+    {
+      "name": "Updates existing memory when new related info arrives",
+      "passed": true,
+      "durationMs": 11281.9662,
+      "memoryCount": 1,
+      "finalMemories": [
+        "User\u0027s name is Alex. He recently moved from Berlin to Munich for a new job at BMW."
+      ],
+      "llmCalls": [
+        {
+          "requestId": "5070e48f35fd4973ac64cffb50520618",
+          "conversationId": "memory-extraction",
+          "model": "claude-sonnet-4-6",
+          "temperature": 0,
+          "maxTokens": 2048,
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a memory extraction system. Your job is to identify discrete, important facts\nfrom a conversation between a user and an AI assistant that are worth remembering long-term.\n\nExtract facts that fall into these categories:\n- User preferences, habits, or personal information\n- Decisions made or conclusions reached\n- Important context about projects, tasks, or goals\n- Relationships, names, locations, or other entities\n- Technical preferences or configuration choices\n\nDo NOT extract:\n- Trivial pleasantries or greetings\n- Transient information (e.g. \u0022it\u0027s raining today\u0022)\n- Information the assistant generated that isn\u0027t grounded in the user\u0027s input\n- Duplicate variations of the same fact\n\nFor each fact, provide:\n- \u0022content\u0022: The fact as a clear, self-contained statement\n- \u0022title\u0022: A short 3-5 word label\n- \u0022tags\u0022: 1-3 categorization tags\n\nRespond with a JSON array. If there is nothing worth remembering, respond with an empty array [].\nExample:\n[\n  {\u0022content\u0022: \u0022User\u0027s name is Yury and he lives in Copenhagen\u0022, \u0022title\u0022: \u0022User identity\u0022, \u0022tags\u0022: [\u0022personal\u0022, \u0022location\u0022]},\n  {\u0022content\u0022: \u0022User prefers Claude over GPT for coding tasks\u0022, \u0022title\u0022: \u0022LLM preference\u0022, \u0022tags\u0022: [\u0022preferences\u0022, \u0022technical\u0022]}\n]\n\nRespond ONLY with the JSON array, no other text."
+            },
+            {
+              "role": "user",
+              "content": "Conversation to analyze:\r\n\r\nUser: By the way, I recently moved from Berlin to Munich for a new job at BMW.\r\n\r\nAssistant: That\u0027s a big move! Munich is a great city. How are you finding it at BMW?\r\n\r\n"
+            }
+          ],
+          "responseContent": "[\n  {\u0022content\u0022: \u0022User recently moved from Berlin to Munich for a new job at BMW\u0022, \u0022title\u0022: \u0022Relocation to Munich\u0022, \u0022tags\u0022: [\u0022personal\u0022, \u0022location\u0022, \u0022career\u0022]}\n]",
+          "responseSuccess": true,
+          "finishReason": "end_turn",
+          "usage": {
+            "promptTokens": 375,
+            "completionTokens": 49,
+            "totalTokens": 424
+          },
+          "durationMs": 2102.0958,
+          "timestamp": "2026-03-12T08:03:02.5514345+00:00"
+        },
+        {
+          "requestId": "0773122400f04e62b2bb85dd27dfb2bd",
+          "conversationId": "memory-consolidation",
+          "model": "claude-sonnet-4-6",
+          "temperature": 0,
+          "maxTokens": 1024,
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a memory consolidation system. You are given a NEW FACT extracted from a conversation\nand a list of EXISTING MEMORIES that are semantically similar, each with a similarity score.\n\nYour primary goal is to AVOID DUPLICATES. When in doubt, prefer UPDATE or NOOP over ADD.\n\nDecide what to do with the new fact:\n\n- UPDATE: The new fact overlaps with an existing memory \u2014 same person, place, topic, or entity.\n  Merge the information into a single comprehensive memory. Always prefer this when there is ANY\n  topical overlap, even if the details differ. Provide the memory ID and the merged content that\n  combines all details from both old and new.\n- NOOP: The new fact is already fully covered by an existing memory. Do nothing.\n- DELETE: The new fact directly contradicts an existing memory, making it obsolete. Provide the\n  memory ID to delete. The new fact will then be added separately.\n- ADD: The new fact is about a completely different topic, person, or entity than ALL existing\n  memories. Only use ADD when there is truly zero overlap with any existing memory.\n\nImportant guidelines:\n- Even a low similarity score (0.3\u002B) can indicate topical overlap \u2014 look at the actual content.\n- If an existing memory mentions the same person, location, project, preference, or entity as the\n  new fact, use UPDATE to merge, not ADD.\n- When merging (UPDATE), combine all details from both memories into one clear, comprehensive statement.\n\nRespond with a JSON object:\n{\u0022action\u0022: \u0022UPDATE|NOOP|DELETE|ADD\u0022, \u0022memoryId\u0022: \u0022id-if-UPDATE-or-DELETE\u0022, \u0022mergedContent\u0022: \u0022combined-content-if-UPDATE\u0022, \u0022reason\u0022: \u0022brief explanation\u0022}\n\nRespond ONLY with the JSON object, no other text."
+            },
+            {
+              "role": "user",
+              "content": "NEW FACT:\nTitle: Relocation to Munich\nContent: User recently moved from Berlin to Munich for a new job at BMW\n\nEXISTING MEMORIES:\n[0] ID=9c36798d-946e-44dd-ab81-7b57b361b727, Score=0.661, Title=\u0022User identity\u0022, Content=\u0022User\u0027s name is Alex and he lives in Berlin\u0022"
+            }
+          ],
+          "responseContent": "{\u0022action\u0022: \u0022UPDATE\u0022, \u0022memoryId\u0022: \u00229c36798d-946e-44dd-ab81-7b57b361b727\u0022, \u0022mergedContent\u0022: \u0022User\u0027s name is Alex. He recently moved from Berlin to Munich for a new job at BMW.\u0022, \u0022reason\u0022: \u0022The new fact updates Alex\u0027s location from Berlin to Munich and adds information about his new job at BMW. Same person, overlapping topic.\u0022}",
+          "responseSuccess": true,
+          "finishReason": "end_turn",
+          "usage": {
+            "promptTokens": 503,
+            "completionTokens": 97,
+            "totalTokens": 600
+          },
+          "durationMs": 6578.3248,
+          "timestamp": "2026-03-12T08:03:09.2147869+00:00"
+        }
+      ],
+      "extractionInputs": [
+        {
+          "userMessage": "By the way, I recently moved from Berlin to Munich for a new job at BMW.",
+          "assistantResponse": "That\u0027s a big move! Munich is a great city. How are you finding it at BMW?"
+        }
+      ]
+    },
+    {
+      "name": "Extracts basic user facts from conversation",
+      "passed": true,
+      "durationMs": 10381.1058,
+      "memoryCount": 1,
+      "finalMemories": [
+        "User\u0027s name is Alex, lives in Berlin, and works as a software engineer at a startup"
+      ],
+      "llmCalls": [
+        {
+          "requestId": "feb354e102324d659a14e2d1fb647419",
+          "conversationId": "memory-extraction",
+          "model": "claude-sonnet-4-6",
+          "temperature": 0,
+          "maxTokens": 2048,
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a memory extraction system. Your job is to identify discrete, important facts\nfrom a conversation between a user and an AI assistant that are worth remembering long-term.\n\nExtract facts that fall into these categories:\n- User preferences, habits, or personal information\n- Decisions made or conclusions reached\n- Important context about projects, tasks, or goals\n- Relationships, names, locations, or other entities\n- Technical preferences or configuration choices\n\nDo NOT extract:\n- Trivial pleasantries or greetings\n- Transient information (e.g. \u0022it\u0027s raining today\u0022)\n- Information the assistant generated that isn\u0027t grounded in the user\u0027s input\n- Duplicate variations of the same fact\n\nFor each fact, provide:\n- \u0022content\u0022: The fact as a clear, self-contained statement\n- \u0022title\u0022: A short 3-5 word label\n- \u0022tags\u0022: 1-3 categorization tags\n\nRespond with a JSON array. If there is nothing worth remembering, respond with an empty array [].\nExample:\n[\n  {\u0022content\u0022: \u0022User\u0027s name is Yury and he lives in Copenhagen\u0022, \u0022title\u0022: \u0022User identity\u0022, \u0022tags\u0022: [\u0022personal\u0022, \u0022location\u0022]},\n  {\u0022content\u0022: \u0022User prefers Claude over GPT for coding tasks\u0022, \u0022title\u0022: \u0022LLM preference\u0022, \u0022tags\u0022: [\u0022preferences\u0022, \u0022technical\u0022]}\n]\n\nRespond ONLY with the JSON array, no other text."
+            },
+            {
+              "role": "user",
+              "content": "Conversation to analyze:\r\n\r\nUser: My name is Alex and I live in Berlin. I work as a software engineer at a startup.\r\n\r\nAssistant: Nice to meet you, Alex! Berlin is a great city for tech startups. What kind of software do you work on?\r\n\r\n"
+            }
+          ],
+          "responseContent": "[\n  {\u0022content\u0022: \u0022User\u0027s name is Alex and lives in Berlin\u0022, \u0022title\u0022: \u0022User identity\u0022, \u0022tags\u0022: [\u0022personal\u0022, \u0022location\u0022]},\n  {\u0022content\u0022: \u0022User works as a software engineer at a startup\u0022, \u0022title\u0022: \u0022User occupation\u0022, \u0022tags\u0022: [\u0022personal\u0022, \u0022professional\u0022]}\n]",
+          "responseSuccess": true,
+          "finishReason": "end_turn",
+          "usage": {
+            "promptTokens": 383,
+            "completionTokens": 72,
+            "totalTokens": 455
+          },
+          "durationMs": 5112.5966,
+          "timestamp": "2026-03-12T08:03:16.5036205+00:00"
+        },
+        {
+          "requestId": "da7a80e16ce54ace9a536483f23721ff",
+          "conversationId": "memory-consolidation",
+          "model": "claude-sonnet-4-6",
+          "temperature": 0,
+          "maxTokens": 1024,
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a memory consolidation system. You are given a NEW FACT extracted from a conversation\nand a list of EXISTING MEMORIES that are semantically similar, each with a similarity score.\n\nYour primary goal is to AVOID DUPLICATES. When in doubt, prefer UPDATE or NOOP over ADD.\n\nDecide what to do with the new fact:\n\n- UPDATE: The new fact overlaps with an existing memory \u2014 same person, place, topic, or entity.\n  Merge the information into a single comprehensive memory. Always prefer this when there is ANY\n  topical overlap, even if the details differ. Provide the memory ID and the merged content that\n  combines all details from both old and new.\n- NOOP: The new fact is already fully covered by an existing memory. Do nothing.\n- DELETE: The new fact directly contradicts an existing memory, making it obsolete. Provide the\n  memory ID to delete. The new fact will then be added separately.\n- ADD: The new fact is about a completely different topic, person, or entity than ALL existing\n  memories. Only use ADD when there is truly zero overlap with any existing memory.\n\nImportant guidelines:\n- Even a low similarity score (0.3\u002B) can indicate topical overlap \u2014 look at the actual content.\n- If an existing memory mentions the same person, location, project, preference, or entity as the\n  new fact, use UPDATE to merge, not ADD.\n- When merging (UPDATE), combine all details from both memories into one clear, comprehensive statement.\n\nRespond with a JSON object:\n{\u0022action\u0022: \u0022UPDATE|NOOP|DELETE|ADD\u0022, \u0022memoryId\u0022: \u0022id-if-UPDATE-or-DELETE\u0022, \u0022mergedContent\u0022: \u0022combined-content-if-UPDATE\u0022, \u0022reason\u0022: \u0022brief explanation\u0022}\n\nRespond ONLY with the JSON object, no other text."
+            },
+            {
+              "role": "user",
+              "content": "NEW FACT:\nTitle: User occupation\nContent: User works as a software engineer at a startup\n\nEXISTING MEMORIES:\n[0] ID=f1d71fcd-5178-4693-94c0-e0719c9ffbac, Score=0.447, Title=\u0022User identity\u0022, Content=\u0022User\u0027s name is Alex and lives in Berlin\u0022"
+            }
+          ],
+          "responseContent": "{\u0022action\u0022: \u0022UPDATE\u0022, \u0022memoryId\u0022: \u0022f1d71fcd-5178-4693-94c0-e0719c9ffbac\u0022, \u0022mergedContent\u0022: \u0022User\u0027s name is Alex, lives in Berlin, and works as a software engineer at a startup\u0022, \u0022reason\u0022: \u0022Both memories are about the same user\u0027s personal identity/profile information. Merging occupation with existing identity details.\u0022}",
+          "responseSuccess": true,
+          "finishReason": "end_turn",
+          "usage": {
+            "promptTokens": 498,
+            "completionTokens": 95,
+            "totalTokens": 593
+          },
+          "durationMs": 2787.7072,
+          "timestamp": "2026-03-12T08:03:19.6404378+00:00"
+        }
+      ],
+      "extractionInputs": [
+        {
+          "userMessage": "My name is Alex and I live in Berlin. I work as a software engineer at a startup.",
+          "assistantResponse": "Nice to meet you, Alex! Berlin is a great city for tech startups. What kind of software do you work on?"
+        }
+      ]
+    }
+  ]
+}

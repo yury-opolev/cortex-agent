@@ -1,0 +1,14 @@
+# Hard pins only where they matter:
+#   - chatterbox-tts: the model API surface this server targets
+#   - torch/torchaudio: must match the cu124 wheel index below
+# Everything else (fastapi, uvicorn, pydantic, huggingface_hub, ...) is left
+# unpinned so pip can satisfy chatterbox-tts's heavy dependency tree
+# (transformers, gradio, diffusers, ...) without version conflicts.
+fastapi
+uvicorn[standard]
+chatterbox-tts==0.1.7
+torch==2.6.0
+torchaudio==2.6.0
+# torch already pulls numpy, but the /synthesize/stream PCM packer imports it
+# directly — pin nothing, just make the dependency explicit.
+numpy

@@ -1,0 +1,152 @@
+name: cortex-contained
+
+services:
+  cortex-agent:
+    image: cortex-agent:latest
+    container_name: cortex-agent
+    ports:
+      - "127.0.0.1:${CORTEX_HUB_PORT:-5100}:5100"
+    environment:
+      - CORTEX_HUB_TOKEN=${CORTEX_HUB_TOKEN:-dev-token-change-me}
+      - ASPNETCORE_URLS=http://+:5100
+      - ASPNETCORE_ENVIRONMENT=${ASPNETCORE_ENVIRONMENT:-Production}
+      # NOTE: No API keys here. LLM calls are proxied through the Bridge.
+      # Memory service: embeddings (Ollama) endpoint inside the Docker network
+      - MemoryMcp__Ollama__Endpoint=http://embeddings:11434
+      # Speaker-ID remote sidecar
+      - SpeakerId__Backend=Remote
+      - SpeakerId__RemoteEndpoint=http://voice-id:5200
+      - SpeakerId__ModelId=eres2netv2-base
+      - SpeakerId__EmbeddingDim=192
+    volumes:
+      - cortex-data:/app/data
+      - cortex-state:/app/state
+      - cortex-config:/app/config:ro
+    networks:
+      - cortex-internal
+    restart: unless-stopped
+    init: true
+    depends_on:
+      embeddings:
+        condition: service_started
+      voice-id:
+        condition: service_started
+
+  voice-id:
+    # Image is built+tagged by scripts/Build-VoiceIdImage.ps1 (or Build-All.ps1)
+    # which produces both voice-id:<version> and voice-id:latest tags. The
+    # `build:` block here is a fallback so `docker compose build voice-id`
+    # still works on a fresh checkout without running the script first.
+    build:
+      context: ./lib/voice-id
+      dockerfile: Dockerfile
+    image: voice-id:latest
+    container_name: cortex-voice-id
+    # Published to host loopback so the Bridge (Windows host, outside Docker)
+    # can use this ONE embedder for verification — the same instance the Agent
+    # uses internally for enrollment. 127.0.0.1 only: not exposed to the LAN.
+    ports:
+      - "127.0.0.1:5200:5200"
+    volumes:
+      - voice-id-models:/app/models
+    environment:
+      - Sidecar__Model=eres2netv2-base
+    networks:
+      - cortex-internal
+    restart: unless-stopped
+
+  uni-voices:
+    # Unified GPU TTS sidecar (Kokoro + Røst/Danish + Silero) — replaces the old
+    # single-engine danish-tts service. Source: lib/uni-voices submodule
+    # (github.com/yury-opolev/uni-voices). The Bridge's TtsSidecarLifecycle
+    # starts it on demand; profiles:[tts] keeps it out of the default up.
+    #
+    # `image:` pulls the published release from GHCR (tag = 0.1.<build>); the
+    # `build:` block is a dev fallback so `docker compose build uni-voices`
+    # works from the submodule on a fresh checkout.
+    profiles: [tts]
+    image: ghcr.io/yury-opolev/uni-voices:0.1
+    build:
+      context: ./lib/uni-voices
+    container_name: cortex-uni-voices
+    ports:
+      - "127.0.0.1:8000:8000"
+    # No model-cache volumes: weights are baked into the image at build time
+    # (see lib/uni-voices/scripts/prefetch_models.py) so the container needs no
+    # internet at runtime. Mounting empty cache volumes here would shadow them.
+    networks:
+      - cortex-internal
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # Speech-to-text sidecar (whisper-stt submodule, lib/whisper-stt). HF
+  # Transformers whisper-large-v3-turbo on one CUDA runtime. The Bridge's
+  # SttSidecarLifecycle starts it on demand; profiles:[voice] keeps it out of the
+  # default `up` so idle (non-voice) sessions don't hold STT VRAM. `image:` pulls
+  # the GHCR release; `build:` is the dev fallback from the submodule.
+  stt:
+    image: ghcr.io/yury-opolev/whisper-stt:0.1
+    build:
+      context: ./lib/whisper-stt
+    container_name: cortex-stt
+    profiles: [voice]
+    ports:
+      - "127.0.0.1:5300:8000"
+    networks:
+      - cortex-internal
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # Embeddings provider for the semantic memory system. Built from the
+  # lib/cortex-embeddings submodule: stock Ollama with qwen3-embedding:0.6b BAKED
+  # into the image (offline, no runtime pull, no model volume). Same model +
+  # runtime as before, so existing memory vectors stay consistent. `image:` pulls
+  # the GHCR release; `build:` is the dev fallback from the submodule.
+  embeddings:
+    image: ghcr.io/yury-opolev/cortex-embeddings:0.1
+    build:
+      context: ./lib/cortex-embeddings
+    container_name: cortex-embeddings
+    environment:
+      # Keep the embedding model resident instead of unloading after Ollama's
+      # 5-minute default idle timeout. Without this, the first memory_search
+      # after a long idle period (e.g. resuming a Discord voice conversation)
+      # pays a cold model reload — the multi-second "slow first reply". Set to
+      # "-1" to pin the model permanently, or e.g. "30m" to shorten.
+      - OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE:-12h}
+    networks:
+      - cortex-internal
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    ports:
+      - "127.0.0.1:11434:11434"
+
+networks:
+  cortex-internal:
+    driver: bridge
+
+volumes:
+  cortex-data:
+  cortex-state:
+  cortex-config:
+  voice-id-models:

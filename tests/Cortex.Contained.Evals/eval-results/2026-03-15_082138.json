@@ -1,0 +1,689 @@
+{
+  "timestamp": "2026-03-15T08:21:38.0523905+00:00",
+  "model": "claude-sonnet-4-6",
+  "api": "anthropic-messages",
+  "embeddingModel": "qwen3-embedding:0.6b",
+  "summary": {
+    "totalScenarios": 18,
+    "passed": 2,
+    "failed": 16,
+    "totalLlmCalls": 21,
+    "totalDurationMs": 51844.42070000001
+  },
+  "scenarios": [
+    {
+      "name": "China: Multi-turn all aspects \u2014 Wei Zhang",
+      "passed": false,
+      "failureMessage": "Expected at least 3 memories (career, hobby, personal), got 0",
+      "durationMs": 3775.3736,
+      "memoryCount": 0,
+      "finalMemories": [],
+      "llmCalls": [
+        {
+          "requestId": "50e0c77841854634bb0d004522638733",
+          "conversationId": "memory-extraction",
+          "model": "claude-sonnet-4-6",
+          "temperature": 0,
+          "maxTokens": 2048,
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a memory extraction system. Your job is to identify discrete, important facts\nfrom a conversation between a user and an AI assistant that are worth remembering long-term.\n\nExtract facts that fall into these categories:\n- User preferences, habits, or personal information\n- Decisions made or conclusions reached\n- Important context about projects, tasks, or goals\n- Relationships, names, locations, or other entities\n- Technical preferences or configuration choices\n\nDo NOT extract:\n- Trivial pleasantries or greetings\n- Transient information (e.g. \u0022it\u0027s raining today\u0022)\n- Information the assistant generated that isn\u0027t grounded in the user\u0027s input\n- Duplicate variations of the same fact\n\nFor each fact, provide:\n- \u0022content\u0022: The fact as a clear, self-contained statement\n- \u0022title\u0022: A short 3-5 word label\n- \u0022tags\u0022: 1-3 categorization tags\n\nRespond with a JSON array. If there is nothing worth remembering, respond with an empty array [].\nExample:\n[\n  {\u0022content\u0022: \u0022User\u0027s name is Yury and he lives in Copenhagen\u0022, \u0022title\u0022: \u0022User identity\u0022, \u0022tags\u0022: [\u0022personal\u0022, \u0022location\u0022]},\n  {\u0022content\u0022: \u0022User prefers Claude over GPT for coding tasks\u0022, \u0022title\u0022: \u0022LLM preference\u0022, \u0022tags\u0022: [\u0022preferences\u0022, \u0022technical\u0022]}\n]\n\nRespond with exactly one JSON array and nothing else \u2014 no commentary, no explanation, no markdown."
+            },
+            {
+              "role": "user",
+              "content": "Conversation to analyze:\r\n\r\nUser: I\u0027m Wei, mobile developer at ByteDance in Beijing, working on Douyin with Swift.\r\n\r\nAssistant: ByteDance is a big company! What\u0027s the team culture like?\r\n\r\n"
+            }
+          ],
+          "responseSuccess": false,
+          "errorCode": "LlmError",
+          "errorMessage": "HTTP 401: {\u0022type\u0022:\u0022error\u0022,\u0022error\u0022:{\u0022type\u0022:\u0022authentication_error\u0022,\u0022message\u0022:\u0022OAuth token has expired. Please obtain a new token or refresh your existing token.\u0022},\u0022request_id\u0022:\u0022req_011CZ4YJ1PTpDArNQ99VJjY8\u0022}",
+          "durationMs": 547.4276,
+          "timestamp": "2026-03-15T08:20:48.9357505+00:00"
+        },
+        {
+          "requestId": "282304f0455c4087a0da76870a0adef5",
+          "conversationId": "memory-extraction",
+          "model": "claude-sonnet-4-6",
+          "temperature": 0,
+          "maxTokens": 2048,
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a memory extraction system. Your job is to identify discrete, important facts\nfrom a conversation between a user and an AI assistant that are worth remembering long-term.\n\nExtract facts that fall into these categories:\n- User preferences, habits, or personal information\n- Decisions made or conclusions reached\n- Important context about projects, tasks, or goals\n- Relationships, names, locations, or other entities\n- Technical preferences or configuration choices\n\nDo NOT extract:\n- Trivial pleasantries or greetings\n- Transient information (e.g. \u0022it\u0027s raining today\u0022)\n- Information the assistant generated that isn\u0027t grounded in the user\u0027s input\n- Duplicate variations of the same fact\n\nFor each fact, provide:\n- \u0022content\u0022: The fact as a clear, self-contained statement\n- \u0022title\u0022: A short 3-5 word label\n- \u0022tags\u0022: 1-3 categorization tags\n\nRespond with a JSON array. If there is nothing worth remembering, respond with an empty array [].\nExample:\n[\n  {\u0022content\u0022: \u0022User\u0027s name is Yury and he lives in Copenhagen\u0022, \u0022title\u0022: \u0022User identity\u0022, \u0022tags\u0022: [\u0022personal\u0022, \u0022location\u0022]},\n  {\u0022content\u0022: \u0022User prefers Claude over GPT for coding tasks\u0022, \u0022title\u0022: \u0022LLM preference\u0022, \u0022tags\u0022: [\u0022preferences\u0022, \u0022technical\u0022]}\n]\n\nRespond with exactly one JSON array and nothing else \u2014 no commentary, no explanation, no markdown."
+            },
+            {
+              "role": "user",
+              "content": "Conversation to analyze:\r\n\r\nUser: In my free time I do street photography with my Fujifilm X-T5, mostly around the old hutongs in Beijing.\r\n\r\nAssistant: The contrast between old hutongs and modern Beijing must make for stunning shots!\r\n\r\n"
+            }
+          ],
+          "responseSuccess": false,
+          "errorCode": "LlmError",
+          "errorMessage": "HTTP 401: {\u0022type\u0022:\u0022error\u0022,\u0022error\u0022:{\u0022type\u0022:\u0022authentication_error\u0022,\u0022message\u0022:\u0022OAuth token has expired. Please obtain a new token or refresh your existing token.\u0022},\u0022request_id\u0022:\u0022req_011CZ4YJ36QBP9E7MVsZP8kw\u0022}",
+          "durationMs": 383.4227,
+          "timestamp": "2026-03-15T08:20:49.3314766+00:00"
+        },
+        {
+          "requestId": "2fd354f5f8064540bae6dc637c7ec339",
+          "conversationId": "memory-extraction",
+          "model": "claude-sonnet-4-6",
+          "temperature": 0,
+          "maxTokens": 2048,
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a memory extraction system. Your job is to identify discrete, important facts\nfrom a conversation between a user and an AI assistant that are worth remembering long-term.\n\nExtract facts that fall into these categories:\n- User preferences, habits, or personal information\n- Decisions made or conclusions reached\n- Important context about projects, tasks, or goals\n- Relationships, names, locations, or other entities\n- Technical preferences or configuration choices\n\nDo NOT extract:\n- Trivial pleasantries or greetings\n- Transient information (e.g. \u0022it\u0027s raining today\u0022)\n- Information the assistant generated that isn\u0027t grounded in the user\u0027s input\n- Duplicate variations of the same fact\n\nFor each fact, provide:\n- \u0022content\u0022: The fact as a clear, self-contained statement\n- \u0022title\u0022: A short 3-5 word label\n- \u0022tags\u0022: 1-3 categorization tags\n\nRespond with a JSON array. If there is nothing worth remembering, respond with an empty array [].\nExample:\n[\n  {\u0022content\u0022: \u0022User\u0027s name is Yury and he lives in Copenhagen\u0022, \u0022title\u0022: \u0022User identity\u0022, \u0022tags\u0022: [\u0022personal\u0022, \u0022location\u0022]},\n  {\u0022content\u0022: \u0022User prefers Claude over GPT for coding tasks\u0022, \u0022title\u0022: \u0022LLM preference\u0022, \u0022tags\u0022: [\u0022preferences\u0022, \u0022technical\u0022]}\n]\n\nRespond with exactly one JSON array and nothing else \u2014 no commentary, no explanation, no markdown."
+            },
+            {
+              "role": "user",
+              "content": "Conversation to analyze:\r\n\r\nUser: My girlfriend Mei and I adopted a cat called Boba last month. We play badminton together every weekend \u2014 training for a doubles tournament in April.\r\n\r\nAssistant: That\u0027s lovely! Is Boba adjusting well? And good luck with the tournament!\r\n\r\n"
+            }
+          ],
+          "responseSuccess": false,
+          "errorCode": "LlmError",
+          "errorMessage": "HTTP 401: {\u0022type\u0022:\u0022error\u0022,\u0022error\u0022:{\u0022type\u0022:\u0022authentication_error\u0022,\u0022message\u0022:\u0022OAuth token has expired. Please obtain a new token or refresh your existing token.\u0022},\u0022request_id\u0022:\u0022req_011CZ4YJ4oqrkQZ8HQG4xLqv\u0022}",
+          "durationMs": 400.0385,
+          "timestamp": "2026-03-15T08:20:49.7457982+00:00"
+        }
+      ],
+      "extractionInputs": []
+    },
+    {
+      "name": "China: Career \u2014 Wei Zhang",
+      "passed": false,
+      "failureMessage": "Expected at least 1 memory, got 0",
+      "durationMs": 2461.0801,
+      "memoryCount": 0,
+      "finalMemories": [],
+      "llmCalls": [
+        {
+          "requestId": "f6bae4d512214779864adf2bd063e1f9",
+          "conversationId": "memory-extraction",
+          "model": "claude-sonnet-4-6",
+          "temperature": 0,
+          "maxTokens": 2048,
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a memory extraction system. Your job is to identify discrete, important facts\nfrom a conversation between a user and an AI assistant that are worth remembering long-term.\n\nExtract facts that fall into these categories:\n- User preferences, habits, or personal information\n- Decisions made or conclusions reached\n- Important context about projects, tasks, or goals\n- Relationships, names, locations, or other entities\n- Technical preferences or configuration choices\n\nDo NOT extract:\n- Trivial pleasantries or greetings\n- Transient information (e.g. \u0022it\u0027s raining today\u0022)\n- Information the assistant generated that isn\u0027t grounded in the user\u0027s input\n- Duplicate variations of the same fact\n\nFor each fact, provide:\n- \u0022content\u0022: The fact as a clear, self-contained statement\n- \u0022title\u0022: A short 3-5 word label\n- \u0022tags\u0022: 1-3 categorization tags\n\nRespond with a JSON array. If there is nothing worth remembering, respond with an empty array [].\nExample:\n[\n  {\u0022content\u0022: \u0022User\u0027s name is Yury and he lives in Copenhagen\u0022, \u0022title\u0022: \u0022User identity\u0022, \u0022tags\u0022: [\u0022personal\u0022, \u0022location\u0022]},\n  {\u0022content\u0022: \u0022User prefers Claude over GPT for coding tasks\u0022, \u0022title\u0022: \u0022LLM preference\u0022, \u0022tags\u0022: [\u0022preferences\u0022, \u0022technical\u0022]}\n]\n\nRespond with exactly one JSON array and nothing else \u2014 no commentary, no explanation, no markdown."
+            },
+            {
+              "role": "user",
+              "content": "Conversation to analyze:\r\n\r\nUser: I\u0027m Wei, I\u0027m a mobile developer at ByteDance in Beijing. I work on the Douyin iOS team \u2014 we use Swift and a custom MVVM architecture.\r\n\r\nAssistant: Working on Douyin at ByteDance must be intense! How large is the iOS team?\r\n\r\n"
+            }
+          ],
+          "responseSuccess": false,
+          "errorCode": "LlmError",
+          "errorMessage": "HTTP 401: {\u0022type\u0022:\u0022error\u0022,\u0022error\u0022:{\u0022type\u0022:\u0022authentication_error\u0022,\u0022message\u0022:\u0022OAuth token has expired. Please obtain a new token or refresh your existing token.\u0022},\u0022request_id\u0022:\u0022req_011CZ4YJFJd2baK3RN4EN1E9\u0022}",
+          "durationMs": 424.9645,
+          "timestamp": "2026-03-15T08:20:52.2251013+00:00"
+        }
+      ],
+      "extractionInputs": []
+    },
+    {
+      "name": "Canada: Cross-aspect dedup \u2014 Priya Sharma",
+      "passed": false,
+      "failureMessage": "Expected at least 3 distinct memories (career, hobby, personal), got 0",
+      "durationMs": 3371.241,
+      "memoryCount": 0,
+      "finalMemories": [],
+      "llmCalls": [
+        {
+          "requestId": "8cbcd6b036494f9fbfcdea2f538910fb",
+          "conversationId": "memory-extraction",
+          "model": "claude-sonnet-4-6",
+          "temperature": 0,
+          "maxTokens": 2048,
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a memory extraction system. Your job is to identify discrete, important facts\nfrom a conversation between a user and an AI assistant that are worth remembering long-term.\n\nExtract facts that fall into these categories:\n- User preferences, habits, or personal information\n- Decisions made or conclusions reached\n- Important context about projects, tasks, or goals\n- Relationships, names, locations, or other entities\n- Technical preferences or configuration choices\n\nDo NOT extract:\n- Trivial pleasantries or greetings\n- Transient information (e.g. \u0022it\u0027s raining today\u0022)\n- Information the assistant generated that isn\u0027t grounded in the user\u0027s input\n- Duplicate variations of the same fact\n\nFor each fact, provide:\n- \u0022content\u0022: The fact as a clear, self-contained statement\n- \u0022title\u0022: A short 3-5 word label\n- \u0022tags\u0022: 1-3 categorization tags\n\nRespond with a JSON array. If there is nothing worth remembering, respond with an empty array [].\nExample:\n[\n  {\u0022content\u0022: \u0022User\u0027s name is Yury and he lives in Copenhagen\u0022, \u0022title\u0022: \u0022User identity\u0022, \u0022tags\u0022: [\u0022personal\u0022, \u0022location\u0022]},\n  {\u0022content\u0022: \u0022User prefers Claude over GPT for coding tasks\u0022, \u0022title\u0022: \u0022LLM preference\u0022, \u0022tags\u0022: [\u0022preferences\u0022, \u0022technical\u0022]}\n]\n\nRespond with exactly one JSON array and nothing else \u2014 no commentary, no explanation, no markdown."
+            },
+            {
+              "role": "user",
+              "content": "Conversation to analyze:\r\n\r\nUser: I\u0027m Priya, a UX designer at Shopify in Toronto.\r\n\r\nAssistant: Nice to meet you! How do you like working at Shopify?\r\n\r\n"
+            }
+          ],
+          "responseSuccess": false,
+          "errorCode": "LlmError",
+          "errorMessage": "HTTP 401: {\u0022type\u0022:\u0022error\u0022,\u0022error\u0022:{\u0022type\u0022:\u0022authentication_error\u0022,\u0022message\u0022:\u0022OAuth token has expired. Please obtain a new token or refresh your existing token.\u0022},\u0022request_id\u0022:\u0022req_011CZ4YJRo9bbvLqRjJ3N4KM\u0022}",
+          "durationMs": 469.3844,
+          "timestamp": "2026-03-15T08:20:54.7324559+00:00"
+        },
+        {
+          "requestId": "46db31f13b4946f9839b7c0137b9b7a7",
+          "conversationId": "memory-extraction",
+          "model": "claude-sonnet-4-6",
+          "temperature": 0,
+          "maxTokens": 2048,
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a memory extraction system. Your job is to identify discrete, important facts\nfrom a conversation between a user and an AI assistant that are worth remembering long-term.\n\nExtract facts that fall into these categories:\n- User preferences, habits, or personal information\n- Decisions made or conclusions reached\n- Important context about projects, tasks, or goals\n- Relationships, names, locations, or other entities\n- Technical preferences or configuration choices\n\nDo NOT extract:\n- Trivial pleasantries or greetings\n- Transient information (e.g. \u0022it\u0027s raining today\u0022)\n- Information the assistant generated that isn\u0027t grounded in the user\u0027s input\n- Duplicate variations of the same fact\n\nFor each fact, provide:\n- \u0022content\u0022: The fact as a clear, self-contained statement\n- \u0022title\u0022: A short 3-5 word label\n- \u0022tags\u0022: 1-3 categorization tags\n\nRespond with a JSON array. If there is nothing worth remembering, respond with an empty array [].\nExample:\n[\n  {\u0022content\u0022: \u0022User\u0027s name is Yury and he lives in Copenhagen\u0022, \u0022title\u0022: \u0022User identity\u0022, \u0022tags\u0022: [\u0022personal\u0022, \u0022location\u0022]},\n  {\u0022content\u0022: \u0022User prefers Claude over GPT for coding tasks\u0022, \u0022title\u0022: \u0022LLM preference\u0022, \u0022tags\u0022: [\u0022preferences\u0022, \u0022technical\u0022]}\n]\n\nRespond with exactly one JSON array and nothing else \u2014 no commentary, no explanation, no markdown."
+            },
+            {
+              "role": "user",
+              "content": "Conversation to analyze:\r\n\r\nUser: After work I head to the climbing gym here in Toronto. Been climbing for three years.\r\n\r\nAssistant: Rock climbing is a great way to unwind after a design-heavy day. Indoor or outdoor?\r\n\r\n"
+            }
+          ],
+          "responseSuccess": false,
+          "errorCode": "LlmError",
+          "errorMessage": "HTTP 401: {\u0022type\u0022:\u0022error\u0022,\u0022error\u0022:{\u0022type\u0022:\u0022authentication_error\u0022,\u0022message\u0022:\u0022OAuth token has expired. Please obtain a new token or refresh your existing token.\u0022},\u0022request_id\u0022:\u0022req_011CZ4YJTw9C3rrTK1ATmN7E\u0022}",
+          "durationMs": 387.346,
+          "timestamp": "2026-03-15T08:20:55.1473282+00:00"
+        },
+        {
+          "requestId": "e11645b3120e49818c032df9e9bdf42a",
+          "conversationId": "memory-extraction",
+          "model": "claude-sonnet-4-6",
+          "temperature": 0,
+          "maxTokens": 2048,
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a memory extraction system. Your job is to identify discrete, important facts\nfrom a conversation between a user and an AI assistant that are worth remembering long-term.\n\nExtract facts that fall into these categories:\n- User preferences, habits, or personal information\n- Decisions made or conclusions reached\n- Important context about projects, tasks, or goals\n- Relationships, names, locations, or other entities\n- Technical preferences or configuration choices\n\nDo NOT extract:\n- Trivial pleasantries or greetings\n- Transient information (e.g. \u0022it\u0027s raining today\u0022)\n- Information the assistant generated that isn\u0027t grounded in the user\u0027s input\n- Duplicate variations of the same fact\n\nFor each fact, provide:\n- \u0022content\u0022: The fact as a clear, self-contained statement\n- \u0022title\u0022: A short 3-5 word label\n- \u0022tags\u0022: 1-3 categorization tags\n\nRespond with a JSON array. If there is nothing worth remembering, respond with an empty array [].\nExample:\n[\n  {\u0022content\u0022: \u0022User\u0027s name is Yury and he lives in Copenhagen\u0022, \u0022title\u0022: \u0022User identity\u0022, \u0022tags\u0022: [\u0022personal\u0022, \u0022location\u0022]},\n  {\u0022content\u0022: \u0022User prefers Claude over GPT for coding tasks\u0022, \u0022title\u0022: \u0022LLM preference\u0022, \u0022tags\u0022: [\u0022preferences\u0022, \u0022technical\u0022]}\n]\n\nRespond with exactly one JSON array and nothing else \u2014 no commentary, no explanation, no markdown."
+            },
+            {
+              "role": "user",
+              "content": "Conversation to analyze:\r\n\r\nUser: My partner Arjun and I live in Liberty Village. We have a dog named Koda.\r\n\r\nAssistant: Liberty Village is such a vibrant neighbourhood! Does Koda enjoy the parks there?\r\n\r\n"
+            }
+          ],
+          "responseSuccess": false,
+          "errorCode": "LlmError",
+          "errorMessage": "HTTP 401: {\u0022type\u0022:\u0022error\u0022,\u0022error\u0022:{\u0022type\u0022:\u0022authentication_error\u0022,\u0022message\u0022:\u0022OAuth token has expired. Please obtain a new token or refresh your existing token.\u0022},\u0022request_id\u0022:\u0022req_011CZ4YJVe5QhrS9zvG92P56\u0022}",
+          "durationMs": 458.5902,
+          "timestamp": "2026-03-15T08:20:55.609099+00:00"
+        }
+      ],
+      "extractionInputs": []
+    },
+    {
+      "name": "Australia: Career \u2014 Mia Thompson",
+      "passed": false,
+      "failureMessage": "Expected at least 1 memory, got 0",
+      "durationMs": 2423.4451,
+      "memoryCount": 0,
+      "finalMemories": [],
+      "llmCalls": [
+        {
+          "requestId": "7e3531946d634342b2e04a3ec3a2202b",
+          "conversationId": "memory-extraction",
+          "model": "claude-sonnet-4-6",
+          "temperature": 0,
+          "maxTokens": 2048,
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a memory extraction system. Your job is to identify discrete, important facts\nfrom a conversation between a user and an AI assistant that are worth remembering long-term.\n\nExtract facts that fall into these categories:\n- User preferences, habits, or personal information\n- Decisions made or conclusions reached\n- Important context about projects, tasks, or goals\n- Relationships, names, locations, or other entities\n- Technical preferences or configuration choices\n\nDo NOT extract:\n- Trivial pleasantries or greetings\n- Transient information (e.g. \u0022it\u0027s raining today\u0022)\n- Information the assistant generated that isn\u0027t grounded in the user\u0027s input\n- Duplicate variations of the same fact\n\nFor each fact, provide:\n- \u0022content\u0022: The fact as a clear, self-contained statement\n- \u0022title\u0022: A short 3-5 word label\n- \u0022tags\u0022: 1-3 categorization tags\n\nRespond with a JSON array. If there is nothing worth remembering, respond with an empty array [].\nExample:\n[\n  {\u0022content\u0022: \u0022User\u0027s name is Yury and he lives in Copenhagen\u0022, \u0022title\u0022: \u0022User identity\u0022, \u0022tags\u0022: [\u0022personal\u0022, \u0022location\u0022]},\n  {\u0022content\u0022: \u0022User prefers Claude over GPT for coding tasks\u0022, \u0022title\u0022: \u0022LLM preference\u0022, \u0022tags\u0022: [\u0022preferences\u0022, \u0022technical\u0022]}\n]\n\nRespond with exactly one JSON array and nothing else \u2014 no commentary, no explanation, no markdown."
+            },
+            {
+              "role": "user",
+              "content": "Conversation to analyze:\r\n\r\nUser: I\u0027m Mia, I\u0027m a DevOps engineer at Atlassian in Sydney. I manage our Kubernetes clusters and CI/CD pipelines with ArgoCD and GitHub Actions.\r\n\r\nAssistant: Atlassian is a fantastic place for DevOps! ArgoCD with GitHub Actions is a solid GitOps stack. How many clusters are you managing?\r\n\r\n"
+            }
+          ],
+          "responseSuccess": false,
+          "errorCode": "LlmError",
+          "errorMessage": "HTTP 401: {\u0022type\u0022:\u0022error\u0022,\u0022error\u0022:{\u0022type\u0022:\u0022authentication_error\u0022,\u0022message\u0022:\u0022OAuth token has expired. Please obtain a new token or refresh your existing token.\u0022},\u0022request_id\u0022:\u0022req_011CZ4YJgL1yTQWFTVZ8KRw3\u0022}",
+          "durationMs": 387.5311,
+          "timestamp": "2026-03-15T08:20:58.0464306+00:00"
+        }
+      ],
+      "extractionInputs": []
+    },
+    {
+      "name": "China: Hobbies \u2014 Wei Zhang",
+      "passed": false,
+      "failureMessage": "Expected at least 1 memory, got 0",
+      "durationMs": 2435.4763,
+      "memoryCount": 0,
+      "finalMemories": [],
+      "llmCalls": [
+        {
+          "requestId": "8fc2f2c2999d475ba927e58e58df91d3",
+          "conversationId": "memory-extraction",
+          "model": "claude-sonnet-4-6",
+          "temperature": 0,
+          "maxTokens": 2048,
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a memory extraction system. Your job is to identify discrete, important facts\nfrom a conversation between a user and an AI assistant that are worth remembering long-term.\n\nExtract facts that fall into these categories:\n- User preferences, habits, or personal information\n- Decisions made or conclusions reached\n- Important context about projects, tasks, or goals\n- Relationships, names, locations, or other entities\n- Technical preferences or configuration choices\n\nDo NOT extract:\n- Trivial pleasantries or greetings\n- Transient information (e.g. \u0022it\u0027s raining today\u0022)\n- Information the assistant generated that isn\u0027t grounded in the user\u0027s input\n- Duplicate variations of the same fact\n\nFor each fact, provide:\n- \u0022content\u0022: The fact as a clear, self-contained statement\n- \u0022title\u0022: A short 3-5 word label\n- \u0022tags\u0022: 1-3 categorization tags\n\nRespond with a JSON array. If there is nothing worth remembering, respond with an empty array [].\nExample:\n[\n  {\u0022content\u0022: \u0022User\u0027s name is Yury and he lives in Copenhagen\u0022, \u0022title\u0022: \u0022User identity\u0022, \u0022tags\u0022: [\u0022personal\u0022, \u0022location\u0022]},\n  {\u0022content\u0022: \u0022User prefers Claude over GPT for coding tasks\u0022, \u0022title\u0022: \u0022LLM preference\u0022, \u0022tags\u0022: [\u0022preferences\u0022, \u0022technical\u0022]}\n]\n\nRespond with exactly one JSON array and nothing else \u2014 no commentary, no explanation, no markdown."
+            },
+            {
+              "role": "user",
+              "content": "Conversation to analyze:\r\n\r\nUser: Photography is my biggest hobby. I shoot with a Fujifilm X-T5 and I love street photography around the hutongs. I also post on Xiaohongshu.\r\n\r\nAssistant: The X-T5 is a fantastic camera for street photography! The hutongs must give you amazing subjects. Do you have a favourite area?\r\n\r\n"
+            }
+          ],
+          "responseSuccess": false,
+          "errorCode": "LlmError",
+          "errorMessage": "HTTP 401: {\u0022type\u0022:\u0022error\u0022,\u0022error\u0022:{\u0022type\u0022:\u0022authentication_error\u0022,\u0022message\u0022:\u0022OAuth token has expired. Please obtain a new token or refresh your existing token.\u0022},\u0022request_id\u0022:\u0022req_011CZ4YJrnKFp6UPM5ix6dbJ\u0022}",
+          "durationMs": 384.5721,
+          "timestamp": "2026-03-15T08:21:00.4907532+00:00"
+        }
+      ],
+      "extractionInputs": []
+    },
+    {
+      "name": "Canada: Personal life \u2014 Priya Sharma",
+      "passed": false,
+      "failureMessage": "Expected at least 1 memory, got 0",
+      "durationMs": 2498.3593,
+      "memoryCount": 0,
+      "finalMemories": [],
+      "llmCalls": [
+        {
+          "requestId": "50df3f023ad748849ea80608dd92295d",
+          "conversationId": "memory-extraction",
+          "model": "claude-sonnet-4-6",
+          "temperature": 0,
+          "maxTokens": 2048,
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a memory extraction system. Your job is to identify discrete, important facts\nfrom a conversation between a user and an AI assistant that are worth remembering long-term.\n\nExtract facts that fall into these categories:\n- User preferences, habits, or personal information\n- Decisions made or conclusions reached\n- Important context about projects, tasks, or goals\n- Relationships, names, locations, or other entities\n- Technical preferences or configuration choices\n\nDo NOT extract:\n- Trivial pleasantries or greetings\n- Transient information (e.g. \u0022it\u0027s raining today\u0022)\n- Information the assistant generated that isn\u0027t grounded in the user\u0027s input\n- Duplicate variations of the same fact\n\nFor each fact, provide:\n- \u0022content\u0022: The fact as a clear, self-contained statement\n- \u0022title\u0022: A short 3-5 word label\n- \u0022tags\u0022: 1-3 categorization tags\n\nRespond with a JSON array. If there is nothing worth remembering, respond with an empty array [].\nExample:\n[\n  {\u0022content\u0022: \u0022User\u0027s name is Yury and he lives in Copenhagen\u0022, \u0022title\u0022: \u0022User identity\u0022, \u0022tags\u0022: [\u0022personal\u0022, \u0022location\u0022]},\n  {\u0022content\u0022: \u0022User prefers Claude over GPT for coding tasks\u0022, \u0022title\u0022: \u0022LLM preference\u0022, \u0022tags\u0022: [\u0022preferences\u0022, \u0022technical\u0022]}\n]\n\nRespond with exactly one JSON array and nothing else \u2014 no commentary, no explanation, no markdown."
+            },
+            {
+              "role": "user",
+              "content": "Conversation to analyze:\r\n\r\nUser: My partner Arjun and I just adopted a rescue dog named Koda. We live in a condo in Liberty Village.\r\n\r\nAssistant: Congratulations on adopting Koda! Liberty Village is a nice area. How is Koda settling in to condo life?\r\n\r\n"
+            }
+          ],
+          "responseSuccess": false,
+          "errorCode": "LlmError",
+          "errorMessage": "HTTP 401: {\u0022type\u0022:\u0022error\u0022,\u0022error\u0022:{\u0022type\u0022:\u0022authentication_error\u0022,\u0022message\u0022:\u0022OAuth token has expired. Please obtain a new token or refresh your existing token.\u0022},\u0022request_id\u0022:\u0022req_011CZ4YK3RHAWuycoa7NKbbh\u0022}",
+          "durationMs": 450.4166,
+          "timestamp": "2026-03-15T08:21:03.0049738+00:00"
+        }
+      ],
+      "extractionInputs": []
+    },
+    {
+      "name": "Australia: Personal life \u2014 Mia Thompson",
+      "passed": false,
+      "failureMessage": "Expected at least 1 memory, got 0",
+      "durationMs": 2493.5103,
+      "memoryCount": 0,
+      "finalMemories": [],
+      "llmCalls": [
+        {
+          "requestId": "cbcc8518a30343878643742f3ff14427",
+          "conversationId": "memory-extraction",
+          "model": "claude-sonnet-4-6",
+          "temperature": 0,
+          "maxTokens": 2048,
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a memory extraction system. Your job is to identify discrete, important facts\nfrom a conversation between a user and an AI assistant that are worth remembering long-term.\n\nExtract facts that fall into these categories:\n- User preferences, habits, or personal information\n- Decisions made or conclusions reached\n- Important context about projects, tasks, or goals\n- Relationships, names, locations, or other entities\n- Technical preferences or configuration choices\n\nDo NOT extract:\n- Trivial pleasantries or greetings\n- Transient information (e.g. \u0022it\u0027s raining today\u0022)\n- Information the assistant generated that isn\u0027t grounded in the user\u0027s input\n- Duplicate variations of the same fact\n\nFor each fact, provide:\n- \u0022content\u0022: The fact as a clear, self-contained statement\n- \u0022title\u0022: A short 3-5 word label\n- \u0022tags\u0022: 1-3 categorization tags\n\nRespond with a JSON array. If there is nothing worth remembering, respond with an empty array [].\nExample:\n[\n  {\u0022content\u0022: \u0022User\u0027s name is Yury and he lives in Copenhagen\u0022, \u0022title\u0022: \u0022User identity\u0022, \u0022tags\u0022: [\u0022personal\u0022, \u0022location\u0022]},\n  {\u0022content\u0022: \u0022User prefers Claude over GPT for coding tasks\u0022, \u0022title\u0022: \u0022LLM preference\u0022, \u0022tags\u0022: [\u0022preferences\u0022, \u0022technical\u0022]}\n]\n\nRespond with exactly one JSON array and nothing else \u2014 no commentary, no explanation, no markdown."
+            },
+            {
+              "role": "user",
+              "content": "Conversation to analyze:\r\n\r\nUser: My girlfriend Emma and I just moved into a flat in Surry Hills. We have two cats, Pixel and Byte. Very on-brand for tech people.\r\n\r\nAssistant: Surry Hills is a great neighbourhood! Pixel and Byte \u2014 those are perfect names for a DevOps engineer\u0027s cats.\r\n\r\n"
+            }
+          ],
+          "responseSuccess": false,
+          "errorCode": "LlmError",
+          "errorMessage": "HTTP 401: {\u0022type\u0022:\u0022error\u0022,\u0022error\u0022:{\u0022type\u0022:\u0022authentication_error\u0022,\u0022message\u0022:\u0022OAuth token has expired. Please obtain a new token or refresh your existing token.\u0022},\u0022request_id\u0022:\u0022req_011CZ4YKE3FTJet61ayVVT2C\u0022}",
+          "durationMs": 460.429,
+          "timestamp": "2026-03-15T08:21:05.5108623+00:00"
+        }
+      ],
+      "extractionInputs": []
+    },
+    {
+      "name": "Argentina: Career update \u2014 Mateo Ruiz",
+      "passed": false,
+      "failureMessage": "Expected stale MercadoLibre-only memory to be updated, found: Mateo works as a data engineer at MercadoLibre in Buenos Aires using Spark and Airflow",
+      "durationMs": 3078.3322,
+      "memoryCount": 1,
+      "finalMemories": [
+        "Mateo works as a data engineer at MercadoLibre in Buenos Aires using Spark and Airflow"
+      ],
+      "llmCalls": [
+        {
+          "requestId": "c5a5f68beb554909a2964edbba97b9f3",
+          "conversationId": "memory-extraction",
+          "model": "claude-sonnet-4-6",
+          "temperature": 0,
+          "maxTokens": 2048,
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a memory extraction system. Your job is to identify discrete, important facts\nfrom a conversation between a user and an AI assistant that are worth remembering long-term.\n\nExtract facts that fall into these categories:\n- User preferences, habits, or personal information\n- Decisions made or conclusions reached\n- Important context about projects, tasks, or goals\n- Relationships, names, locations, or other entities\n- Technical preferences or configuration choices\n\nDo NOT extract:\n- Trivial pleasantries or greetings\n- Transient information (e.g. \u0022it\u0027s raining today\u0022)\n- Information the assistant generated that isn\u0027t grounded in the user\u0027s input\n- Duplicate variations of the same fact\n\nFor each fact, provide:\n- \u0022content\u0022: The fact as a clear, self-contained statement\n- \u0022title\u0022: A short 3-5 word label\n- \u0022tags\u0022: 1-3 categorization tags\n\nRespond with a JSON array. If there is nothing worth remembering, respond with an empty array [].\nExample:\n[\n  {\u0022content\u0022: \u0022User\u0027s name is Yury and he lives in Copenhagen\u0022, \u0022title\u0022: \u0022User identity\u0022, \u0022tags\u0022: [\u0022personal\u0022, \u0022location\u0022]},\n  {\u0022content\u0022: \u0022User prefers Claude over GPT for coding tasks\u0022, \u0022title\u0022: \u0022LLM preference\u0022, \u0022tags\u0022: [\u0022preferences\u0022, \u0022technical\u0022]}\n]\n\nRespond with exactly one JSON array and nothing else \u2014 no commentary, no explanation, no markdown."
+            },
+            {
+              "role": "user",
+              "content": "Conversation to analyze:\r\n\r\nUser: Big news \u2014 I left MercadoLibre last month. I\u0027m now at Globant as a senior data architect. Much bigger scope.\r\n\r\nAssistant: Congratulations on the move to Globant! Senior data architect sounds like a great step up. What\u0027s the new role like?\r\n\r\n"
+            }
+          ],
+          "responseSuccess": false,
+          "errorCode": "LlmError",
+          "errorMessage": "HTTP 401: {\u0022type\u0022:\u0022error\u0022,\u0022error\u0022:{\u0022type\u0022:\u0022authentication_error\u0022,\u0022message\u0022:\u0022OAuth token has expired. Please obtain a new token or refresh your existing token.\u0022},\u0022request_id\u0022:\u0022req_011CZ4YKT5pKcbjnshLpvnPq\u0022}",
+          "durationMs": 554.6822,
+          "timestamp": "2026-03-15T08:21:08.597603+00:00"
+        }
+      ],
+      "extractionInputs": []
+    },
+    {
+      "name": "Argentina: Personal life \u2014 Mateo Ruiz",
+      "passed": false,
+      "failureMessage": "Expected at least 1 memory, got 0",
+      "durationMs": 2557.9338,
+      "memoryCount": 0,
+      "finalMemories": [],
+      "llmCalls": [
+        {
+          "requestId": "e79665a6c01e4029aad793662e09aea9",
+          "conversationId": "memory-extraction",
+          "model": "claude-sonnet-4-6",
+          "temperature": 0,
+          "maxTokens": 2048,
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a memory extraction system. Your job is to identify discrete, important facts\nfrom a conversation between a user and an AI assistant that are worth remembering long-term.\n\nExtract facts that fall into these categories:\n- User preferences, habits, or personal information\n- Decisions made or conclusions reached\n- Important context about projects, tasks, or goals\n- Relationships, names, locations, or other entities\n- Technical preferences or configuration choices\n\nDo NOT extract:\n- Trivial pleasantries or greetings\n- Transient information (e.g. \u0022it\u0027s raining today\u0022)\n- Information the assistant generated that isn\u0027t grounded in the user\u0027s input\n- Duplicate variations of the same fact\n\nFor each fact, provide:\n- \u0022content\u0022: The fact as a clear, self-contained statement\n- \u0022title\u0022: A short 3-5 word label\n- \u0022tags\u0022: 1-3 categorization tags\n\nRespond with a JSON array. If there is nothing worth remembering, respond with an empty array [].\nExample:\n[\n  {\u0022content\u0022: \u0022User\u0027s name is Yury and he lives in Copenhagen\u0022, \u0022title\u0022: \u0022User identity\u0022, \u0022tags\u0022: [\u0022personal\u0022, \u0022location\u0022]},\n  {\u0022content\u0022: \u0022User prefers Claude over GPT for coding tasks\u0022, \u0022title\u0022: \u0022LLM preference\u0022, \u0022tags\u0022: [\u0022preferences\u0022, \u0022technical\u0022]}\n]\n\nRespond with exactly one JSON array and nothing else \u2014 no commentary, no explanation, no markdown."
+            },
+            {
+              "role": "user",
+              "content": "Conversation to analyze:\r\n\r\nUser: My wife Luciana and I dance tango every Friday in San Telmo. Our daughter Sofia just turned two \u2014 she tries to dance with us, it\u0027s hilarious.\r\n\r\nAssistant: That\u0027s wonderful! San Telmo is the heart of tango culture. Sofia sounds adorable trying to join in!\r\n\r\n"
+            }
+          ],
+          "responseSuccess": false,
+          "errorCode": "LlmError",
+          "errorMessage": "HTTP 401: {\u0022type\u0022:\u0022error\u0022,\u0022error\u0022:{\u0022type\u0022:\u0022authentication_error\u0022,\u0022message\u0022:\u0022OAuth token has expired. Please obtain a new token or refresh your existing token.\u0022},\u0022request_id\u0022:\u0022req_011CZ4YKe3spBjZnRB4n4oRy\u0022}",
+          "durationMs": 508.8816,
+          "timestamp": "2026-03-15T08:21:11.1724735+00:00"
+        }
+      ],
+      "extractionInputs": []
+    },
+    {
+      "name": "Canada: Hobbies \u2014 Priya Sharma",
+      "passed": false,
+      "failureMessage": "Expected at least 1 memory, got 0",
+      "durationMs": 2493.9149,
+      "memoryCount": 0,
+      "finalMemories": [],
+      "llmCalls": [
+        {
+          "requestId": "99b3e545f37d4f3ca8d1ca28a13f859f",
+          "conversationId": "memory-extraction",
+          "model": "claude-sonnet-4-6",
+          "temperature": 0,
+          "maxTokens": 2048,
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a memory extraction system. Your job is to identify discrete, important facts\nfrom a conversation between a user and an AI assistant that are worth remembering long-term.\n\nExtract facts that fall into these categories:\n- User preferences, habits, or personal information\n- Decisions made or conclusions reached\n- Important context about projects, tasks, or goals\n- Relationships, names, locations, or other entities\n- Technical preferences or configuration choices\n\nDo NOT extract:\n- Trivial pleasantries or greetings\n- Transient information (e.g. \u0022it\u0027s raining today\u0022)\n- Information the assistant generated that isn\u0027t grounded in the user\u0027s input\n- Duplicate variations of the same fact\n\nFor each fact, provide:\n- \u0022content\u0022: The fact as a clear, self-contained statement\n- \u0022title\u0022: A short 3-5 word label\n- \u0022tags\u0022: 1-3 categorization tags\n\nRespond with a JSON array. If there is nothing worth remembering, respond with an empty array [].\nExample:\n[\n  {\u0022content\u0022: \u0022User\u0027s name is Yury and he lives in Copenhagen\u0022, \u0022title\u0022: \u0022User identity\u0022, \u0022tags\u0022: [\u0022personal\u0022, \u0022location\u0022]},\n  {\u0022content\u0022: \u0022User prefers Claude over GPT for coding tasks\u0022, \u0022title\u0022: \u0022LLM preference\u0022, \u0022tags\u0022: [\u0022preferences\u0022, \u0022technical\u0022]}\n]\n\nRespond with exactly one JSON array and nothing else \u2014 no commentary, no explanation, no markdown."
+            },
+            {
+              "role": "user",
+              "content": "Conversation to analyze:\r\n\r\nUser: I\u0027m really into rock climbing. I go to the Toronto Climbing Academy every weekend and I\u0027m working towards leading 5.11s outdoors.\r\n\r\nAssistant: That\u0027s impressive! 5.11 is solid outdoor climbing. Do you have a favourite crag in Ontario?\r\n\r\n"
+            }
+          ],
+          "responseSuccess": false,
+          "errorCode": "LlmError",
+          "errorMessage": "HTTP 401: {\u0022type\u0022:\u0022error\u0022,\u0022error\u0022:{\u0022type\u0022:\u0022authentication_error\u0022,\u0022message\u0022:\u0022OAuth token has expired. Please obtain a new token or refresh your existing token.\u0022},\u0022request_id\u0022:\u0022req_011CZ4YKptVZt9CCMFab4Rq4\u0022}",
+          "durationMs": 449.5743,
+          "timestamp": "2026-03-15T08:21:13.677771+00:00"
+        }
+      ],
+      "extractionInputs": []
+    },
+    {
+      "name": "Australia: Hobbies \u2014 Mia Thompson",
+      "passed": false,
+      "failureMessage": "Expected at least 1 memory, got 0",
+      "durationMs": 2470.501,
+      "memoryCount": 0,
+      "finalMemories": [],
+      "llmCalls": [
+        {
+          "requestId": "e6e27995482646a7811803e13d9ddc6c",
+          "conversationId": "memory-extraction",
+          "model": "claude-sonnet-4-6",
+          "temperature": 0,
+          "maxTokens": 2048,
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a memory extraction system. Your job is to identify discrete, important facts\nfrom a conversation between a user and an AI assistant that are worth remembering long-term.\n\nExtract facts that fall into these categories:\n- User preferences, habits, or personal information\n- Decisions made or conclusions reached\n- Important context about projects, tasks, or goals\n- Relationships, names, locations, or other entities\n- Technical preferences or configuration choices\n\nDo NOT extract:\n- Trivial pleasantries or greetings\n- Transient information (e.g. \u0022it\u0027s raining today\u0022)\n- Information the assistant generated that isn\u0027t grounded in the user\u0027s input\n- Duplicate variations of the same fact\n\nFor each fact, provide:\n- \u0022content\u0022: The fact as a clear, self-contained statement\n- \u0022title\u0022: A short 3-5 word label\n- \u0022tags\u0022: 1-3 categorization tags\n\nRespond with a JSON array. If there is nothing worth remembering, respond with an empty array [].\nExample:\n[\n  {\u0022content\u0022: \u0022User\u0027s name is Yury and he lives in Copenhagen\u0022, \u0022title\u0022: \u0022User identity\u0022, \u0022tags\u0022: [\u0022personal\u0022, \u0022location\u0022]},\n  {\u0022content\u0022: \u0022User prefers Claude over GPT for coding tasks\u0022, \u0022title\u0022: \u0022LLM preference\u0022, \u0022tags\u0022: [\u0022preferences\u0022, \u0022technical\u0022]}\n]\n\nRespond with exactly one JSON array and nothing else \u2014 no commentary, no explanation, no markdown."
+            },
+            {
+              "role": "user",
+              "content": "Conversation to analyze:\r\n\r\nUser: I surf almost every morning before work at Bondi Beach. I\u0027ve been surfing since I was twelve. I also play in a local women\u0027s AFL team on Saturdays.\r\n\r\nAssistant: Dawn patrol at Bondi \u2014 that\u0027s living the dream! AFL and surfing is a very Aussie combo. What position do you play?\r\n\r\n"
+            }
+          ],
+          "responseSuccess": false,
+          "errorCode": "LlmError",
+          "errorMessage": "HTTP 401: {\u0022type\u0022:\u0022error\u0022,\u0022error\u0022:{\u0022type\u0022:\u0022authentication_error\u0022,\u0022message\u0022:\u0022OAuth token has expired. Please obtain a new token or refresh your existing token.\u0022},\u0022request_id\u0022:\u0022req_011CZ4YL1fdgqTPLhZrqSqT2\u0022}",
+          "durationMs": 422.6236,
+          "timestamp": "2026-03-15T08:21:16.1739551+00:00"
+        }
+      ],
+      "extractionInputs": []
+    },
+    {
+      "name": "Argentina: Dev environment \u2014 Mateo Ruiz",
+      "passed": false,
+      "failureMessage": "Expected at least 1 memory, got 0",
+      "durationMs": 2663.8796,
+      "memoryCount": 0,
+      "finalMemories": [],
+      "llmCalls": [
+        {
+          "requestId": "427b90e9553c4f3fb221c6f7bd6112fb",
+          "conversationId": "memory-extraction",
+          "model": "claude-sonnet-4-6",
+          "temperature": 0,
+          "maxTokens": 2048,
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a memory extraction system. Your job is to identify discrete, important facts\nfrom a conversation between a user and an AI assistant that are worth remembering long-term.\n\nExtract facts that fall into these categories:\n- User preferences, habits, or personal information\n- Decisions made or conclusions reached\n- Important context about projects, tasks, or goals\n- Relationships, names, locations, or other entities\n- Technical preferences or configuration choices\n\nDo NOT extract:\n- Trivial pleasantries or greetings\n- Transient information (e.g. \u0022it\u0027s raining today\u0022)\n- Information the assistant generated that isn\u0027t grounded in the user\u0027s input\n- Duplicate variations of the same fact\n\nFor each fact, provide:\n- \u0022content\u0022: The fact as a clear, self-contained statement\n- \u0022title\u0022: A short 3-5 word label\n- \u0022tags\u0022: 1-3 categorization tags\n\nRespond with a JSON array. If there is nothing worth remembering, respond with an empty array [].\nExample:\n[\n  {\u0022content\u0022: \u0022User\u0027s name is Yury and he lives in Copenhagen\u0022, \u0022title\u0022: \u0022User identity\u0022, \u0022tags\u0022: [\u0022personal\u0022, \u0022location\u0022]},\n  {\u0022content\u0022: \u0022User prefers Claude over GPT for coding tasks\u0022, \u0022title\u0022: \u0022LLM preference\u0022, \u0022tags\u0022: [\u0022preferences\u0022, \u0022technical\u0022]}\n]\n\nRespond with exactly one JSON array and nothing else \u2014 no commentary, no explanation, no markdown."
+            },
+            {
+              "role": "user",
+              "content": "Conversation to analyze:\r\n\r\nUser: My dev setup is a ThinkPad running Fedora with Neovim. I do everything in the terminal \u2014 tmux, lazygit, ripgrep. Can\u0027t stand IDEs.\r\n\r\nAssistant: A terminal-centric workflow! Neovim on Fedora is a great combo. Have you customized your config much?\r\n\r\n"
+            }
+          ],
+          "responseSuccess": false,
+          "errorCode": "LlmError",
+          "errorMessage": "HTTP 401: {\u0022type\u0022:\u0022error\u0022,\u0022error\u0022:{\u0022type\u0022:\u0022authentication_error\u0022,\u0022message\u0022:\u0022OAuth token has expired. Please obtain a new token or refresh your existing token.\u0022},\u0022request_id\u0022:\u0022req_011CZ4YLCCeMbwK1fHh1CBzp\u0022}",
+          "durationMs": 635.2498,
+          "timestamp": "2026-03-15T08:21:18.8487178+00:00"
+        }
+      ],
+      "extractionInputs": []
+    },
+    {
+      "name": "Canada: Career \u2014 Priya Sharma",
+      "passed": false,
+      "failureMessage": "Expected at least 1 memory, got 0",
+      "durationMs": 2421.0488,
+      "memoryCount": 0,
+      "finalMemories": [],
+      "llmCalls": [
+        {
+          "requestId": "959b03be9dee4996bcb33cec7342632e",
+          "conversationId": "memory-extraction",
+          "model": "claude-sonnet-4-6",
+          "temperature": 0,
+          "maxTokens": 2048,
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a memory extraction system. Your job is to identify discrete, important facts\nfrom a conversation between a user and an AI assistant that are worth remembering long-term.\n\nExtract facts that fall into these categories:\n- User preferences, habits, or personal information\n- Decisions made or conclusions reached\n- Important context about projects, tasks, or goals\n- Relationships, names, locations, or other entities\n- Technical preferences or configuration choices\n\nDo NOT extract:\n- Trivial pleasantries or greetings\n- Transient information (e.g. \u0022it\u0027s raining today\u0022)\n- Information the assistant generated that isn\u0027t grounded in the user\u0027s input\n- Duplicate variations of the same fact\n\nFor each fact, provide:\n- \u0022content\u0022: The fact as a clear, self-contained statement\n- \u0022title\u0022: A short 3-5 word label\n- \u0022tags\u0022: 1-3 categorization tags\n\nRespond with a JSON array. If there is nothing worth remembering, respond with an empty array [].\nExample:\n[\n  {\u0022content\u0022: \u0022User\u0027s name is Yury and he lives in Copenhagen\u0022, \u0022title\u0022: \u0022User identity\u0022, \u0022tags\u0022: [\u0022personal\u0022, \u0022location\u0022]},\n  {\u0022content\u0022: \u0022User prefers Claude over GPT for coding tasks\u0022, \u0022title\u0022: \u0022LLM preference\u0022, \u0022tags\u0022: [\u0022preferences\u0022, \u0022technical\u0022]}\n]\n\nRespond with exactly one JSON array and nothing else \u2014 no commentary, no explanation, no markdown."
+            },
+            {
+              "role": "user",
+              "content": "Conversation to analyze:\r\n\r\nUser: I\u0027m Priya, I work as a senior UX designer at Shopify in Toronto. Been there about four years now.\r\n\r\nAssistant: That\u0027s great, Priya! Shopify is an amazing company. How are you enjoying the UX design work there?\r\n\r\n"
+            }
+          ],
+          "responseSuccess": false,
+          "errorCode": "LlmError",
+          "errorMessage": "HTTP 401: {\u0022type\u0022:\u0022error\u0022,\u0022error\u0022:{\u0022type\u0022:\u0022authentication_error\u0022,\u0022message\u0022:\u0022OAuth token has expired. Please obtain a new token or refresh your existing token.\u0022},\u0022request_id\u0022:\u0022req_011CZ4YLPhx3stkNeMX19dEn\u0022}",
+          "durationMs": 378.5572,
+          "timestamp": "2026-03-15T08:21:21.2818368+00:00"
+        }
+      ],
+      "extractionInputs": []
+    },
+    {
+      "name": "Australia: Hobby update \u2014 Mia Thompson",
+      "passed": false,
+      "failureMessage": "Expected stale Bondi-only surfing memory to be updated, found: Mia surfs almost every morning at Bondi Beach in Sydney before work",
+      "durationMs": 2893.5236,
+      "memoryCount": 1,
+      "finalMemories": [
+        "Mia surfs almost every morning at Bondi Beach in Sydney before work"
+      ],
+      "llmCalls": [
+        {
+          "requestId": "b3f4b315fa86452db891f50c2df7c3ef",
+          "conversationId": "memory-extraction",
+          "model": "claude-sonnet-4-6",
+          "temperature": 0,
+          "maxTokens": 2048,
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a memory extraction system. Your job is to identify discrete, important facts\nfrom a conversation between a user and an AI assistant that are worth remembering long-term.\n\nExtract facts that fall into these categories:\n- User preferences, habits, or personal information\n- Decisions made or conclusions reached\n- Important context about projects, tasks, or goals\n- Relationships, names, locations, or other entities\n- Technical preferences or configuration choices\n\nDo NOT extract:\n- Trivial pleasantries or greetings\n- Transient information (e.g. \u0022it\u0027s raining today\u0022)\n- Information the assistant generated that isn\u0027t grounded in the user\u0027s input\n- Duplicate variations of the same fact\n\nFor each fact, provide:\n- \u0022content\u0022: The fact as a clear, self-contained statement\n- \u0022title\u0022: A short 3-5 word label\n- \u0022tags\u0022: 1-3 categorization tags\n\nRespond with a JSON array. If there is nothing worth remembering, respond with an empty array [].\nExample:\n[\n  {\u0022content\u0022: \u0022User\u0027s name is Yury and he lives in Copenhagen\u0022, \u0022title\u0022: \u0022User identity\u0022, \u0022tags\u0022: [\u0022personal\u0022, \u0022location\u0022]},\n  {\u0022content\u0022: \u0022User prefers Claude over GPT for coding tasks\u0022, \u0022title\u0022: \u0022LLM preference\u0022, \u0022tags\u0022: [\u0022preferences\u0022, \u0022technical\u0022]}\n]\n\nRespond with exactly one JSON array and nothing else \u2014 no commentary, no explanation, no markdown."
+            },
+            {
+              "role": "user",
+              "content": "Conversation to analyze:\r\n\r\nUser: I actually stopped surfing at Bondi \u2014 too crowded these days. I now drive out to Maroubra every morning. Way better waves and fewer people.\r\n\r\nAssistant: Maroubra is a local\u0027s favourite! Less touristy and more consistent swell. Worth the extra drive?\r\n\r\n"
+            }
+          ],
+          "responseSuccess": false,
+          "errorCode": "LlmError",
+          "errorMessage": "HTTP 401: {\u0022type\u0022:\u0022error\u0022,\u0022error\u0022:{\u0022type\u0022:\u0022authentication_error\u0022,\u0022message\u0022:\u0022OAuth token has expired. Please obtain a new token or refresh your existing token.\u0022},\u0022request_id\u0022:\u0022req_011CZ4YLbx9PWcr2zvJrSfnw\u0022}",
+          "durationMs": 419.3229,
+          "timestamp": "2026-03-15T08:21:24.1875332+00:00"
+        }
+      ],
+      "extractionInputs": []
+    },
+    {
+      "name": "All personas: Trivial conversation \u2014 no extraction",
+      "passed": true,
+      "durationMs": 3559.8725,
+      "memoryCount": 2,
+      "finalMemories": [
+        "Mateo Ruiz is a data engineer at MercadoLibre in Buenos Aires",
+        "Priya Sharma is a UX designer at Shopify in Toronto"
+      ],
+      "llmCalls": [
+        {
+          "requestId": "834941b6772f41519ee29f20db3dc328",
+          "conversationId": "memory-extraction",
+          "model": "claude-sonnet-4-6",
+          "temperature": 0,
+          "maxTokens": 2048,
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a memory extraction system. Your job is to identify discrete, important facts\nfrom a conversation between a user and an AI assistant that are worth remembering long-term.\n\nExtract facts that fall into these categories:\n- User preferences, habits, or personal information\n- Decisions made or conclusions reached\n- Important context about projects, tasks, or goals\n- Relationships, names, locations, or other entities\n- Technical preferences or configuration choices\n\nDo NOT extract:\n- Trivial pleasantries or greetings\n- Transient information (e.g. \u0022it\u0027s raining today\u0022)\n- Information the assistant generated that isn\u0027t grounded in the user\u0027s input\n- Duplicate variations of the same fact\n\nFor each fact, provide:\n- \u0022content\u0022: The fact as a clear, self-contained statement\n- \u0022title\u0022: A short 3-5 word label\n- \u0022tags\u0022: 1-3 categorization tags\n\nRespond with a JSON array. If there is nothing worth remembering, respond with an empty array [].\nExample:\n[\n  {\u0022content\u0022: \u0022User\u0027s name is Yury and he lives in Copenhagen\u0022, \u0022title\u0022: \u0022User identity\u0022, \u0022tags\u0022: [\u0022personal\u0022, \u0022location\u0022]},\n  {\u0022content\u0022: \u0022User prefers Claude over GPT for coding tasks\u0022, \u0022title\u0022: \u0022LLM preference\u0022, \u0022tags\u0022: [\u0022preferences\u0022, \u0022technical\u0022]}\n]\n\nRespond with exactly one JSON array and nothing else \u2014 no commentary, no explanation, no markdown."
+            },
+            {
+              "role": "user",
+              "content": "Conversation to analyze:\r\n\r\nUser: Good morning! How\u0027s the weather today?\r\n\r\nAssistant: Good morning! I\u0027m an AI so I don\u0027t experience weather, but I hope it\u0027s nice where you are!\r\n\r\n"
+            }
+          ],
+          "responseSuccess": false,
+          "errorCode": "LlmError",
+          "errorMessage": "HTTP 401: {\u0022type\u0022:\u0022error\u0022,\u0022error\u0022:{\u0022type\u0022:\u0022authentication_error\u0022,\u0022message\u0022:\u0022OAuth token has expired. Please obtain a new token or refresh your existing token.\u0022},\u0022request_id\u0022:\u0022req_011CZ4YLrVGDFpTQCbjmByqi\u0022}",
+          "durationMs": 600.0477,
+          "timestamp": "2026-03-15T08:21:27.7629752+00:00"
+        }
+      ],
+      "extractionInputs": [
+        {
+          "userMessage": "Good morning! How\u0027s the weather today?",
+          "assistantResponse": "Good morning! I\u0027m an AI so I don\u0027t experience weather, but I hope it\u0027s nice where you are!"
+        }
+      ]
+    },
+    {
+      "name": "Argentina: Career \u2014 Mateo Ruiz",
+      "passed": false,
+      "failureMessage": "Expected at least 1 memory, got 0",
+      "durationMs": 2486.2513,
+      "memoryCount": 0,
+      "finalMemories": [],
+      "llmCalls": [
+        {
+          "requestId": "316d49dd96534b0b9ebd2eba41bf1dfd",
+          "conversationId": "memory-extraction",
+          "model": "claude-sonnet-4-6",
+          "temperature": 0,
+          "maxTokens": 2048,
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a memory extraction system. Your job is to identify discrete, important facts\nfrom a conversation between a user and an AI assistant that are worth remembering long-term.\n\nExtract facts that fall into these categories:\n- User preferences, habits, or personal information\n- Decisions made or conclusions reached\n- Important context about projects, tasks, or goals\n- Relationships, names, locations, or other entities\n- Technical preferences or configuration choices\n\nDo NOT extract:\n- Trivial pleasantries or greetings\n- Transient information (e.g. \u0022it\u0027s raining today\u0022)\n- Information the assistant generated that isn\u0027t grounded in the user\u0027s input\n- Duplicate variations of the same fact\n\nFor each fact, provide:\n- \u0022content\u0022: The fact as a clear, self-contained statement\n- \u0022title\u0022: A short 3-5 word label\n- \u0022tags\u0022: 1-3 categorization tags\n\nRespond with a JSON array. If there is nothing worth remembering, respond with an empty array [].\nExample:\n[\n  {\u0022content\u0022: \u0022User\u0027s name is Yury and he lives in Copenhagen\u0022, \u0022title\u0022: \u0022User identity\u0022, \u0022tags\u0022: [\u0022personal\u0022, \u0022location\u0022]},\n  {\u0022content\u0022: \u0022User prefers Claude over GPT for coding tasks\u0022, \u0022title\u0022: \u0022LLM preference\u0022, \u0022tags\u0022: [\u0022preferences\u0022, \u0022technical\u0022]}\n]\n\nRespond with exactly one JSON array and nothing else \u2014 no commentary, no explanation, no markdown."
+            },
+            {
+              "role": "user",
+              "content": "Conversation to analyze:\r\n\r\nUser: I\u0027m Mateo, I work as a data engineer at MercadoLibre in Buenos Aires. We mostly use Spark and Airflow for our ETL pipelines.\r\n\r\nAssistant: MercadoLibre is huge in Latin America! Spark and Airflow are solid choices for data engineering. What scale are you dealing with?\r\n\r\n"
+            }
+          ],
+          "responseSuccess": false,
+          "errorCode": "LlmError",
+          "errorMessage": "HTTP 401: {\u0022type\u0022:\u0022error\u0022,\u0022error\u0022:{\u0022type\u0022:\u0022authentication_error\u0022,\u0022message\u0022:\u0022OAuth token has expired. Please obtain a new token or refresh your existing token.\u0022},\u0022request_id\u0022:\u0022req_011CZ4YM3uMZ2rKBqY2va78k\u0022}",
+          "durationMs": 421.0646,
+          "timestamp": "2026-03-15T08:21:30.263155+00:00"
+        }
+      ],
+      "extractionInputs": []
+    },
+    {
+      "name": "All personas: Seeded facts searchable",
+      "passed": true,
+      "durationMs": 5278.9971,
+      "memoryCount": 4,
+      "finalMemories": [
+        "Mia Thompson is a DevOps engineer at Atlassian in Sydney, Australia, managing Kubernetes clusters",
+        "Wei Zhang is a mobile developer at ByteDance in Beijing, China, working on Douyin with Swift",
+        "Mateo Ruiz is a data engineer at MercadoLibre in Buenos Aires, Argentina, using Spark and Airflow",
+        "Priya Sharma is a senior UX designer at Shopify in Toronto, Canada"
+      ],
+      "llmCalls": [],
+      "extractionInputs": []
+    },
+    {
+      "name": "China: Personal life \u2014 Wei Zhang",
+      "passed": false,
+      "failureMessage": "Expected at least 1 memory, got 0",
+      "durationMs": 2481.6802,
+      "memoryCount": 0,
+      "finalMemories": [],
+      "llmCalls": [
+        {
+          "requestId": "0f2b59281ba142ff949a049feef913ed",
+          "conversationId": "memory-extraction",
+          "model": "claude-sonnet-4-6",
+          "temperature": 0,
+          "maxTokens": 2048,
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a memory extraction system. Your job is to identify discrete, important facts\nfrom a conversation between a user and an AI assistant that are worth remembering long-term.\n\nExtract facts that fall into these categories:\n- User preferences, habits, or personal information\n- Decisions made or conclusions reached\n- Important context about projects, tasks, or goals\n- Relationships, names, locations, or other entities\n- Technical preferences or configuration choices\n\nDo NOT extract:\n- Trivial pleasantries or greetings\n- Transient information (e.g. \u0022it\u0027s raining today\u0022)\n- Information the assistant generated that isn\u0027t grounded in the user\u0027s input\n- Duplicate variations of the same fact\n\nFor each fact, provide:\n- \u0022content\u0022: The fact as a clear, self-contained statement\n- \u0022title\u0022: A short 3-5 word label\n- \u0022tags\u0022: 1-3 categorization tags\n\nRespond with a JSON array. If there is nothing worth remembering, respond with an empty array [].\nExample:\n[\n  {\u0022content\u0022: \u0022User\u0027s name is Yury and he lives in Copenhagen\u0022, \u0022title\u0022: \u0022User identity\u0022, \u0022tags\u0022: [\u0022personal\u0022, \u0022location\u0022]},\n  {\u0022content\u0022: \u0022User prefers Claude over GPT for coding tasks\u0022, \u0022title\u0022: \u0022LLM preference\u0022, \u0022tags\u0022: [\u0022preferences\u0022, \u0022technical\u0022]}\n]\n\nRespond with exactly one JSON array and nothing else \u2014 no commentary, no explanation, no markdown."
+            },
+            {
+              "role": "user",
+              "content": "Conversation to analyze:\r\n\r\nUser: My girlfriend Mei and I adopted a cat called Boba last month. We also play badminton together every weekend at the community court. I\u0027m training for a doubles tournament in April.\r\n\r\nAssistant: A cat and badminton \u2014 sounds like you two have a great balance! Is Boba adjusting well?\r\n\r\n"
+            }
+          ],
+          "responseSuccess": false,
+          "errorCode": "LlmError",
+          "errorMessage": "HTTP 401: {\u0022type\u0022:\u0022error\u0022,\u0022error\u0022:{\u0022type\u0022:\u0022authentication_error\u0022,\u0022message\u0022:\u0022OAuth token has expired. Please obtain a new token or refresh your existing token.\u0022},\u0022request_id\u0022:\u0022req_011CZ4YMdAMGpJyrCP3sM7yP\u0022}",
+          "durationMs": 433.0594,
+          "timestamp": "2026-03-15T08:21:38.0482809+00:00"
+        }
+      ],
+      "extractionInputs": []
+    }
+  ]
+}

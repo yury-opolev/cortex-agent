@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Voice channel runs on the Windows host for audio device access -->
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Cortex.Contained.Channels.Voice.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Cortex.Contained.Contracts\Cortex.Contained.Contracts.csproj" />
+    <ProjectReference Include="..\Cortex.Contained.Speech\Cortex.Contained.Speech.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="NAudio" />
+  </ItemGroup>
+
+</Project>

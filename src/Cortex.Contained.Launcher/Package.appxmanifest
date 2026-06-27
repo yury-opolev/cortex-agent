@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+         xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+         xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+         xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
+         IgnorableNamespaces="uap rescap desktop">
+
+  <Identity Name="Cortex.Contained.Launcher"
+            Publisher="CN=B4C4AA96-F301-4E3B-AA5D-25A99E1D356D"
+            Version="0.1.0.0"
+            ProcessorArchitecture="x64" />
+
+  <Properties>
+    <DisplayName>Cortex AI</DisplayName>
+    <PublisherDisplayName>Space-Kube</PublisherDisplayName>
+    <Description>Cortex AI personal assistant launcher</Description>
+    <Logo>Assets\StoreLogo.png</Logo>
+  </Properties>
+
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19041.0" MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="en-us" />
+  </Resources>
+
+  <Applications>
+    <Application Id="CortexLauncher"
+                 Executable="Cortex.Contained.Launcher.exe"
+                 EntryPoint="Windows.FullTrustApplication">
+
+      <uap:VisualElements DisplayName="Cortex AI"
+                          Description="Cortex AI personal assistant"
+                          BackgroundColor="transparent"
+                          Square150x150Logo="Assets\Square150x150Logo.png"
+                          Square44x44Logo="Assets\Square44x44Logo.png" />
+
+      <Extensions>
+        <desktop:Extension Category="windows.startupTask">
+          <desktop:StartupTask TaskId="CortexLauncher"
+                               Enabled="true"
+                               DisplayName="Cortex AI" />
+        </desktop:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
+
+</Package>

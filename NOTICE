@@ -1,0 +1,32 @@
+cortex-agent
+Copyright (c) 2026 Yury Opolev
+
+This product is licensed under the MIT License (see LICENSE). It bundles or
+depends on third-party components and model weights under their own licenses:
+
+Submodules (each under its own LICENSE):
+  - coda-cli ......... MIT
+  - silero-sharp ..... MIT
+  - uni-voices ....... MIT
+  - whisper-stt ...... MIT
+  - cortex-embeddings  MIT
+  - memory-mcp ....... BSD-3-Clause
+  - voice-id ......... BSD-3-Clause (code) + model licenses below
+  - Discord.Net ...... MIT (fork of github.com/discord-net/Discord.Net,
+                       Copyright (c) 2015-2024 Discord.Net Contributors)
+
+Model weights (downloaded at build/runtime, NOT redistributed in this repo):
+  - Whisper (OpenAI) ............ MIT
+  - qwen3-embedding (Alibaba) ... Apache-2.0
+  - ERes2NetV2, CAM++ (3D-Speaker) Apache-2.0
+  - WeSpeaker ResNet ............ CC-BY-4.0 (attribution required)
+  - Kokoro TTS .................. community ONNX (verify upstream before redistributing)
+  - Silero TTS .................. CC-BY-NC  ** NON-COMMERCIAL USE ONLY **
+
+IMPORTANT: while cortex-agent itself is MIT, the optional Silero TTS model is
+CC-BY-NC. Commercial deployments must not use Silero (use Kokoro or another TTS).
+See lib/voice-id for model attribution details.
+
+THIRD-PARTY SERVICE TERMS: Using the GitHub Copilot API outside official editor
+integrations, or the Claude.ai subscription OAuth flow, may be subject to those
+providers' Terms of Service. Prefer an Anthropic API key for Anthropic access.

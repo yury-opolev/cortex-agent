@@ -1,0 +1,7 @@
+<Project>
+  <!-- Submodule projects manage their own package versions inline.
+       Disable central package management for everything under lib/. -->
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+</Project>

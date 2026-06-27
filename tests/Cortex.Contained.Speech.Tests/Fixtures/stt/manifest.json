@@ -1,0 +1,55 @@
+{
+  "//": "transcript is EMPTY on purpose — fill the EXACT words said. hypothesis is the STT guess (an aid, not ground truth).",
+  "clips": [
+    {
+      "file": "b935fa47.wav",
+      "transcript": "",
+      "hypothesis": "No, that's it. Thank you very much."
+    },
+    {
+      "file": "81a2721d.wav",
+      "transcript": "",
+      "hypothesis": "Interesting."
+    },
+    {
+      "file": "d9533b3f.wav",
+      "transcript": "",
+      "hypothesis": "Thank you. That was really..."
+    },
+    {
+      "file": "8cabd25d.wav",
+      "transcript": "",
+      "hypothesis": "- Oh, that one. - Yeah."
+    },
+    {
+      "file": "bbba7ce6.wav",
+      "transcript": "",
+      "hypothesis": "Stop, stop. Please continue."
+    },
+    {
+      "file": "af175016.wav",
+      "transcript": "",
+      "hypothesis": "Wait, wait, wait. I need a story about Helsingor, not Copenhagen."
+    },
+    {
+      "file": "0fa64999.wav",
+      "transcript": "",
+      "hypothesis": "Can I find this story about Copenhagen like a real historical article that is not too long, maybe 10 sentences, and tell it to me here?"
+    },
+    {
+      "file": "e0b385c6.wav",
+      "transcript": "",
+      "hypothesis": "I was wondering, can you find"
+    },
+    {
+      "file": "da016ff9.wav",
+      "transcript": "",
+      "hypothesis": "Hello, can you hear me?"
+    },
+    {
+      "file": "66fabb0d.wav",
+      "transcript": "",
+      "hypothesis": "Hello, how is it going?"
+    }
+  ]
+}

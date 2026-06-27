@@ -1,0 +1,79 @@
+{
+  "id": "priya-sharma",
+  "persona": {
+    "name": "Priya Sharma",
+    "background": "UX designer at Shopify in Toronto. Originally from Mumbai, moved to Canada 5 years ago. Works on the merchant dashboard team.",
+    "personality": "Warm, detail-oriented, uses casual language. Often mentions weekend plans. Enthusiastic about her hobbies."
+  },
+  "facts": {
+    "career": [
+      "Works as a UX designer at Shopify",
+      "On the merchant dashboard team",
+      "Uses Figma for design work",
+      "Has been at Shopify for 2 years"
+    ],
+    "personal": [
+      "Lives in Toronto",
+      "Originally from Mumbai",
+      "Moved to Canada 5 years ago",
+      "Has a cat named Chai"
+    ],
+    "hobbies": [
+      "Rock climbing at a gym called Boulder House",
+      "Climbs V4-V5 bouldering grades",
+      "Goes climbing every Saturday morning"
+    ]
+  },
+  "phases": [
+    {
+      "name": "day-1-intro",
+      "segments": [
+        {
+          "type": "conversation",
+          "topic": "Introduce yourself casually — mention your job and where you live",
+          "exchanges": 3,
+          "hints": ["mention Shopify and Toronto naturally"]
+        },
+        {
+          "type": "conversation",
+          "topic": "Talk about your weekend climbing hobby",
+          "exchanges": 3,
+          "hints": ["mention Boulder House", "mention your bouldering grade"],
+          "scoring": {
+            "memory_facts": ["Shopify", "Toronto", "climbing", "Boulder House"],
+            "label": "day1-memory-check"
+          }
+        }
+      ],
+      "after": ["compact", "compact-memories", "reset-session"]
+    },
+    {
+      "name": "day-2-recall",
+      "segments": [
+        {
+          "type": "conversation",
+          "topic": "Greet the assistant and see if it remembers who you are and what you do",
+          "exchanges": 3,
+          "scoring": {
+            "recall_facts": ["Shopify", "Toronto"],
+            "soft_facts": ["UX", "designer", "Mumbai"],
+            "no_hallucination": true,
+            "naturalness": true,
+            "label": "day2-recall"
+          }
+        },
+        {
+          "type": "conversation",
+          "topic": "Ask the assistant if it remembers your hobby and weekend routine",
+          "exchanges": 2,
+          "scoring": {
+            "recall_facts": ["climbing", "Boulder House"],
+            "soft_facts": ["Saturday", "V4", "V5"],
+            "label": "day2-hobby-recall"
+          }
+        }
+      ],
+      "after": ["compact"]
+    }
+  ]
+}

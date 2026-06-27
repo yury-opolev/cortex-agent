@@ -1,0 +1,25 @@
+[submodule "lib/Discord.Net"]
+	path = lib/Discord.Net
+	url = https://github.com/yury-opolev/Discord.Net.git
+	branch = cortex
+[submodule "lib/silero-sharp"]
+	path = lib/silero-sharp
+	url = https://github.com/yury-opolev/silero-sharp.git
+[submodule "lib/memory-mcp"]
+	path = lib/memory-mcp
+	url = https://github.com/yury-opolev/memory-mcp.git
+[submodule "lib/voice-id"]
+	path = lib/voice-id
+	url = https://github.com/yury-opolev/voice-id.git
+[submodule "lib/uni-voices"]
+	path = lib/uni-voices
+	url = https://github.com/yury-opolev/uni-voices.git
+[submodule "lib/coda-cli"]
+	path = lib/coda-cli
+	url = https://github.com/yury-opolev/coda-cli.git
+[submodule "lib/whisper-stt"]
+	path = lib/whisper-stt
+	url = https://github.com/yury-opolev/whisper-stt.git
+[submodule "lib/cortex-embeddings"]
+	path = lib/cortex-embeddings
+	url = https://github.com/yury-opolev/cortex-embeddings.git

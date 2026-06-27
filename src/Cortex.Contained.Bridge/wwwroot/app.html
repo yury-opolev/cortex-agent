@@ -1,0 +1,1989 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Cortex</title>
+    <link rel="stylesheet" href="/lib/bootstrap/bootstrap.min.css" />
+    <link rel="stylesheet" href="/lib/bootstrap-icons/bootstrap-icons.min.css" />
+    <link rel="stylesheet" href="/lib/highlightjs/styles/github-dark.min.css" id="hljs-theme" />
+    <link rel="stylesheet" href="/css/app.css" />
+</head>
+<body>
+
+<div x-data="appShell()" class="app-shell" x-cloak>
+
+    <!-- ═══════════════════════════════════════════════════════════
+         Sidebar
+         ═══════════════════════════════════════════════════════════ -->
+    <aside class="sidebar" :class="sidebarCollapsed ? 'collapsed' : 'expanded'">
+
+        <!-- Logo / brand -->
+        <div class="sidebar-header">
+            <span class="sidebar-item-icon"><i class="bi bi-cpu"></i></span>
+            <span class="sidebar-header-label fw-semibold">Cortex</span>
+        </div>
+
+        <!-- Navigation items -->
+        <div class="sidebar-items">
+            <!-- Chat -->
+            <a href="/chat" class="sidebar-item" :class="{ active: page === 'chat' }"
+               @click.prevent="nav('/chat')" title="Chat">
+                <span class="sidebar-item-icon"><i class="bi bi-chat-dots"></i></span>
+                <span class="sidebar-item-label">Chat</span>
+            </a>
+
+            <!-- Admin / Tenants overview -->
+            <a href="/tenants" class="sidebar-item" :class="{ active: page === 'tenants' }"
+               @click.prevent="nav('/tenants')" title="Tenants">
+                <span class="sidebar-item-icon"><i class="bi bi-diagram-3"></i></span>
+                <span class="sidebar-item-label">Admin</span>
+            </a>
+
+            <!-- Tenant tree (expanded sidebar only) -->
+            <template x-if="!sidebarCollapsed && tenants.length > 0">
+                <div class="sidebar-section">
+                    <div class="sidebar-section-label">TENANTS</div>
+
+                    <template x-for="t in tenants" :key="t.tenantId">
+                        <div class="sidebar-tenant">
+                            <!-- Tenant name row (click to expand/collapse) -->
+                            <button class="sidebar-item sidebar-tenant-toggle"
+                                    :class="{ active: $store.router.tenantId === t.tenantId && page.startsWith('tenant-') }"
+                                    @click="toggleTenant(t.tenantId)">
+                                <span class="sidebar-item-icon">
+                                    <i class="bi" :class="expandedTenants[t.tenantId] ? 'bi-chevron-down' : 'bi-chevron-right'"
+                                       style="font-size:var(--text-2xs);"></i>
+                                </span>
+                                <span class="sidebar-item-label" x-text="t.tenantId"></span>
+                            </button>
+
+                            <!-- Sub-pages (collapsible) -->
+                            <div class="sidebar-tenant-pages" x-show="expandedTenants[t.tenantId]">
+                                <a :href="`/tenants/${encodeURIComponent(t.tenantId)}/settings`"
+                                   class="sidebar-item sidebar-sub-item"
+                                   :class="{ active: page === 'tenant-settings' && $store.router.tenantId === t.tenantId }"
+                                   @click.prevent="nav(`/tenants/${encodeURIComponent(t.tenantId)}/settings`)">
+                                    <span class="sidebar-item-icon"><i class="bi bi-gear"></i></span>
+                                    <span class="sidebar-item-label">Settings</span>
+                                </a>
+                                <a :href="`/tenants/${encodeURIComponent(t.tenantId)}/history`"
+                                   class="sidebar-item sidebar-sub-item"
+                                   :class="{ active: page === 'tenant-history' && $store.router.tenantId === t.tenantId }"
+                                   @click.prevent="nav(`/tenants/${encodeURIComponent(t.tenantId)}/history`)">
+                                    <span class="sidebar-item-icon"><i class="bi bi-clock-history"></i></span>
+                                    <span class="sidebar-item-label">History</span>
+                                </a>
+                                <a :href="`/tenants/${encodeURIComponent(t.tenantId)}/memory`"
+                                   class="sidebar-item sidebar-sub-item"
+                                   :class="{ active: page === 'tenant-memory' && $store.router.tenantId === t.tenantId }"
+                                   @click.prevent="nav(`/tenants/${encodeURIComponent(t.tenantId)}/memory`)">
+                                    <span class="sidebar-item-icon"><i class="bi bi-sd-card"></i></span>
+                                    <span class="sidebar-item-label">Memory</span>
+                                </a>
+                            </div>
+                        </div>
+                    </template>
+
+                    <!-- Global Settings (under SYSTEM heading) -->
+                    <div class="sidebar-section-label" style="margin-top: 8px;">SYSTEM</div>
+                    <a href="/settings" class="sidebar-item" :class="{ active: page === 'settings' }"
+                       @click.prevent="nav('/settings')">
+                        <span class="sidebar-item-icon"><i class="bi bi-sliders"></i></span>
+                        <span class="sidebar-item-label">Global Settings</span>
+                    </a>
+                    <a href="/help" class="sidebar-item" :class="{ active: page === 'help' }"
+                       @click.prevent="nav('/help')">
+                        <span class="sidebar-item-icon"><i class="bi bi-question-circle"></i></span>
+                        <span class="sidebar-item-label">Help</span>
+                    </a>
+                </div>
+            </template>
+
+            <!-- Global Settings + Help fallback (collapsed mode or no tenants) -->
+            <template x-if="sidebarCollapsed || tenants.length === 0">
+                <div>
+                    <a href="/settings" class="sidebar-item" :class="{ active: page === 'settings' }"
+                       @click.prevent="nav('/settings')" title="Global Settings">
+                        <span class="sidebar-item-icon"><i class="bi bi-sliders"></i></span>
+                        <span class="sidebar-item-label">Global Settings</span>
+                    </a>
+                    <a href="/help" class="sidebar-item" :class="{ active: page === 'help' }"
+                       @click.prevent="nav('/help')" title="Help">
+                        <span class="sidebar-item-icon"><i class="bi bi-question-circle"></i></span>
+                        <span class="sidebar-item-label">Help</span>
+                    </a>
+                </div>
+            </template>
+        </div>
+
+        <!-- Footer: theme toggle + connection status -->
+        <div class="sidebar-footer">
+            <button class="sidebar-item" @click="Alpine.store('theme').toggle()"
+                    :title="'Theme: ' + Alpine.store('theme').label + ' (click to change)'">
+                <span class="sidebar-item-icon">
+                    <i class="bi" :class="Alpine.store('theme').icon"></i>
+                </span>
+                <span class="sidebar-item-label" x-text="Alpine.store('theme').label"></span>
+            </button>
+            <div class="sidebar-item connection-badge" title="Connection status">
+                <span class="sidebar-item-icon">
+                    <span class="presence" :class="connectionOk ? 'is-live' : 'is-off'"></span>
+                </span>
+                <span class="sidebar-item-label text-body-secondary" style="font-size:var(--text-xs);"
+                      x-text="connectionOk ? 'Connected' : 'Disconnected'"></span>
+            </div>
+            <div class="sidebar-item" style="pointer-events: none;">
+                <span class="sidebar-item-icon"></span>
+                <span class="sidebar-item-label text-body-secondary" style="font-size:var(--text-2xs);"
+                      x-text="bridgeVersion"></span>
+            </div>
+        </div>
+    </aside>
+
+    <!-- ═══════════════════════════════════════════════════════════
+         Content Area
+         ═══════════════════════════════════════════════════════════ -->
+    <main class="content-area">
+
+        <!-- Toast (shared across all pages) -->
+        <div class="position-fixed top-0 end-0 p-3" style="z-index: 1100;"
+             x-data x-show="$store.toast.visible" x-transition.opacity>
+            <div class="toast show align-items-center border-0"
+                 :class="{
+                     'text-bg-success': $store.toast.type === 'success',
+                     'text-bg-danger':  $store.toast.type === 'error',
+                     'text-bg-warning': $store.toast.type === 'warning',
+                     'text-bg-info':    $store.toast.type === 'info',
+                 }">
+                <div class="d-flex">
+                    <div class="toast-body" x-text="$store.toast.message"></div>
+                    <button type="button" class="btn-close btn-close-white me-2 m-auto"
+                            @click="$store.toast.visible = false"></button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ── Tenant Sub-Nav (shared across all /tenants/{id}/* pages) ── -->
+        <template x-if="['tenant-settings','tenant-history','tenant-channel-history','tenant-memory'].includes($store.router.page)">
+            <div x-data="tenantTabs()" class="container pt-3 pb-3" style="max-width: 860px;">
+                <div class="d-flex align-items-center gap-2">
+                    <button class="btn btn-sm btn-outline-secondary" @click="backToTenants()">
+                        <i class="bi bi-arrow-left"></i>
+                    </button>
+                    <h5 class="mb-0" x-text="tenantId"></h5>
+                    <div class="ms-auto d-flex gap-1">
+                        <button class="btn btn-sm"
+                                :class="isActive('settings') ? 'btn-primary' : 'btn-outline-secondary'"
+                                :disabled="isActive('settings')" @click="navSub('settings')">
+                            <i class="bi bi-gear me-1"></i>Settings
+                        </button>
+                        <button class="btn btn-sm"
+                                :class="isActive('history') ? 'btn-primary' : 'btn-outline-secondary'"
+                                :disabled="isActive('history')" @click="navSub('history')">
+                            <i class="bi bi-clock-history me-1"></i>History
+                        </button>
+                        <button class="btn btn-sm"
+                                :class="isActive('memory') ? 'btn-primary' : 'btn-outline-secondary'"
+                                :disabled="isActive('memory')" @click="navSub('memory')">
+                            <i class="bi bi-sd-card me-1"></i>Memory
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </template>
+
+        <!-- ── Chat Page ──────────────────────────────────────── -->
+        <template x-if="$store.router.page === 'chat'">
+            <div id="chat-page" style="display: flex; flex-direction: column; height: 100%;">
+                <!-- Header bar -->
+                <header id="chat-header" class="chat-header">
+                    <h1 class="logo">Cortex</h1>
+                    <nav class="header-actions">
+                        <span id="connection-status" class="conn-badge disconnected" title="Connection status">
+                            <span class="presence is-off"></span>
+                            <span class="status-text">Disconnected</span>
+                        </span>
+                    </nav>
+                </header>
+
+                <!-- Main chat area -->
+                <div id="chat-area" class="chat-area">
+                    <!-- Messages container -->
+                    <div id="messages" class="messages chat-messages" role="log" aria-live="polite" aria-label="Chat messages">
+                        <!-- Populated by JS -->
+                    </div>
+
+                    <!-- Streaming indicator -->
+                    <div id="streaming-indicator" class="streaming-indicator hidden">
+                        <div class="typing-dots">
+                            <span></span><span></span><span></span>
+                        </div>
+                    </div>
+
+                    <!-- Input area -->
+                    <div id="input-area" class="input-area chat-input-area">
+                        <form id="chat-form" class="chat-form">
+                            <textarea id="message-input" class="message-input"
+                                      placeholder="Type a message..."
+                                      rows="1"
+                                      maxlength="100000"
+                                      aria-label="Message input"></textarea>
+                            <button type="submit" id="send-btn" class="btn btn-send" title="Send message" disabled>
+                                <i class="bi bi-send-fill" style="font-size:var(--text-xl);"></i>
+                            </button>
+                            <button type="button" id="abort-btn" class="btn btn-abort hidden" title="Stop generating">
+                                <i class="bi bi-stop-fill" style="font-size:var(--text-xl);"></i>
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </template>
+
+        <!-- ── Tenants List ───────────────────────────────────── -->
+        <template x-if="$store.router.page === 'tenants'">
+        <div x-data="tenantsPage()" class="container py-3" style="max-width: 860px;">
+            <div class="d-flex align-items-center justify-content-between mb-3">
+                <h5 class="mb-0"><i class="bi bi-diagram-3 me-2"></i>Tenants</h5>
+                <button class="btn btn-sm btn-outline-success" @click="showAddModal = true">
+                    <i class="bi bi-plus-lg me-1"></i>Add Tenant
+                </button>
+            </div>
+
+            <!-- Loading -->
+            <div x-show="loading" class="text-center py-4">
+                <div class="spinner-border spinner-border-sm" role="status"></div>
+                Loading...
+            </div>
+
+            <!-- Tenant Cards -->
+            <div x-show="!loading" class="d-flex flex-column gap-3">
+                <template x-for="t in tenants" :key="t.tenantId">
+                    <div>
+                        <div class="card">
+                            <div class="card-body">
+                                <!-- Header: name + status -->
+                                <div class="d-flex align-items-center justify-content-between mb-2">
+                                    <div class="d-flex align-items-center gap-2">
+                                        <strong x-text="t.tenantId" class="text-truncate" style="max-width: 150px;"></strong>
+                                        <span x-show="t.isDefault" class="badge bg-primary">Default</span>
+                                        <span class="badge" :class="statusBadge(t)" x-text="t.status"></span>
+                                    </div>
+                                    <div class="d-flex gap-1">
+                                        <button x-show="!t.isDefault" class="btn btn-sm btn-outline-primary"
+                                                @click="setDefault(t.tenantId)" title="Set as default">
+                                            <i class="bi bi-star"></i>
+                                        </button>
+                                        <button class="btn btn-sm btn-outline-secondary"
+                                                @click="openTenant(t.tenantId)" title="Settings">
+                                            <i class="bi bi-pencil"></i>
+                                        </button>
+                                        <button class="btn btn-sm"
+                                                :class="t.isDefault ? 'btn-outline-warning' : 'btn-outline-danger'"
+                                                @click="confirmDelete(t)"
+                                                :title="t.isDefault ? 'Clear all data' : 'Delete tenant'">
+                                            <i class="bi" :class="t.isDefault ? 'bi-exclamation-triangle' : 'bi-trash'"></i>
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <!-- Discord Status -->
+                                <div class="mb-2">
+                                    <small class="text-body-secondary">
+                                        <i class="bi bi-discord me-1"></i>
+                                        <template x-if="t.discordUsername">
+                                            <span>
+                                                <span class="text-success" x-text="t.discordUsername"></span>
+                                                <button class="btn btn-sm btn-link text-danger p-0 ms-1"
+                                                        @click="unlinkDiscord(t)" title="Unlink">
+                                                    <i class="bi bi-x-circle"></i>
+                                                </button>
+                                            </span>
+                                        </template>
+                                        <template x-if="!t.discordUsername && !t.hasSetupCode">
+                                            <span>
+                                                Not linked
+                                                <button class="btn btn-sm btn-link p-0 ms-1"
+                                                        @click="generateSetupCode(t)" title="Generate pairing code">
+                                                    <i class="bi bi-link-45deg"></i> Generate Code
+                                                </button>
+                                            </span>
+                                        </template>
+                                        <template x-if="!t.discordUsername && t.hasSetupCode">
+                                            <span>
+                                                Code: <code x-text="t._setupCode || 'CORTEX-****'" class="fs-6"></code>
+                                                <button class="btn btn-sm btn-link p-0 ms-1"
+                                                        @click="generateSetupCode(t)" title="Regenerate">
+                                                    <i class="bi bi-arrow-clockwise"></i>
+                                                </button>
+                                            </span>
+                                        </template>
+                                    </small>
+                                </div>
+
+                                <!-- API Status -->
+                                <div class="mb-2">
+                                    <small class="text-body-secondary">
+                                        <i class="bi bi-plug me-1"></i>
+                                        API:
+                                        <span x-show="t.apiEnabled" class="text-success">Enabled</span>
+                                        <span x-show="!t.apiEnabled" class="text-body-secondary">Disabled</span>
+                                    </small>
+                                </div>
+
+                                <!-- Meta -->
+                                <div class="text-body-secondary" style="font-size:var(--text-xs);">
+                                    <span x-show="t.port">Port: <span x-text="t.port"></span></span>
+                                    <span x-show="t.messageCount > 0" class="ms-2">
+                                        <span x-text="t.messageCount"></span> msgs
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </template>
+            </div>
+
+            <!-- Add Tenant Modal -->
+            <div x-show.important="showAddModal" class="modal d-block" tabindex="-1" style="background: rgba(0,0,0,0.5);">
+                <div class="modal-dialog">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title">Add Tenant</h5>
+                            <button type="button" class="btn-close" @click="showAddModal = false"></button>
+                        </div>
+                        <div class="modal-body">
+                            <div class="mb-3">
+                                <label class="form-label">Tenant ID</label>
+                                <input type="text" class="form-control" x-model="form.tenantId"
+                                       placeholder="e.g. alice" @keydown.enter="addTenant()">
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Port</label>
+                                <input type="number" class="form-control" x-model.number="form.port">
+                            </div>
+                            <div class="form-check mb-2">
+                                <input type="checkbox" class="form-check-input" id="add-enabled" x-model="form.enabled">
+                                <label class="form-check-label" for="add-enabled">Enabled</label>
+                            </div>
+                            <div class="form-check">
+                                <input type="checkbox" class="form-check-input" id="add-api" x-model="form.apiEnabled">
+                                <label class="form-check-label" for="add-api">API channel enabled</label>
+                            </div>
+                        </div>
+                        <div class="modal-footer">
+                            <button class="btn btn-secondary" @click="showAddModal = false">Cancel</button>
+                            <button class="btn btn-primary" @click="addTenant()"
+                                    :disabled="!form.tenantId.trim()">Create</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Delete Confirmation Modal -->
+            <div x-show.important="showDeleteModal" class="modal d-block" tabindex="-1" style="background: rgba(0,0,0,0.5);">
+                <div class="modal-dialog modal-sm">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title" x-text="deleteTarget?.isDefault ? 'Clear Data' : 'Delete Tenant'"></h5>
+                            <button type="button" class="btn-close" @click="showDeleteModal = false"></button>
+                        </div>
+                        <div class="modal-body">
+                            <p x-show="deleteTarget?.isDefault">Clear all messages and memories for the default tenant?</p>
+                            <p x-show="!deleteTarget?.isDefault">Delete tenant <strong x-text="deleteTarget?.tenantId"></strong> and all its data?</p>
+                        </div>
+                        <div class="modal-footer">
+                            <button class="btn btn-secondary" @click="showDeleteModal = false">Cancel</button>
+                            <button class="btn" :class="deleteTarget?.isDefault ? 'btn-warning' : 'btn-danger'"
+                                    @click="doDelete()"
+                                    x-text="deleteTarget?.isDefault ? 'Clear Data' : 'Delete'"></button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        </template>
+
+        <!-- ── Tenant Settings ────────────────────────────────── -->
+        <template x-if="$store.router.page === 'tenant-settings'">
+        <div x-data="tenantSettingsPage()" class="container pb-3" style="max-width: 860px;">
+            <!-- Sub-nav is rendered above by the shared tenantTabs() block. -->
+
+            <div x-show="loading" class="text-center py-4">
+                <div class="spinner-border spinner-border-sm"></div> Loading...
+            </div>
+
+            <div x-show="!loading && tenant" class="row g-3">
+                <!-- General Settings -->
+                <div class="col-12">
+                    <div class="card">
+                        <div class="card-header"><i class="bi bi-gear me-2"></i>General</div>
+                        <div class="card-body">
+                            <div class="form-check form-switch mb-3">
+                                <input class="form-check-input" type="checkbox" id="enabled-toggle"
+                                       x-model="enabled" @change="save()">
+                                <label class="form-check-label" for="enabled-toggle">Enabled</label>
+                            </div>
+                            <div class="d-flex align-items-center gap-2">
+                                <label class="form-label mb-0 text-body-secondary" for="voice-gender">Voice Gender</label>
+                                <select class="form-select form-select-sm" id="voice-gender" style="width: 120px;"
+                                        x-model="voiceGender" @change="save()">
+                                    <option value="female">Female</option>
+                                    <option value="male">Male</option>
+                                </select>
+                                <small class="text-body-secondary">Auto-detected from personality, or set manually.</small>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Discord Pairing Card -->
+                <div class="col-12">
+                    <div class="card">
+                        <div class="card-header"><i class="bi bi-discord me-2"></i>Discord</div>
+                        <div class="card-body">
+                            <!-- Linked -->
+                            <template x-if="tenant?.discordUsername">
+                                <div>
+                                    <div class="d-flex align-items-center gap-2 mb-2">
+                                        <span class="badge bg-success"><i class="bi bi-check-circle me-1"></i>Linked</span>
+                                        <strong x-text="tenant.discordUsername"></strong>
+                                        <small class="text-body-secondary" x-text="'ID: ' + tenant.discordUserId"></small>
+                                    </div>
+                                    <button class="btn btn-sm btn-outline-danger" @click="unlinkDiscord()">
+                                        <i class="bi bi-x-circle me-1"></i>Unlink
+                                    </button>
+                                </div>
+                            </template>
+
+                            <!-- Not linked -->
+                            <template x-if="!tenant?.discordUsername">
+                                <div>
+                                    <p class="text-body-secondary mb-2">No Discord user linked to this tenant.</p>
+
+                                    <!-- Setup code active -->
+                                    <template x-if="setupCode">
+                                        <div class="d-flex align-items-center gap-2">
+                                            <code class="fs-5 px-2 py-1 bg-body-secondary rounded" x-text="setupCode"></code>
+                                            <button class="btn btn-sm btn-outline-secondary" @click="copyCode()" title="Copy">
+                                                <i class="bi bi-clipboard"></i>
+                                            </button>
+                                            <small class="text-body-secondary" x-text="'Expires in ' + codeCountdown"></small>
+                                            <button class="btn btn-sm btn-outline-danger" @click="revokeCode()">Revoke</button>
+                                        </div>
+                                    </template>
+
+                                    <!-- No code yet -->
+                                    <template x-if="!setupCode">
+                                        <div>
+                                            <button class="btn btn-sm btn-outline-primary" @click="generateCode()">
+                                                <i class="bi bi-link-45deg me-1"></i>Generate Setup Code
+                                            </button>
+                                            <div class="mt-2">
+                                                <small class="text-body-secondary">
+                                                    Generate a code, then send the instructions to the user.
+                                                </small>
+                                            </div>
+                                        </div>
+                                    </template>
+
+                                    <!-- Setup instructions (shown after code is generated) -->
+                                    <template x-if="setupCode">
+                                        <div class="mt-3">
+                                            <label class="form-label fw-semibold">
+                                                <i class="bi bi-send me-1"></i>Send these instructions to the user:
+                                            </label>
+                                            <pre class="bg-body-secondary rounded p-3 mb-2" style="white-space: pre-wrap; font-size:var(--text-sm);"
+                                                 x-text="setupInstructions"></pre>
+                                            <button class="btn btn-sm btn-outline-secondary" @click="copyInstructions()">
+                                                <i class="bi bi-clipboard me-1"></i>Copy Instructions
+                                            </button>
+                                        </div>
+                                    </template>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Voice Channel Card (only visible when Discord user is linked) -->
+                <template x-if="tenant?.discordUserId">
+                <div class="col-12">
+                    <div class="card">
+                        <div class="card-header"><i class="bi bi-mic me-2"></i>Discord Voice Channel</div>
+                        <div class="card-body">
+                            <!-- Step 1: Invite bot (shown when guild ID not yet set) -->
+                            <template x-if="!discordGuildId">
+                                <div class="mb-3 p-3 rounded" style="background: var(--bg-tertiary, rgba(255,255,255,0.03));">
+                                    <p class="small fw-semibold mb-2"><i class="bi bi-1-circle me-1"></i>Invite bot to server</p>
+                                    <p class="small text-body-secondary mb-2" x-show="botApplicationId">
+                                        <a :href="'https://discord.com/oauth2/authorize?client_id=' + botApplicationId + '&scope=bot&permissions=36703232'"
+                                           target="_blank" class="link-primary"><i class="bi bi-box-arrow-up-right me-1"></i>Add bot to Discord server</a>
+                                        — grants voice + text permissions. If the bot is already in the server, skip this step.
+                                    </p>
+                                    <p class="small text-body-secondary mb-0" x-show="!botApplicationId">
+                                        Invite the bot to your Discord server with voice + text permissions.
+                                    </p>
+                                </div>
+                            </template>
+
+                            <!-- Step 2: Enter IDs -->
+                            <div class="mb-3 p-3 rounded" x-show="!discordGuildId || !discordVoiceChannelId"
+                                 style="background: var(--bg-tertiary, rgba(255,255,255,0.03));">
+                                <p class="small fw-semibold mb-2">
+                                    <i class="bi bi-2-circle me-1" x-show="!discordGuildId"></i>
+                                    <i class="bi bi-1-circle me-1" x-show="discordGuildId && !discordVoiceChannelId"></i>
+                                    Copy IDs from Discord
+                                </p>
+                                <p class="small text-body-secondary mb-0">
+                                    Open the voice channel in Discord — the URL contains both IDs:<br>
+                                    <code class="small">discord.com/channels/<strong>GUILD_ID</strong>/<strong>CHANNEL_ID</strong></code>
+                                </p>
+                            </div>
+
+                            <div class="mb-2">
+                                <label class="form-label small fw-semibold">Guild (Server) ID</label>
+                                <input type="text" class="form-control form-control-sm font-monospace"
+                                       x-model="discordGuildId"
+                                       placeholder="First number in discord.com/channels/GUILD/CHANNEL">
+                            </div>
+                            <div class="mb-2">
+                                <label class="form-label small fw-semibold">Voice Channel ID</label>
+                                <input type="text" class="form-control form-control-sm font-monospace"
+                                       x-model="discordVoiceChannelId"
+                                       placeholder="Second number in discord.com/channels/GUILD/CHANNEL">
+                            </div>
+
+                            <!-- Optional fields (shown after required IDs are filled) -->
+                            <div x-show="discordGuildId && discordVoiceChannelId" x-transition>
+                                <div class="mb-3">
+                                    <label class="form-label small fw-semibold">Voice Greeting</label>
+                                    <input type="text" class="form-control form-control-sm"
+                                           x-model="voiceGreeting"
+                                           placeholder="Spoken when bot joins voice channel (blank = disabled)">
+                                </div>
+                            </div>
+
+                            <button class="btn btn-sm btn-primary" @click="saveVoiceConfig()" :disabled="savingVoice">
+                                <i class="bi bi-check-lg me-1"></i>Save Voice Settings
+                            </button>
+
+                            <!-- Status messages -->
+                            <template x-if="discordGuildId && discordVoiceChannelId">
+                                <div class="mt-2">
+                                    <small class="text-success"><i class="bi bi-check-circle me-1"></i>Configured — join the voice channel in Discord and the bot will auto-connect.</small>
+                                </div>
+                            </template>
+                            <template x-if="!discordGuildId || !discordVoiceChannelId">
+                                <div class="mt-2">
+                                    <small class="text-body-secondary">Requires STT and TTS engines to be running.</small>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
+                </div>
+                </template>
+
+                <!-- API Channel Card -->
+                <div class="col-12">
+                    <div class="card">
+                        <div class="card-header"><i class="bi bi-plug me-2"></i>API Channel</div>
+                        <div class="card-body">
+                            <div class="form-check form-switch mb-3">
+                                <input class="form-check-input" type="checkbox" id="api-toggle"
+                                       x-model="apiEnabled" @change="save()">
+                                <label class="form-check-label" for="api-toggle">Enable API channel</label>
+                            </div>
+
+                            <div x-show="apiEnabled">
+                                <template x-if="apiKey">
+                                    <div>
+                                        <div class="input-group input-group-sm mb-2">
+                                            <input :type="apiKeyRevealed ? 'text' : 'password'" class="form-control font-monospace"
+                                                   :value="apiKey" readonly>
+                                            <button class="btn btn-outline-secondary" @click="apiKeyRevealed = !apiKeyRevealed">
+                                                <i class="bi" :class="apiKeyRevealed ? 'bi-eye-slash' : 'bi-eye'"></i>
+                                            </button>
+                                            <button class="btn btn-outline-secondary" @click="copyApiKey()" title="Copy">
+                                                <i class="bi bi-clipboard"></i>
+                                            </button>
+                                        </div>
+                                        <button class="btn btn-sm btn-outline-danger" @click="revokeApiKey()">
+                                            <i class="bi bi-x-circle me-1"></i>Revoke Key
+                                        </button>
+                                    </div>
+                                </template>
+                                <template x-if="!apiKey">
+                                    <button class="btn btn-sm btn-outline-primary" @click="generateApiKey()">
+                                        <i class="bi bi-key me-1"></i>Generate API Key
+                                    </button>
+                                </template>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Personality Card -->
+                <div class="col-12">
+                    <div class="card">
+                        <div class="card-header"><i class="bi bi-person-badge me-2"></i>Personality</div>
+                        <div class="card-body">
+                            <p class="text-secondary small mb-2">
+                                Define how the agent behaves, its name, tone, and instructions. Changes take effect on the next message.
+                            </p>
+                            <textarea class="form-control font-monospace mb-2" rows="5" x-model="persona"
+                                      placeholder="You are a helpful personal AI assistant. Be concise and direct."
+                                      :disabled="personalityLoading"></textarea>
+                            <div class="text-secondary small mb-2">The agent can also modify its own personality when asked by the user.</div>
+                            <div class="d-flex align-items-center gap-2">
+                                <button class="btn btn-sm btn-primary" @click="savePersonality()" :disabled="savingPersonality">
+                                    <i class="bi bi-check-lg me-1"></i>Save Personality
+                                </button>
+                                <button class="btn btn-sm btn-outline-secondary" @click="resetPersonality()" :disabled="savingPersonality">
+                                    <i class="bi bi-arrow-counterclockwise me-1"></i>Reset to Default
+                                </button>
+                                <span class="text-secondary small" x-text="personalityStatus"></span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Self-Notes Card -->
+                <div class="col-12">
+                    <div class="card">
+                        <div class="card-header"><i class="bi bi-journal-text me-2"></i>Self-Notes</div>
+                        <div class="card-body">
+                            <p class="text-secondary small mb-2">
+                                Operating principles that govern how the agent works. Should be stable and rarely changed.
+                                User preferences and specific procedures belong in memory or skills, not here.
+                            </p>
+                            <textarea class="form-control font-monospace mb-2" rows="8" x-model="selfNotes"
+                                      placeholder="No self-notes yet."
+                                      :disabled="selfNotesLoading"></textarea>
+                            <div class="d-flex align-items-center gap-2">
+                                <button class="btn btn-sm btn-primary" @click="saveSelfNotes()" :disabled="savingSelfNotes">
+                                    <i class="bi bi-check-lg me-1"></i>Save Self-Notes
+                                </button>
+                                <button class="btn btn-sm btn-outline-secondary" @click="resetSelfNotes()" :disabled="savingSelfNotes">
+                                    <i class="bi bi-arrow-counterclockwise me-1"></i>Reset to Default
+                                </button>
+                                <span class="text-secondary small" x-text="selfNotesStatus"></span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Voice Identification Card -->
+                <div class="col-12">
+                    <div class="card">
+                        <div class="card-header"><i class="bi bi-mic-fill me-2"></i>Voice identification</div>
+                        <div class="card-body">
+                            <p class="text-secondary small mb-2">
+                                When enabled, the agent only acts on voice utterances that match the enrolled owner's voiceprint.
+                                Setup happens in voice (the agent offers it after a few utterances); admin actions here.
+                            </p>
+
+                            <div class="form-check form-switch mb-3">
+                                <input class="form-check-input" type="checkbox" role="switch" id="voiceIdFeatureEnabled"
+                                       x-model="voiceIdFeatureEnabled" @change="saveVoiceIdFeatureFlag()"
+                                       :disabled="voiceIdLoading || savingVoiceId">
+                                <label class="form-check-label" for="voiceIdFeatureEnabled">
+                                    Feature enabled
+                                </label>
+                            </div>
+
+                            <dl class="row mb-3 small">
+                                <dt class="col-sm-3 text-secondary">Status</dt>
+                                <dd class="col-sm-9"><code x-text="voiceIdState"></code></dd>
+
+                                <dt class="col-sm-3 text-secondary">Embedding dim</dt>
+                                <dd class="col-sm-9" x-text="voiceIdEmbeddingDim || '—'"></dd>
+
+                                <dt class="col-sm-3 text-secondary">Model</dt>
+                                <dd class="col-sm-9" x-text="voiceIdModelId || '—'"></dd>
+                            </dl>
+
+                            <div class="d-flex align-items-center gap-2 mb-3">
+                                <button class="btn btn-sm btn-primary" @click="startVoiceIdEnrollment()"
+                                        x-show="voiceIdCanStartEnrollment"
+                                        :disabled="voiceIdLoading || savingVoiceId">
+                                    <i class="bi bi-mic me-1"></i>Start enrollment
+                                </button>
+                                <button class="btn btn-sm btn-outline-danger" @click="resetVoiceIdEnrollment()"
+                                        :disabled="voiceIdLoading || savingVoiceId">
+                                    <i class="bi bi-trash me-1"></i>Forget voiceprint
+                                </button>
+                                <button class="btn btn-sm btn-link" @click="voiceIdShowAdvanced = !voiceIdShowAdvanced">
+                                    <span x-show="!voiceIdShowAdvanced">Show advanced</span>
+                                    <span x-show="voiceIdShowAdvanced">Hide advanced</span>
+                                </button>
+                                <span class="text-secondary small" x-text="voiceIdStatus"></span>
+                            </div>
+
+                            <div x-show="voiceIdShowAdvanced" class="mt-2">
+                                <label class="form-label small text-secondary">
+                                    Cosine threshold override (0&ndash;1, blank for default 0.55)
+                                </label>
+                                <div class="d-flex gap-2">
+                                    <input type="text" class="form-control form-control-sm"
+                                           style="max-width: 8em"
+                                           x-model="voiceIdThresholdOverrideInput"
+                                           placeholder="0.55"
+                                           :disabled="savingVoiceId">
+                                    <button class="btn btn-sm btn-outline-secondary" @click="saveVoiceIdThreshold()"
+                                            :disabled="savingVoiceId">
+                                        Set
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+        </template>
+
+        <!-- ── Tenant History (channel overview) ──────────────── -->
+        <template x-if="$store.router.page === 'tenant-history'">
+        <div x-data="tenantHistoryPage()" class="container pb-3" style="max-width: 860px;">
+            <!-- Sub-nav is rendered above by the shared tenantTabs() block. -->
+
+            <div class="d-flex justify-content-between mb-3">
+                <small class="text-body-secondary align-self-center" x-text="channels.length + ' channels'"></small>
+                <button class="btn btn-sm btn-outline-danger" @click="openClearModal()">
+                    <i class="bi bi-trash me-1"></i>Clear all history
+                </button>
+            </div>
+
+            <div x-show="loading" class="text-center py-4">
+                <div class="spinner-border spinner-border-sm"></div> Loading...
+            </div>
+
+            <!-- Empty state -->
+            <div x-show="!loading && channels.length === 0" class="text-body-secondary text-center py-5">
+                No message history yet.
+            </div>
+
+            <!-- Channel cards -->
+            <div x-show="!loading && channels.length > 0" class="row g-3">
+                <template x-for="ch in channels" :key="ch.id">
+                    <div class="col-12 col-md-6">
+                        <button type="button"
+                                class="card w-100 h-100 text-start border"
+                                style="border-radius: var(--radius); cursor: pointer;"
+                                @click="openChannel(ch)">
+                            <div class="card-body">
+                                <div class="d-flex justify-content-between align-items-start mb-1">
+                                    <strong x-text="prettyName(ch.id)"></strong>
+                                    <span class="badge bg-secondary" x-text="ch.messageCount + ' msgs'"></span>
+                                </div>
+                                <div class="small text-body-secondary" x-text="ch.id"></div>
+                                <div class="small text-body-secondary mt-2">
+                                    <i class="bi bi-clock-history me-1"></i>
+                                    <span x-text="relativeTime(ch.lastActivity)"></span>
+                                </div>
+                            </div>
+                        </button>
+                    </div>
+                </template>
+            </div>
+
+            <!-- Clear All History Modal -->
+            <div x-show.important="showClearModal" class="modal d-block" tabindex="-1" style="background: rgba(0,0,0,0.5);">
+                <div class="modal-dialog">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title">Clear all history</h5>
+                            <button type="button" class="btn-close" @click="showClearModal = false"></button>
+                        </div>
+                        <div class="modal-body">
+                            <p>Delete all messages older than:</p>
+                            <input type="datetime-local" class="form-control" x-model="clearOlderThan">
+                        </div>
+                        <div class="modal-footer">
+                            <button class="btn btn-outline-secondary btn-sm" @click="showClearModal = false">Cancel</button>
+                            <button class="btn btn-outline-danger btn-sm" @click="confirmClear()" :disabled="clearing">
+                                <span x-show="!clearing">Delete</span>
+                                <span x-show="clearing"><span class="spinner-border spinner-border-sm"></span> Deleting...</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        </template>
+
+        <!-- ── Tenant Channel History (drill-in) ──────────────── -->
+        <template x-if="$store.router.page === 'tenant-channel-history'">
+        <div x-data="tenantChannelHistoryPage()" class="container pb-3" style="max-width: 860px;">
+            <!-- Sub-nav is rendered above by the shared tenantTabs() block. -->
+
+            <!-- Channel breadcrumb + clear button -->
+            <div class="d-flex align-items-center gap-2 mb-2">
+                <button class="btn btn-sm btn-outline-secondary" @click="backToOverview()" title="Back to channels">
+                    <i class="bi bi-arrow-left"></i>
+                </button>
+                <nav aria-label="breadcrumb" class="flex-grow-1">
+                    <ol class="breadcrumb mb-0 small">
+                        <li class="breadcrumb-item">
+                            <a href="#" @click.prevent="backToOverview()">History</a>
+                        </li>
+                        <li class="breadcrumb-item active" aria-current="page" x-text="prettyChannel"></li>
+                    </ol>
+                </nav>
+                <button class="btn btn-sm btn-outline-danger" @click="openClearModal()">
+                    <i class="bi bi-trash me-1"></i>Clear this channel's history
+                </button>
+            </div>
+
+            <div x-show="loading" class="text-center py-4">
+                <div class="spinner-border spinner-border-sm"></div> Loading...
+            </div>
+
+            <!-- Messages (direct view; a channel == a conversation) -->
+            <div x-show="!loading">
+                <div x-show="messages.length === 0" class="text-body-secondary text-center py-3">
+                    No messages in this channel yet.
+                </div>
+                <div x-show="messages.length > 0" class="mb-2">
+                    <small class="text-body-secondary" x-text="totalMessages + ' messages'"></small>
+                </div>
+                <div class="d-flex flex-column gap-2">
+                    <template x-for="msg in messages" :key="msg.messageId">
+                        <div class="d-flex gap-2" :class="{ 'opacity-50': isSystemMessage(msg), 'opacity-75': isProactiveMessage(msg) }">
+                            <span class="badge rounded-pill align-self-start mt-1" :class="roleBadge(msg.role)">
+                                <i class="bi" :class="roleIcon(msg.role)"></i>
+                            </span>
+                            <div class="flex-grow-1">
+                                <div class="small"
+                                     :class="isSystemMessage(msg) ? 'fst-italic text-warning' : isProactiveMessage(msg) ? 'fst-italic' : ''"
+                                     x-text="msg.content" style="white-space: pre-wrap;"></div>
+                                <small class="text-body-secondary" x-text="formatTime(msg.timestamp)"></small>
+                                <template x-if="messageBadge(msg)">
+                                    <span class="badge ms-1" :class="messageBadge(msg)?.cls" x-text="messageBadge(msg)?.text"></span>
+                                </template>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+                <div x-show="totalMessages > msgLimit" class="d-flex justify-content-between mt-2">
+                    <button class="btn btn-sm btn-outline-secondary" :disabled="!hasPrevMessages" @click="prevMessages()">
+                        <i class="bi bi-arrow-left"></i> Newer
+                    </button>
+                    <button class="btn btn-sm btn-outline-secondary" :disabled="!hasMoreMessages" @click="nextMessages()">
+                        Older <i class="bi bi-arrow-right"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Clear this channel modal -->
+            <div x-show.important="showClearModal" class="modal d-block" tabindex="-1" style="background: rgba(0,0,0,0.5);">
+                <div class="modal-dialog">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title">Clear channel history</h5>
+                            <button type="button" class="btn-close" @click="showClearModal = false"></button>
+                        </div>
+                        <div class="modal-body">
+                            <p>
+                                This clears messages for
+                                <strong x-text="prettyChannel"></strong>
+                                only.
+                            </p>
+                            <div class="form-check mb-2">
+                                <input class="form-check-input" type="radio" id="clear-scope-older"
+                                       value="older" x-model="clearScope">
+                                <label class="form-check-label" for="clear-scope-older">
+                                    Delete messages older than:
+                                </label>
+                            </div>
+                            <input type="datetime-local" class="form-control mb-2"
+                                   x-model="clearOlderThan" :disabled="clearScope !== 'older'">
+                            <div class="form-check">
+                                <input class="form-check-input" type="radio" id="clear-scope-all"
+                                       value="all" x-model="clearScope">
+                                <label class="form-check-label" for="clear-scope-all">
+                                    All messages in this channel
+                                </label>
+                            </div>
+                        </div>
+                        <div class="modal-footer">
+                            <button class="btn btn-outline-secondary btn-sm" @click="showClearModal = false">Cancel</button>
+                            <button class="btn btn-outline-danger btn-sm" @click="confirmClear()" :disabled="clearing">
+                                <span x-show="!clearing">Delete</span>
+                                <span x-show="clearing"><span class="spinner-border spinner-border-sm"></span> Deleting...</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        </template>
+
+        <!-- ── Tenant Memory ──────────────────────────────────── -->
+        <template x-if="$store.router.page === 'tenant-memory'">
+        <div x-data="tenantMemoryPage()" class="container pb-3" style="max-width: 860px;">
+            <!-- Sub-nav is rendered above by the shared tenantTabs() block. -->
+
+            <div class="d-flex justify-content-between mb-3">
+                <small class="text-body-secondary align-self-center" x-text="totalCount + ' memories'"></small>
+                <button class="btn btn-sm btn-outline-success" @click="openAdd()">
+                    <i class="bi bi-plus-lg me-1"></i>Add Memory
+                </button>
+            </div>
+
+            <div x-show="loading" class="text-center py-4">
+                <div class="spinner-border spinner-border-sm"></div> Loading...
+            </div>
+
+            <!-- Memory List -->
+            <div x-show="!loading" class="d-flex flex-column gap-2">
+                <template x-for="m in memories" :key="m.memoryId">
+                    <div class="card">
+                        <div class="card-body py-2 px-3">
+                            <div class="d-flex justify-content-between align-items-start">
+                                <div class="flex-grow-1">
+                                    <div x-show="m.title" class="fw-semibold mb-1" x-text="m.title"></div>
+                                    <div style="white-space: pre-wrap; font-size:var(--text-base);" x-text="m.content"></div>
+                                </div>
+                                <div class="d-flex gap-1 ms-2 flex-shrink-0">
+                                    <button class="btn btn-sm btn-outline-secondary" @click="openEdit(m)" title="Edit">
+                                        <i class="bi bi-pencil"></i>
+                                    </button>
+                                    <button class="btn btn-sm btn-outline-danger" @click="confirmDelete(m)" title="Delete">
+                                        <i class="bi bi-trash"></i>
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="mt-1 d-flex flex-wrap align-items-center gap-1">
+                                <template x-for="tag in (m.tags || [])" :key="tag">
+                                    <span class="badge bg-secondary" x-text="tag"></span>
+                                </template>
+                                <small class="text-body-secondary" x-text="formatDateTime(m.createdAt)"></small>
+                                <template x-if="wasUpdated(m)">
+                                    <small class="text-body-secondary fst-italic"
+                                           x-text="'(updated ' + formatDateTime(m.updatedAt) + ')'"></small>
+                                </template>
+                            </div>
+                        </div>
+                    </div>
+                </template>
+                <div x-show="memories.length === 0 && !loading" class="text-body-secondary text-center py-3">
+                    No memories yet.
+                </div>
+            </div>
+
+            <!-- Pagination -->
+            <div x-show="totalCount > limit" class="d-flex justify-content-between mt-2">
+                <button class="btn btn-sm btn-outline-secondary" :disabled="!hasPrev" @click="prev()">
+                    <i class="bi bi-arrow-left"></i> Previous
+                </button>
+                <button class="btn btn-sm btn-outline-secondary" :disabled="!hasMore" @click="next()">
+                    Next <i class="bi bi-arrow-right"></i>
+                </button>
+            </div>
+
+            <!-- Add/Edit Modal -->
+            <div x-show.important="showModal" class="modal d-block" tabindex="-1" style="background: rgba(0,0,0,0.5);">
+                <div class="modal-dialog">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title" x-text="editing ? 'Edit Memory' : 'Add Memory'"></h5>
+                            <button type="button" class="btn-close" @click="showModal = false"></button>
+                        </div>
+                        <div class="modal-body">
+                            <div class="mb-3">
+                                <label class="form-label">Title (optional)</label>
+                                <input type="text" class="form-control" x-model="form.title" placeholder="Brief summary...">
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Content</label>
+                                <textarea class="form-control" rows="4" x-model="form.content"></textarea>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Tags (comma-separated)</label>
+                                <input type="text" class="form-control" x-model="form.tags" placeholder="tag1, tag2">
+                            </div>
+                        </div>
+                        <div class="modal-footer">
+                            <button class="btn btn-secondary" @click="showModal = false">Cancel</button>
+                            <button class="btn btn-primary" @click="saveMemory()" :disabled="!form.content.trim()">Save</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Delete Confirmation -->
+            <div x-show.important="showDeleteModal" class="modal d-block" tabindex="-1" style="background: rgba(0,0,0,0.5);">
+                <div class="modal-dialog modal-sm">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title">Delete Memory</h5>
+                            <button type="button" class="btn-close" @click="showDeleteModal = false"></button>
+                        </div>
+                        <div class="modal-body">Delete this memory permanently?</div>
+                        <div class="modal-footer">
+                            <button class="btn btn-secondary" @click="showDeleteModal = false">Cancel</button>
+                            <button class="btn btn-danger" @click="doDelete()">Delete</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        </template>
+
+        <!-- ── Global Settings ────────────────────────────────── -->
+        <template x-if="$store.router.page === 'settings'">
+        <div x-data="globalSettingsPage()" class="container py-3" style="max-width: 760px;">
+
+            <!-- Loading -->
+            <div x-show="loading" class="text-center py-5 text-secondary">
+                <div class="spinner-border spinner-border-sm me-2" role="status"></div>
+                Loading settings...
+            </div>
+
+            <!-- Content -->
+            <div x-show="!loading" x-cloak>
+
+                <!-- Tab navigation -->
+                <ul class="nav nav-tabs mb-3" role="tablist">
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link" :class="activeTab === 'general' ? 'active' : ''"
+                                @click="activeTab = 'general'" type="button">General</button>
+                    </li>
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link" :class="activeTab === 'channels' ? 'active' : ''"
+                                @click="activeTab = 'channels'" type="button">Channels</button>
+                    </li>
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link" :class="activeTab === 'speech' ? 'active' : ''"
+                                @click="activeTab = 'speech'" type="button">Speech</button>
+                    </li>
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link" :class="activeTab === 'memory' ? 'active' : ''"
+                                @click="activeTab = 'memory'" type="button">Memory</button>
+                    </li>
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link" :class="activeTab === 'coding' ? 'active' : ''"
+                                @click="activeTab = 'coding'; loadCodingFolders()" type="button">Coding</button>
+                    </li>
+                </ul>
+
+                <!-- ═══ General tab ═══ -->
+                <div x-show="activeTab === 'general'">
+
+                    <!-- LLM Providers -->
+                    <div class="mb-4">
+                        <h6 class="text-uppercase text-secondary border-bottom pb-2 mb-3">LLM Providers</h6>
+                        <template x-for="p in providers" :key="p.name">
+                            <div class="provider-card">
+                                <div class="provider-card-header">
+                                    <span class="provider-name" x-text="p.name"></span>
+                                    <button x-show="p.apiKeyConfigured"
+                                            class="btn btn-sm btn-outline-secondary ms-auto"
+                                            :disabled="isRefreshing(p.name)"
+                                            @click="refreshModels(p.name)"
+                                            title="Refresh available models from provider API">
+                                        <template x-if="isRefreshing(p.name)">
+                                            <span><span class="spinner-border spinner-border-sm me-1" role="status"></span>Refreshing...</span>
+                                        </template>
+                                        <template x-if="!isRefreshing(p.name)">
+                                            <span><i class="bi bi-arrow-clockwise"></i> Refresh</span>
+                                        </template>
+                                    </button>
+                                    <span class="provider-api-badge" x-text="p.api"></span>
+                                </div>
+
+                                <!-- Endpoint -->
+                                <div class="provider-detail" x-show="p.baseUrl">
+                                    <span class="label">Endpoint:</span>
+                                    <span class="value" x-text="p.baseUrl"></span>
+                                </div>
+
+                                <!-- API Key status -->
+                                <div class="provider-detail">
+                                    <span class="label">API Key:</span>
+                                    <span class="key-status" :class="p.apiKeyConfigured ? 'configured' : 'missing'">
+                                        <i class="bi" :class="p.apiKeyConfigured ? 'bi-check-circle' : 'bi-x-circle'"></i>
+                                        <span x-text="p.apiKeyConfigured
+                                            ? (p.apiKeyHint ? 'Configured (' + p.apiKeyHint + ')' : 'Configured')
+                                            : (p.apiKeyFrom ? 'From: ' + p.apiKeyFrom : 'Not configured')"></span>
+                                    </span>
+                                </div>
+
+                                <!-- Model tags -->
+                                <div class="provider-models">
+                                    <template x-for="m in p.models" :key="m">
+                                        <span class="model-tag" x-text="m"></span>
+                                    </template>
+                                </div>
+
+                                <!-- Model selectors (if 2+ models) -->
+                                <template x-if="p.models.length >= 2">
+                                    <div>
+                                        <div class="provider-detail" style="margin-top: 8px;">
+                                            <span class="label">Default Model:</span>
+                                            <select class="form-select form-select-sm d-inline-block w-auto"
+                                                    :value="defaultModels[p.name]"
+                                                    @change="onDefaultModelChange(p.name, $event.target.value)">
+                                                <template x-for="m in p.models" :key="m">
+                                                    <option :value="m" x-text="m" :selected="m === defaultModels[p.name]"></option>
+                                                </template>
+                                            </select>
+                                        </div>
+                                        <div class="provider-detail" style="margin-top: 6px;">
+                                            <span class="label">Memory Model:</span>
+                                            <select class="form-select form-select-sm d-inline-block w-auto"
+                                                    :value="memoryModels[p.name]"
+                                                    @change="onMemoryModelChange(p.name, $event.target.value)">
+                                                <option value="" :selected="!memoryModels[p.name]">Same as default</option>
+                                                <template x-for="m in p.models" :key="m">
+                                                    <option :value="m" x-text="m" :selected="m === memoryModels[p.name]"></option>
+                                                </template>
+                                            </select>
+                                        </div>
+                                        <div class="hint" style="margin-top: 2px;">Memory model is used for extraction and compaction tasks. A cheaper model can reduce costs.</div>
+                                    </div>
+                                </template>
+                            </div>
+                        </template>
+                    </div>
+
+                    <!-- Fallback Order -->
+                    <div class="mb-4">
+                        <h6 class="text-uppercase text-secondary border-bottom pb-2 mb-3">Provider Fallback Order</h6>
+                        <p class="text-secondary small mb-2">
+                            Drag to reorder. When the primary provider fails, the next provider in the list will be tried.
+                        </p>
+                        <div class="fallback-list">
+                            <template x-for="(name, idx) in fallbackOrder" :key="name">
+                                <div class="fallback-item" draggable="true"
+                                     @dragstart="dragStart($event, name)"
+                                     @dragend="dragEnd($event)"
+                                     @dragover="dragOver($event)"
+                                     @drop="drop($event, name)">
+                                    <span class="fallback-grip"><i class="bi bi-grip-vertical"></i></span>
+                                    <span class="fallback-rank" x-text="idx + 1"></span>
+                                    <span class="fallback-name" x-text="name"></span>
+                                    <span class="fallback-model-count"
+                                          x-text="(() => { const p = providers.find(pr => pr.name === name); const c = p ? p.models.length : 0; return c + ' model' + (c !== 1 ? 's' : ''); })()"></span>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
+
+                    <!-- Sub-agent settings -->
+                    <div class="mb-4">
+                        <h6 class="text-uppercase text-secondary border-bottom pb-2 mb-3">Sub-agent</h6>
+                        <div class="row mb-2 align-items-center">
+                            <div class="col-5 text-secondary small">Max tool rounds</div>
+                            <div class="col-4">
+                                <input type="number" class="form-control form-control-sm"
+                                       min="0" max="10000" :value="maxSubagentRounds"
+                                       @input="onMaxRoundsInput($event.target.value)" />
+                            </div>
+                            <div class="col-3 text-secondary small">0 = default (200)</div>
+                        </div>
+                        <div class="hint mb-0">
+                            Safety-net limit for sub-agent tool-call rounds. The real stops are: model finishes,
+                            context window fills up, or doom loop detection (3 identical calls). Set to 0 for default.
+                        </div>
+                    </div>
+
+                    <!-- System info -->
+                    <div class="mb-4">
+                        <h6 class="text-uppercase text-secondary border-bottom pb-2 mb-3">System</h6>
+                        <div class="row mb-1">
+                            <div class="col-3 text-secondary small">Web UI</div>
+                            <div class="col-9 small font-monospace" x-text="webUiInfo"></div>
+                        </div>
+                        <div class="row mb-1">
+                            <div class="col-3 text-secondary small">Agent Hub</div>
+                            <div class="col-9 small" :class="agentConnected ? 'text-success' : 'text-muted'"
+                                 x-text="agentConnected ? 'Connected' : 'Disconnected'"></div>
+                        </div>
+                    </div>
+
+                    <!-- Save button -->
+                    <div class="d-flex justify-content-between align-items-center">
+                        <a href="/setup.html" class="btn btn-sm btn-outline-secondary">Re-run Setup Wizard</a>
+                        <button class="btn btn-sm btn-primary" :disabled="!dirty || saving"
+                                @click="saveGeneralSettings()">
+                            <span x-show="saving" class="spinner-border spinner-border-sm me-1" role="status"></span>
+                            <span x-text="saving ? 'Saving...' : 'Save Changes'"></span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- ═══ Channels tab ═══ -->
+                <div x-show="activeTab === 'channels'">
+                    <p class="text-secondary small mb-3">
+                        Configure messaging channels. Changes require a restart to take effect.
+                    </p>
+
+                    <template x-for="ch in channels" :key="ch.type">
+                        <div class="channel-card" :class="ch.enabled ? 'enabled' : ''" :data-type="ch.type">
+                            <div class="channel-card-header">
+                                <div class="channel-card-left">
+                                    <span class="channel-icon"><i class="bi" :class="channelIcon(ch.type)"></i></span>
+                                    <span class="channel-name" x-text="ch.displayName"></span>
+                                    <!-- Badge -->
+                                    <span x-show="ch.isDefault" class="channel-badge default-badge">Default</span>
+                                    <span x-show="!ch.isDefault && ch.enabled" class="channel-badge enabled-badge">Enabled</span>
+                                    <span x-show="!ch.isDefault && !ch.enabled" class="channel-badge disabled-badge">Disabled</span>
+                                </div>
+                                <!-- Toggle (not for default channels) -->
+                                <label x-show="!ch.isDefault" class="toggle-switch">
+                                    <input type="checkbox" :checked="ch.enabled"
+                                           @change="toggleChannel(ch, $event.target.checked)">
+                                    <span class="toggle-slider"></span>
+                                </label>
+                            </div>
+                            <div class="channel-desc" x-text="ch.description"></div>
+
+                            <!-- Settings panel (non-default, enabled) -->
+                            <div x-show="!ch.isDefault && ch.enabled" class="channel-settings">
+                                <!-- Prerequisites check -->
+                                <div class="mb-2">
+                                    <button class="btn-check-prereqs" @click="checkPrerequisites(ch.type)">Check Prerequisites</button>
+                                    <div x-show="getPrereqs(ch.type)" class="prereq-list mt-1">
+                                        <span x-show="getPrereqs(ch.type)?.loading" class="text-muted" style="font-size:var(--text-sm);">Checking...</span>
+                                        <template x-if="getPrereqs(ch.type) && !getPrereqs(ch.type).loading">
+                                            <div>
+                                                <template x-for="check in getPrereqs(ch.type).checks" :key="check.name">
+                                                    <div class="prereq-item">
+                                                        <span class="prereq-icon" :class="check.ok ? 'ok' : 'fail'">
+                                                            <i class="bi" :class="check.ok ? 'bi-check-circle' : 'bi-x-circle'"></i>
+                                                        </span>
+                                                        <span class="prereq-name" x-text="check.name"></span>
+                                                        <span class="prereq-detail" x-text="check.detail"></span>
+                                                    </div>
+                                                </template>
+                                                <div x-show="!getPrereqs(ch.type)?.ready"
+                                                     style="font-size:var(--text-xs); color: var(--warning); margin-top: 6px;">
+                                                    Some prerequisites are not met. The channel may not work correctly.
+                                                </div>
+                                            </div>
+                                        </template>
+                                    </div>
+                                </div>
+
+                                <!-- Dynamic fields from schema -->
+                                <template x-for="field in channelSchema(ch.type)" :key="field.key">
+                                    <div class="control-group" x-show="isFieldVisible(ch, field)">
+                                        <label x-text="field.label"></label>
+                                        <!-- Select type -->
+                                        <template x-if="field.type === 'select'">
+                                            <select class="form-select form-select-sm"
+                                                    :value="getFieldValue(ch, field)"
+                                                    @change="setFieldValue(ch, field, $event.target.value)">
+                                                <template x-for="opt in field.options" :key="opt">
+                                                    <option :value="opt" x-text="opt"
+                                                            :selected="opt === getFieldValue(ch, field)"></option>
+                                                </template>
+                                            </select>
+                                        </template>
+                                        <!-- Text/password type -->
+                                        <template x-if="field.type !== 'select'">
+                                            <input class="form-control form-control-sm"
+                                                   :type="field.type === 'password' ? 'password' : 'text'"
+                                                   :value="getFieldValue(ch, field)"
+                                                   @input="setFieldValue(ch, field, $event.target.value)"
+                                                   :placeholder="field.default || ''"
+                                                   autocomplete="off">
+                                        </template>
+                                        <div class="hint" x-text="field.hint || ''"></div>
+                                    </div>
+                                </template>
+
+                                <!-- Discord setup guide (collapsible) -->
+                                <template x-if="ch.type === 'discord'">
+                                    <div class="wa-pairing-section">
+                                        <div class="wa-pairing-header" style="cursor:pointer;" @click="discordGuideOpen = !discordGuideOpen">
+                                            <span class="wa-pairing-title">Setup Guide</span>
+                                            <span style="font-size:var(--text-xs); color:var(--text-muted);">
+                                                <i class="bi" :class="discordGuideOpen ? 'bi-caret-down-fill' : 'bi-caret-right-fill'"></i>
+                                            </span>
+                                        </div>
+                                        <div x-show="discordGuideOpen" style="font-size:var(--text-sm); line-height:1.6; color:var(--text-secondary);">
+                                            <p style="margin:8px 0 4px; font-weight:600; color:var(--text-primary);">1. Create a Discord Application</p>
+                                            <ul style="margin:0 0 8px 16px; padding:0;">
+                                                <li>Go to <a href="https://discord.com/developers/applications" target="_blank" rel="noopener" style="color:var(--accent);">discord.com/developers/applications</a></li>
+                                                <li>Click <strong>New Application</strong> and name it (e.g. "Cortex")</li>
+                                            </ul>
+                                            <p style="margin:8px 0 4px; font-weight:600; color:var(--text-primary);">2. Configure Installation</p>
+                                            <ul style="margin:0 0 8px 16px; padding:0;">
+                                                <li>Go to the <strong>Installation</strong> tab in the left sidebar</li>
+                                                <li>Set <strong>Install Link</strong> to <strong>Discord Provided Link</strong></li>
+                                                <li>Enable <strong>Guild Install</strong> and add the <code style="background:var(--bg-input); padding:1px 4px; border-radius:3px;">bot</code> scope</li>
+                                            </ul>
+                                            <p style="margin:8px 0 4px; font-weight:600; color:var(--text-primary);">3. Get the Bot Token</p>
+                                            <ul style="margin:0 0 8px 16px; padding:0;">
+                                                <li>Go to the <strong>Bot</strong> tab in the left sidebar</li>
+                                                <li>Click <strong>Reset Token</strong> and copy the token</li>
+                                                <li>Paste it in the <strong>Bot Token</strong> field above</li>
+                                            </ul>
+                                            <p style="margin:8px 0 4px; font-weight:600; color:var(--text-primary);">4. Configure Bot Settings</p>
+                                            <ul style="margin:0 0 8px 16px; padding:0;">
+                                                <li>Still on the <strong>Bot</strong> tab, enable <strong>Public Bot</strong> (under Authorization Flow)</li>
+                                                <li>Scroll to <strong>Privileged Gateway Intents</strong></li>
+                                                <li>Enable <strong>Message Content Intent</strong> (required to read messages)</li>
+                                            </ul>
+                                            <p style="margin:8px 0 4px; font-weight:600; color:var(--text-primary);">5. Save &amp; Connect</p>
+                                            <ul style="margin:0 0 8px 16px; padding:0;">
+                                                <li>Paste the bot token above and <strong>save</strong></li>
+                                                <li>The bot will connect automatically &mdash; DM pairing and server invite are configured per-tenant in <strong>Tenant Settings</strong></li>
+                                            </ul>
+                                        </div>
+                                    </div>
+                                </template>
+
+                                <!-- Save button for this channel -->
+                                <div style="margin-top: 12px;">
+                                    <button class="btn btn-primary" style="padding: 6px 14px; font-size:var(--text-sm);"
+                                            :disabled="savingChannel === ch.type"
+                                            @click="saveChannelSettings(ch)">
+                                        <span x-text="savingChannel === ch.type ? 'Saving...' : 'Save Channel Settings'"></span>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+
+                <!-- ═══ Speech tab ═══ -->
+                <div x-show="activeTab === 'speech'">
+                    <p class="text-secondary small mb-3">
+                        Speech-to-text and text-to-speech engines used by voice-enabled channels.
+                    </p>
+
+                    <div x-show="speechLoading" class="text-muted small">Loading speech status...</div>
+                    <div x-show="speechError" class="text-danger small" x-text="'Failed to load speech status: ' + speechError"></div>
+
+                    <div x-show="!speechLoading && !speechError">
+                        <!-- Language voice configuration -->
+                        <div x-show="!langConfigLoading" class="settings-panel mb-4">
+                            <div class="settings-panel-title">Language Voice Configuration</div>
+                            <div class="settings-panel-hint mb-2">Language is auto-detected. Configure which languages are supported and which voice to use for each.</div>
+
+                            <div class="settings-panel-section mb-2">Supported Languages</div>
+
+                            <!-- Table header -->
+                            <div class="lang-config-header">
+                                <span>Lang</span><span>Male Voice</span><span>Female Voice</span><span>Fallback</span><span></span>
+                            </div>
+
+                            <!-- Language rows -->
+                            <template x-for="(row, idx) in langRows" :key="row.lang">
+                                <div class="lang-config-row">
+                                    <span class="lang-badge" x-text="langName(row.lang)"></span>
+
+                                    <!-- Male voice select -->
+                                    <select class="form-select form-select-sm"
+                                            x-model="row.maleVoice">
+                                        <template x-for="group in getVoiceOptions('male', row.lang)" :key="group.label">
+                                            <optgroup :label="group.label">
+                                                <template x-for="v in group.voices" :key="v.value">
+                                                    <option :value="v.value" x-text="v.label"></option>
+                                                </template>
+                                            </optgroup>
+                                        </template>
+                                    </select>
+
+                                    <!-- Female voice select -->
+                                    <select class="form-select form-select-sm"
+                                            x-model="row.femaleVoice">
+                                        <template x-for="group in getVoiceOptions('female', row.lang)" :key="group.label">
+                                            <optgroup :label="group.label">
+                                                <template x-for="v in group.voices" :key="v.value">
+                                                    <option :value="v.value" x-text="v.label"></option>
+                                                </template>
+                                            </optgroup>
+                                        </template>
+                                    </select>
+
+                                    <!-- Fallback radio -->
+                                    <div class="form-check d-flex justify-content-center m-0">
+                                        <input class="form-check-input" type="radio" name="fallbackLanguage"
+                                               :value="row.lang" :checked="row.lang === fallbackLanguage"
+                                               @change="fallbackLanguage = row.lang">
+                                    </div>
+
+                                    <!-- Remove button -->
+                                    <button class="btn btn-sm text-secondary" title="Remove language"
+                                            @click="removeLanguageRow(row.lang)">&#10005;</button>
+                                </div>
+                            </template>
+
+                            <!-- Add language dropdown -->
+                            <div style="position: relative;" class="mb-3">
+                                <button x-show="unusedLanguages.length > 0"
+                                        class="btn btn-outline-primary btn-sm"
+                                        @click.stop="langAddMenuOpen = !langAddMenuOpen">
+                                    + Add Language
+                                </button>
+                                <div x-show="langAddMenuOpen" @click.outside="langAddMenuOpen = false"
+                                     class="lang-add-menu">
+                                    <template x-for="l in unusedLanguages" :key="l">
+                                        <a href="#" @click.prevent.stop="addLanguageRow(l)"
+                                           x-text="langName(l)"></a>
+                                    </template>
+                                </div>
+                            </div>
+
+                            <!-- Save language config -->
+                            <button class="btn btn-primary btn-sm" :disabled="savingLangConfig"
+                                    @click="saveLangConfig()">
+                                <span x-text="savingLangConfig ? 'Saving...' : 'Save Language Configuration'"></span>
+                            </button>
+                        </div>
+
+                        <!-- Speech Models -->
+                        <div class="settings-panel">
+                            <div class="settings-panel-title">Speech Models</div>
+                            <div class="settings-panel-hint mb-2">Download and manage speech recognition and synthesis models.</div>
+
+                            <div class="speech-model-grid">
+                                <!-- Whisper STT card -->
+                                <div class="speech-card">
+                                    <div class="speech-card-header">
+                                        <div class="speech-card-title">Whisper STT</div>
+                                        <span class="speech-badge" :class="sttReady ? 'speech-badge-ready' : 'speech-badge-missing'"
+                                              x-text="sttReady ? 'Ready' : 'Not installed'"></span>
+                                    </div>
+                                    <div class="speech-card-info">Speech-to-text (auto-detect language)</div>
+                                    <button x-show="!sttReady" class="btn btn-primary btn-sm mt-2"
+                                            @click="downloadSpeechModel('whisper', 'Whisper STT')">
+                                        Download Whisper (~142 MB)
+                                    </button>
+                                </div>
+
+                                <!-- TTS provider cards -->
+                                <template x-for="p in speechProviders" :key="p.name">
+                                    <div class="speech-card">
+                                        <div class="speech-card-header">
+                                            <div class="speech-card-title" x-text="providerLabel(p.name)"></div>
+                                            <span class="speech-badge" :class="p.ready ? 'speech-badge-ready' : 'speech-badge-missing'"
+                                                  x-text="p.ready ? 'Ready' : 'Not installed'"></span>
+                                        </div>
+                                        <div x-show="p.voiceCount > 0" class="speech-card-info"
+                                             x-text="p.voiceCount + ' voices (' + providerLanguages(p) + ')'"></div>
+                                        <button x-show="!p.ready && p.canDownload"
+                                                class="btn btn-primary btn-sm mt-2"
+                                                @click="downloadProvider(p.name)"
+                                                x-text="p.downloadLabel || ('Download ' + providerLabel(p.name))">
+                                        </button>
+                                    </div>
+                                </template>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ═══ Memory tab ═══ -->
+                <div x-show="activeTab === 'memory'">
+                    <p class="text-secondary small mb-3">
+                        Duplicate detection and compaction settings. Changes take effect immediately.
+                    </p>
+
+                    <div x-show="memoryLoading" class="text-secondary small">Loading...</div>
+                    <div x-show="memoryError" class="text-secondary small" x-text="memoryError"></div>
+
+                    <div x-show="!memoryLoading && !memoryError && memoryConfig">
+                        <!-- Duplicate threshold -->
+                        <div class="control-group" style="margin-bottom: 16px;">
+                            <label style="display:block; font-size:var(--text-base); margin-bottom:4px;">Duplicate Detection Threshold</label>
+                            <div style="display:flex; align-items:center; gap:10px;">
+                                <input type="range" class="form-range" style="flex:1;"
+                                       min="0" max="1" step="0.01"
+                                       x-model.number="memoryConfig.duplicateThreshold">
+                                <span class="font-monospace" style="min-width:36px; font-size:var(--text-base);"
+                                      x-text="parseFloat(memoryConfig.duplicateThreshold).toFixed(2)"></span>
+                            </div>
+                            <div class="hint">Cosine similarity above which new memories are rejected as duplicates (0 = disabled, 0.90 = default). Higher = stricter.</div>
+                        </div>
+
+                        <!-- Compaction threshold -->
+                        <div class="control-group" style="margin-bottom: 16px;">
+                            <label style="display:block; font-size:var(--text-base); margin-bottom:4px;">Compaction Similarity Threshold</label>
+                            <div style="display:flex; align-items:center; gap:10px;">
+                                <input type="range" class="form-range" style="flex:1;"
+                                       min="0" max="1" step="0.01"
+                                       x-model.number="memoryConfig.compactionSimilarityThreshold">
+                                <span class="font-monospace" style="min-width:36px; font-size:var(--text-base);"
+                                      x-text="parseFloat(memoryConfig.compactionSimilarityThreshold).toFixed(2)"></span>
+                            </div>
+                            <div class="hint">Similarity above which the periodic compaction sweep merges near-duplicate memories (0.70 = default).</div>
+                        </div>
+
+                        <!-- Compaction enabled -->
+                        <div class="form-check form-switch mb-3">
+                            <input type="checkbox" class="form-check-input" id="mem-comp-enabled" role="switch"
+                                   x-model="memoryConfig.compactionEnabled">
+                            <label class="form-check-label" for="mem-comp-enabled" style="font-size:var(--text-base); cursor:pointer;">
+                                Enable periodic compaction
+                            </label>
+                        </div>
+
+                        <!-- Idle Session Handling divider -->
+                        <div style="border-top:1px solid var(--border-color); margin:20px 0 16px;"></div>
+                        <div style="font-size:var(--text-base); font-weight:600; margin-bottom:4px;">Idle Session Handling</div>
+                        <div class="hint" style="margin-bottom:12px;">Controls what happens when a conversation is idle for too long. Compaction summarizes the conversation via the LLM; disabling it wipes history entirely.</div>
+
+                        <!-- Idle compaction enabled -->
+                        <div class="form-check form-switch mb-3">
+                            <input type="checkbox" class="form-check-input" id="mem-idle-comp-enabled" role="switch"
+                                   x-model="memoryConfig.idleCompactionEnabled">
+                            <label class="form-check-label" for="mem-idle-comp-enabled" style="font-size:var(--text-base); cursor:pointer;">
+                                Compact on idle (instead of wiping)
+                            </label>
+                        </div>
+
+                        <!-- Idle timeout -->
+                        <div class="control-group" style="margin-bottom: 16px;">
+                            <label style="display:block; font-size:var(--text-base); margin-bottom:4px;">Idle Timeout (minutes)</label>
+                            <div style="display:flex; align-items:center; gap:10px;">
+                                <input type="range" class="form-range" style="flex:1;"
+                                       min="0" max="1440" step="5"
+                                       x-model.number="memoryConfig.idleResetMinutes">
+                                <span class="font-monospace" style="min-width:48px; font-size:var(--text-base);"
+                                      x-text="memoryConfig.idleResetMinutes == 0 ? 'off' : memoryConfig.idleResetMinutes"></span>
+                            </div>
+                            <div class="hint">Minutes of inactivity before a session is compacted or cleared (0 = disabled, 360 = default).</div>
+                        </div>
+
+                        <!-- Compaction: preserve recent user turns -->
+                        <div class="control-group" style="margin-bottom: 16px;">
+                            <label style="display:block; font-size:var(--text-base); margin-bottom:4px;">Preserve Recent User Turns (compaction)</label>
+                            <div style="display:flex; align-items:center; gap:10px;">
+                                <input type="range" class="form-range" style="flex:1;"
+                                       min="0" max="20" step="1"
+                                       x-model.number="memoryConfig.compactionPreserveRecentTurns">
+                                <span class="font-monospace" style="min-width:48px; font-size:var(--text-base);"
+                                      x-text="memoryConfig.compactionPreserveRecentTurns == 0 ? 'off' : memoryConfig.compactionPreserveRecentTurns"></span>
+                            </div>
+                            <div class="hint">When summarizing conversation history, keep this many recent user turns (with their assistant/tool replies) verbatim if their combined size fits in 25% of the context window. 0 = always summarize everything, 4 = default.</div>
+                        </div>
+
+                        <!-- Save memory settings -->
+                        <div style="display:flex; gap:8px; align-items:center; margin-top:8px;">
+                            <button class="btn btn-primary" style="padding:6px 14px; font-size:var(--text-sm);"
+                                    :disabled="savingMemory" @click="saveMemorySettings()">
+                                <span x-text="savingMemory ? 'Saving...' : 'Save Memory Settings'"></span>
+                            </button>
+                            <span x-show="memoryStatus" style="font-size:var(--text-sm); color:var(--text-muted);"
+                                  x-text="memoryStatus"></span>
+                        </div>
+                    </div>
+
+                    <!-- Remote Services — Embeddings -->
+                    <div style="border-top:1px solid var(--border-color); margin:24px 0 16px;"></div>
+                    <h6 class="text-uppercase text-secondary border-bottom pb-2 mb-3">Remote Services</h6>
+
+                    <div x-show="embeddingLoading" class="text-secondary small">Loading...</div>
+
+                    <div x-show="!embeddingLoading && embeddingProvider" class="settings-panel">
+                        <!-- Card header: title + status badge -->
+                        <div class="d-flex align-items-center justify-content-between mb-3">
+                            <div class="settings-panel-title mb-0">Embeddings</div>
+                            <span class="badge"
+                                  :class="embeddingProvider?.isDefault ? 'bg-success' : 'bg-primary'"
+                                  x-text="embeddingProvider?.isDefault ? 'Local (default)' : 'Remote'"></span>
+                        </div>
+
+                        <!-- Endpoint -->
+                        <div class="control-group">
+                            <label for="emb-endpoint">Endpoint</label>
+                            <input id="emb-endpoint" type="text" class="form-control form-control-sm font-monospace"
+                                   x-model="embeddingEndpointInput"
+                                   :disabled="embeddingSaving || embeddingTesting"
+                                   placeholder="http://embeddings:11434">
+                            <div class="hint">URL of the Ollama-compatible embeddings server.</div>
+                        </div>
+
+                        <!-- API Key -->
+                        <div class="control-group">
+                            <label for="emb-embedkey">API Key</label>
+                            <div class="d-flex gap-2 align-items-center">
+                                <!-- type=password + autocomplete=new-password + a non-login-looking
+                                     name/id + password-manager ignore hints suppress the browser's
+                                     "Save password?" prompt. This card is not inside a <form>. -->
+                                <input id="emb-embedkey" name="emb-embedkey" type="password"
+                                       class="form-control form-control-sm font-monospace"
+                                       x-model="embeddingKeyInput"
+                                       :placeholder="embeddingProvider?.keySet ? '•••••• (set)' : '(none)'"
+                                       autocomplete="new-password" autocapitalize="off"
+                                       autocorrect="off" spellcheck="false"
+                                       data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other">
+                                <button x-show="embeddingProvider?.keySet"
+                                        class="btn btn-sm btn-outline-secondary flex-shrink-0"
+                                        :disabled="embeddingSaving || embeddingTesting"
+                                        @click="clearEmbeddingKey()" type="button">
+                                    Clear
+                                </button>
+                            </div>
+                            <div class="hint">
+                                <span x-show="embeddingProvider?.keySet" class="text-success"><i class="bi bi-check-circle me-1"></i>Key is set.</span>
+                                <span x-show="!embeddingProvider?.keySet" class="text-secondary"><i class="bi bi-dash-circle me-1"></i>No key set.</span>
+                                Leave blank to keep the existing key; type a value to replace it; use Clear to remove it.
+                            </div>
+                        </div>
+
+                        <!-- Model + Dimensions (read-only) -->
+                        <div class="row g-2 mb-3">
+                            <div class="col-auto">
+                                <span class="text-secondary small">Model:</span>
+                                <span class="font-monospace small ms-1" x-text="embeddingProvider?.model || '—'"></span>
+                            </div>
+                            <div class="col-auto">
+                                <span class="text-secondary small">Dimensions:</span>
+                                <span class="font-monospace small ms-1" x-text="embeddingProvider?.dimensions ?? '—'"></span>
+                            </div>
+                        </div>
+
+                        <!-- Test result inline -->
+                        <div x-show="embeddingTestResult !== null" class="mb-3" style="font-size:var(--text-sm);">
+                            <template x-if="embeddingTestResult?.ok">
+                                <span class="text-success">
+                                    <i class="bi bi-check-circle me-1"></i>OK
+                                    <span x-show="embeddingTestResult?.dim" x-text="' · ' + embeddingTestResult?.dim + '-dim'"></span>
+                                </span>
+                            </template>
+                            <template x-if="embeddingTestResult && !embeddingTestResult.ok">
+                                <span class="text-danger">
+                                    <i class="bi bi-x-circle me-1"></i><span x-text="embeddingTestResult?.error || 'Connection failed'"></span>
+                                </span>
+                            </template>
+                        </div>
+
+                        <!-- Action buttons -->
+                        <div class="d-flex gap-2 flex-wrap">
+                            <button class="btn btn-sm btn-primary" :disabled="embeddingSaving || embeddingTesting"
+                                    @click="saveEmbeddingProvider()" type="button">
+                                <span x-show="embeddingSaving"><span class="spinner-border spinner-border-sm me-1" role="status"></span>Saving...</span>
+                                <span x-show="!embeddingSaving">Save</span>
+                            </button>
+                            <button class="btn btn-sm btn-outline-secondary" :disabled="embeddingSaving || embeddingTesting"
+                                    @click="testEmbeddingProvider()" type="button">
+                                <span x-show="embeddingTesting"><span class="spinner-border spinner-border-sm me-1" role="status"></span>Testing...</span>
+                                <span x-show="!embeddingTesting"><i class="bi bi-plug me-1"></i>Test connection</span>
+                            </button>
+                            <button class="btn btn-sm btn-outline-danger ms-auto" :disabled="embeddingSaving || embeddingTesting"
+                                    @click="showEmbeddingResetModal = true" type="button">
+                                <i class="bi bi-arrow-counterclockwise me-1"></i>Reset to default
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Reset Embeddings confirmation modal -->
+                    <div x-show.important="showEmbeddingResetModal" class="modal d-block" tabindex="-1"
+                         style="background: rgba(0,0,0,0.5);" @keydown.escape.window="showEmbeddingResetModal = false">
+                        <div class="modal-dialog modal-dialog-centered modal-sm">
+                            <div class="modal-content">
+                                <div class="modal-header">
+                                    <h5 class="modal-title">Reset embeddings</h5>
+                                    <button type="button" class="btn-close" @click="showEmbeddingResetModal = false"></button>
+                                </div>
+                                <div class="modal-body">
+                                    Reset the embedding provider to the local default
+                                    (<span class="font-monospace small">http://embeddings:11434</span>)?
+                                    This clears any stored API key.
+                                </div>
+                                <div class="modal-footer">
+                                    <button class="btn btn-outline-secondary btn-sm" :disabled="embeddingResetting"
+                                            @click="showEmbeddingResetModal = false" type="button">Cancel</button>
+                                    <button class="btn btn-outline-danger btn-sm" :disabled="embeddingResetting"
+                                            @click="resetEmbeddingProvider()" type="button">
+                                        <span x-show="!embeddingResetting"><i class="bi bi-arrow-counterclockwise me-1"></i>Reset</span>
+                                        <span x-show="embeddingResetting"><span class="spinner-border spinner-border-sm me-1" role="status"></span>Resetting...</span>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ═══ Coding tab ═══ -->
+                <div x-show="activeTab === 'coding'">
+                    <p class="text-secondary small mb-3">
+                        Configure which folders on this machine the coda coding engine may open, and the permission ceiling for each.
+                    </p>
+
+                    <!-- Coda auth status -->
+                    <div class="mb-4">
+                        <h6 class="text-uppercase text-secondary border-bottom pb-2 mb-3">Coda Auth Status</h6>
+                        <div x-show="codaAuthLoading" class="text-secondary small">Loading...</div>
+                        <div x-show="!codaAuthLoading && codaAuthStatus" class="small">
+                            <span x-show="codaAuthStatus && codaAuthStatus.binaryFound"
+                                  class="badge bg-success me-2"><i class="bi bi-check-circle me-1"></i>coda found</span>
+                            <span x-show="codaAuthStatus && !codaAuthStatus.binaryFound"
+                                  class="badge bg-warning text-dark me-2"><i class="bi bi-exclamation-triangle me-1"></i>coda not found</span>
+                            <span class="text-secondary" x-text="codaAuthStatus && codaAuthStatus.hint"></span>
+                        </div>
+                    </div>
+
+                    <!-- Provider / Model -->
+                    <div class="mb-4">
+                        <h6 class="text-uppercase text-secondary border-bottom pb-2 mb-3">Provider / Model</h6>
+                        <div x-show="codaModelLoading" class="text-secondary small">Loading...</div>
+                        <div x-show="!codaModelLoading" class="d-flex flex-column gap-2">
+                            <div>
+                                <label class="form-label small fw-semibold mb-1">Provider</label>
+                                <select class="form-select form-select-sm" x-model="codaModel.provider">
+                                    <option value="">Default (coda decides)</option>
+                                    <template x-for="p in codaModelProviders" :key="p.id">
+                                        <option :value="p.id" x-text="p.label"></option>
+                                    </template>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="form-label small fw-semibold mb-1">Model</label>
+                                <input type="text" class="form-control form-control-sm"
+                                       x-model="codaModel.model"
+                                       placeholder="Default (provider's default)">
+                            </div>
+                            <div>
+                                <button class="btn btn-sm btn-outline-primary"
+                                        @click="saveCodaModelSettings()">
+                                    <i class="bi bi-floppy me-1"></i>Save
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Folder list -->
+                    <div class="mb-4">
+                        <h6 class="text-uppercase text-secondary border-bottom pb-2 mb-3">Allowed Folders</h6>
+
+                        <div x-show="codaFoldersLoading" class="text-secondary small">Loading...</div>
+
+                        <div x-show="!codaFoldersLoading && codaFolders.length === 0" class="text-secondary small mb-3">
+                            No folders configured.
+                        </div>
+
+                        <div x-show="!codaFoldersLoading && codaFolders.length > 0" class="d-flex flex-column gap-2 mb-3">
+                            <template x-for="f in codaFolders" :key="f.path">
+                                <div class="card">
+                                    <div class="card-body py-2 px-3">
+                                        <div class="d-flex align-items-center gap-2">
+                                            <div class="flex-grow-1">
+                                                <div class="font-monospace small" x-text="f.path"></div>
+                                                <div class="d-flex align-items-center gap-2 mt-1">
+                                                    <span x-show="f.label" class="text-secondary small" x-text="f.label"></span>
+                                                    <span class="badge"
+                                                          :class="{
+                                                              'bg-danger':  f.policy === 'Yolo',
+                                                              'bg-warning text-dark': f.policy === 'YoloSafe',
+                                                              'bg-secondary': f.policy === 'Prompt'
+                                                          }"
+                                                          x-text="f.policy"></span>
+                                                    <span x-show="!f.exists" class="badge bg-warning text-dark">
+                                                        <i class="bi bi-exclamation-triangle me-1"></i>not found
+                                                    </span>
+                                                </div>
+                                            </div>
+                                            <button class="btn btn-sm btn-outline-danger flex-shrink-0"
+                                                    @click="removeCodingFolder(f.path)"
+                                                    title="Remove folder">
+                                                <i class="bi bi-trash"></i>
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </template>
+                        </div>
+
+                        <!-- Add folder form -->
+                        <div class="card">
+                            <div class="card-body py-2 px-3">
+                                <div class="small fw-semibold mb-2">Add Folder</div>
+                                <div class="d-flex flex-column gap-2">
+                                    <input type="text" class="form-control form-control-sm font-monospace"
+                                           x-model="codaAddForm.path"
+                                           placeholder="Absolute path, e.g. C:\Projects\myapp"
+                                           @keydown.enter="addCodingFolder()">
+                                    <input type="text" class="form-control form-control-sm"
+                                           x-model="codaAddForm.label"
+                                           placeholder="Label (optional)">
+                                    <select class="form-select form-select-sm" x-model="codaAddForm.policy">
+                                        <option value="Prompt">Prompt — ask before every operation</option>
+                                        <option value="YoloSafe" selected>YoloSafe — auto-approve safe operations</option>
+                                        <option value="Yolo">Yolo — auto-approve everything</option>
+                                    </select>
+                                    <div x-show="codaAddError" class="text-danger small" x-text="codaAddError"></div>
+                                    <div>
+                                        <button class="btn btn-sm btn-outline-success"
+                                                @click="addCodingFolder()"
+                                                :disabled="!codaAddForm.path.trim()">
+                                            <i class="bi bi-plus-lg me-1"></i>Add Folder
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Restart Banner -->
+                <div x-show="showRestartBanner" class="alert alert-warning mt-3" role="alert">
+                    <i class="bi bi-exclamation-triangle"></i> Configuration changed. Restart the Bridge for changes to take effect.
+                </div>
+            </div>
+        </div>
+        </template>
+
+        <!-- ── Help ───────────────────────────────────────────── -->
+        <template x-if="$store.router.page === 'help'">
+        <div x-data="helpPage()" class="help-page">
+
+            <!-- Loading / error (manifest) -->
+            <div x-show="loading" class="help-state text-secondary">
+                <div class="spinner-border spinner-border-sm me-2" role="status"></div>
+                Loading help…
+            </div>
+            <div x-show="!loading && error" class="help-state text-danger">
+                <i class="bi bi-exclamation-triangle me-1"></i>
+                Help content unavailable: <span x-text="error"></span>
+            </div>
+
+            <div x-show="!loading && !error" class="help-layout" x-cloak>
+                <!-- Topic sidebar -->
+                <aside class="help-nav">
+                    <div class="help-search">
+                        <i class="bi bi-search"></i>
+                        <input type="search" class="form-control form-control-sm"
+                               placeholder="Search help…"
+                               x-model="searchQuery" @input.debounce.200ms="onSearch()">
+                    </div>
+
+                    <!-- Search results -->
+                    <div x-show="searchQuery.trim().length > 0">
+                        <div class="help-search-meta" x-text="searchResults.length + ' result' + (searchResults.length === 1 ? '' : 's')"></div>
+                        <template x-for="r in searchResults" :key="r.id">
+                            <a href="#" class="help-result"
+                               @click.prevent="selectArticle(r.id)">
+                                <div class="help-result-title" x-text="r.title"></div>
+                                <div class="help-result-section" x-text="r.sectionTitle"></div>
+                                <div class="help-result-snippet" x-show="r.snippet" x-text="r.snippet"></div>
+                            </a>
+                        </template>
+                        <div x-show="searchResults.length === 0" class="text-secondary small px-2 py-1">No matches.</div>
+                    </div>
+
+                    <!-- Topic tree -->
+                    <div x-show="searchQuery.trim().length === 0">
+                        <template x-for="section in sections" :key="section.id">
+                            <div class="help-section">
+                                <div class="help-section-title" x-text="section.title"></div>
+                                <template x-for="article in section.articles" :key="article.id">
+                                    <a :href="articleHref(article.id)"
+                                       class="help-link"
+                                       :class="{ active: isActive(article.id) }"
+                                       @click.prevent="selectArticle(article.id)"
+                                       x-text="article.title"></a>
+                                </template>
+                            </div>
+                        </template>
+                    </div>
+                </aside>
+
+                <!-- Article content -->
+                <article class="help-content">
+                    <div x-show="articleLoading" class="text-secondary">
+                        <div class="spinner-border spinner-border-sm me-2" role="status"></div>
+                        Loading…
+                    </div>
+                    <div x-show="!articleLoading && articleError" class="text-secondary">
+                        <p><i class="bi bi-exclamation-triangle me-1"></i><span x-text="articleError"></span></p>
+                        <a href="#" @click.prevent="selectArticle(firstArticleId())">Back to the first article</a>
+                    </div>
+                    <div x-show="!articleLoading && !articleError"
+                         class="help-article markdown-body"
+                         x-ref="articleBody" x-html="articleHtml"></div>
+                </article>
+            </div>
+        </div>
+        </template>
+
+    </main>
+</div>
+
+<!-- Restart confirmation modal — owned by js/components/restart-modal.js.
+     Opened by cortexRestart.promptAndRestart({ reason }) from any settings
+     page that just saved a restart-required change. -->
+<div class="modal fade" id="cortexRestartModal" tabindex="-1" aria-labelledby="cortexRestartTitle" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="cortexRestartTitle">
+                    <i class="bi bi-arrow-clockwise me-2"></i>Restart Cortex
+                </h5>
+            </div>
+
+            <!-- Body 1: Confirm -->
+            <div class="modal-body" id="cortexRestartConfirmBody">
+                <p id="cortexRestartReason" class="mb-2">
+                    Some settings require a restart to take effect.
+                </p>
+                <p class="text-muted small mb-0">
+                    Saving will restart the Bridge process. The Web UI will reconnect automatically in about 10–15 seconds.
+                </p>
+            </div>
+
+            <!-- Body 2: In-progress (shown after the user confirms) -->
+            <div class="modal-body" id="cortexRestartProgressBody" style="display: none;">
+                <div class="d-flex align-items-center gap-3">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Loading…</span>
+                    </div>
+                    <div id="cortexRestartProgressMessage">Restarting Cortex…</div>
+                </div>
+            </div>
+
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" id="cortexRestartCancelBtn">Later</button>
+                <button type="button" class="btn btn-primary" id="cortexRestartConfirmBtn">Restart now</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     Scripts
+     ═══════════════════════════════════════════════════════════════ -->
+
+<!-- Libraries -->
+<script src="/lib/signalr/signalr.min.js"></script>
+<script src="/lib/marked/marked.min.js"></script>
+<script src="/lib/highlightjs/highlight.min.js"></script>
+
+<!-- Auth guard (fetch interceptor — load before any API calls) -->
+<script src="/js/auth-guard.js"></script>
+<script src="/js/check-setup.js"></script>
+
+<!-- Alpine components and stores (must load before Alpine) -->
+<script src="/js/components/api-helper.js"></script>
+<script src="/js/components/toast.js"></script>
+<script src="/js/components/layout.js"></script>
+<script src="/js/components/channel-helpers.js"></script>
+<script src="/js/components/restart-modal.js"></script>
+
+<!-- Page scripts (Alpine x-data functions) -->
+<script src="/js/pages/tenants.js"></script>
+<script src="/js/pages/tenant-settings.js"></script>
+<script src="/js/pages/tenant-history.js"></script>
+<script src="/js/pages/tenant-channel-history.js"></script>
+<script src="/js/pages/tenant-memory.js"></script>
+<script src="/js/pages/global-settings.js"></script>
+<script src="/js/pages/help.js"></script>
+
+<!-- Chat page (vanilla JS — loaded last, initializes on demand) -->
+<script src="/js/app.js"></script>
+
+<!-- Alpine.js (must load after all component definitions) -->
+<script defer src="/lib/alpine/alpine.min.js"></script>
+
+</body>
+</html>

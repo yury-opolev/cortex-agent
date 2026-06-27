@@ -1,0 +1,175 @@
+# Cortex - Personal AI Assistant Configuration
+# Copy this file to cortex.yml and customize for your setup.
+#
+# Environment variable substitution:
+#   ${VAR_NAME}         - replaced with the value of VAR_NAME
+#   ${VAR_NAME:-default} - replaced with VAR_NAME, or "default" if unset
+#
+# All API keys can also be managed via DPAPI-encrypted storage (auto on first run).
+
+# ── Bridge Settings ──────────────────────────────────────────────
+
+# Agent Hub SignalR URL (container endpoint)
+agentHubUrl: ${CORTEX_AGENT_HUB_URL:-http://localhost:5100/hub/agent}
+
+# Shared authentication token for Bridge <-> Agent Hub communication.
+# If omitted, a cryptographically random token is generated and encrypted on first run.
+# hubToken: ${CORTEX_HUB_TOKEN}
+
+# ── Web UI ───────────────────────────────────────────────────────
+
+webUi:
+  enabled: true
+  port: 5080
+  # IMPORTANT: Keep this on loopback unless behind a reverse proxy.
+  bindAddress: "127.0.0.1"
+
+# ── LLM Providers ───────────────────────────────────────────────
+
+llmProviders:
+  - name: openai
+    api: openai-completions
+    # API key (can also be set via OPENAI_API_KEY env var or DPAPI store)
+    apiKey: ${OPENAI_API_KEY:-}
+    # baseUrl: https://api.openai.com/v1  # Uncomment to override
+    defaultModel: gpt-4o
+    models:
+      - gpt-4o
+      - gpt-4o-mini
+      - gpt-4-turbo
+      - gpt-3.5-turbo
+    # Per-model context window and max output tokens (optional).
+    # Models not listed here use defaults: 128k context, 8192 max output.
+    modelDefinitions:
+      - id: gpt-4o
+        contextWindow: 128000
+        maxOutputTokens: 16384
+      - id: gpt-4o-mini
+        contextWindow: 128000
+        maxOutputTokens: 16384
+    rateLimits:
+      requestsPerMinute: 60
+      tokensPerMinute: 150000
+
+  # Uncomment to add Anthropic:
+  # - name: anthropic
+  #   api: anthropic-messages
+  #   apiKey: ${ANTHROPIC_API_KEY:-}
+  #   defaultModel: claude-sonnet-4-20250514
+  #   models:
+  #     - claude-sonnet-4-20250514
+  #     - claude-3-5-haiku-20241022
+  #   modelDefinitions:
+  #     - id: claude-sonnet-4-20250514
+  #       contextWindow: 200000
+  #       maxOutputTokens: 16384
+  #     - id: claude-3-5-haiku-20241022
+  #       contextWindow: 200000
+  #       maxOutputTokens: 8192
+  #   rateLimits:
+  #     requestsPerMinute: 50
+  #     tokensPerMinute: 100000
+
+  # GitHub Copilot API (recommended for Copilot Pro+ subscribers):
+  # Uses GitHub OAuth device flow — no API key or PAT needed.
+  # Includes ALL models in your subscription: Claude, GPT, Gemini, etc.
+  # Run the setup wizard to authenticate via GitHub OAuth.
+  #
+  # To use your own OAuth App (optional):
+  #   1. Go to https://github.com/settings/developers → "OAuth Apps" → "New OAuth App"
+  #   2. Set callback URL to http://localhost (not used by device flow, but required)
+  #   3. Check "Enable Device Flow" and save
+  #   4. Copy the Client ID and set it below
+  #
+  # - name: github-copilot-api
+  #   api: github-copilot-api
+  #   baseUrl: https://api.githubcopilot.com
+  #   tokenType: oauth
+  #   # clientId: Ov23liXXXXXXXXXXXXXX  # Your own GitHub OAuth App Client ID (optional)
+  #   defaultModel: claude-sonnet-4
+  #   models:
+  #     - claude-sonnet-4
+  #     - claude-opus-4
+  #     - gpt-4o
+  #   modelDefinitions:
+  #     - id: claude-sonnet-4
+  #       contextWindow: 200000
+  #       maxOutputTokens: 16384
+  #     - id: claude-opus-4
+  #       contextWindow: 200000
+  #       maxOutputTokens: 16384
+  #     - id: gpt-4o
+  #       contextWindow: 128000
+  #       maxOutputTokens: 16384
+
+  # Uncomment for local Ollama:
+  # - name: ollama
+  #   api: openai-completions
+  #   baseUrl: http://localhost:11434/v1
+  #   models:
+  #     - llama3
+  #     - mistral
+
+  # Mock provider for local dev/testing (no API keys needed):
+  # - name: mock
+  #   api: mock
+  #   models:
+  #     - mock-gpt
+  #     - mock-claude
+
+# ── LLM Routing ──────────────────────────────────────────────────
+
+llmProxy:
+  # Provider failover order (first available wins).
+  # The Bridge pushes credentials to the Agent, which calls LLMs directly.
+  fallbackOrder:
+    - openai
+    # - anthropic
+    # - github-copilot-api
+    # - ollama
+
+  # Cost tracking (optional)
+  # costTracking:
+  #   enabled: true
+  #   monthlyBudgetUsd: 50.00
+
+# ── Channels ────────────────────────────────────────────────────
+
+# ── Speech (STT/TTS) ────────────────────────────────────────────
+# Shared speech engine configuration used by Voice channel, Discord voice messages,
+# and any future voice-enabled channels. Only needed if a speech-capable channel is enabled.
+
+# speech:
+#   stt:
+#     engine: whisper                    # STT engine (currently only "whisper")
+#     whisperModelPath: ${LOCALAPPDATA}/Cortex/models/ggml-base.bin
+#     language: en                       # Whisper language code ("en", "auto", etc.)
+#   tts:
+#     engine: kokoro                     # "kokoro" (default, cross-platform), "windows-sapi", or "silero"
+#     kokoroVoice: af_heart              # Kokoro voice name
+#     # kokoroModelPath: /path/to/kokoro-v1.0.onnx  # Custom model (null = auto-download)
+#     # windowsVoiceName: Microsoft David Desktop    # Windows SAPI voice (engine=windows-sapi)
+#     # windowsSpeechRate: 0                         # -10 (slowest) to 10 (fastest)
+#     # sileroVoice: xenia                           # Silero voice name (engine=silero)
+#     # sileroModelPath: ${LOCALAPPDATA}/Cortex/models/silero  # Directory containing Silero model subdirs
+
+channels:
+  # Voice (Windows audio capture + STT/TTS from speech: section)
+  # STT/TTS engine settings are configured in the shared speech: section above.
+  # Per-channel settings below control audio devices, wake word, etc.
+  # voice:
+  #   enabled: true
+  #   settings:
+  #     wakeWord: hey cortex
+  #     pushToTalk: "false"
+  #     channelId: voice-default
+  #     # inputDeviceIndex: -1           # Audio input device (-1 = system default)
+  #     # outputDeviceIndex: -1          # Audio output device (-1 = system default)
+
+  # Discord bot
+  # discord:
+  #   enabled: true
+  #   settings:
+    #     BotToken: ${DISCORD_BOT_TOKEN}
+    #     # EnableVoiceMessages: "true"      # Transcribe voice messages in DMs via STT
+  #     # VoiceResponseMode: text          # "text" (default) = reply as text, "voice" = reply as audio

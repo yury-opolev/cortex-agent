@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <!-- Properties inherited from Directory.Build.props -->
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Cortex.Contained.Agent.Host.Tests" />
+    <InternalsVisibleTo Include="Cortex.Contained.Evals" />
+    <!-- NSubstitute uses Castle.DynamicProxy to substitute interfaces; proxying
+         internal interfaces requires the proxy assembly to see them. -->
+    <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Cortex.Contained.Contracts\Cortex.Contained.Contracts.csproj" />
+    <ProjectReference Include="..\Cortex.Contained.Speech\Cortex.Contained.Speech.csproj" />
+    <ProjectReference Include="..\..\lib\memory-mcp\src\MemoryMcp.Core\MemoryMcp.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Cronos" />
+    <PackageReference Include="Microsoft.Data.Sqlite" />
+    <PackageReference Include="Serilog.Extensions.Hosting" />
+    <PackageReference Include="Serilog.Settings.Configuration" />
+    <PackageReference Include="Serilog.Sinks.Console" />
+    <PackageReference Include="Serilog.Sinks.File" />
+  </ItemGroup>
+
+</Project>

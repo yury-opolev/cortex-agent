@@ -1,0 +1,53 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Properties inherited from Directory.Build.props -->
+
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\tts-notice-trouble-female.pcm" />
+    <EmbeddedResource Include="Resources\tts-notice-trouble-male.pcm" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Cortex.Contained.Channels.Discord.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Cortex.Contained.Contracts\Cortex.Contained.Contracts.csproj" />
+    <ProjectReference Include="..\Cortex.Contained.Speech\Cortex.Contained.Speech.csproj" />
+  </ItemGroup>
+
+  <!--
+    Discord.Net is referenced from our local fork at lib/Discord.Net (branch
+    fix/rtp-padding-stripping) so we ship with the RFC 3550 RTP padding-strip
+    fix. See discord-net/Discord.Net#3262 / #3263 — when the fix is merged
+    and released on NuGet, revert this block to `<PackageReference
+    Include="Discord.Net" />` + `<PackageReference Include="Discord.Net.Dave" />`.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\lib\Discord.Net\src\Discord.Net.Core\Discord.Net.Core.csproj" />
+    <ProjectReference Include="..\..\lib\Discord.Net\src\Discord.Net.Rest\Discord.Net.Rest.csproj" />
+    <ProjectReference Include="..\..\lib\Discord.Net\src\Discord.Net.WebSocket\Discord.Net.WebSocket.csproj" />
+    <ProjectReference Include="..\..\lib\Discord.Net\tools\Discord.Net.Dave\Discord.Net.Dave.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="libsodium" />
+    <PackageReference Include="OpusDotNet.opus.win-x64" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+
+  <!--
+    libdave.dll is Discord's native DAVE (End-to-End Encryption) library. Required by
+    Discord for voice connections as of March 1st, 2026. Not shipped with Discord.Net.Dave
+    (which only contains the C# wrapper). Downloaded from
+    https://github.com/discord/libdave/releases and committed into native/libdave/.
+  -->
+  <ItemGroup>
+    <Content Include="..\..\native\libdave\win-x64\libdave.dll" Condition="Exists('..\..\native\libdave\win-x64\libdave.dll')">
+      <Link>libdave.dll</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+  </ItemGroup>
+
+</Project>

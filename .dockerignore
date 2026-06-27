@@ -1,0 +1,21 @@
+# Build-context hygiene for the cortex-agent image.
+#
+# The build context is the repo root (scripts/Build-AgentImage.ps1 runs
+# `docker build <repoRoot>`), but the agent Dockerfile only copies src/,
+# lib/memory-mcp/src/MemoryMcp.Core/, and the root Directory.*.props files.
+# Without this file Docker shipped the entire tree (~38 GB: artifacts/*.msix,
+# .git, and every bin/obj) as context on every build — minutes of transfer
+# for nothing. Exclude paths the Dockerfile never references.
+
+.git/
+.gitignore
+artifacts/
+**/bin/
+**/obj/
+*.msix
+*.user
+docs/
+.vs/
+.vscode/
+.idea/
+**/TestResults/

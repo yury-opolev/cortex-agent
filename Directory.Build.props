@@ -1,0 +1,51 @@
+<Project>
+  <!-- Read version from version.json (shared across all projects).
+       Override at build time with -p:Version=X.Y.Z if needed. -->
+  <PropertyGroup>
+    <VersionJsonPath>$([MSBuild]::GetPathOfFileAbove('version.json', $(MSBuildProjectDirectory)))</VersionJsonPath>
+    <VersionJsonContent Condition="Exists('$(VersionJsonPath)')">$([System.IO.File]::ReadAllText('$(VersionJsonPath)'))</VersionJsonContent>
+    <VersionMajor Condition="'$(VersionJsonContent)' != ''">$([System.Text.RegularExpressions.Regex]::Match('$(VersionJsonContent)', '"major"\s*:\s*(\d+)').Groups[1].Value)</VersionMajor>
+    <VersionMinor Condition="'$(VersionJsonContent)' != ''">$([System.Text.RegularExpressions.Regex]::Match('$(VersionJsonContent)', '"minor"\s*:\s*(\d+)').Groups[1].Value)</VersionMinor>
+    <VersionPatch Condition="'$(VersionJsonContent)' != ''">$([System.Text.RegularExpressions.Regex]::Match('$(VersionJsonContent)', '"patch"\s*:\s*(\d+)').Groups[1].Value)</VersionPatch>
+    <Version Condition="'$(Version)' == '' and '$(VersionMajor)' != ''">$(VersionMajor).$(VersionMinor).$(VersionPatch)</Version>
+    <Version Condition="'$(Version)' == ''">0.1.0-local</Version>
+    <InformationalVersion Condition="'$(InformationalVersion)' == ''">$(Version)</InformationalVersion>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <WarningLevel>9999</WarningLevel>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <Authors>Space-Kube</Authors>
+    <Company>Space-Kube</Company>
+    <Product>Cortex Contained</Product>
+    <RepositoryUrl>https://github.com/yury-opolev/cortex-contained</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+  </PropertyGroup>
+
+  <!-- NuGet audit (NU1903): suppress a single advisory that has no patched package yet.
+       SQLitePCLRaw.lib.e_sqlite3 2.1.11 (pulled transitively by Microsoft.Data.Sqlite) is the
+       latest published version, so it cannot be upgraded away — the advisory's fixed version
+       does not exist on nuget.org. The bundled native lib is used only inside the sandboxed
+       Agent Host container (no untrusted SQL input). Re-evaluate and REMOVE this suppression when
+       SQLitePCLRaw publishes a fixed release. See https://github.com/advisories/GHSA-2m69-gcr7-jv3q -->
+  <ItemGroup>
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-2m69-gcr7-jv3q" />
+  </ItemGroup>
+
+  <!-- Test projects -->
+  <PropertyGroup Condition="$(MSBuildProjectName.EndsWith('.Tests'))">
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <!-- Allow underscores in test method names (common convention) -->
+    <NoWarn>$(NoWarn);CA1707</NoWarn>
+  </PropertyGroup>
+</Project>
