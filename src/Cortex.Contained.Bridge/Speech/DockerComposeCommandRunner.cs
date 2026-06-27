@@ -9,11 +9,12 @@ namespace Cortex.Contained.Bridge.Speech;
 /// <see cref="Tenants.DockerContainerManager"/>. The compose file is resolved to
 /// <c>%LOCALAPPDATA%\Cortex\docker-compose.yml</c>.
 /// </summary>
-public sealed partial class DockerComposeCommandRunner : IComposeCommandRunner, ISttComposeRunner, IEmbeddingsComposeRunner
+public sealed partial class DockerComposeCommandRunner : IComposeCommandRunner, ISttComposeRunner, IEmbeddingsComposeRunner, IVoiceIdComposeRunner
 {
     private const string DanishContainerName = "cortex-uni-voices";
     private const string SttContainerName = "cortex-stt";
     private const string EmbeddingsContainerName = "cortex-embeddings";
+    private const string VoiceIdContainerName = "cortex-voice-id";
 
     /// <summary>Image pull/start can be slow on first run, so allow a generous window.</summary>
     private static readonly TimeSpan StartTimeout = TimeSpan.FromSeconds(60);
@@ -90,6 +91,24 @@ public sealed partial class DockerComposeCommandRunner : IComposeCommandRunner, 
     /// <inheritdoc />
     public Task<bool> IsEmbeddingsRunningAsync(CancellationToken cancellationToken)
         => this.IsContainerRunningAsync(EmbeddingsContainerName, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<bool> StartVoiceIdAsync(CancellationToken cancellationToken)
+        => this.RunCommandAsync(
+            $"compose -f \"{this.composeFilePath}\" --profile voiceid up -d voice-id",
+            StartTimeout,
+            cancellationToken);
+
+    /// <inheritdoc />
+    public Task<bool> StopVoiceIdAsync(CancellationToken cancellationToken)
+        => this.RunCommandAsync(
+            $"compose -f \"{this.composeFilePath}\" --profile voiceid stop voice-id",
+            ShortTimeout,
+            cancellationToken);
+
+    /// <inheritdoc />
+    public Task<bool> IsVoiceIdRunningAsync(CancellationToken cancellationToken)
+        => this.IsContainerRunningAsync(VoiceIdContainerName, cancellationToken);
 
     private async Task<bool> IsContainerRunningAsync(string containerName, CancellationToken cancellationToken)
     {

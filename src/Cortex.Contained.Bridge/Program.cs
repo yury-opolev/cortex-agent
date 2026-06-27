@@ -861,9 +861,12 @@ builder.Services.AddSingleton<Cortex.Contained.Bridge.Speech.ISttComposeRunner>(
     sp => sp.GetRequiredService<Cortex.Contained.Bridge.Speech.DockerComposeCommandRunner>());
 builder.Services.AddSingleton<Cortex.Contained.Bridge.Speech.IEmbeddingsComposeRunner>(
     sp => sp.GetRequiredService<Cortex.Contained.Bridge.Speech.DockerComposeCommandRunner>());
+builder.Services.AddSingleton<Cortex.Contained.Bridge.Speech.IVoiceIdComposeRunner>(
+    sp => sp.GetRequiredService<Cortex.Contained.Bridge.Speech.DockerComposeCommandRunner>());
 builder.Services.AddSingleton<Cortex.Contained.Bridge.Speech.DanishTtsLifecycle>();
 builder.Services.AddSingleton<Cortex.Contained.Bridge.Speech.SttSidecarLifecycle>();
 builder.Services.AddSingleton<Cortex.Contained.Bridge.Speech.EmbeddingsSidecarLifecycle>();
+builder.Services.AddSingleton<Cortex.Contained.Bridge.Speech.VoiceIdSidecarLifecycle>();
 
 var app = builder.Build();
 
@@ -906,6 +909,13 @@ _ = modelCatalog.InitializeAsync(); // Fire-and-forget; data will be ready befor
     var embeddingsLifecycle = app.Services.GetRequiredService<Cortex.Contained.Bridge.Speech.EmbeddingsSidecarLifecycle>();
     var memEnabled = app.Services.GetRequiredService<BridgeConfig>().Memory.Enabled;
     _ = Task.Run(() => embeddingsLifecycle.ReconcileAsync(memEnabled, CancellationToken.None));
+}
+
+// --- Voice-id sidecar lifecycle: converge with effective voice-id flag at startup ---
+{
+    var voiceIdLifecycle = app.Services.GetRequiredService<Cortex.Contained.Bridge.Speech.VoiceIdSidecarLifecycle>();
+    var speech = app.Services.GetRequiredService<BridgeConfig>().Speech;
+    _ = Task.Run(() => voiceIdLifecycle.ReconcileAsync(SpeechToggles.EffectiveVoiceId(speech), CancellationToken.None));
 }
 
 // --- Middleware Pipeline ---

@@ -26,9 +26,6 @@ services:
       - cortex-internal
     restart: unless-stopped
     init: true
-    depends_on:
-      voice-id:
-        condition: service_started
 
   voice-id:
     # Image is built+tagged by scripts/Build-VoiceIdImage.ps1 (or Build-All.ps1)
@@ -40,6 +37,7 @@ services:
       dockerfile: Dockerfile
     image: voice-id:latest
     container_name: cortex-voice-id
+    profiles: [voiceid]
     # Published to host loopback so the Bridge (Windows host, outside Docker)
     # can use this ONE embedder for verification — the same instance the Agent
     # uses internally for enrollment. 127.0.0.1 only: not exposed to the LAN.
