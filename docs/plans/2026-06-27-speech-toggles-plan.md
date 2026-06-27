@@ -452,7 +452,7 @@ git commit -m "feat(speech): sidecar lifecycles honor master+STT+TTS enable flag
 - Test: `tests/Cortex.Contained.Bridge.Tests/Speech/SpeechToggleApplyTests.cs`
 
 **Interfaces:**
-- Produces: `POST /api/speech/toggles` accepting `{ speechEnabled?: bool, sttEnabled?: bool, ttsEnabled?: bool }`, returning `{ success, sttRunning?, restartRequired:false }`. A testable static helper `SpeechToggleApply.Apply(SpeechConfig, bool?, bool?, bool?)` that mutates the config.
+- Produces: `POST /api/speech/toggles` accepting `{ speechEnabled?: bool, sttEnabled?: bool, ttsEnabled?: bool }`, returning `{ success, speechEnabled, sttEnabled, ttsEnabled }` (the effective values, consumed by the Task 6 UI). No `restartRequired` field — STT/TTS are fully live in this slice (see slice self-review). A testable static helper `SpeechToggleApply.Apply(SpeechConfig, bool?, bool?, bool?)` that mutates the config.
 
 - [ ] **Step 1: Write the failing test**
 
