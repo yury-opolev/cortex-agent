@@ -103,6 +103,12 @@ function globalSettingsPage() {
         sttReady: false,
         speechError: null,
 
+        // Speech toggles (master + STT + TTS)
+        speechEnabled: true,
+        sttEnabled: true,
+        ttsEnabled: true,
+        savingSpeechToggles: false,
+
         // Language voice config
         langConfigLoading: true,
         langRows: [],            // [{lang, maleVoice, femaleVoice}]
@@ -176,6 +182,8 @@ function globalSettingsPage() {
                     maxSubagentRounds: this.maxSubagentRounds,
                 };
                 this.dirty = false;
+
+                this.loadSpeechTogglesFromSettings(data);
 
                 uiTelemetry("global-settings.js", "loadSettings.success", {
                     providerCount: this.providers.length,
@@ -533,6 +541,41 @@ function globalSettingsPage() {
                 this.speechError = e.message;
             }
             this.speechLoading = false;
+        },
+
+        _applySpeechToggles(speech) {
+            this.speechEnabled = !!speech.enabled;
+            this.sttEnabled = !!speech.stt?.enabled;
+            this.ttsEnabled = !!speech.tts?.enabled;
+        },
+
+        loadSpeechTogglesFromSettings(data) {
+            if (data?.speech) {
+                this._applySpeechToggles(data.speech);
+            }
+        },
+
+        async saveSpeechToggles() {
+            this.savingSpeechToggles = true;
+            try {
+                const payload = {
+                    speechEnabled: this.speechEnabled,
+                    sttEnabled: this.sttEnabled,
+                    ttsEnabled: this.ttsEnabled,
+                };
+                const data = await api.post("/api/speech/toggles", payload);
+                if (data?.success) {
+                    this._applySpeechToggles({
+                        enabled: data.speechEnabled,
+                        stt: { enabled: data.sttEnabled },
+                        tts: { enabled: data.ttsEnabled },
+                    });
+                    Alpine.store("toast").success("Voice settings saved");
+                }
+            } catch (e) {
+                Alpine.store("toast").error("Failed to save voice settings: " + e.message);
+            }
+            this.savingSpeechToggles = false;
         },
 
         async downloadSpeechModel(providerOrModel, label) {
