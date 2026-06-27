@@ -1,4 +1,5 @@
 using Cortex.Contained.Contracts.Config;
+using Cortex.Contained.Contracts.Hub;
 
 namespace Cortex.Contained.Bridge.Endpoints;
 
@@ -12,4 +13,13 @@ public static class MemoryToggleApply
             memory.Enabled = enabled.Value;
         }
     }
+
+    /// <summary>
+    /// Forces the persisted master enable flag onto a memory-settings update before it is pushed
+    /// to the agent. The memory-settings page omits <c>enabled</c>, so the bound DTO defaults it
+    /// to true; without this, saving unrelated settings would silently re-enable a disabled
+    /// memory subsystem. Only the <see cref="MemoryConfig.Enabled"/> flag is overridden.
+    /// </summary>
+    public static MemoryConfig WithPersistedEnabled(MemoryConfig requested, MemorySettingsConfig persisted)
+        => requested with { Enabled = persisted.Enabled };
 }

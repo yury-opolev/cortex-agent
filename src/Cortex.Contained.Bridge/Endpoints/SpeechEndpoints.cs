@@ -391,6 +391,9 @@ internal static class SpeechEndpoints
                 return Results.Json(new { error = "body is required" }, statusCode: 400);
             }
 
+            // Capture the effective voice-id state BEFORE applying, to detect an enable transition.
+            var voiceIdEffectiveBefore = SpeechToggles.EffectiveVoiceId(config.Speech);
+
             SpeechToggleApply.Apply(config.Speech, body.SpeechEnabled, body.SttEnabled, body.TtsEnabled, body.VoiceIdEnabled);
             BridgeSettingsWriter.PersistSettingsToYaml(config, cortexConfigPath);
 
@@ -409,14 +412,17 @@ internal static class SpeechEndpoints
             var pusher = sp.GetRequiredService<Cortex.Contained.Bridge.Hosting.CredentialsPusher>();
             await pusher.PushSpeakerIdConfigAsync(CancellationToken.None);
 
+            // Report the RAW persisted flags (not master-gated effective values) so the UI never
+            // writes a wiped sub-flag back and re-enabling the master cannot persist subs as off.
+            var state = SpeechToggleApply.RawState(config.Speech);
             return Results.Ok(new
             {
                 success = true,
-                speechEnabled = config.Speech.Enabled,
-                sttEnabled = SpeechToggles.EffectiveStt(config.Speech),
-                ttsEnabled = SpeechToggles.EffectiveTts(config.Speech),
-                voiceIdEnabled = voiceIdEffective,
-                restartRequired = !voiceIdConfirmed,
+                speechEnabled = state.SpeechEnabled,
+                sttEnabled = state.SttEnabled,
+                ttsEnabled = state.TtsEnabled,
+                voiceIdEnabled = state.VoiceIdEnabled,
+                restartRequired = SpeechToggleApply.VoiceIdRestartRequired(voiceIdEffectiveBefore, voiceIdEffective, voiceIdConfirmed),
             });
         }).RequireAuthorization();
 

@@ -259,6 +259,11 @@ internal static class MemoryEndpoints
 
             try
             {
+                // The settings page omits `enabled`, so the bound DTO defaults it to true. Force
+                // the persisted master flag so saving unrelated settings never re-enables a
+                // disabled memory subsystem (which would expose memory tools the stopped
+                // embeddings sidecar cannot service).
+                memoryConfig = MemoryToggleApply.WithPersistedEnabled(memoryConfig, config.Memory);
                 await tenantRouter.GetDefaultClient()!.UpdateMemoryConfigAsync(memoryConfig, CancellationToken.None).ConfigureAwait(false);
 
                 // Persist to cortex.yml so settings survive restarts
