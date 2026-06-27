@@ -1514,6 +1514,15 @@
 
                 <!-- ═══ Memory tab ═══ -->
                 <div x-show="activeTab === 'memory'">
+                    <div class="form-check mb-3">
+                        <input class="form-check-input" type="checkbox" id="memory-enabled"
+                               :checked="memoryEnabled"
+                               :disabled="savingMemoryToggle"
+                               @change="memoryEnabled = $event.target.checked; saveMemoryToggle()">
+                        <label class="form-check-label" for="memory-enabled">Built-in memory enabled</label>
+                        <div class="form-text">When off, the agent runs with no long-term memory and the embeddings container is stopped. Existing memories are preserved and restored when re-enabled.</div>
+                    </div>
+
                     <p class="text-secondary small mb-3">
                         Duplicate detection and compaction settings. Changes take effect immediately.
                     </p>

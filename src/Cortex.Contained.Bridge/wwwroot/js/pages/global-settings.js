@@ -109,6 +109,10 @@ function globalSettingsPage() {
         ttsEnabled: true,
         savingSpeechToggles: false,
 
+        // Built-in memory master toggle
+        memoryEnabled: true,
+        savingMemoryToggle: false,
+
         // Language voice config
         langConfigLoading: true,
         langRows: [],            // [{lang, maleVoice, femaleVoice}]
@@ -184,6 +188,7 @@ function globalSettingsPage() {
                 this.dirty = false;
 
                 this.loadSpeechTogglesFromSettings(data);
+                this.loadMemoryToggleFromSettings(data);
 
                 uiTelemetry("global-settings.js", "loadSettings.success", {
                     providerCount: this.providers.length,
@@ -588,6 +593,31 @@ function globalSettingsPage() {
                 await this.loadSettings();
             } finally {
                 this.savingSpeechToggles = false;
+            }
+        },
+
+        loadMemoryToggleFromSettings(data) {
+            if (data?.memory) {
+                this.memoryEnabled = !!data.memory.enabled;
+            }
+        },
+
+        async saveMemoryToggle() {
+            this.savingMemoryToggle = true;
+            try {
+                const data = await api.post("/api/memory/toggle", { enabled: this.memoryEnabled });
+                if (data?.success) {
+                    this.memoryEnabled = !!data.enabled;
+                    Alpine.store("toast").success("Memory " + (data.enabled ? "enabled" : "disabled"));
+                } else {
+                    Alpine.store("toast").error("Failed to save memory toggle");
+                    await this.loadSettings();
+                }
+            } catch (e) {
+                Alpine.store("toast").error("Failed to save memory toggle: " + e.message);
+                await this.loadSettings();
+            } finally {
+                this.savingMemoryToggle = false;
             }
         },
 
