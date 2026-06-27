@@ -232,6 +232,9 @@ public sealed class ChannelConfig
 /// </summary>
 public sealed class SpeechConfig
 {
+    /// <summary>Master voice switch. When false, STT, TTS, and voice-id are all off.</summary>
+    public bool Enabled { get; set; } = true;
+
     /// <summary>Speech-to-text engine settings.</summary>
     public SttConfig Stt { get; set; } = new();
 
@@ -242,6 +245,9 @@ public sealed class SpeechConfig
 /// <summary>Speech-to-text engine configuration.</summary>
 public sealed class SttConfig
 {
+    /// <summary>Whether speech-to-text is enabled (gated by <see cref="SpeechConfig.Enabled"/>).</summary>
+    public bool Enabled { get; set; } = true;
+
     /// <summary>STT engine name. Currently only "whisper" is supported.</summary>
     public string Engine { get; set; } = "whisper";
 
@@ -259,6 +265,9 @@ public sealed class SttConfig
 /// <summary>Text-to-speech engine configuration.</summary>
 public sealed class TtsConfig
 {
+    /// <summary>Whether text-to-speech is enabled (gated by <see cref="SpeechConfig.Enabled"/>).</summary>
+    public bool Enabled { get; set; } = true;
+
     /// <summary>
     /// TTS engine name: "kokoro" (default, cross-platform) or "windows-sapi" (Windows only).
     /// </summary>
