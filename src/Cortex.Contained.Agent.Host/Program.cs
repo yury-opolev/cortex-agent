@@ -450,6 +450,7 @@ builder.Services.AddSingleton(sp =>
         sp.GetRequiredService<Cortex.Contained.Agent.Host.Memory.MemoryExtractionService>(),
         sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.IModelProvider>(),
         sp.GetRequiredService<Cortex.Contained.Agent.Host.Memory.MaintenanceStore>(),
+        sp.GetRequiredService<Cortex.Contained.Agent.Host.Memory.MemorySettingsStore>(),
         sp.GetRequiredService<IOptions<Cortex.Contained.Agent.Host.Memory.MemoryCompactionOptions>>(),
         sp.GetRequiredService<ILogger<Cortex.Contained.Agent.Host.Memory.MemoryCompactionService>>()));
 builder.Services.AddHostedService(sp =>
@@ -587,7 +588,8 @@ builder.Services.AddSingleton(sp =>
         imageDescriber: sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.IImageDescriber>(),
         compactionOptions: sp.GetRequiredService<IOptionsMonitor<ConversationCompactionConfig>>(),
         metrics: sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.AgentMetrics>(),
-        loggerFactory: sp.GetRequiredService<ILoggerFactory>()));
+        loggerFactory: sp.GetRequiredService<ILoggerFactory>(),
+        memorySettingsStore: sp.GetRequiredService<Cortex.Contained.Agent.Host.Memory.MemorySettingsStore>()));
 builder.Services.AddSingleton<IAgentRuntime>(sp => sp.GetRequiredService<AgentRuntime>());
 
 // Bootstrap context store removed — replaced by self-notes

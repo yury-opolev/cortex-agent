@@ -24,6 +24,7 @@ internal sealed partial class CompactionOrchestrator
     private readonly ILlmClient llmClient;
     private readonly IModelProvider modelProvider;
     private readonly Memory.MemoryExtractionService? memoryExtraction;
+    private readonly Memory.MemorySettingsStore? memorySettingsStore;
     private readonly IOptionsMonitor<ConversationCompactionConfig>? compactionOptions;
     private readonly IOptionsMonitor<ImageAgingConfig> imageAgingOptions;
     private readonly IImageDescriber? imageDescriber;
@@ -91,7 +92,8 @@ internal sealed partial class CompactionOrchestrator
         ILogger<CompactionOrchestrator> logger,
         Memory.MemoryExtractionService? memoryExtraction = null,
         IOptionsMonitor<ConversationCompactionConfig>? compactionOptions = null,
-        IImageDescriber? imageDescriber = null)
+        IImageDescriber? imageDescriber = null,
+        Memory.MemorySettingsStore? memorySettingsStore = null)
     {
         this.llmClient = llmClient;
         this.modelProvider = modelProvider;
@@ -100,6 +102,7 @@ internal sealed partial class CompactionOrchestrator
         this.memoryExtraction = memoryExtraction;
         this.compactionOptions = compactionOptions;
         this.imageDescriber = imageDescriber;
+        this.memorySettingsStore = memorySettingsStore;
     }
 
     private string DefaultModel => this.modelProvider.DefaultModel;
@@ -114,6 +117,13 @@ internal sealed partial class CompactionOrchestrator
     /// </summary>
     public void FlushExtractionBuffer(AgentSession session, string conversationId)
     {
+        if (this.memorySettingsStore is { IsMemoryEnabled: false })
+        {
+            // Memory disabled — discard buffered entries instead of extracting.
+            _ = session.DrainExtractionBuffer();
+            return;
+        }
+
         var entries = session.DrainExtractionBuffer();
         if (entries.Count == 0)
         {

@@ -22,6 +22,7 @@ public sealed partial class MemoryCompactionService : BackgroundService
     private readonly MemoryExtractionService extraction;
     private readonly IModelProvider modelProvider;
     private readonly MaintenanceStore maintenanceStore;
+    private readonly MemorySettingsStore memorySettingsStore;
     private readonly MemoryCompactionOptions options;
     private readonly ILogger<MemoryCompactionService> logger;
 
@@ -44,6 +45,7 @@ public sealed partial class MemoryCompactionService : BackgroundService
         MemoryExtractionService extraction,
         IModelProvider modelProvider,
         MaintenanceStore maintenanceStore,
+        MemorySettingsStore memorySettingsStore,
         IOptions<MemoryCompactionOptions> options,
         ILogger<MemoryCompactionService> logger)
     {
@@ -53,6 +55,7 @@ public sealed partial class MemoryCompactionService : BackgroundService
         this.extraction = extraction;
         this.modelProvider = modelProvider;
         this.maintenanceStore = maintenanceStore;
+        this.memorySettingsStore = memorySettingsStore;
         this.options = options.Value;
         this.logger = logger;
     }
@@ -190,6 +193,12 @@ public sealed partial class MemoryCompactionService : BackgroundService
     /// </summary>
     private async Task<(int Checked, int Merged)> RunCompactionAsync(CancellationToken cancellationToken)
     {
+        if (!this.memorySettingsStore.IsMemoryEnabled)
+        {
+            // Built-in memory disabled — skip the sweep.
+            return (0, 0);
+        }
+
         this.LogCompactionStarted();
 
         // Track which memory IDs have already been processed (merged or checked)

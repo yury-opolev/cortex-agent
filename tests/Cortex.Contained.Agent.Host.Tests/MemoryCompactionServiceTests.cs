@@ -27,6 +27,7 @@ public class MemoryCompactionServiceTests : IDisposable
     private readonly IMemoryManagementService _management = Substitute.For<IMemoryManagementService>();
     private readonly ModelProvider _modelProvider = new();
     private readonly MaintenanceStore _maintenanceStore;
+    private readonly MemorySettingsStore _memorySettingsStore = new(); // default: memory enabled
     private readonly string _tempDir;
     private readonly MemoryCompactionOptions _options = new()
     {
@@ -81,13 +82,14 @@ public class MemoryCompactionServiceTests : IDisposable
     {
         _extraction.StopAsync(CancellationToken.None).GetAwaiter().GetResult();
         _maintenanceStore.Dispose();
+        _memorySettingsStore.Dispose();
         try { Directory.Delete(_tempDir, recursive: true); } catch { /* best effort */ }
         GC.SuppressFinalize(this);
     }
 
     private MemoryCompactionService CreateService() =>
         new(_management, _memoryService, _consolidation, _extraction,
-            _modelProvider, _maintenanceStore, Options.Create(_options),
+            _modelProvider, _maintenanceStore, _memorySettingsStore, Options.Create(_options),
             NullLogger<MemoryCompactionService>.Instance);
 
     // ── Disabled ───────────────────────────────────────────────────────

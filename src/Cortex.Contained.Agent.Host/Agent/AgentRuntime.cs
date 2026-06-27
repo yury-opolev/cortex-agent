@@ -64,6 +64,7 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
     private readonly IModelProvider modelProvider;
     private readonly IHttpClientFactory httpClientFactory;
     private readonly Memory.MemoryExtractionService? memoryExtraction;
+    private readonly Memory.MemorySettingsStore? memorySettingsStore;
     private readonly MemoryMcp.Core.Services.IMemoryService? memoryService;
     private readonly Storage.IMessageStore messageStore;
     private readonly MemoryMcp.Core.Services.IEmbeddingService? embeddingService;
@@ -161,7 +162,8 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
         IImageDescriber? imageDescriber = null,
         IOptionsMonitor<ConversationCompactionConfig>? compactionOptions = null,
         AgentMetrics? metrics = null,
-        ILoggerFactory? loggerFactory = null)
+        ILoggerFactory? loggerFactory = null,
+        Memory.MemorySettingsStore? memorySettingsStore = null)
     {
         this.subagentStore = subagentStore;
         this.todoResolver = todoResolver;
@@ -180,6 +182,7 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
         this.logger = logger;
         this.modelProvider = modelProvider;
         this.memoryExtraction = memoryExtraction;
+        this.memorySettingsStore = memorySettingsStore;
         this.memoryService = memoryService;
         this.embeddingService = embeddingService;
         this.messageStore = messageStore ?? Storage.NullMessageStore.Instance;
@@ -203,7 +206,8 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
                 ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<CompactionOrchestrator>.Instance,
             memoryExtraction,
             compactionOptions,
-            imageDescriber);
+            imageDescriber,
+            memorySettingsStore);
         this.promptAssembler = new PromptAssembler(
             this.LoadPersonality,
             modelProvider,
