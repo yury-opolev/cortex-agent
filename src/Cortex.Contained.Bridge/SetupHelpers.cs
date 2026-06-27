@@ -1128,6 +1128,13 @@ public sealed class SpeechTogglesRequest
     public bool? TtsEnabled { get; set; }
 }
 
+/// <summary>Built-in-memory enable-toggle request from the settings page.</summary>
+public sealed class MemoryToggleRequest
+{
+    [JsonPropertyName("enabled")]
+    public bool? Enabled { get; set; }
+}
+
 /// <summary>Language voice configuration save request.</summary>
 public sealed class LanguageConfigRequest
 {

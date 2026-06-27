@@ -189,6 +189,7 @@ internal static class MemoryEndpoints
             var mem = config.Memory;
             return Results.Ok(new MemoryConfig
             {
+                Enabled = mem.Enabled,
                 DuplicateThreshold = mem.DuplicateThreshold,
                 CompactionSimilarityThreshold = mem.CompactionSimilarityThreshold,
                 CompactionEnabled = mem.CompactionEnabled,
@@ -196,6 +197,36 @@ internal static class MemoryEndpoints
                 IdleResetMinutes = mem.IdleResetMinutes,
                 CompactionPreserveRecentTurns = mem.CompactionPreserveRecentTurns,
             });
+        }).RequireAuthorization();
+
+        // Built-in-memory master toggle. Persists to YAML, pushes the flag to the
+        // agent (so the in-process gates flip live), and converges the embeddings sidecar.
+        app.MapPost("/api/memory/toggle", async (
+            HttpContext ctx,
+            BridgeConfig config,
+            CredentialsPusher credentialsPusher,
+            Cortex.Contained.Bridge.Speech.EmbeddingsSidecarLifecycle embeddings,
+            CancellationToken ct) =>
+        {
+            var body = await ctx.Request.ReadFromJsonAsync<MemoryToggleRequest>(ct).ConfigureAwait(false);
+            if (body is null)
+            {
+                return Results.Json(new { error = "body is required" }, statusCode: 400);
+            }
+
+            MemoryToggleApply.Apply(config.Memory, body.Enabled);
+            BridgeSettingsWriter.PersistSettingsToYaml(config, cortexConfigPath);
+
+            // Push the updated memory config (incl. Enabled) to every connected agent so the
+            // tool gates + extraction/compaction skips flip live. Best-effort: PushMemorySettingsAsync
+            // isolates per-tenant failures, and the agent re-syncs on next connect.
+            await credentialsPusher.PushMemorySettingsAsync(ct).ConfigureAwait(false);
+
+            // Converge the embeddings sidecar with the new flag (fire-and-forget so a slow
+            // docker compose call never blocks the HTTP save).
+            _ = Task.Run(() => embeddings.ReconcileAsync(config.Memory.Enabled, CancellationToken.None), CancellationToken.None);
+
+            return Results.Ok(new { success = true, enabled = config.Memory.Enabled });
         }).RequireAuthorization();
 
         app.MapPut("/api/memory/settings", async (MemoryConfig memoryConfig, TenantRouter tenantRouter, BridgeConfig config) =>

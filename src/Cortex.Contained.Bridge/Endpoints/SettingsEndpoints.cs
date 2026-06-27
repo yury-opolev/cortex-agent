@@ -53,6 +53,7 @@ internal static class SettingsEndpoints
                     stt = new { config.Speech.Stt.Enabled, config.Speech.Stt.Engine, config.Speech.Stt.WhisperModelPath, config.Speech.Stt.Language },
                     tts = new { config.Speech.Tts.Enabled, config.Speech.Tts.Engine, config.Speech.Tts.KokoroVoice, config.Speech.Tts.KokoroModelPath, config.Speech.Tts.WindowsVoiceName, config.Speech.Tts.WindowsSpeechRate },
                 },
+                memory = new { enabled = config.Memory.Enabled },
                 maxSubagentRounds = config.MaxSubagentRounds,
             });
         }).RequireAuthorization();
