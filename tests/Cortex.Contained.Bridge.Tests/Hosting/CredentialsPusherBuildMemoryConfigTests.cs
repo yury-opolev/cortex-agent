@@ -118,6 +118,26 @@ public sealed class CredentialsPusherBuildMemoryConfigTests : IDisposable
     }
 
     [Fact]
+    public void BuildMemoryConfig_PropagatesEnabledFalse()
+    {
+        var pusher = this.BuildPusher(new MemorySettingsConfig { Enabled = false });
+
+        var result = pusher.BuildMemoryConfig();
+
+        Assert.False(result.Enabled);
+    }
+
+    [Fact]
+    public void BuildMemoryConfig_DefaultEnabledTrue()
+    {
+        var pusher = this.BuildPusher(new MemorySettingsConfig());
+
+        var result = pusher.BuildMemoryConfig();
+
+        Assert.True(result.Enabled);
+    }
+
+    [Fact]
     public void BuildMemoryConfig_PassesThroughThresholds()
     {
         var pusher = this.BuildPusher(new MemorySettingsConfig

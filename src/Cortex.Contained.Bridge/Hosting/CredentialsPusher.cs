@@ -339,6 +339,7 @@ public sealed partial class CredentialsPusher : ICredentialReplisher
         var mem = this.config.Memory;
         return new MemoryConfig
         {
+            Enabled = mem.Enabled,
             DuplicateThreshold = mem.DuplicateThreshold,
             CompactionSimilarityThreshold = mem.CompactionSimilarityThreshold,
             CompactionEnabled = mem.CompactionEnabled,
