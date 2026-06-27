@@ -103,10 +103,12 @@ function globalSettingsPage() {
         sttReady: false,
         speechError: null,
 
-        // Speech toggles (master + STT + TTS)
+        // Speech toggles (master + STT + TTS + voice-id)
         speechEnabled: true,
         sttEnabled: true,
         ttsEnabled: true,
+        voiceIdEnabled: true,
+        voiceRestartRequired: false,
         savingSpeechToggles: false,
 
         // Built-in memory master toggle
@@ -552,6 +554,7 @@ function globalSettingsPage() {
             this.speechEnabled = !!speech.enabled;
             this.sttEnabled = !!speech.stt?.enabled;
             this.ttsEnabled = !!speech.tts?.enabled;
+            this.voiceIdEnabled = !!speech.voiceId?.enabled;
         },
 
         loadSpeechTogglesFromSettings(data) {
@@ -567,6 +570,7 @@ function globalSettingsPage() {
                     speechEnabled: this.speechEnabled,
                     sttEnabled: this.sttEnabled,
                     ttsEnabled: this.ttsEnabled,
+                    voiceIdEnabled: this.voiceIdEnabled,
                 };
                 // The @change handlers optimistically wrote the new values to Alpine
                 // state before this POST. api.post throws on any non-2xx (see
@@ -580,8 +584,13 @@ function globalSettingsPage() {
                         enabled: data.speechEnabled,
                         stt: { enabled: data.sttEnabled },
                         tts: { enabled: data.ttsEnabled },
+                        voiceId: { enabled: data.voiceIdEnabled },
                     });
-                    Alpine.store("toast").success("Voice settings saved");
+                    this.voiceRestartRequired = !!data.restartRequired;
+                    Alpine.store("toast").success(
+                        data.restartRequired
+                            ? "Voice settings saved — restart required to fully apply voice-id"
+                            : "Voice settings saved");
                 } else {
                     Alpine.store("toast").error("Failed to save voice settings");
                     await this.loadSettings();

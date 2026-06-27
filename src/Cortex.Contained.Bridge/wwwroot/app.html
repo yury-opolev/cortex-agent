@@ -1391,6 +1391,15 @@
                                        @change="ttsEnabled = $event.target.checked; saveSpeechToggles()">
                                 <label class="form-check-label" for="tts-enabled">Text-to-speech (TTS)</label>
                             </div>
+
+                            <div class="form-check ms-4">
+                                <input class="form-check-input" type="checkbox" id="voice-id-enabled"
+                                       :checked="voiceIdEnabled"
+                                       :disabled="savingSpeechToggles || !speechEnabled"
+                                       @change="voiceIdEnabled = $event.target.checked; saveSpeechToggles()">
+                                <label class="form-check-label" for="voice-id-enabled">Speaker ID (voice-id)</label>
+                                <span class="badge bg-warning text-dark ms-2" x-show="voiceRestartRequired">restart required</span>
+                            </div>
                         </div>
 
                         <!-- Language voice configuration -->
