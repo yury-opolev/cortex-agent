@@ -13,6 +13,9 @@ public interface ISttComposeRunner
     /// <summary>`docker compose --profile voice up -d stt`. Returns true on exit 0.</summary>
     Task<bool> StartSttAsync(CancellationToken cancellationToken);
 
+    /// <summary>`docker compose --profile voice stop stt`. Returns true on exit 0.</summary>
+    Task<bool> StopSttAsync(CancellationToken cancellationToken);
+
     /// <summary>True if the `cortex-stt` container is currently running.</summary>
     Task<bool> IsSttRunningAsync(CancellationToken cancellationToken);
 }

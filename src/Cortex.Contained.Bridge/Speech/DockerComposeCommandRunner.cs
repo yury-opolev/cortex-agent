@@ -62,6 +62,13 @@ public sealed partial class DockerComposeCommandRunner : IComposeCommandRunner, 
             cancellationToken);
 
     /// <inheritdoc />
+    public Task<bool> StopSttAsync(CancellationToken cancellationToken)
+        => this.RunCommandAsync(
+            $"compose -f \"{this.composeFilePath}\" --profile voice stop stt",
+            ShortTimeout,
+            cancellationToken);
+
+    /// <inheritdoc />
     public Task<bool> IsSttRunningAsync(CancellationToken cancellationToken)
         => this.IsContainerRunningAsync(SttContainerName, cancellationToken);
 

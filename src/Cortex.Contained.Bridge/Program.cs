@@ -884,19 +884,18 @@ var app = builder.Build();
 var modelCatalog = app.Services.GetRequiredService<ModelCatalog>();
 _ = modelCatalog.InitializeAsync(); // Fire-and-forget; data will be ready before credentials are pushed
 
-// --- Danish TTS lifecycle: converge sidecar run-state with config at startup ---
-// Fire-and-forget so a slow Docker call doesn't block boot.
+// --- TTS sidecar lifecycle: converge with config at startup (fire-and-forget) ---
 {
     var danishLifecycle = app.Services.GetRequiredService<Cortex.Contained.Bridge.Speech.DanishTtsLifecycle>();
-    var ttsCfg = app.Services.GetRequiredService<BridgeConfig>().Speech.Tts;
-    _ = Task.Run(() => danishLifecycle.ReconcileAsync(ttsCfg, CancellationToken.None));
+    var speech = app.Services.GetRequiredService<BridgeConfig>().Speech;
+    _ = Task.Run(() => danishLifecycle.ReconcileAsync(SpeechToggles.EffectiveTts(speech), CancellationToken.None));
 }
 
-// --- STT sidecar lifecycle: start whisper-stt (cortex-stt) at boot ---
-// Fire-and-forget so a slow Docker call doesn't block boot.
+// --- STT sidecar lifecycle: converge with config at startup (fire-and-forget) ---
 {
     var sttLifecycle = app.Services.GetRequiredService<Cortex.Contained.Bridge.Speech.SttSidecarLifecycle>();
-    _ = Task.Run(() => sttLifecycle.ReconcileAsync(CancellationToken.None));
+    var speech = app.Services.GetRequiredService<BridgeConfig>().Speech;
+    _ = Task.Run(() => sttLifecycle.ReconcileAsync(SpeechToggles.EffectiveStt(speech), CancellationToken.None));
 }
 
 // --- Middleware Pipeline ---

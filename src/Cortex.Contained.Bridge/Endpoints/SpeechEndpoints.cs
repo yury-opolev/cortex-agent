@@ -365,7 +365,7 @@ internal static class SpeechEndpoints
             // self-contained (catches and logs its own failures), so this can't produce
             // an unobserved task exception.
             var danishLifecycle = sp.GetRequiredService<Cortex.Contained.Bridge.Speech.DanishTtsLifecycle>();
-            _ = Task.Run(() => danishLifecycle.ReconcileAsync(config.Speech.Tts, CancellationToken.None));
+            _ = Task.Run(() => danishLifecycle.ReconcileAsync(SpeechToggles.EffectiveTts(config.Speech), CancellationToken.None));
 
             // Hot-reload the composite engine's language config (no restart needed)
             var tts = sp.GetService<ITextToSpeech>();
