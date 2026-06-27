@@ -563,6 +563,12 @@ function globalSettingsPage() {
                     sttEnabled: this.sttEnabled,
                     ttsEnabled: this.ttsEnabled,
                 };
+                // The @change handlers optimistically wrote the new values to Alpine
+                // state before this POST. api.post throws on any non-2xx (see
+                // api-helper.js), so a thrown error is the usual failure path — but a
+                // 200 with success:false is still handled below. In both failure
+                // cases we resync the toggles to what the backend actually has so the
+                // checkboxes can't drift out of sync with the optimistic write.
                 const data = await api.post("/api/speech/toggles", payload);
                 if (data?.success) {
                     this._applySpeechToggles({
@@ -571,11 +577,18 @@ function globalSettingsPage() {
                         tts: { enabled: data.ttsEnabled },
                     });
                     Alpine.store("toast").success("Voice settings saved");
+                } else {
+                    Alpine.store("toast").error("Failed to save voice settings");
+                    await this.loadSettings();
                 }
             } catch (e) {
                 Alpine.store("toast").error("Failed to save voice settings: " + e.message);
+                // Re-apply known-good state from the backend so the optimistic
+                // checkbox value doesn't linger after a failed save.
+                await this.loadSettings();
+            } finally {
+                this.savingSpeechToggles = false;
             }
-            this.savingSpeechToggles = false;
         },
 
         async downloadSpeechModel(providerOrModel, label) {
