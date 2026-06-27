@@ -27,8 +27,6 @@ services:
     restart: unless-stopped
     init: true
     depends_on:
-      embeddings:
-        condition: service_started
       voice-id:
         condition: service_started
 
@@ -119,6 +117,7 @@ services:
     build:
       context: ./lib/cortex-embeddings
     container_name: cortex-embeddings
+    profiles: [memory]
     environment:
       # Keep the embedding model resident instead of unloading after Ollama's
       # 5-minute default idle timeout. Without this, the first memory_search

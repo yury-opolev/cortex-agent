@@ -859,8 +859,11 @@ builder.Services.AddSingleton<Cortex.Contained.Bridge.Speech.IComposeCommandRunn
     sp => sp.GetRequiredService<Cortex.Contained.Bridge.Speech.DockerComposeCommandRunner>());
 builder.Services.AddSingleton<Cortex.Contained.Bridge.Speech.ISttComposeRunner>(
     sp => sp.GetRequiredService<Cortex.Contained.Bridge.Speech.DockerComposeCommandRunner>());
+builder.Services.AddSingleton<Cortex.Contained.Bridge.Speech.IEmbeddingsComposeRunner>(
+    sp => sp.GetRequiredService<Cortex.Contained.Bridge.Speech.DockerComposeCommandRunner>());
 builder.Services.AddSingleton<Cortex.Contained.Bridge.Speech.DanishTtsLifecycle>();
 builder.Services.AddSingleton<Cortex.Contained.Bridge.Speech.SttSidecarLifecycle>();
+builder.Services.AddSingleton<Cortex.Contained.Bridge.Speech.EmbeddingsSidecarLifecycle>();
 
 var app = builder.Build();
 
@@ -896,6 +899,13 @@ _ = modelCatalog.InitializeAsync(); // Fire-and-forget; data will be ready befor
     var sttLifecycle = app.Services.GetRequiredService<Cortex.Contained.Bridge.Speech.SttSidecarLifecycle>();
     var speech = app.Services.GetRequiredService<BridgeConfig>().Speech;
     _ = Task.Run(() => sttLifecycle.ReconcileAsync(SpeechToggles.EffectiveStt(speech), CancellationToken.None));
+}
+
+// --- Embeddings sidecar lifecycle: converge with memory enable flag at startup ---
+{
+    var embeddingsLifecycle = app.Services.GetRequiredService<Cortex.Contained.Bridge.Speech.EmbeddingsSidecarLifecycle>();
+    var memEnabled = app.Services.GetRequiredService<BridgeConfig>().Memory.Enabled;
+    _ = Task.Run(() => embeddingsLifecycle.ReconcileAsync(memEnabled, CancellationToken.None));
 }
 
 // --- Middleware Pipeline ---

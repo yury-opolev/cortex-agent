@@ -9,10 +9,11 @@ namespace Cortex.Contained.Bridge.Speech;
 /// <see cref="Tenants.DockerContainerManager"/>. The compose file is resolved to
 /// <c>%LOCALAPPDATA%\Cortex\docker-compose.yml</c>.
 /// </summary>
-public sealed partial class DockerComposeCommandRunner : IComposeCommandRunner, ISttComposeRunner
+public sealed partial class DockerComposeCommandRunner : IComposeCommandRunner, ISttComposeRunner, IEmbeddingsComposeRunner
 {
     private const string DanishContainerName = "cortex-uni-voices";
     private const string SttContainerName = "cortex-stt";
+    private const string EmbeddingsContainerName = "cortex-embeddings";
 
     /// <summary>Image pull/start can be slow on first run, so allow a generous window.</summary>
     private static readonly TimeSpan StartTimeout = TimeSpan.FromSeconds(60);
@@ -71,6 +72,24 @@ public sealed partial class DockerComposeCommandRunner : IComposeCommandRunner, 
     /// <inheritdoc />
     public Task<bool> IsSttRunningAsync(CancellationToken cancellationToken)
         => this.IsContainerRunningAsync(SttContainerName, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<bool> StartEmbeddingsAsync(CancellationToken cancellationToken)
+        => this.RunCommandAsync(
+            $"compose -f \"{this.composeFilePath}\" --profile memory up -d embeddings",
+            StartTimeout,
+            cancellationToken);
+
+    /// <inheritdoc />
+    public Task<bool> StopEmbeddingsAsync(CancellationToken cancellationToken)
+        => this.RunCommandAsync(
+            $"compose -f \"{this.composeFilePath}\" --profile memory stop embeddings",
+            ShortTimeout,
+            cancellationToken);
+
+    /// <inheritdoc />
+    public Task<bool> IsEmbeddingsRunningAsync(CancellationToken cancellationToken)
+        => this.IsContainerRunningAsync(EmbeddingsContainerName, cancellationToken);
 
     private async Task<bool> IsContainerRunningAsync(string containerName, CancellationToken cancellationToken)
     {
