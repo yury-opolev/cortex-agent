@@ -244,6 +244,16 @@ public sealed class SpeechConfig
 
     /// <summary>Text-to-speech engine settings.</summary>
     public TtsConfig Tts { get; set; } = new();
+
+    /// <summary>Speaker-identification (voice-id) settings.</summary>
+    public VoiceIdConfig VoiceId { get; set; } = new();
+}
+
+/// <summary>Speaker-identification (voice-id) settings.</summary>
+public sealed class VoiceIdConfig
+{
+    /// <summary>Whether speaker verification/enrollment is enabled (gated by <see cref="SpeechConfig.Enabled"/>).</summary>
+    public bool Enabled { get; set; } = true;
 }
 
 /// <summary>Speech-to-text engine configuration.</summary>

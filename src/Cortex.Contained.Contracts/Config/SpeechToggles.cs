@@ -13,4 +13,7 @@ public static class SpeechToggles
 
     /// <summary>True when TTS should run: master AND tts flag.</summary>
     public static bool EffectiveTts(SpeechConfig speech) => speech.Enabled && speech.Tts.Enabled;
+
+    /// <summary>True when voice-id should run: master AND voice-id flag.</summary>
+    public static bool EffectiveVoiceId(SpeechConfig speech) => speech.Enabled && speech.VoiceId.Enabled;
 }
