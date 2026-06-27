@@ -71,6 +71,14 @@ public sealed partial class DiscordChannel : IChannelWithStreaming, IDiscordChan
     private ulong dmChannelSnowflake;
 
     /// <summary>
+    /// Recipient user id for outbound DMs, learned from inbound DMs and from the tenant's
+    /// configured linked user (<see cref="ReconcileVoiceHandlers"/>). Lets the channel open a
+    /// DM on demand when no <see cref="dmChannelSnowflake"/> is cached (e.g. after a restart),
+    /// instead of failing because no inbound DM has primed the snowflake yet.
+    /// </summary>
+    private ulong dmRecipientUserId;
+
+    /// <summary>
     /// Per-tenant voice handlers. Keyed by tenant ID. Created/destroyed dynamically
     /// via <see cref="ReconcileVoiceHandlers"/>.
     /// </summary>
@@ -388,6 +396,10 @@ public sealed partial class DiscordChannel : IChannelWithStreaming, IDiscordChan
                     this.voiceHandlers.Remove(tenantId);
                 }
 
+                // Remember the tenant's linked user so proactive DMs can be opened on demand
+                // even when no inbound DM has primed the snowflake (e.g. after a restart).
+                this.dmRecipientUserId = config.LinkedUserId;
+
                 var handlerTenantId = tenantId;
                 var handler = new DiscordVoiceHandler(
                     this.logger,
@@ -493,10 +505,26 @@ public sealed partial class DiscordChannel : IChannelWithStreaming, IDiscordChan
             else if (string.Equals(message.ChannelId, DmChannelId, StringComparison.Ordinal)
                      || string.Equals(message.ConversationId, DmChannelId, StringComparison.Ordinal))
             {
-                targetSnowflake = this.dmChannelSnowflake;
-                if (targetSnowflake == 0)
+                var (dmAction, dmValue) = DmTargetResolver.Resolve(this.dmChannelSnowflake, this.dmRecipientUserId);
+                switch (dmAction)
                 {
-                    return SendResult.Error("No DM channel available — no DM has been received yet");
+                    case DmTargetResolver.DmAction.UseSnowflake:
+                        targetSnowflake = dmValue;
+                        break;
+
+                    case DmTargetResolver.DmAction.OpenDmForUser:
+                        var openedSnowflake = await this.OpenDmChannelAsync(dmValue).ConfigureAwait(false);
+                        if (openedSnowflake == 0)
+                        {
+                            return SendResult.Error("No DM channel available — could not open a DM with the linked user (not in a shared guild, or the user has DMs disabled)");
+                        }
+
+                        this.dmChannelSnowflake = openedSnowflake;
+                        targetSnowflake = openedSnowflake;
+                        break;
+
+                    default:
+                        return SendResult.Error("No DM channel available — no DM has been received yet and no linked user is known");
                 }
             }
             else
@@ -962,7 +990,36 @@ public sealed partial class DiscordChannel : IChannelWithStreaming, IDiscordChan
     void IDiscordChannelHost.SetDmChannelSnowflake(ulong snowflake) => this.dmChannelSnowflake = snowflake;
 
     /// <inheritdoc />
+    void IDiscordChannelHost.SetDmRecipientUserId(ulong userId) => this.dmRecipientUserId = userId;
+
+    /// <inheritdoc />
     void IDiscordChannelHost.MarkVoiceConversation(string channelId) => this.voiceConversations[channelId] = true;
+
+    /// <summary>
+    /// Opens (or reuses) the DM channel for <paramref name="userId"/> and returns its snowflake,
+    /// or 0 when the user cannot be resolved or a DM cannot be opened. Mirrors the voice handler's
+    /// proactive-DM open path so text DMs no longer require a prior inbound DM to prime the snowflake.
+    /// </summary>
+    private async Task<ulong> OpenDmChannelAsync(ulong userId)
+    {
+        try
+        {
+            var user = await this.client.GetUserAsync(userId).ConfigureAwait(false);
+            if (user is null)
+            {
+                this.LogDmOpenUserMissing(userId);
+                return 0;
+            }
+
+            var dm = await user.CreateDMChannelAsync().ConfigureAwait(false);
+            return dm.Id;
+        }
+        catch (Exception ex)
+        {
+            this.LogDmOpenFailed(userId, ex.Message);
+            return 0;
+        }
+    }
 
     /// <inheritdoc />
     DiscordVoiceHandler? IDiscordChannelHost.TryGetVoiceHandler(string tenantId)
@@ -1098,6 +1155,12 @@ public sealed partial class DiscordChannel : IChannelWithStreaming, IDiscordChan
 
     [LoggerMessage(Level = LogLevel.Error, Message = "Discord channel {ChannelId} failed to send to {ConversationId}: {ErrorMessage}")]
     private partial void LogSendFailed(string channelId, string conversationId, string errorMessage);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Proactive DM open skipped — Discord user {UserId} not found (not in a shared guild or blocked the bot)")]
+    private partial void LogDmOpenUserMissing(ulong userId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Proactive DM open failed for user {UserId}: {ErrorMessage}")]
+    private partial void LogDmOpenFailed(ulong userId, string errorMessage);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Discord.Net [{Source}]: {ErrorMessage}")]
     private partial void LogDiscordLibError(string source, string errorMessage);

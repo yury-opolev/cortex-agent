@@ -21,6 +21,9 @@ internal interface IDiscordChannelHost
     /// <summary>Record the snowflake of the DM channel a message arrived on, for outbound routing.</summary>
     void SetDmChannelSnowflake(ulong snowflake);
 
+    /// <summary>Record the user id behind an inbound DM, so outbound DMs can be opened on demand.</summary>
+    void SetDmRecipientUserId(ulong userId);
+
     /// <summary>Mark a channel as having used voice input so its reply is also delivered as audio.</summary>
     void MarkVoiceConversation(string channelId);
 

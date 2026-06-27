@@ -72,8 +72,10 @@ internal sealed partial class DiscordMessageRouter
             channelId = DiscordChannel.DmChannelId;
             isGroup = false;
 
-            // Store the DM channel snowflake for outbound routing
+            // Store the DM channel snowflake and the author's user id for outbound routing
+            // (the user id lets us re-open the DM on demand if the snowflake is later lost).
             this.host.SetDmChannelSnowflake(message.Channel.Id);
+            this.host.SetDmRecipientUserId(message.Author.Id);
         }
         else if (message.Channel is SocketGuildChannel guildChannel)
         {
