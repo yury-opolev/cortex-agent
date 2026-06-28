@@ -35,4 +35,10 @@ public interface IMcpOAuthManager
     /// the new access token, or null when refresh is impossible.
     /// </summary>
     Task<string?> RefreshAccessTokenAsync(string serverKey, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Removes any stored OAuth tokens for <paramref name="serverKey"/> (e.g. when the server is
+    /// deleted) so no orphaned credentials remain in DPAPI.
+    /// </summary>
+    void ClearTokens(string serverKey);
 }

@@ -253,4 +253,18 @@ public sealed class McpOAuthManagerTests
 
         Assert.True(manager.HasTokens(HttpOAuthServer()));
     }
+
+    [Fact]
+    public void ClearTokens_RemovesStoredTokens()
+    {
+        var (manager, tokens, secrets, _, _) = Build();
+        tokens.Save("github", new McpOAuthTokens { AccessToken = "a", ClientId = "c", TokenEndpoint = "t" });
+        Assert.True(manager.HasTokens(HttpOAuthServer()));
+
+        manager.ClearTokens("GitHub"); // case-insensitive; server keys are lowercased
+
+        Assert.False(manager.HasTokens(HttpOAuthServer()));
+        Assert.Null(tokens.Get("github"));
+        Assert.False(secrets.Entries.ContainsKey(McpTokenStore.SecretId("github")));
+    }
 }

@@ -85,12 +85,13 @@ internal static class McpEndpoints
             return Results.Ok(new { success = true });
         }).RequireAuthorization();
 
-        // Delete a server (and its static API-key secret).
+        // Delete a server (and its static API-key secret + any OAuth tokens).
         app.MapDelete("/api/mcp/servers/{key}", (
             string key,
             McpConfigStore configStore,
             McpHostService hostService,
-            SecretManager secretManager) =>
+            SecretManager secretManager,
+            IMcpOAuthManager oauthManager) =>
         {
             var settings = configStore.GetSettings();
             var config = FindServer(settings, key);
@@ -104,6 +105,9 @@ internal static class McpEndpoints
             {
                 secretManager.RemoveApiKey(config.SecretRef);
             }
+
+            // Clear any stored OAuth tokens so no orphaned credentials remain in DPAPI.
+            oauthManager.ClearTokens(config.Key);
 
             configStore.Save(settings);
             FireReconcile(hostService, configStore);

@@ -55,6 +55,12 @@ public sealed partial class McpOAuthManager : IMcpOAuthManager
         return this.tokenStore.Get(server.Key.ToLowerInvariant()) is not null;
     }
 
+    public void ClearTokens(string serverKey)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(serverKey);
+        this.tokenStore.Clear(serverKey.ToLowerInvariant());
+    }
+
     public async Task<McpOAuthStart> BuildAuthorizationUrlAsync(McpServerConfig server, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(server);
