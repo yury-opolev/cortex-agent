@@ -30,6 +30,7 @@
     <PackageReference Include="Serilog.Sinks.File" />
     <PackageReference Include="BCrypt.Net-Next" />
     <PackageReference Include="System.Security.Cryptography.ProtectedData" />
+    <PackageReference Include="ModelContextProtocol" />
     <PackageReference Include="StreamJsonRpc" />
     <PackageReference Include="Nerdbank.Streams" />
     <PackageReference Include="Nerdbank.MessagePack" />

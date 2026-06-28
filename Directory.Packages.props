@@ -59,6 +59,8 @@
     <PackageVersion Include="Avalonia" Version="11.3.13" />
     <PackageVersion Include="Avalonia.Desktop" Version="11.3.13" />
     <PackageVersion Include="Avalonia.Themes.Fluent" Version="11.3.13" />
+    <!-- MCP (Model Context Protocol) C# SDK — Bridge MCP host/client -->
+    <PackageVersion Include="ModelContextProtocol" Version="1.4.0" />
     <!-- JSON-RPC (coda serve protocol) -->
     <PackageVersion Include="StreamJsonRpc" Version="2.24.92" />
     <PackageVersion Include="Nerdbank.Streams" Version="2.13.16" />
