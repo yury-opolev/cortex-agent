@@ -221,8 +221,8 @@ Inject `IMcpGateway` into `McpToolStore` ctor so `Update` builds `McpProxyTool` 
 Delivers: real MCP servers configured in `cortex.yml` connect on the Bridge; their tools flow to the agent and calls round-trip. No OAuth, no Web UI yet (config by hand-editing yaml).
 
 ### Task 2.1: Add `ModelContextProtocol` package
-- [ ] Add `<PackageVersion Include="ModelContextProtocol" Version="<latest stable>" />` to `Directory.Packages.props`; `<PackageReference Include="ModelContextProtocol" />` to `Cortex.Contained.Bridge.csproj`. Run `dotnet restore`; confirm the client types (`McpClientFactory`/`IMcpClient`, stdio + http transport) resolve. Commit `chore(mcp): add ModelContextProtocol C# SDK`.
-  > Implementer: pin the exact version available; verify the client API surface (`ListToolsAsync`, `CallToolAsync`, transport constructors) against the package and adapt the connection wrappers below to the real SDK signatures.
+- [ ] Add `<PackageVersion Include="ModelContextProtocol" Version="1.4.0" />` to `Directory.Packages.props` (stable, verified on NuGet); `<PackageReference Include="ModelContextProtocol" />` to `Cortex.Contained.Bridge.csproj`. Run `dotnet restore`; confirm the client types resolve. Commit `chore(mcp): add ModelContextProtocol C# SDK 1.4.0`.
+  > **Verified API surface (1.4.0):** `await McpClientFactory.CreateAsync(transport, ...)` → `IMcpClient`; `IMcpClient.ListToolsAsync()` → tools (each with `Name`, `Description`, `JsonSchema`); `IMcpClient.CallToolAsync(name, IReadOnlyDictionary<string,object?> args, ...)` → result with a `Content` list (text/json/image blocks) + `IsError`. **stdio transport:** `new StdioClientTransport(new StdioClientTransportOptions { Command=..., Arguments=[...], EnvironmentVariables=... })`. **HTTP transport:** the streamable-HTTP/SSE client transport in the same package — confirm the exact class name against the installed package (`SseClientTransport` / `StreamableHttpClientTransport`) and its options (Endpoint URL + a way to supply auth headers, e.g. a configured `HttpClient` or header dictionary). Adapt the connection wrappers (Task 2.4) to the real signatures. Map `CallToolAsync` result `Content` → the `McpToolResult.Content` string (concatenate text blocks; keep json as json) and `IsError` → `McpToolResult.IsError`.
 
 ### Task 2.2: Config DTOs
 **Files:** Create `Contracts/Config/McpServerConfig.cs`, `Contracts/Config/McpSettingsConfig.cs`; Modify `Contracts/Config/BridgeConfig.cs` (add `public McpSettingsConfig Mcp { get; set; } = new();`). Tests for defaults (Enabled true; lists empty; transport enum).
@@ -266,6 +266,33 @@ Commit `feat(mcp): config DTOs (McpServerConfig/McpSettingsConfig)`.
 ### Phase 2 verification + review
 - [ ] Full Bridge.Tests green; manual stdio + http server round-trip.
 - [ ] CODE REVIEW (subagent): transport correctness, secret redaction (no secret in yaml/logs), reconcile lifecycle, invoke error mapping, thread safety. Fix.
+
+#### MANUAL VERIFICATION — SignalR hop (the only seam not covered by automated tests)
+
+The full host stack (auth → factory → stdio connection → host service aggregation + invoke
+routing, incl. a DPAPI secret reaching the spawned process) is covered end-to-end by
+`McpHostEndToEndIntegrationTests` against a real Node MCP server. The remaining manual check is the
+SignalR push/invoke hop to a live agent container:
+
+1. Add to `%LOCALAPPDATA%\Cortex\cortex.yml` (the agent has Node/npx in-image, or use a host stdio
+   server reachable on the Bridge host):
+   ```yaml
+   mcp:
+     enabled: true
+     servers:
+       - key: filesystem
+         enabled: true
+         transport: stdio
+         command: npx
+         args: ["-y", "@modelcontextprotocol/server-filesystem", "C:\\some\\shared\\dir"]
+         auth: none
+   ```
+2. `.\scripts\Start-Cortex.ps1 -BridgeOnly` (Bridge spawns the server, aggregates the catalog,
+   pushes it on agent connect).
+3. In a chat, confirm the agent now lists `mcp__filesystem__*` tools and that a call (e.g.
+   `list_directory`) round-trips Agent→SignalR→Bridge→MCP server→back.
+4. Set `mcp.enabled: false` (or the server's `enabled: false`) and re-push — confirm the tools
+   disappear live.
 
 ---
 

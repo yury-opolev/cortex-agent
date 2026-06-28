@@ -23,6 +23,8 @@ public sealed partial class TenantConnectionBootstrapper
     private readonly Cortex.Contained.Bridge.Coding.CodingHubBinder? externalAgentBinder;
     private readonly Cortex.Contained.Bridge.SpeakerId.SignalRVoiceprintCache? voiceprintCache;
     private readonly Cortex.Contained.Channels.Discord.IEnrollmentProgressNotifier? enrollmentProgressNotifier;
+    private readonly Cortex.Contained.Bridge.Mcp.McpHostService? mcpHostService;
+    private readonly Cortex.Contained.Bridge.Mcp.McpCatalogPusher? mcpCatalogPusher;
     private readonly ILogger<TenantConnectionBootstrapper> logger;
 
     /// <summary>
@@ -39,7 +41,9 @@ public sealed partial class TenantConnectionBootstrapper
         ILogger<TenantConnectionBootstrapper> logger,
         Cortex.Contained.Bridge.Coding.CodingHubBinder? externalAgentBinder = null,
         Cortex.Contained.Bridge.SpeakerId.SignalRVoiceprintCache? voiceprintCache = null,
-        Cortex.Contained.Channels.Discord.IEnrollmentProgressNotifier? enrollmentProgressNotifier = null)
+        Cortex.Contained.Channels.Discord.IEnrollmentProgressNotifier? enrollmentProgressNotifier = null,
+        Cortex.Contained.Bridge.Mcp.McpHostService? mcpHostService = null,
+        Cortex.Contained.Bridge.Mcp.McpCatalogPusher? mcpCatalogPusher = null)
     {
         this.dispatcher = dispatcher;
         this.credentialsPusher = credentialsPusher;
@@ -48,6 +52,8 @@ public sealed partial class TenantConnectionBootstrapper
         this.externalAgentBinder = externalAgentBinder;
         this.voiceprintCache = voiceprintCache;
         this.enrollmentProgressNotifier = enrollmentProgressNotifier;
+        this.mcpHostService = mcpHostService;
+        this.mcpCatalogPusher = mcpCatalogPusher;
     }
 
     /// <summary>
@@ -59,7 +65,50 @@ public sealed partial class TenantConnectionBootstrapper
         this.dispatcher.WireHubClient(client, tenantId);
         this.WireHubEvents(client, tenantId);
         this.externalAgentBinder?.WireHubClient(client, tenantId);
+        this.WireMcp(client);
         this.LogTenantEventsWired(tenantId);
+    }
+
+    /// <summary>
+    /// Wires MCP routing for a connected agent: tool invocations route to the host service (which
+    /// attaches auth on the host), and the current tool catalog is pushed so the agent registers the
+    /// available <c>mcp__*</c> tools. Re-pushed on reconnect.
+    /// </summary>
+    private void WireMcp(HubClient client)
+    {
+        if (this.mcpHostService is not null)
+        {
+            client.OnInvokeMcpTool += invocation =>
+                this.mcpHostService.InvokeAsync(
+                    invocation.ServerKey, invocation.ToolName, invocation.ArgumentsJson, CancellationToken.None);
+        }
+
+        if (this.mcpCatalogPusher is not null)
+        {
+            // Initial catalog push for this (possibly late-joining) agent.
+            _ = this.PushMcpCatalogSafelyAsync();
+
+            client.Reconnected += _ => this.PushMcpCatalogSafelyAsync();
+        }
+    }
+
+    private async Task PushMcpCatalogSafelyAsync()
+    {
+        if (this.mcpCatalogPusher is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await this.mcpCatalogPusher.PushCurrentCatalogAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+#pragma warning disable CA1031 // A catalog-push failure must not break connection wiring.
+        catch (Exception ex)
+        {
+            this.LogHealthCheckFailed($"Failed to push MCP catalog: {ex.Message}");
+        }
+#pragma warning restore CA1031
     }
 
     private void WireHubEvents(HubClient client, string tenantId)

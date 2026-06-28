@@ -815,6 +815,35 @@ builder.Services.AddSingleton<Cortex.Contained.Bridge.Tokens.ICredentialReplishe
 builder.Services.AddSingleton<Cortex.Contained.Bridge.Hosting.TenantConnectionBootstrapper>();
 builder.Services.AddSingleton<Cortex.Contained.Bridge.Hosting.ChannelLifecycleManager>();
 
+// --- MCP plugin system (Bridge is the MCP host + credential boundary) ---
+// Static auth (none/apiKey) resolves secrets from DPAPI; OAuth is a later phase.
+builder.Services.AddSingleton<Cortex.Contained.Bridge.Mcp.Auth.IMcpSecretResolver>(sp =>
+    new Cortex.Contained.Bridge.Mcp.Auth.SecretManagerMcpSecretResolver(sp.GetRequiredService<SecretManager>()));
+builder.Services.AddSingleton<Cortex.Contained.Bridge.Mcp.Auth.IMcpAuthManager>(sp =>
+    new Cortex.Contained.Bridge.Mcp.Auth.McpStaticAuth(
+        sp.GetRequiredService<Cortex.Contained.Bridge.Mcp.Auth.IMcpSecretResolver>(),
+        sp.GetRequiredService<ILogger<Cortex.Contained.Bridge.Mcp.Auth.McpStaticAuth>>()));
+builder.Services.AddSingleton<Cortex.Contained.Bridge.Mcp.IMcpServerConnectionFactory>(sp =>
+    new Cortex.Contained.Bridge.Mcp.McpServerConnectionFactory(
+        sp.GetRequiredService<Cortex.Contained.Bridge.Mcp.Auth.IMcpAuthManager>(),
+        sp.GetRequiredService<ILoggerFactory>(),
+        sp.GetRequiredService<ILogger<Cortex.Contained.Bridge.Mcp.McpServerConnectionFactory>>()));
+builder.Services.AddSingleton<Cortex.Contained.Bridge.Mcp.McpHostService>(sp =>
+    new Cortex.Contained.Bridge.Mcp.McpHostService(
+        sp.GetRequiredService<Cortex.Contained.Bridge.Mcp.IMcpServerConnectionFactory>(),
+        sp.GetRequiredService<ILogger<Cortex.Contained.Bridge.Mcp.McpHostService>>()));
+builder.Services.AddSingleton<Cortex.Contained.Bridge.Mcp.McpConfigStore>(sp =>
+    new Cortex.Contained.Bridge.Mcp.McpConfigStore(
+        sp.GetRequiredService<BridgeConfig>(),
+        cortexConfigPath,
+        sp.GetRequiredService<ILogger<Cortex.Contained.Bridge.Mcp.McpConfigStore>>()));
+builder.Services.AddSingleton<Cortex.Contained.Bridge.Mcp.McpCatalogPusher>(sp =>
+    new Cortex.Contained.Bridge.Mcp.McpCatalogPusher(
+        sp.GetRequiredService<TenantRouter>(),
+        sp.GetRequiredService<Cortex.Contained.Bridge.Mcp.McpHostService>(),
+        sp.GetRequiredService<ILogger<Cortex.Contained.Bridge.Mcp.McpCatalogPusher>>()));
+builder.Services.AddHostedService<Cortex.Contained.Bridge.Mcp.McpHostBootstrapper>();
+
 // --- Worker ---
 builder.Services.AddSingleton<Worker>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<Worker>());
