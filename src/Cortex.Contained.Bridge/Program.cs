@@ -1001,6 +1001,8 @@ app.MapSpeechEndpoints(cortexConfigPath);
 // --- Memory Management API ---
 app.MapMemoryEndpoints(cortexConfigPath);
 
+// --- MCP server management API ---
+app.MapMcpEndpoints();
 // --- MCP OAuth loopback callback (unauthenticated; state-protected) ---
 app.MapMcpOAuthCallbackEndpoint();
 // --- Message History API ---

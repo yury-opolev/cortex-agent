@@ -59,6 +59,31 @@ public sealed partial class McpHostService : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Returns a point-in-time runtime snapshot (status, last error, tools) for the live connection of
+    /// <paramref name="serverKey"/>, or <c>null</c> when no connection exists (disabled, never started,
+    /// or skipped because it needs interactive login). Carries no secret material.
+    /// </summary>
+    public McpServerRuntimeInfo? GetServerInfo(string serverKey)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(serverKey);
+
+        lock (this.stateLock)
+        {
+            if (this.connections.TryGetValue(serverKey.ToLowerInvariant(), out var connection))
+            {
+                return new McpServerRuntimeInfo
+                {
+                    Status = connection.Status,
+                    LastError = connection.LastError,
+                    Tools = connection.Tools,
+                };
+            }
+        }
+
+        return null;
+    }
+
     /// <summary>Routes a tool invocation to the owning connection, or returns a structured failure when it is unavailable.</summary>
     public async Task<McpToolResult> InvokeAsync(
         string serverKey, string toolName, string argumentsJson, CancellationToken cancellationToken)
