@@ -94,6 +94,13 @@ public sealed partial class McpStaticAuth : IMcpAuthManager
             return McpResolvedAuth.RequiresLogin("api key not configured (no secretRef)");
         }
 
+        // SECURITY: never transmit a credential in cleartext to a non-local host.
+        if (McpUrlSecurity.IsInsecureForCredentials(server.Url))
+        {
+            this.LogInsecureUrlForCredentials(server.Key);
+            return McpResolvedAuth.RequiresLogin("refusing to send api key over plaintext http to a non-local host; use https");
+        }
+
         var token = this.secretResolver.GetSecret(server.SecretRef);
         if (string.IsNullOrEmpty(token))
         {
@@ -131,4 +138,7 @@ public sealed partial class McpStaticAuth : IMcpAuthManager
 
     [LoggerMessage(Level = LogLevel.Information, Message = "MCP server '{ServerKey}': OAuth not yet configured — needs login")]
     private partial void LogOAuthNotConfigured(string serverKey);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "MCP server '{ServerKey}': refusing to attach api key over plaintext http to a non-local host (use https)")]
+    private partial void LogInsecureUrlForCredentials(string serverKey);
 }

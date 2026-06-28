@@ -33,22 +33,42 @@ public sealed class StdioMcpServerConnection : McpServerConnectionBase
     }
 
     protected override IClientTransport CreateTransport()
-    {
-        var options = new StdioClientTransportOptions
-        {
-            Name = this.ServerKey,
-            Command = this.command,
-            Arguments = [.. this.arguments],
-            // Only the explicitly-configured variables (incl. resolved secrets) reach the child —
-            // not the Bridge's full environment.
-            EnvironmentVariables = this.environment.ToDictionary(kvp => kvp.Key, kvp => (string?)kvp.Value, StringComparer.Ordinal),
-        };
+        => new StdioClientTransport(BuildTransportOptions(this.ServerKey, this.command, this.arguments, this.environment, this.workingDirectory));
 
-        if (!string.IsNullOrWhiteSpace(this.workingDirectory))
+    /// <summary>
+    /// Builds the stdio transport options with a HARDENED environment. The spawned third-party
+    /// process must NOT inherit the Bridge's environment — that holds <c>CORTEX_HUB_TOKEN</c> and
+    /// other secrets which untrusted server code could read. We start from the SDK's minimal safe
+    /// base (PATH etc.) and layer ONLY the explicitly-configured variables (incl. DPAPI-resolved
+    /// secrets) on top. Extracted as the unit-testable security seam.
+    /// </summary>
+    internal static StdioClientTransportOptions BuildTransportOptions(
+        string serverKey,
+        string command,
+        IReadOnlyList<string> arguments,
+        IReadOnlyDictionary<string, string> environment,
+        string? workingDirectory)
+    {
+        var env = StdioClientTransportOptions.GetDefaultEnvironmentVariables();
+        foreach (var (name, value) in environment)
         {
-            options.WorkingDirectory = this.workingDirectory;
+            env[name] = value;
         }
 
-        return new StdioClientTransport(options);
+        var options = new StdioClientTransportOptions
+        {
+            Name = serverKey,
+            Command = command,
+            Arguments = [.. arguments],
+            InheritEnvironmentVariables = false,
+            EnvironmentVariables = env,
+        };
+
+        if (!string.IsNullOrWhiteSpace(workingDirectory))
+        {
+            options.WorkingDirectory = workingDirectory;
+        }
+
+        return options;
     }
 }

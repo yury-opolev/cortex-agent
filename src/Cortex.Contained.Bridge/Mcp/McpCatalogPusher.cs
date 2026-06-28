@@ -71,30 +71,3 @@ public sealed partial class McpCatalogPusher
     [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to push MCP tool catalog to tenant '{TenantId}': {Error}")]
     private partial void LogPushToTenantFailed(string tenantId, string error);
 }
-
-/// <summary>One connected tenant the MCP catalog is pushed to. Abstracted for unit-testing the push loop.</summary>
-internal interface IMcpCatalogPushTarget
-{
-    /// <summary>The tenant id, used for per-tenant failure logging.</summary>
-    string TenantId { get; }
-
-    /// <summary>Pushes the catalog to this tenant's agent.</summary>
-    Task PushMcpToolCatalogAsync(McpToolCatalog catalog, CancellationToken cancellationToken);
-}
-
-/// <summary>Adapts a connected <see cref="Hub.HubClient"/> to <see cref="IMcpCatalogPushTarget"/>.</summary>
-internal sealed class HubClientMcpCatalogPushTarget : IMcpCatalogPushTarget
-{
-    private readonly Hub.HubClient client;
-
-    public HubClientMcpCatalogPushTarget(string tenantId, Hub.HubClient client)
-    {
-        this.TenantId = tenantId;
-        this.client = client;
-    }
-
-    public string TenantId { get; }
-
-    public Task PushMcpToolCatalogAsync(McpToolCatalog catalog, CancellationToken cancellationToken)
-        => this.client.PushMcpToolCatalogAsync(catalog, cancellationToken);
-}
