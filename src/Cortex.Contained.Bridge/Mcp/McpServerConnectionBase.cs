@@ -141,8 +141,9 @@ public abstract partial class McpServerConnectionBase : IMcpServerConnection
 #pragma warning disable CA1031 // Tool/transport failures map to a structured result, never thrown.
         catch (Exception ex)
         {
+            // Log the detail host-side only; the agent receives a sanitized, secret-free message.
             this.LogToolFailed(this.ServerKey, toolName, ex.Message);
-            return McpToolResult.Fail($"MCP tool '{toolName}' on server '{this.ServerKey}' failed: {ex.Message}");
+            return McpToolResult.Fail(McpErrorSanitizer.ToolFailure(this.ServerKey, toolName));
         }
 #pragma warning restore CA1031
     }

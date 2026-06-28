@@ -76,6 +76,36 @@ public sealed class StdioMcpServerConnectionIntegrationTests
     }
 
     [Fact]
+    public async Task CallTool_WhenInvocationThrows_ReturnsSanitizedErrorWithoutDetail()
+    {
+        var node = FindNode();
+        if (node is null)
+        {
+            return;
+        }
+
+        await using var connection = new StdioMcpServerConnection(
+            serverKey: "fake",
+            command: node,
+            arguments: [ScriptPath()],
+            environment: new Dictionary<string, string>(),
+            toolAllowList: [],
+            logger: NullLogger<StdioMcpServerConnection>.Instance);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await connection.ConnectAsync(cts.Token);
+        Assert.Equal(McpServerStatus.Connected, connection.Status);
+
+        // Malformed arguments JSON forces the invocation path to throw; the agent must only ever see
+        // the generic, secret-free message — never the raw exception text.
+        var result = await connection.CallToolAsync("echo", "{ this is not json", cts.Token);
+
+        Assert.True(result.IsError);
+        Assert.Equal(McpErrorSanitizer.ToolFailure("fake", "echo"), result.Error);
+        Assert.DoesNotContain("json", result.Error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task CallTool_WhenNotConnected_ReturnsStructuredFailure()
     {
         await using var connection = new StdioMcpServerConnection(
