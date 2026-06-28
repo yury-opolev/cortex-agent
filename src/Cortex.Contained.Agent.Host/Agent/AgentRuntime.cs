@@ -562,7 +562,11 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
 
             // Use the original conversation ID (not the session-resolved one) for callbacks
             // so the Bridge routes responses to the correct channel.
-            await GenerateResponseAsync(session, message.ConversationId, message.ChannelId, message.CorrelationId, useProactiveDelivery, messageText, message.IsVoice, generationToken)
+            // Queue-wait = receive (Bridge-stamped) → processing start (now). Clamp ≥0
+            // since clocks across processes aren't perfectly aligned.
+            var queueWaitMs = (long)Math.Max(0, (DateTimeOffset.UtcNow - message.Timestamp).TotalMilliseconds);
+
+            await GenerateResponseAsync(session, message.ConversationId, message.ChannelId, message.CorrelationId, useProactiveDelivery, messageText, message.IsVoice, queueWaitMs, generationToken)
                 .ConfigureAwait(false);
 
             // Memory extraction: append to the extraction buffer. The buffer
@@ -642,6 +646,7 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
         bool useProactiveDelivery,
         string? instructionText,
         bool isVoice,
+        long queueWaitMs,
         CancellationToken cancellationToken)
     {
         var client = this.bridgeClientAccessor.Client;
@@ -670,6 +675,10 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
         var delivery = new TurnResponseDelivery(
             client, this.messageStore, replyConversationId, channelId, correlationId, useProactiveDelivery, this.logger);
 
+        // Per-turn latency profiling (queue-wait, TTFT, LLM, tools, e2e).
+        var latency = new TurnLatencyTracker(TimeProvider.System);
+        LlmTokenUsage? lastUsage = null;
+
         // Shared context for the entire turn — collects proactive messages
         // sent via send_message tool for deferred injection after the turn.
         var turnContext = new ToolExecutionContext
@@ -696,7 +705,7 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
                 Tools = toolDefinitions.Count > 0 ? toolDefinitions : null,
             };
 
-            var streamed = await this.StreamLlmTurnAsync(request, delivery, session, round, replyConversationId, cancellationToken).ConfigureAwait(false);
+            var streamed = await this.StreamLlmTurnAsync(request, delivery, session, round, replyConversationId, latency, cancellationToken).ConfigureAwait(false);
             if (streamed.Outcome == StreamOutcome.RetryAfterCompaction)
             {
                 continue;
@@ -710,6 +719,7 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
             // Track actual prompt token usage from the API response
             if (streamed.Usage is not null)
             {
+                lastUsage = streamed.Usage;
                 session.LastPromptTokens = streamed.Usage.PromptTokens + streamed.Usage.CacheWriteTokens + streamed.Usage.CacheReadTokens;
                 this.LogTokenUsage(session.ConversationId, round + 1, streamed.Usage.PromptTokens, streamed.Usage.CompletionTokens, streamed.Usage.TotalTokens, session.MessageCount, streamed.Usage.CacheWriteTokens, streamed.Usage.CacheReadTokens);
             }
@@ -717,7 +727,7 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
             if (streamed.ToolCalls.Count > 0)
             {
                 var assistantContent = streamed.Text.Length > 0 ? streamed.Text : null;
-                if (await this.ExecuteToolRoundAsync(session, delivery, turnContext, streamed.ToolCalls, assistantContent, doomLoopDetector, round, replyConversationId, cancellationToken).ConfigureAwait(false) == ToolRoundOutcome.DoomHalted)
+                if (await this.ExecuteToolRoundAsync(session, delivery, turnContext, streamed.ToolCalls, assistantContent, doomLoopDetector, round, replyConversationId, latency, cancellationToken).ConfigureAwait(false) == ToolRoundOutcome.DoomHalted)
                 {
                     return;
                 }
@@ -754,6 +764,14 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
             }
         }
 
+        // Per-turn latency breakdown — greppable profiling line + rolling aggregates.
+        var turnLatency = latency.Build(queueWaitMs);
+        this.metrics?.RecordTurnLatency(turnLatency);
+        this.LogTurnLatency(
+            session.ConversationId, correlationId, isVoice, turnLatency.Rounds,
+            turnLatency.QueueWaitMs, turnLatency.TtftMs, turnLatency.LlmMs, turnLatency.ToolMs, turnLatency.E2eMs,
+            lastUsage?.PromptTokens ?? 0, lastUsage?.CacheReadTokens ?? 0, lastUsage?.CacheWriteTokens ?? 0);
+
         // Notify idle
         await client.OnStatusChanged(new AgentStatusInfo
         {
@@ -770,12 +788,15 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
         AgentSession session,
         int round,
         string replyConversationId,
+        TurnLatencyTracker latency,
         CancellationToken cancellationToken)
     {
         var fullResponse = new StringBuilder();
         var sequenceNumber = 0;
         var toolCallAccumulators = new Dictionary<int, ToolCallAccumulator>();
         LlmTokenUsage? usage = null;
+
+        latency.MarkLlmRequestStart();
 
         await foreach (var chunk in this.llmClient.StreamCompleteAsync(request, cancellationToken).ConfigureAwait(false))
         {
@@ -803,6 +824,7 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
             // Accumulate text content
             if (chunk.ContentDelta is not null)
             {
+                latency.MarkFirstToken();
                 fullResponse.Append(chunk.ContentDelta);
                 await delivery.StreamChunkAsync(chunk.ContentDelta, sequenceNumber++).ConfigureAwait(false);
             }
@@ -810,6 +832,8 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
             // Accumulate tool call deltas (may be multiple per chunk)
             if (chunk.ToolCallDeltas is { Count: > 0 } deltas)
             {
+                latency.MarkFirstToken();
+
                 foreach (var delta in deltas)
                 {
                     if (!toolCallAccumulators.TryGetValue(delta.Index, out var acc))
@@ -841,6 +865,8 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
             }
         }
 
+        latency.MarkLlmRequestEnd();
+
         // Build completed tool calls from accumulators
         var toolCalls = toolCallAccumulators.Values
             .OrderBy(acc => acc.Index)
@@ -864,6 +890,7 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
         DoomLoopDetector doomLoopDetector,
         int round,
         string replyConversationId,
+        TurnLatencyTracker latency,
         CancellationToken cancellationToken)
     {
         // Add the assistant message with tool calls to history
@@ -913,6 +940,7 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
             var stopwatch = Stopwatch.StartNew();
             var result = await this.toolRegistry.ExecuteAsync(toolCall, turnContext, cancellationToken).ConfigureAwait(false);
             stopwatch.Stop();
+            latency.AddToolMs(stopwatch.ElapsedMilliseconds);
             this.LogToolExecuted(session.ConversationId, toolCall.Name, result.Success, stopwatch.ElapsedMilliseconds);
 
             // Build the tool result content
@@ -1906,6 +1934,9 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
 
     [LoggerMessage(Level = LogLevel.Information, Message = "[tokens] {ConversationId} round={Round} promptTokens={PromptTokens} completionTokens={CompletionTokens} totalTokens={TotalTokens} sessionMessages={SessionMessages} cacheWrite={CacheWrite} cacheRead={CacheRead}")]
     private partial void LogTokenUsage(string conversationId, int round, int promptTokens, int completionTokens, int totalTokens, int sessionMessages, int cacheWrite, int cacheRead);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "[latency] {ConversationId} corr={CorrelationId} voice={IsVoice} rounds={Rounds} queueWaitMs={QueueWaitMs} ttftMs={TtftMs} llmMs={LlmMs} toolMs={ToolMs} e2eMs={E2eMs} promptTokens={PromptTokens} cacheRead={CacheRead} cacheWrite={CacheWrite}")]
+    private partial void LogTurnLatency(string conversationId, string correlationId, bool isVoice, int rounds, long queueWaitMs, long ttftMs, long llmMs, long toolMs, long e2eMs, int promptTokens, int cacheRead, int cacheWrite);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Context overflow detected for {ConversationId}, attempting emergency compaction. LLM error: {ErrorMessage}")]
     private partial void LogContextOverflowRetry(string conversationId, string errorMessage);

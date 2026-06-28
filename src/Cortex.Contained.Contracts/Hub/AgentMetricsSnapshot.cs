@@ -14,6 +14,13 @@ namespace Cortex.Contained.Contracts.Hub;
 /// <param name="ExtractionQueuePeak">Highest extraction queue depth observed since startup.</param>
 /// <param name="TokenRefreshSuccesses">Number of successful OAuth token refresh/reload exchanges.</param>
 /// <param name="TokenRefreshFailures">Number of failed OAuth token refresh/reload exchanges.</param>
+/// <param name="LatencySampleCount">Number of turns in the rolling latency window (0 when none yet).</param>
+/// <param name="TtftAvgMs">Average LLM time-to-first-token over the window (ms).</param>
+/// <param name="TtftP50Ms">Median TTFT over the window (ms).</param>
+/// <param name="TtftP95Ms">95th-percentile TTFT over the window (ms).</param>
+/// <param name="E2eAvgMs">Average end-to-end turn latency over the window (ms).</param>
+/// <param name="E2eP50Ms">Median end-to-end turn latency over the window (ms).</param>
+/// <param name="E2eP95Ms">95th-percentile end-to-end turn latency over the window (ms).</param>
 public sealed record AgentMetricsSnapshot(
     long TotalMessagesProcessed,
     int ActiveConversations,
@@ -22,4 +29,11 @@ public sealed record AgentMetricsSnapshot(
     int ExtractionQueueDepth,
     int ExtractionQueuePeak,
     int TokenRefreshSuccesses,
-    int TokenRefreshFailures);
+    int TokenRefreshFailures,
+    int LatencySampleCount = 0,
+    double TtftAvgMs = 0,
+    long TtftP50Ms = 0,
+    long TtftP95Ms = 0,
+    double E2eAvgMs = 0,
+    long E2eP50Ms = 0,
+    long E2eP95Ms = 0);

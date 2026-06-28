@@ -26,6 +26,9 @@ public sealed class AgentMetrics
     private int tokenRefreshSuccesses;
     private int tokenRefreshFailures;
 
+    private readonly LatencyStats ttftStats = new();
+    private readonly LatencyStats e2eStats = new();
+
     private volatile Func<int>? activeConversationsProvider;
 
     /// <summary>
@@ -79,6 +82,23 @@ public sealed class AgentMetrics
         Interlocked.Increment(ref this.tokenRefreshFailures);
     }
 
+    /// <summary>
+    /// Feeds a completed turn's latency into the rolling TTFT/e2e windows so the snapshot
+    /// can report avg/p50/p95. Called once per turn by <c>AgentRuntime</c>.
+    /// </summary>
+    public void RecordTurnLatency(TurnLatencySnapshot latency)
+    {
+        if (latency.TtftMs > 0)
+        {
+            this.ttftStats.Add(latency.TtftMs);
+        }
+
+        if (latency.E2eMs > 0)
+        {
+            this.e2eStats.Add(latency.E2eMs);
+        }
+    }
+
     /// <summary>Captures the current values as an immutable snapshot.</summary>
     public AgentMetricsSnapshot Snapshot()
     {
@@ -98,6 +118,9 @@ public sealed class AgentMetrics
 #pragma warning restore CA1031
         }
 
+        var ttft = this.ttftStats.Snapshot();
+        var e2e = this.e2eStats.Snapshot();
+
         return new AgentMetricsSnapshot(
             TotalMessagesProcessed: Interlocked.Read(ref this.totalMessagesProcessed),
             ActiveConversations: activeConversations,
@@ -106,7 +129,14 @@ public sealed class AgentMetrics
             ExtractionQueueDepth: Volatile.Read(ref this.extractionQueueDepth),
             ExtractionQueuePeak: Volatile.Read(ref this.extractionQueuePeak),
             TokenRefreshSuccesses: Volatile.Read(ref this.tokenRefreshSuccesses),
-            TokenRefreshFailures: Volatile.Read(ref this.tokenRefreshFailures));
+            TokenRefreshFailures: Volatile.Read(ref this.tokenRefreshFailures),
+            LatencySampleCount: ttft.Count,
+            TtftAvgMs: ttft.AvgMs,
+            TtftP50Ms: ttft.P50Ms,
+            TtftP95Ms: ttft.P95Ms,
+            E2eAvgMs: e2e.AvgMs,
+            E2eP50Ms: e2e.P50Ms,
+            E2eP95Ms: e2e.P95Ms);
     }
 
     /// <summary>
