@@ -21,6 +21,40 @@ public class SetupHelpersTests
     }
 
     [Fact]
+    public void GenerateYaml_AgentHubUrl_UsesIPv4Loopback_NotLocalhost()
+    {
+        var request = CreateSetupRequest("openai", ["gpt-4o"]);
+
+        var yaml = SetupHelpers.GenerateYaml(request);
+
+        // 'localhost' resolves to IPv6 ::1 first on Windows; the agent hub rejects loopback
+        // (::1) connections, which silently breaks the Bridge↔agent link. Pin to IPv4
+        // 127.0.0.1, which reaches the container as the (non-loopback) Docker gateway address.
+        Assert.Contains("agentHubUrl: http://127.0.0.1:5100/hub/agent", yaml);
+        Assert.DoesNotContain("localhost:5100", yaml);
+    }
+
+    [Fact]
+    public void GenerateYaml_MultiProvider_AgentHubUrl_UsesIPv4Loopback()
+    {
+        var providers = new List<Cortex.Contained.Contracts.Config.LlmProviderConfig>
+        {
+            new() { Name = "openai", Api = "openai-completions" },
+        };
+
+        var yaml = SetupHelpers.GenerateYaml(providers, ["openai"]);
+
+        Assert.Contains("agentHubUrl: http://127.0.0.1:5100/hub/agent", yaml);
+        Assert.DoesNotContain("localhost:5100", yaml);
+    }
+
+    [Fact]
+    public void BridgeConfig_AgentHubUrl_DefaultsToIPv4Loopback()
+    {
+        Assert.Equal("http://127.0.0.1:5100/hub/agent", new Cortex.Contained.Contracts.Config.BridgeConfig().AgentHubUrl);
+    }
+
+    [Fact]
     public void GenerateYaml_GitHubCopilotApi_WithCustomClientId_EmitsClientId()
     {
         var request = CreateSetupRequest("github-copilot-api", ["gpt-4o"]);

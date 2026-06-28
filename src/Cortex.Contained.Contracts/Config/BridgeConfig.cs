@@ -7,7 +7,7 @@ public sealed class BridgeConfig
 {
     /// <summary>Agent Hub SignalR URL.</summary>
     [Required]
-    public string AgentHubUrl { get; set; } = "http://localhost:5100/hub/agent";
+    public string AgentHubUrl { get; set; } = "http://127.0.0.1:5100/hub/agent";
 
     /// <summary>Shared authentication token for Bridge-Hub communication.</summary>
     [Required, MinLength(8)]
@@ -352,8 +352,10 @@ public sealed class LanguageTtsConfig
 public sealed class TenantConfig
 {
     /// <summary>
-    /// SignalR Hub endpoint URL for the tenant's Agent container.
-    /// Example: <c>http://localhost:5100/hub/agent</c>
+    /// SignalR Hub endpoint URL for the tenant's Agent container. Use the IPv4 loopback
+    /// (<c>127.0.0.1</c>), not <c>localhost</c>: on Windows <c>localhost</c> resolves to IPv6
+    /// <c>::1</c>, which the agent's hub auth rejects as a loopback connection.
+    /// Example: <c>http://127.0.0.1:5100/hub/agent</c>
     /// </summary>
     public string Endpoint { get; set; } = string.Empty;
 
