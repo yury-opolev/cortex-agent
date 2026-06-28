@@ -1,5 +1,6 @@
 using System.Collections.Frozen;
 using Cortex.Contained.Agent.Host.Agent;
+using Cortex.Contained.Agent.Host.Mcp;
 using Cortex.Contained.Contracts.Llm;
 
 namespace Cortex.Contained.Agent.Host.Tools;
@@ -16,22 +17,43 @@ public sealed partial class ToolRegistry
     private readonly ILogger<ToolRegistry> logger;
     private readonly ActiveChannelStore activeChannelStore;
     private readonly IConversationToolGate[] gates;
+    private readonly McpToolStore? mcpToolStore;
 
-    /// <summary>Cached tool definitions, invalidated when <see cref="ActiveChannelStore.Version"/> changes.</summary>
+    /// <summary>
+    /// Cached tool definitions, invalidated when EITHER the active channel list
+    /// (<see cref="ActiveChannelStore.Version"/>) OR the dynamic MCP tool set
+    /// (<see cref="McpToolStore.Version"/>) changes, tracked as a composite key.
+    /// </summary>
     private IReadOnlyList<LlmToolDefinition>? cachedDefinitions;
-    private int cachedVersion = -1;
+    private int cachedChannelVersion = -1;
+    private int cachedMcpVersion = -1;
 
-    public ToolRegistry(IEnumerable<IAgentTool> tools, ActiveChannelStore activeChannelStore, ILogger<ToolRegistry> logger, IEnumerable<IConversationToolGate>? gates = null)
+    public ToolRegistry(IEnumerable<IAgentTool> tools, ActiveChannelStore activeChannelStore, ILogger<ToolRegistry> logger, IEnumerable<IConversationToolGate>? gates = null, McpToolStore? mcpToolStore = null)
     {
         this.logger = logger;
         this.activeChannelStore = activeChannelStore;
         this.gates = gates?.ToArray() ?? [];
+        this.mcpToolStore = mcpToolStore;
 
         this.toolList = tools.ToArray();
         this.tools = this.toolList.ToFrozenDictionary(t => t.Name, StringComparer.OrdinalIgnoreCase);
 
         var toolNames = string.Join(", ", this.tools.Keys);
         this.LogToolsRegistered(this.tools.Count, toolNames);
+    }
+
+    /// <summary>
+    /// The full current tool set: the static built-in tools unioned with the dynamic
+    /// MCP proxy tools currently pushed by the Bridge (if any).
+    /// </summary>
+    private IEnumerable<IAgentTool> AllTools()
+    {
+        if (this.mcpToolStore is null)
+        {
+            return this.toolList;
+        }
+
+        return this.toolList.Concat(this.mcpToolStore.Tools);
     }
 
     /// <summary>
@@ -43,16 +65,20 @@ public sealed partial class ToolRegistry
     /// </summary>
     public IReadOnlyList<LlmToolDefinition> GetDefinitions()
     {
-        var currentVersion = this.activeChannelStore.Version;
-        if (this.cachedDefinitions is not null && this.cachedVersion == currentVersion)
+        var channelVersion = this.activeChannelStore.Version;
+        var mcpVersion = this.mcpToolStore?.Version ?? 0;
+        if (this.cachedDefinitions is not null
+            && this.cachedChannelVersion == channelVersion
+            && this.cachedMcpVersion == mcpVersion)
         {
             return this.cachedDefinitions;
         }
 
-        var definitions = BuildToolDefinitions(this.toolList);
+        var definitions = BuildToolDefinitions(this.AllTools());
 
         this.cachedDefinitions = definitions;
-        this.cachedVersion = currentVersion;
+        this.cachedChannelVersion = channelVersion;
+        this.cachedMcpVersion = mcpVersion;
         return definitions;
     }
 
@@ -73,8 +99,8 @@ public sealed partial class ToolRegistry
         }
 
         return hidden.Count == 0
-            ? BuildToolDefinitions(this.toolList)
-            : BuildToolDefinitions(this.toolList.Where(t => !hidden.Contains(t.Name)));
+            ? BuildToolDefinitions(this.AllTools())
+            : BuildToolDefinitions(this.AllTools().Where(t => !hidden.Contains(t.Name)));
     }
 
     /// <summary>
@@ -83,7 +109,7 @@ public sealed partial class ToolRegistry
     /// </summary>
     public IReadOnlyList<LlmToolDefinition> GetDefinitionsExcluding(IReadOnlySet<string> excludedNames)
     {
-        return BuildToolDefinitions(this.toolList.Where(t => !excludedNames.Contains(t.Name)));
+        return BuildToolDefinitions(this.AllTools().Where(t => !excludedNames.Contains(t.Name)));
     }
 
     private static LlmToolDefinition[] BuildToolDefinitions(IEnumerable<IAgentTool> tools)
@@ -108,8 +134,12 @@ public sealed partial class ToolRegistry
     {
         if (!this.tools.TryGetValue(toolCall.Name, out var tool))
         {
-            this.LogToolNotFound(toolCall.Name, toolCall.Id);
-            return AgentToolResult.Fail($"Unknown tool: {toolCall.Name}");
+            // Fall back to the dynamic MCP proxy tools pushed by the Bridge.
+            if (this.mcpToolStore is null || !this.mcpToolStore.TryGet(toolCall.Name, out tool))
+            {
+                this.LogToolNotFound(toolCall.Name, toolCall.Id);
+                return AgentToolResult.Fail($"Unknown tool: {toolCall.Name}");
+            }
         }
 
         this.LogToolExecuting(toolCall.Name, toolCall.Id);

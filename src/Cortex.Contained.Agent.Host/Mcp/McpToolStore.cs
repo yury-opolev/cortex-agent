@@ -1,4 +1,5 @@
 using System.Collections.Frozen;
+using System.Diagnostics.CodeAnalysis;
 using Cortex.Contained.Agent.Host.Tools;
 using Cortex.Contained.Contracts.Hub;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -55,7 +56,7 @@ public sealed class McpToolStore
     }
 
     /// <summary>Look up a proxy tool by its namespaced full name (case-insensitive).</summary>
-    public bool TryGet(string fullName, out IAgentTool tool)
+    public bool TryGet(string fullName, [NotNullWhen(true)] out IAgentTool? tool)
     {
         FrozenDictionary<string, IAgentTool> snapshot;
         lock (this.syncLock)
@@ -63,7 +64,7 @@ public sealed class McpToolStore
             snapshot = this.toolsByName;
         }
 
-        return snapshot.TryGetValue(fullName, out tool!);
+        return snapshot.TryGetValue(fullName, out tool);
     }
 
     /// <summary>
