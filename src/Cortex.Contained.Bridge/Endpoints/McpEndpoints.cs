@@ -285,6 +285,16 @@ internal static class McpEndpoints
 
     private static bool TryOpenBrowser(string url, out string? error)
     {
+        // SECURITY: only ever hand a web URL to ShellExecute. The authorization URL is built from
+        // server-controlled discovery metadata; a file://, smb, or custom-scheme URL passed to
+        // UseShellExecute=true would launch an arbitrary protocol handler on the host.
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)
+            || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+        {
+            error = "refusing to open a non-http(s) authorization url";
+            return false;
+        }
+
         try
         {
             Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });

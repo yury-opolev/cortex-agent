@@ -108,4 +108,33 @@ public sealed class McpOAuthMetadataTests
 
         Assert.Null(endpoints);
     }
+
+    [Fact]
+    public void ParseAuthorizationServerMetadata_NonHttpsAuthorizationEndpoint_ReturnsNull()
+    {
+        // SECURITY: a server-controlled file:// (or other non-web) authorization endpoint would be
+        // shell-opened on the host — it must be rejected at parse time.
+        const string json = """{"authorization_endpoint":"file://attacker/share","token_endpoint":"https://auth.example.com/token"}""";
+
+        Assert.Null(McpOAuthMetadata.ParseAuthorizationServerMetadata(json));
+    }
+
+    [Fact]
+    public void ParseAuthorizationServerMetadata_PlaintextHttpTokenEndpoint_ReturnsNull()
+    {
+        const string json = """{"authorization_endpoint":"https://auth.example.com/authorize","token_endpoint":"http://auth.example.com/token"}""";
+
+        Assert.Null(McpOAuthMetadata.ParseAuthorizationServerMetadata(json));
+    }
+
+    [Fact]
+    public void ParseAuthorizationServerMetadata_HttpsEndpoints_Parses()
+    {
+        const string json = """{"authorization_endpoint":"https://auth.example.com/authorize","token_endpoint":"https://auth.example.com/token"}""";
+
+        var endpoints = McpOAuthMetadata.ParseAuthorizationServerMetadata(json);
+
+        Assert.NotNull(endpoints);
+        Assert.Equal("https://auth.example.com/authorize", endpoints!.AuthorizationEndpoint);
+    }
 }

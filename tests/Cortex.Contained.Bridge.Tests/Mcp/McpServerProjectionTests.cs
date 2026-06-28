@@ -115,4 +115,27 @@ public sealed class McpServerProjectionTests
         Assert.Equal("connected", view.Status);
         Assert.Equal("http", view.Transport);
     }
+
+    [Fact]
+    public void Project_RedactsPlaintextSecretEnv_KeepsRefAndPlainLiteral()
+    {
+        var config = new McpServerConfig
+        {
+            Key = "srv",
+            Transport = McpTransport.Stdio,
+            Command = "node",
+            Env = new Dictionary<string, string>
+            {
+                ["RAW_TOKEN"] = "ghp_aB3dEfGh1jKlMn0pQrStUvWxYz1234567890", // high-entropy literal secret
+                ["REF_TOKEN"] = "${secret:mcp/srv/token}",                  // a reference (no value)
+                ["FLAG"] = "true",                                          // ordinary config
+            },
+        };
+
+        var view = McpServerProjection.Project(config, masterEnabled: true, runtime: null, needsLogin: false);
+
+        Assert.Equal("***redacted***", view.Env["RAW_TOKEN"]);
+        Assert.Equal("${secret:mcp/srv/token}", view.Env["REF_TOKEN"]);
+        Assert.Equal("true", view.Env["FLAG"]);
+    }
 }

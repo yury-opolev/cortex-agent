@@ -118,6 +118,14 @@ public abstract partial class McpServerConnectionBase : IMcpServerConnection
 
     public async Task<McpToolResult> CallToolAsync(string toolName, string argumentsJson, CancellationToken cancellationToken)
     {
+        // SECURITY: the allow-list is a policy boundary, not just a catalog filter. Re-check at
+        // invoke time so a (prompt-injected) agent cannot call an excluded tool by naming it directly.
+        if (!McpToolFilter.IsAllowed(toolName, this.toolAllowList))
+        {
+            this.LogToolNotAllowed(this.ServerKey, toolName);
+            return McpToolResult.Fail($"MCP tool '{toolName}' is not permitted for server '{this.ServerKey}'.");
+        }
+
         McpClient? activeClient;
         lock (this.stateLock)
         {
@@ -199,6 +207,9 @@ public abstract partial class McpServerConnectionBase : IMcpServerConnection
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "MCP tool failed: server '{ServerKey}' tool '{ToolName}': {Error}")]
     private partial void LogToolFailed(string serverKey, string toolName, string error);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "MCP tool invocation blocked by allow-list: server '{ServerKey}' tool '{ToolName}'")]
+    private partial void LogToolNotAllowed(string serverKey, string toolName);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "MCP server '{ServerKey}' dispose failed: {Error}")]
     private partial void LogDisposeFailed(string serverKey, string error);

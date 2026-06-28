@@ -23,7 +23,7 @@ public static class McpServerProjection
             Url = config.Url,
             Command = config.Command,
             Args = config.Args,
-            Env = config.Env,
+            Env = RedactEnv(config.Env),
             Auth = AuthLabel(config.Auth),
             ApiKeyHeader = config.ApiKeyHeader,
             HasSecret = !string.IsNullOrEmpty(config.SecretRef),
@@ -60,6 +60,24 @@ public static class McpServerProjection
         }
 
         return needsLogin ? "needsLogin" : "disconnected";
+    }
+
+    /// <summary>
+    /// Redacts stdio <c>env</c> values for the API response: a <c>${secret:id}</c> reference is kept
+    /// (it carries no value), a value that looks like a raw secret is masked, and a plain literal
+    /// (e.g. a flag or path) is shown as-is. A user who pastes a raw secret never sees it echoed back.
+    /// </summary>
+    private static Dictionary<string, string> RedactEnv(Dictionary<string, string> env)
+    {
+        var redacted = new Dictionary<string, string>(env.Count, StringComparer.Ordinal);
+        foreach (var (name, value) in env)
+        {
+            redacted[name] = Auth.McpSecretRef.TryParse(value, out _) || !McpEnvSecretHeuristic.LooksLikeSecret(value)
+                ? value
+                : "***redacted***";
+        }
+
+        return redacted;
     }
 
     private static string AuthLabel(McpAuthMode auth)

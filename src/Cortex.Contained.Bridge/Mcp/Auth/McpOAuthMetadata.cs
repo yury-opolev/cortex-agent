@@ -101,7 +101,22 @@ public static partial class McpOAuthMetadata
                 return null;
             }
 
+            // SECURITY: these come from server-controlled metadata. The authorization endpoint is
+            // shell-opened (UseShellExecute) and the token endpoint receives the code/verifier/secret,
+            // so reject anything that isn't https (or loopback http) — blocks file://, smb, custom
+            // protocol-handler launch, and cleartext exfiltration.
+            if (!McpUrlSecurity.IsAllowedOAuthEndpoint(authorizationEndpoint)
+                || !McpUrlSecurity.IsAllowedOAuthEndpoint(tokenEndpoint))
+            {
+                return null;
+            }
+
             var registrationEndpoint = GetString(root, "registration_endpoint");
+            if (!string.IsNullOrWhiteSpace(registrationEndpoint)
+                && !McpUrlSecurity.IsAllowedOAuthEndpoint(registrationEndpoint))
+            {
+                registrationEndpoint = null;
+            }
 
             var scopes = new List<string>();
             if (root.TryGetProperty("scopes_supported", out var scopesElement)
