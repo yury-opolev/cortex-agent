@@ -173,6 +173,9 @@ internal static class BridgeSettingsWriter
         // Memory settings section
         MemoryConfigYamlWriter.AppendMemorySection(sb, config.Memory);
 
+        // MCP servers section (non-secret: secretRef ids + ${secret:id} tokens only)
+        Cortex.Contained.Bridge.Mcp.McpConfigYamlWriter.AppendMcpSection(sb, config.Mcp);
+
         // Channels section (exclude secrets like BotToken — those live in DPAPI)
         if (config.Channels.Count > 0)
         {
