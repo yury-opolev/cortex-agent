@@ -858,6 +858,29 @@ public sealed partial class DiscordChannel : IChannelWithStreaming, IDiscordChan
             this.TryFlushDaveStatsSummary();
         }
 
+        // Out-of-band audio-transport-death signal. A silent "Audio #N: A task was
+        // canceled" raises no IAudioClient.Disconnected event and can leave
+        // ConnectionState stale at Connected, so the event-driven recovery paths
+        // miss it (the 2026-06-28 ~14-minute outage). Flag the voice handler(s) so
+        // the watchdog forces a reconnect. The message can arrive on either the
+        // log text or the exception, so check both.
+        if (AudioDeathLogClassifier.IsAudioTransportDeath(logMsg.Source, logMsg.Message)
+            || AudioDeathLogClassifier.IsAudioTransportDeath(logMsg.Source, logMsg.Exception?.Message))
+        {
+            DiscordVoiceHandler[] handlers;
+            lock (this.voiceHandlersLock)
+            {
+                handlers = [.. this.voiceHandlers.Values];
+            }
+
+            foreach (var handler in handlers)
+            {
+                handler.NotifyAudioTransportSuspectDead();
+            }
+
+            this.LogAudioTransportDeathSignal(logMsg.Source, handlers.Length);
+        }
+
         if (logMsg.Exception is not null)
         {
             this.LogDiscordLibError(logMsg.Source, logMsg.Exception.Message);
@@ -1176,6 +1199,9 @@ public sealed partial class DiscordChannel : IChannelWithStreaming, IDiscordChan
 
     [LoggerMessage(Level = LogLevel.Information, Message = "DAVE stats last {ElapsedMs}ms: decryptFail={DecryptFail} missingKeyRatchet={MissingKeyRatchet} invalidNonce={InvalidNonce} missingCryptor={MissingCryptor} malformed={Malformed} unknownSsrc={UnknownSsrc} unknownUser={UnknownUser} mlsFail={MlsFail}")]
     private partial void LogDaveStatsSummary(int elapsedMs, long decryptFail, long missingKeyRatchet, long invalidNonce, long missingCryptor, long malformed, long unknownSsrc, long unknownUser, long mlsFail);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Audio-transport death signal from [{Source}] — flagged {HandlerCount} voice handler(s) for watchdog reconnect")]
+    private partial void LogAudioTransportDeathSignal(string source, int handlerCount);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Discord channel {ChannelId} synthesizing voice reply ({CharCount} chars)")]
     private partial void LogVoiceSynthesizing(string channelId, int charCount);

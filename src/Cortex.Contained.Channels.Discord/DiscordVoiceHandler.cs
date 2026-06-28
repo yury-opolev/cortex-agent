@@ -155,6 +155,36 @@ internal sealed partial class DiscordVoiceHandler : IAsyncDisposable
     /// </summary>
     private readonly SemaphoreSlim connectionGate = new(1, 1);
 
+    // ── Transport watchdog (auto-recover silent audio death) ─────────
+    //
+    // The event-driven recovery paths (audioClient.Disconnected, gateway
+    // reconnect, user-join) all missed the 2026-06-28 outage: the audio
+    // transport died as a silent "Audio #N: A task was canceled" that raised no
+    // Disconnected event and left ConnectionState stale at Connected, so voice
+    // was dead for ~14 minutes until a manual rejoin. This watchdog polls
+    // liveness and reacts to an out-of-band audio-death log signal so a silent
+    // death heals on its own. See VoiceWatchdogDecision for the (tested) policy.
+
+    /// <summary>Watchdog poll interval.</summary>
+    private static readonly TimeSpan WatchdogTickInterval = TimeSpan.FromSeconds(10);
+
+    /// <summary>Minimum gap between forced reconnects — guards against a reconnect storm.</summary>
+    private static readonly TimeSpan WatchdogForceCooldown = TimeSpan.FromSeconds(25);
+
+    private readonly TimeProvider timeProvider;
+    private readonly CancellationTokenSource watchdogCts = new();
+    private Task? watchdogTask;
+
+    /// <summary>
+    /// Set when an audio-transport-death log line is observed (via
+    /// <see cref="NotifyAudioTransportSuspectDead"/>); consumed by the next
+    /// watchdog tick to force a reconnect even when <c>ConnectionState</c> lies.
+    /// </summary>
+    private volatile bool suspectDead;
+
+    /// <summary><see cref="TimeProvider.GetUtcNow"/> ticks of the last forced reconnect (0 = never).</summary>
+    private long lastForcedReconnectTicks;
+
     // ── Per-user audio state ─────────────────────────────────────────
 
     private readonly ConcurrentDictionary<ulong, UserAudioState> userAudioStates = new();
@@ -260,6 +290,7 @@ internal sealed partial class DiscordVoiceHandler : IAsyncDisposable
         this.onTurnInterrupted = onTurnInterrupted ?? (_ => Task.CompletedTask);
         this.onAbortGeneration = onAbortGeneration ?? (_ => Task.CompletedTask);
         this.daveStats = daveStats;
+        this.timeProvider = timeProvider ?? TimeProvider.System;
         this.speakerVerifier = config.SpeakerVerifier;
         this.verificationMetrics = config.VerificationMetrics;
 
@@ -301,7 +332,12 @@ internal sealed partial class DiscordVoiceHandler : IAsyncDisposable
             ringTtl: ProactiveRingTtl,
             queueCap: ProactiveQueueCap,
             logger: logger,
-            timeProvider: timeProvider ?? TimeProvider.System);
+            timeProvider: this.timeProvider);
+
+        // Long-lived watchdog: heals a silently-dead audio transport that the
+        // event-driven recovery paths miss. Runs for the handler's lifetime;
+        // no-ops while there is no live session to heal.
+        this.watchdogTask = Task.Run(() => WatchdogLoopAsync(this.watchdogCts.Token));
     }
 
     /// <summary>The tenant ID this handler is associated with.</summary>
@@ -720,6 +756,153 @@ internal sealed partial class DiscordVoiceHandler : IAsyncDisposable
     }
 
     /// <summary>
+    /// Called by <see cref="DiscordChannel"/> when an audio-transport-death log
+    /// line is observed (e.g. <c>Audio #N: A task was canceled</c>). Flags the
+    /// transport as suspect so the next watchdog tick forces a reconnect even if
+    /// <c>ConnectionState</c> still (falsely) reports <c>Connected</c>.
+    /// </summary>
+    public void NotifyAudioTransportSuspectDead()
+    {
+        if (this.disposed)
+        {
+            return;
+        }
+
+        this.suspectDead = true;
+    }
+
+    /// <summary>
+    /// Unconditional teardown + rejoin under <see cref="connectionGate"/>. Unlike
+    /// <see cref="EnsureConnectedAsync"/> it does NOT early-return when
+    /// <see cref="IsConnected"/> is true — that is the whole point, since a silent
+    /// audio death can leave a stale <c>Connected</c> state. Cooldown is enforced
+    /// by the caller (the watchdog) via <see cref="VoiceWatchdogDecision"/>.
+    /// </summary>
+    private async Task ForceReconnectAsync(string trigger)
+    {
+        if (this.disposed)
+        {
+            return;
+        }
+
+        await this.connectionGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (this.disposed)
+            {
+                return;
+            }
+
+            this.LogVoiceRecovering(trigger);
+
+            if (this.audioClient is not null)
+            {
+                await LeaveVoiceChannelAsync().ConfigureAwait(false);
+            }
+
+            await JoinVoiceChannelAsync(this.config.VoiceChannelId).ConfigureAwait(false);
+        }
+        finally
+        {
+            this.connectionGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Watchdog loop. Ticks every <see cref="WatchdogTickInterval"/> for the
+    /// handler's lifetime and heals a silently-dead audio transport. Steady-state
+    /// cost is one cheap <c>ConnectionState</c> read per tick — the (REST)
+    /// user-presence check only runs when the transport already looks dead or is
+    /// flagged suspect.
+    /// </summary>
+    private async Task WatchdogLoopAsync(CancellationToken ct)
+    {
+        using var timer = new PeriodicTimer(WatchdogTickInterval);
+        try
+        {
+            while (await timer.WaitForNextTickAsync(ct).ConfigureAwait(false))
+            {
+                try
+                {
+                    await WatchdogTickAsync(ct).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    this.LogVoiceRecoveryFailed("watchdog", ex.Message);
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Handler disposing — normal shutdown.
+        }
+    }
+
+    private async Task WatchdogTickAsync(CancellationToken ct)
+    {
+        var client = this.audioClient;
+
+        // No live session to heal (never joined / cleanly left). Cold joins stay
+        // event-driven (user-join / proactive ring) — the watchdog only revives a
+        // dead-or-suspect existing client, it never drags the bot into voice.
+        if (client is null)
+        {
+            this.suspectDead = false;
+            return;
+        }
+
+        var isConnected = VoiceConnectionState.IsAlive(client.ConnectionState);
+        var suspect = this.suspectDead;
+
+        // Healthy and no death signal — the cheap steady-state path, no REST call.
+        if (isConnected && !suspect)
+        {
+            return;
+        }
+
+        var userPresent = await IsUserInTargetChannelAsync(ct).ConfigureAwait(false);
+        var nowTicks = this.timeProvider.GetUtcNow().UtcTicks;
+        var action = VoiceWatchdogDecision.Decide(
+            userPresent,
+            isConnected,
+            suspect,
+            this.lastForcedReconnectTicks,
+            nowTicks,
+            WatchdogForceCooldown.Ticks);
+
+        switch (action)
+        {
+            case WatchdogAction.Reconnect:
+                await EnsureConnectedAsync("watchdog").ConfigureAwait(false);
+                this.suspectDead = false;
+                break;
+
+            case WatchdogAction.ForceReconnect:
+                this.lastForcedReconnectTicks = nowTicks;
+                await ForceReconnectAsync("audio-death-signal").ConfigureAwait(false);
+                this.suspectDead = false;
+                break;
+
+            case WatchdogAction.None:
+            default:
+                // User absent with a dead client: drop the stale client so a later
+                // join reconnects cleanly (mirrors OnAudioClientDisconnected) and so
+                // the watchdog stops REST-probing a connection nobody is waiting on.
+                if (!userPresent && !isConnected)
+                {
+                    await LeaveGatedAsync().ConfigureAwait(false);
+                }
+
+                this.suspectDead = false;
+                break;
+        }
+    }
+
+    /// <summary>
     /// Accept a text chunk from the LLM streaming response.
     /// Accumulates text and enqueues complete sentences for TTS synthesis.
     /// Thread-safe — called from the streaming dispatcher.
@@ -890,6 +1073,23 @@ internal sealed partial class DiscordVoiceHandler : IAsyncDisposable
         }
 
         this.disposed = true;
+
+        // Stop the watchdog before tearing down the connection so it cannot race
+        // a reconnect against the teardown below.
+        await this.watchdogCts.CancelAsync().ConfigureAwait(false);
+        if (this.watchdogTask is { } task)
+        {
+            try
+            {
+                await task.ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                this.LogVoiceRecoveryFailed("watchdog-shutdown", ex.Message);
+            }
+        }
+
+        this.watchdogCts.Dispose();
 
         this.EndEnrollmentWizard();
         await LeaveVoiceChannelAsync().ConfigureAwait(false);
@@ -1068,6 +1268,10 @@ internal sealed partial class DiscordVoiceHandler : IAsyncDisposable
                 this.sentenceAccumulator.Reset();
                 this.agentMessageBuilder.Clear();
             }
+
+            // Fresh transport — clear any stale death suspicion so the watchdog
+            // doesn't immediately force another reconnect.
+            this.suspectDead = false;
 
             this.LogVoiceJoined(voiceChannel.Name, voiceChannelId);
 
