@@ -19,4 +19,28 @@ internal static class McpUrlSecurity
         return string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)
             && !uri.IsLoopback;
     }
+
+    /// <summary>
+    /// True when <paramref name="url"/> is an acceptable OAuth discovery/authorization/token
+    /// endpoint to fetch or POST secrets to: <c>https</c> anywhere, or <c>http</c> only on loopback
+    /// (a local authorization server). Everything else is rejected — this blocks both SSRF to
+    /// internal/cleartext hosts (e.g. <c>http://169.254.169.254/…</c>) reached via server-controlled
+    /// discovery metadata, and exfiltration of the auth code / PKCE verifier / client secret to a
+    /// plaintext or attacker-nominated token endpoint. An unparseable URL is rejected.
+    /// </summary>
+    public static bool IsAllowedOAuthEndpoint(string? url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+        {
+            return false;
+        }
+
+        if (string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)
+            && uri.IsLoopback;
+    }
 }

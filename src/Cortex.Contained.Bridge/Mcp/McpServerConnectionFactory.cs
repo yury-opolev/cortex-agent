@@ -92,6 +92,14 @@ public sealed partial class McpServerConnectionFactory : IMcpServerConnectionFac
             && (server.Auth == McpAuthMode.OAuth || (server.Auth == McpAuthMode.Auto && this.oauthManager.HasTokens(server)));
         if (usesOAuth)
         {
+            // SECURITY: never send an OAuth bearer token in cleartext to a non-local host
+            // (mirror the static apiKey path's guard).
+            if (Auth.McpUrlSecurity.IsInsecureForCredentials(server.Url))
+            {
+                this.LogNeedsAuth(server.Key, "refusing to send oauth token over plaintext http to a non-local host; use https");
+                return null;
+            }
+
             if (!this.oauthManager!.HasTokens(server))
             {
                 // OAuth selected but not yet connected — surface a real "connect" signal.

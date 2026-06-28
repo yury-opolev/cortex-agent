@@ -60,6 +60,10 @@ public sealed partial class McpOAuthManager : IMcpOAuthManager
         ArgumentNullException.ThrowIfNull(server);
         var serverKey = server.Key.ToLowerInvariant();
 
+        // Drop abandoned pending flows past their TTL so their in-memory PKCE verifier + client
+        // secret don't linger until process exit.
+        this.SweepExpiredPending();
+
         if (string.IsNullOrWhiteSpace(server.Url))
         {
             throw new InvalidOperationException($"MCP server '{serverKey}' has no URL to discover OAuth against.");
@@ -143,7 +147,7 @@ public sealed partial class McpOAuthManager : IMcpOAuthManager
         }
         catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException or JsonException)
         {
-            this.LogExchangeFailed(request.ServerKey, ex.Message);
+            this.LogExchangeFailed(request.ServerKey, SafeError(ex));
             return McpOAuthCompletion.Fail("token exchange failed");
         }
     }
@@ -207,7 +211,7 @@ public sealed partial class McpOAuthManager : IMcpOAuthManager
         }
         catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException or JsonException)
         {
-            this.LogRefreshFailed(serverKey, ex.Message);
+            this.LogRefreshFailed(serverKey, SafeError(ex));
             return null;
         }
         finally
@@ -286,7 +290,8 @@ public sealed partial class McpOAuthManager : IMcpOAuthManager
 
     private async Task<McpClientCredentials?> RegisterClientAsync(HttpClient http, McpAuthServerEndpoints endpoints, CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(endpoints.RegistrationEndpoint))
+        if (string.IsNullOrWhiteSpace(endpoints.RegistrationEndpoint)
+            || !McpUrlSecurity.IsAllowedOAuthEndpoint(endpoints.RegistrationEndpoint))
         {
             return null;
         }
@@ -306,6 +311,14 @@ public sealed partial class McpOAuthManager : IMcpOAuthManager
 
     private static async Task<TokenResponse> PostTokenAsync(HttpClient http, string tokenEndpoint, HttpContent content, CancellationToken cancellationToken)
     {
+        // SECURITY: never POST the auth code / PKCE verifier / client secret to a non-https
+        // (or non-loopback) endpoint — a server-nominated plaintext/attacker token endpoint
+        // would otherwise exfiltrate them.
+        if (!McpUrlSecurity.IsAllowedOAuthEndpoint(tokenEndpoint))
+        {
+            throw new InvalidOperationException("token endpoint must use https");
+        }
+
         using var response = await http.PostAsync(new Uri(tokenEndpoint), content, cancellationToken).ConfigureAwait(false);
         var json = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
@@ -324,6 +337,13 @@ public sealed partial class McpOAuthManager : IMcpOAuthManager
 
     private static async Task<string?> GetStringOrNullAsync(HttpClient http, string url, CancellationToken cancellationToken)
     {
+        // SECURITY: discovery URLs come from server-controlled responses — never fetch a non-https
+        // (or non-loopback) one. Blocks SSRF to internal/cleartext hosts (e.g. cloud metadata IPs).
+        if (!McpUrlSecurity.IsAllowedOAuthEndpoint(url))
+        {
+            return null;
+        }
+
         try
         {
             using var response = await http.GetAsync(new Uri(url), cancellationToken).ConfigureAwait(false);
@@ -421,6 +441,23 @@ public sealed partial class McpOAuthManager : IMcpOAuthManager
             .Replace('+', '-')
             .Replace('/', '_');
     }
+
+    private void SweepExpiredPending()
+    {
+        var cutoff = this.timeProvider.GetUtcNow() - this.options.PendingTtl;
+        foreach (var entry in this.pending)
+        {
+            if (entry.Value.CreatedAt < cutoff)
+            {
+                this.pending.TryRemove(entry.Key, out _);
+            }
+        }
+    }
+
+    // A malformed (but 2xx) token-endpoint body would surface a JsonException whose message can
+    // include a snippet of the response (i.e. the token). Never log that — use a fixed string.
+    private static string SafeError(Exception ex)
+        => ex is JsonException ? "malformed token response" : ex.Message;
 
     private static string? OriginOf(string url)
     {

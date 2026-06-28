@@ -16,4 +16,20 @@ public class McpUrlSecurityTests
     {
         Assert.Equal(expected, McpUrlSecurity.IsInsecureForCredentials(url));
     }
+
+    [Theory]
+    [InlineData("https://auth.example.com/token", true)]   // https anywhere -> allowed
+    [InlineData("https://10.0.0.5/token", true)]            // https on a private host -> allowed
+    [InlineData("http://localhost:9000/token", true)]      // loopback http (local AS) -> allowed
+    [InlineData("http://127.0.0.1/token", true)]
+    [InlineData("http://auth.example.com/token", false)]   // plaintext remote -> rejected (exfil)
+    [InlineData("http://169.254.169.254/latest", false)]   // cloud metadata SSRF -> rejected
+    [InlineData("http://10.0.0.5:8080/token", false)]      // internal plaintext -> rejected (SSRF)
+    [InlineData("ftp://example.com/x", false)]             // wrong scheme -> rejected
+    [InlineData("not-a-url", false)]
+    [InlineData(null, false)]
+    public void IsAllowedOAuthEndpoint_Cases(string? url, bool expected)
+    {
+        Assert.Equal(expected, McpUrlSecurity.IsAllowedOAuthEndpoint(url));
+    }
 }
