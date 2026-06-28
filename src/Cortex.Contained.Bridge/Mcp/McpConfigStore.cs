@@ -39,10 +39,35 @@ public sealed partial class McpConfigStore
     /// <summary>Persists the current config to YAML (non-secret only).</summary>
     public void Persist()
     {
+        this.WarnOnPlaintextEnvSecrets();
         BridgeSettingsWriter.PersistSettingsToYaml(this.config, this.yamlPath);
         this.LogPersisted(this.config.Mcp.Servers.Count);
     }
 
+    /// <summary>
+    /// Logs a warning (never blocks) when a stdio <c>env</c> value looks like a literal secret rather
+    /// than a <c>${secret:id}</c> token, so plaintext secrets in YAML are discouraged. The value
+    /// itself is never logged — only the server key and env-var name.
+    /// </summary>
+    private void WarnOnPlaintextEnvSecrets()
+    {
+        foreach (var server in this.config.Mcp.Servers)
+        {
+            foreach (var (name, value) in server.Env)
+            {
+                if (McpEnvSecretHeuristic.LooksLikeSecret(value))
+                {
+                    this.LogPlaintextEnvSecret(server.Key, name);
+                }
+            }
+        }
+    }
+
     [LoggerMessage(Level = LogLevel.Information, Message = "MCP settings persisted: {ServerCount} servers")]
     private partial void LogPersisted(int serverCount);
+
+    [LoggerMessage(
+        Level = LogLevel.Warning,
+        Message = "MCP server '{ServerKey}' env '{EnvName}' looks like a plaintext secret — prefer a ${{secret:id}} reference so it is stored encrypted (DPAPI), not in YAML")]
+    private partial void LogPlaintextEnvSecret(string serverKey, string envName);
 }
