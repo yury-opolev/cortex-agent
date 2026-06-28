@@ -154,6 +154,33 @@ public class SubagentRunnerTests
         Assert.Equal("result_b", request.Messages[4].Content);
     }
 
+    [Fact]
+    public async Task RunAsync_ToolContext_ChannelIdIsConversationId_SoEachSubagentGetsOwnCodaChannel()
+    {
+        // Coda sessions are keyed by ToolExecutionContext.ChannelId. Each subagent must
+        // get its OWN channel (its unique conversationId, "subagent-{taskId}") rather than
+        // the shared constant "subagent" — otherwise concurrent subagents' coda sessions
+        // collide (ambiguous_session).
+        string? capturedChannelId = null;
+        var probe = new ContextCapturingTool("probe", ctx => capturedChannelId = ctx.ChannelId);
+
+        var callCount = 0;
+        _mockLlmClient.StreamCompleteAsync(Arg.Any<LlmCompletionRequest>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                callCount++;
+                return callCount == 1
+                    ? ToolCallStream("call_1", "probe", "{}")
+                    : SingleChunkStream("done");
+            });
+
+        var runner = new SubagentRunner(_mockLlmClient, CreateRegistry(probe), 0, NullLogger<SubagentRunner>.Instance);
+
+        await runner.RunAsync("gpt-4o", "System", "Prompt", "subagent-sa-abc123", CancellationToken.None);
+
+        Assert.Equal("subagent-sa-abc123", capturedChannelId);
+    }
+
     // ── Persistent mode ────────────────────────────────────────────────
 
     [Fact]
@@ -350,6 +377,27 @@ public class SubagentRunnerTests
             IsComplete = true,
             FinishReason = "tool_calls",
         };
+    }
+
+    private sealed class ContextCapturingTool : IAgentTool
+    {
+        private readonly Action<ToolExecutionContext> _onExecute;
+
+        public ContextCapturingTool(string name, Action<ToolExecutionContext> onExecute)
+        {
+            Name = name;
+            _onExecute = onExecute;
+        }
+
+        public string Name { get; }
+        public string Description => "Captures the execution context.";
+        public string ParametersSchema => """{"type":"object","properties":{}}""";
+
+        public Task<AgentToolResult> ExecuteAsync(string argumentsJson, ToolExecutionContext context, CancellationToken cancellationToken)
+        {
+            _onExecute(context);
+            return Task.FromResult(new AgentToolResult { Success = true, Content = "ok" });
+        }
     }
 
     private sealed class FakeTool : IAgentTool

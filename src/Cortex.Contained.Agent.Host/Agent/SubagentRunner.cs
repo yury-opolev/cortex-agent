@@ -178,7 +178,11 @@ public sealed class SubagentRunner : IDisposable
             MaxOutputTokens = maxOutputTokens,
             ContextWindow = contextWindow,
             ConversationId = conversationId,
-            ChannelId = "subagent",
+            // Each subagent gets its OWN channel (its unique conversationId,
+            // "subagent-{taskId}") rather than a shared constant, so coda sessions
+            // started by concurrent subagents don't collide in one channel namespace
+            // (which resolves to ambiguous_session). Coda keys sessions by channel.
+            ChannelId = conversationId,
         };
 
         var callbacks = new SubagentCallbacks(
