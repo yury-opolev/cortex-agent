@@ -112,6 +112,7 @@ scripts/
 - [Personality architecture](docs/personality-architecture.md) — persona/personality storage, delivery, and editing
 - [API reference](docs/api-reference.md) — REST API endpoints
 - [Security](docs/security.md) — threat model, DPAPI secrets, sandbox, auth
+- [MCP plugin system](docs/mcp-plugin-system.md) — host-side MCP servers (stdio + HTTP) as native agent tools; how the catalog/invocations ride the Bridge↔agent SignalR hub; host-side auth (DPAPI / OAuth 2.1)
 - [Design reference](docs/design-reference.md) — design patterns and conventions
 - [Setup guide](docs/setup-guide.md) — installation and configuration
 
