@@ -15,17 +15,28 @@ public sealed partial class McpHostService : IAsyncDisposable
 {
     private readonly IMcpServerConnectionFactory factory;
     private readonly ILogger<McpHostService> logger;
+    private readonly TimeProvider timeProvider;
     private readonly SemaphoreSlim reconcileLock = new(1, 1);
     private readonly Lock stateLock = new();
 
-    // key -> live connection; key -> config signature used to detect changes.
+    // key -> live connection; key -> config signature used to detect changes;
+    // key -> backoff state for a connection that failed to connect (so a permanently-broken
+    // server is retried on later reconciles, but with exponential backoff — never a hot loop).
     private readonly Dictionary<string, IMcpServerConnection> connections = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> signatures = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, RetryState> retries = new(StringComparer.Ordinal);
+    private string? lastPushedSignature;
 
     public McpHostService(IMcpServerConnectionFactory factory, ILogger<McpHostService> logger)
+        : this(factory, logger, timeProvider: null)
+    {
+    }
+
+    public McpHostService(IMcpServerConnectionFactory factory, ILogger<McpHostService> logger, TimeProvider? timeProvider)
     {
         this.factory = factory;
         this.logger = logger;
+        this.timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     /// <summary>Raised after a reconcile changes the aggregated catalog. Awaited by the pusher.</summary>
@@ -43,6 +54,7 @@ public sealed partial class McpHostService : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(settings);
 
+        McpToolCatalog catalog;
         await this.reconcileLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -51,12 +63,44 @@ public sealed partial class McpHostService : IAsyncDisposable
             await this.StopUndesiredAsync(desired).ConfigureAwait(false);
             await this.StartDesiredAsync(desired, cancellationToken).ConfigureAwait(false);
 
-            await this.RebuildCatalogAndNotifyAsync(cancellationToken).ConfigureAwait(false);
+            catalog = this.RebuildCatalog();
         }
         finally
         {
             this.reconcileLock.Release();
         }
+
+        // M4: fire the catalog push OUTSIDE the reconcile lock so a slow tenant's SignalR I/O can't
+        // serialize every reconcile. The snapshot above is immutable, so the push sees a stable view.
+        await this.NotifyCatalogChangedAsync(catalog, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Forces a disconnect + reconnect of a single server, picking up a rotated secret (the factory
+    /// re-resolves auth on rebuild). Clears any backoff so the reconnect is immediate. Then reconciles
+    /// against <paramref name="settings"/> to recreate the connection and re-push the catalog.
+    /// </summary>
+    public async Task ForceReconnectAsync(string serverKey, McpSettingsConfig settings, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(serverKey);
+        ArgumentNullException.ThrowIfNull(settings);
+
+        var key = serverKey.ToLowerInvariant();
+        IMcpServerConnection? toDispose;
+        lock (this.stateLock)
+        {
+            this.connections.Remove(key, out toDispose);
+            this.signatures.Remove(key);
+            this.retries.Remove(key);
+        }
+
+        if (toDispose is not null)
+        {
+            this.LogForceReconnect(key);
+            await toDispose.DisposeAsync().ConfigureAwait(false);
+        }
+
+        await this.ReconcileAsync(settings, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -142,6 +186,7 @@ public sealed partial class McpHostService : IAsyncDisposable
             {
                 this.connections.Remove(key, out connection);
                 this.signatures.Remove(key);
+                this.retries.Remove(key);
             }
 
             if (connection is not null)
@@ -157,15 +202,38 @@ public sealed partial class McpHostService : IAsyncDisposable
     {
         foreach (var (key, server) in desired)
         {
-            bool alreadyRunning;
+            // M1: a connection that is present but not Connected (failed handshake / dropped) counts
+            // as "not running" — dispose + recreate it, but only once its backoff window has elapsed.
+            IMcpServerConnection? existing;
+            bool backingOff;
             lock (this.stateLock)
             {
-                alreadyRunning = this.connections.ContainsKey(key);
+                this.connections.TryGetValue(key, out existing);
+                backingOff = existing is not null
+                    && !IsHealthy(existing.Status)
+                    && this.retries.TryGetValue(key, out var state)
+                    && this.timeProvider.GetUtcNow() < state.NextAttemptAt;
             }
 
-            if (alreadyRunning)
+            if (existing is not null && IsHealthy(existing.Status))
             {
                 continue;
+            }
+
+            if (backingOff)
+            {
+                continue;
+            }
+
+            if (existing is not null)
+            {
+                lock (this.stateLock)
+                {
+                    this.connections.Remove(key);
+                }
+
+                this.LogRetrying(key);
+                await existing.DisposeAsync().ConfigureAwait(false);
             }
 
             var connection = this.factory.TryCreate(server);
@@ -177,15 +245,36 @@ public sealed partial class McpHostService : IAsyncDisposable
             this.LogStarting(key);
             await connection.ConnectAsync(cancellationToken).ConfigureAwait(false);
 
+            var connected = IsHealthy(connection.Status);
+            bool recovered;
             lock (this.stateLock)
             {
                 this.connections[key] = connection;
                 this.signatures[key] = Signature(server);
+                if (connected)
+                {
+                    recovered = this.retries.Remove(key);
+                }
+                else
+                {
+                    var attempts = (this.retries.TryGetValue(key, out var prev) ? prev.Attempts : 0) + 1;
+                    this.retries[key] = new RetryState
+                    {
+                        Attempts = attempts,
+                        NextAttemptAt = this.timeProvider.GetUtcNow() + McpReconnectBackoff.DelayFor(attempts),
+                    };
+                    recovered = false;
+                }
+            }
+
+            if (recovered)
+            {
+                this.LogServerRecovered(key);
             }
         }
     }
 
-    private async Task RebuildCatalogAndNotifyAsync(CancellationToken cancellationToken)
+    private McpToolCatalog RebuildCatalog()
     {
         List<McpToolDefinition> tools;
         lock (this.stateLock)
@@ -196,13 +285,44 @@ public sealed partial class McpHostService : IAsyncDisposable
         var catalog = new McpToolCatalog { Tools = tools };
         this.CurrentCatalog = catalog;
         this.LogCatalogRebuilt(tools.Count);
-
-        var handler = this.CatalogChanged;
-        if (handler is not null)
-        {
-            await handler.Invoke(catalog, cancellationToken).ConfigureAwait(false);
-        }
+        return catalog;
     }
+
+    private async Task NotifyCatalogChangedAsync(McpToolCatalog catalog, CancellationToken cancellationToken)
+    {
+        var handler = this.CatalogChanged;
+        if (handler is null)
+        {
+            return;
+        }
+
+        // Only push when the aggregated catalog actually changed. The periodic reconcile (which
+        // drives auto-retry of failed servers) would otherwise re-push an identical catalog to every
+        // tenant on each idle tick.
+        var signature = CatalogSignature(catalog);
+        lock (this.stateLock)
+        {
+            if (string.Equals(signature, this.lastPushedSignature, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            this.lastPushedSignature = signature;
+        }
+
+        await handler.Invoke(catalog, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static string CatalogSignature(McpToolCatalog catalog)
+    {
+        return string.Join(
+            '\n',
+            catalog.Tools
+                .OrderBy(t => t.FullName, StringComparer.Ordinal)
+                .Select(t => $"{t.FullName}{t.Description}{t.ParametersSchemaJson}"));
+    }
+
+    private static bool IsHealthy(McpServerStatus status) => status == McpServerStatus.Connected;
 
     private static string Signature(McpServerConfig server)
     {
@@ -220,6 +340,7 @@ public sealed partial class McpHostService : IAsyncDisposable
             toDispose = this.connections.Values.ToList();
             this.connections.Clear();
             this.signatures.Clear();
+            this.retries.Clear();
         }
 
         foreach (var connection in toDispose)
@@ -236,9 +357,26 @@ public sealed partial class McpHostService : IAsyncDisposable
     [LoggerMessage(Level = LogLevel.Information, Message = "MCP host stopping server '{ServerKey}'")]
     private partial void LogStopping(string serverKey);
 
+    [LoggerMessage(Level = LogLevel.Information, Message = "MCP host retrying failed server '{ServerKey}' (backoff elapsed)")]
+    private partial void LogRetrying(string serverKey);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "MCP host server '{ServerKey}' recovered after earlier failure")]
+    private partial void LogServerRecovered(string serverKey);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "MCP host force-reconnecting server '{ServerKey}'")]
+    private partial void LogForceReconnect(string serverKey);
+
     [LoggerMessage(Level = LogLevel.Information, Message = "MCP catalog rebuilt: {ToolCount} tools")]
     private partial void LogCatalogRebuilt(int toolCount);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "MCP invoke for unavailable server '{ServerKey}' tool '{ToolName}'")]
     private partial void LogInvokeUnavailable(string serverKey, string toolName);
+
+    /// <summary>Backoff bookkeeping for a server whose connection failed and is awaiting retry.</summary>
+    private sealed class RetryState
+    {
+        public required int Attempts { get; init; }
+
+        public required DateTimeOffset NextAttemptAt { get; init; }
+    }
 }

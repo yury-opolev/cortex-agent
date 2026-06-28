@@ -2,11 +2,22 @@ using Cortex.Contained.Bridge.Mcp;
 using Cortex.Contained.Contracts.Config;
 using Cortex.Contained.Contracts.Hub;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Cortex.Contained.Bridge.Tests.Mcp;
 
 public sealed class McpHostServiceTests
 {
+    private static IMcpServerConnection ErroredConnection(string key)
+    {
+        var connection = Substitute.For<IMcpServerConnection>();
+        connection.ServerKey.Returns(key);
+        connection.Status.Returns(McpServerStatus.Error);
+        connection.Tools.Returns([]);
+        connection.ConnectAsync(Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
+        return connection;
+    }
+
     private static McpToolDefinition Def(string serverKey, string tool) => new()
     {
         ServerKey = serverKey,
@@ -143,5 +154,143 @@ public sealed class McpHostServiceTests
 
         Assert.True(result.IsError);
         Assert.Contains("not available", result.Error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ReconcileAsync_ServerErrorsThenSucceeds_EndsConnectedAfterBackoff()
+    {
+        var time = new FakeTimeProvider();
+        var errored = ErroredConnection("a");
+        var healthy = FakeConnection("a", Def("a", "x"));
+        var factory = Substitute.For<IMcpServerConnectionFactory>();
+        factory.TryCreate(Arg.Any<McpServerConfig>()).Returns(errored, healthy);
+        await using var host = new McpHostService(factory, NullLogger<McpHostService>.Instance, time);
+
+        var settings = new McpSettingsConfig { Servers = [StdioServer("a")] };
+
+        await host.ReconcileAsync(settings, CancellationToken.None);
+        Assert.Empty(host.CurrentCatalog.Tools);
+
+        time.Advance(TimeSpan.FromSeconds(5));
+        await host.ReconcileAsync(settings, CancellationToken.None);
+
+        Assert.Single(host.CurrentCatalog.Tools);
+        await errored.Received(1).DisposeAsync();
+    }
+
+    [Fact]
+    public async Task ReconcileAsync_ErroredServerWithinBackoffWindow_NotRetried()
+    {
+        var time = new FakeTimeProvider();
+        var factory = Substitute.For<IMcpServerConnectionFactory>();
+        factory.TryCreate(Arg.Any<McpServerConfig>()).Returns(_ => ErroredConnection("a"));
+        await using var host = new McpHostService(factory, NullLogger<McpHostService>.Instance, time);
+
+        var settings = new McpSettingsConfig { Servers = [StdioServer("a")] };
+        await host.ReconcileAsync(settings, CancellationToken.None);
+
+        // No time advance: still inside the first backoff window, so no second create attempt.
+        await host.ReconcileAsync(settings, CancellationToken.None);
+
+        factory.Received(1).TryCreate(Arg.Any<McpServerConfig>());
+    }
+
+    [Fact]
+    public async Task ReconcileAsync_PushRunsOutsideLock_NestedReconcileDoesNotDeadlock()
+    {
+        var factory = Substitute.For<IMcpServerConnectionFactory>();
+        factory.TryCreate(Arg.Any<McpServerConfig>()).Returns(_ => FakeConnection("a", Def("a", "x")));
+        await using var host = new McpHostService(factory, NullLogger<McpHostService>.Instance);
+
+        var nested = false;
+        host.CatalogChanged += async (_, ct) =>
+        {
+            if (nested)
+            {
+                return;
+            }
+
+            nested = true;
+            // If the push were awaited while holding the reconcile lock, this nested reconcile
+            // would block forever. A timeout converts a regression into a fast failure.
+            await host.ReconcileAsync(new McpSettingsConfig { Servers = [StdioServer("a")] }, ct)
+                .WaitAsync(TimeSpan.FromSeconds(5), ct);
+        };
+
+        await host.ReconcileAsync(new McpSettingsConfig { Servers = [StdioServer("a")] }, CancellationToken.None)
+            .WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.True(nested);
+    }
+
+    [Fact]
+    public async Task ReconcileAsync_DisablingOneServer_RepublishesCatalogWithoutItsToolsLive()
+    {
+        var connectionA = FakeConnection("a", Def("a", "x"));
+        var connectionB = FakeConnection("b", Def("b", "y"));
+        var factory = Substitute.For<IMcpServerConnectionFactory>();
+        factory.TryCreate(Arg.Is<McpServerConfig>(s => s.Key == "a")).Returns(connectionA);
+        factory.TryCreate(Arg.Is<McpServerConfig>(s => s.Key == "b")).Returns(connectionB);
+        await using var host = new McpHostService(factory, NullLogger<McpHostService>.Instance);
+
+        McpToolCatalog? lastPush = null;
+        host.CatalogChanged += (catalog, _) =>
+        {
+            lastPush = catalog;
+            return Task.CompletedTask;
+        };
+
+        await host.ReconcileAsync(
+            new McpSettingsConfig { Servers = [StdioServer("a"), StdioServer("b")] }, CancellationToken.None);
+
+        // Disable server 'a' (master still on) — tools must drop live, no full restart of 'b'.
+        await host.ReconcileAsync(
+            new McpSettingsConfig { Servers = [StdioServer("a", enabled: false), StdioServer("b")] },
+            CancellationToken.None);
+
+        Assert.NotNull(lastPush);
+        Assert.Equal(["mcp__b__y"], lastPush!.Tools.Select(t => t.FullName).ToList());
+        await connectionA.Received(1).DisposeAsync();
+        await connectionB.DidNotReceive().DisposeAsync();
+    }
+
+    [Fact]
+    public async Task ReconcileAsync_UnchangedCatalog_DoesNotRepush()
+    {
+        var factory = Substitute.For<IMcpServerConnectionFactory>();
+        factory.TryCreate(Arg.Any<McpServerConfig>()).Returns(_ => FakeConnection("a", Def("a", "x")));
+        await using var host = new McpHostService(factory, NullLogger<McpHostService>.Instance);
+
+        var pushes = 0;
+        host.CatalogChanged += (_, _) =>
+        {
+            pushes++;
+            return Task.CompletedTask;
+        };
+
+        var settings = new McpSettingsConfig { Servers = [StdioServer("a")] };
+        await host.ReconcileAsync(settings, CancellationToken.None);
+        await host.ReconcileAsync(settings, CancellationToken.None);
+
+        Assert.Equal(1, pushes);
+    }
+
+    [Fact]
+    public async Task ForceReconnectAsync_DisposesAndRecreatesConnection()
+    {
+        var first = FakeConnection("a", Def("a", "old"));
+        var second = FakeConnection("a", Def("a", "new"));
+        var factory = Substitute.For<IMcpServerConnectionFactory>();
+        factory.TryCreate(Arg.Any<McpServerConfig>()).Returns(first, second);
+        await using var host = new McpHostService(factory, NullLogger<McpHostService>.Instance);
+
+        var settings = new McpSettingsConfig { Servers = [StdioServer("a")] };
+        await host.ReconcileAsync(settings, CancellationToken.None);
+        Assert.Equal(["mcp__a__old"], host.CurrentCatalog.Tools.Select(t => t.FullName).ToList());
+
+        await host.ForceReconnectAsync("a", settings, CancellationToken.None);
+
+        await first.Received(1).DisposeAsync();
+        Assert.Equal(["mcp__a__new"], host.CurrentCatalog.Tools.Select(t => t.FullName).ToList());
     }
 }

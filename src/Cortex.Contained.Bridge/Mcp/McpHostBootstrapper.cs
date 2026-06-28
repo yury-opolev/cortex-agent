@@ -11,6 +11,13 @@ namespace Cortex.Contained.Bridge.Mcp;
 /// </summary>
 public sealed partial class McpHostBootstrapper : BackgroundService
 {
+    /// <summary>
+    /// Cadence of the background reconcile sweep. Each tick re-reconciles the configured servers,
+    /// which retries any connection that is failed/dropped (subject to its exponential backoff) and
+    /// re-pushes the catalog when it changes.
+    /// </summary>
+    private static readonly TimeSpan ReconcileInterval = TimeSpan.FromSeconds(30);
+
     private readonly McpHostService hostService;
     private readonly McpConfigStore configStore;
     private readonly McpCatalogPusher catalogPusher;
@@ -33,13 +40,34 @@ public sealed partial class McpHostBootstrapper : BackgroundService
         // Push the freshly-aggregated catalog to connected agents whenever it changes.
         this.hostService.CatalogChanged += this.catalogPusher.PushCatalogAsync;
 
+        var settings = this.configStore.GetSettings();
+        this.LogReconciling(settings.Servers.Count, settings.Enabled);
+
+        // Initial reconcile, then a periodic sweep so failed/dropped connections auto-retry with
+        // backoff without needing a config change. Each tick is best-effort and never crashes the host.
+        await this.ReconcileOnceAsync(stoppingToken).ConfigureAwait(false);
+
+        using var timer = new PeriodicTimer(ReconcileInterval);
         try
         {
-            var settings = this.configStore.GetSettings();
-            this.LogReconciling(settings.Servers.Count, settings.Enabled);
-            await this.hostService.ReconcileAsync(settings, stoppingToken).ConfigureAwait(false);
+            while (await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false))
+            {
+                await this.ReconcileOnceAsync(stoppingToken).ConfigureAwait(false);
+            }
         }
-#pragma warning disable CA1031 // Startup reconcile failures must not crash the Bridge.
+        catch (OperationCanceledException)
+        {
+            // Bridge is shutting down.
+        }
+    }
+
+    private async Task ReconcileOnceAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await this.hostService.ReconcileAsync(this.configStore.GetSettings(), cancellationToken).ConfigureAwait(false);
+        }
+#pragma warning disable CA1031 // Reconcile failures must not crash the Bridge.
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             this.LogReconcileFailed(ex.Message);
