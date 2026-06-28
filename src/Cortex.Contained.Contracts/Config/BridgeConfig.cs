@@ -40,6 +40,9 @@ public sealed class BridgeConfig
 
     /// <summary>Multi-tenant configuration. Maps tenant ID → tenant config.</summary>
     public Dictionary<string, TenantConfig> Tenants { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>MCP plugin-system settings (master switch + configured servers).</summary>
+    public McpSettingsConfig Mcp { get; set; } = new();
 }
 
 /// <summary>Memory service settings persisted on the Bridge host.</summary>
