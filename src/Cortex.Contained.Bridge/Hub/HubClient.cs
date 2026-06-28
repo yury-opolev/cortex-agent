@@ -814,6 +814,7 @@ public sealed partial class HubClient : IAsyncDisposable
                 OnVoiceEnrollmentProgress?.Invoke(tenantId, stateName, captured, required) ?? Task.CompletedTask);
 
         this.RegisterCodingCallbacks(connection);
+        this.RegisterMcpCallbacks(connection);
     }
 
     private void EnsureConnected()
