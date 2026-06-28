@@ -20,6 +20,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Minimal MCP stdio server used by the StdioMcpServerConnection integration test. -->
+    <Content Include="Mcp\Fixtures\fake-mcp-server.mjs" Link="Mcp\Fixtures\fake-mcp-server.mjs">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <ItemGroup>
     <Using Include="Xunit" />
     <Using Include="NSubstitute" />
   </ItemGroup>
