@@ -841,6 +841,7 @@ builder.Services.AddSingleton<Cortex.Contained.Bridge.Mcp.Auth.IMcpAuthManager>(
 builder.Services.AddSingleton<Cortex.Contained.Bridge.Mcp.IMcpServerConnectionFactory>(sp =>
     new Cortex.Contained.Bridge.Mcp.McpServerConnectionFactory(
         sp.GetRequiredService<Cortex.Contained.Bridge.Mcp.Auth.IMcpAuthManager>(),
+        sp.GetRequiredService<Cortex.Contained.Bridge.Mcp.Auth.IMcpOAuthManager>(),
         sp.GetRequiredService<ILoggerFactory>(),
         sp.GetRequiredService<ILogger<Cortex.Contained.Bridge.Mcp.McpServerConnectionFactory>>()));
 builder.Services.AddSingleton<Cortex.Contained.Bridge.Mcp.McpHostService>(sp =>

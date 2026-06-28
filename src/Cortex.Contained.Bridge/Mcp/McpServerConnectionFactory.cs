@@ -5,13 +5,16 @@ using Microsoft.Extensions.Logging;
 namespace Cortex.Contained.Bridge.Mcp;
 
 /// <summary>
-/// Production <see cref="IMcpServerConnectionFactory"/>: resolves host-side auth via
-/// <see cref="IMcpAuthManager"/> and builds the matching stdio/http connection. Servers needing an
-/// interactive login (or missing required transport fields) yield null and are skipped.
+/// Production <see cref="IMcpServerConnectionFactory"/>: resolves host-side auth and builds the
+/// matching stdio/http connection. Static auth (none/apiKey/stdio env) flows through
+/// <see cref="IMcpAuthManager"/>; HTTP OAuth flows through <see cref="IMcpOAuthManager"/> — a server
+/// with valid/refreshable tokens gets a refreshing bearer connection, one without yields null
+/// (needs interactive login). Servers needing login or missing transport fields are skipped.
 /// </summary>
 public sealed partial class McpServerConnectionFactory : IMcpServerConnectionFactory
 {
     private readonly IMcpAuthManager authManager;
+    private readonly IMcpOAuthManager? oauthManager;
     private readonly ILoggerFactory loggerFactory;
     private readonly ILogger<McpServerConnectionFactory> logger;
 
@@ -19,8 +22,18 @@ public sealed partial class McpServerConnectionFactory : IMcpServerConnectionFac
         IMcpAuthManager authManager,
         ILoggerFactory loggerFactory,
         ILogger<McpServerConnectionFactory> logger)
+        : this(authManager, oauthManager: null, loggerFactory, logger)
+    {
+    }
+
+    public McpServerConnectionFactory(
+        IMcpAuthManager authManager,
+        IMcpOAuthManager? oauthManager,
+        ILoggerFactory loggerFactory,
+        ILogger<McpServerConnectionFactory> logger)
     {
         this.authManager = authManager;
+        this.oauthManager = oauthManager;
         this.loggerFactory = loggerFactory;
         this.logger = logger;
     }
@@ -35,6 +48,13 @@ public sealed partial class McpServerConnectionFactory : IMcpServerConnectionFac
             return null;
         }
 
+        return server.Transport == McpTransport.Stdio
+            ? this.CreateStdio(server)
+            : this.CreateHttp(server);
+    }
+
+    private StdioMcpServerConnection? CreateStdio(McpServerConfig server)
+    {
         var auth = this.authManager.Resolve(server);
         if (auth.NeedsAuth)
         {
@@ -42,13 +62,6 @@ public sealed partial class McpServerConnectionFactory : IMcpServerConnectionFac
             return null;
         }
 
-        return server.Transport == McpTransport.Stdio
-            ? this.CreateStdio(server, auth)
-            : this.CreateHttp(server, auth);
-    }
-
-    private StdioMcpServerConnection? CreateStdio(McpServerConfig server, McpResolvedAuth auth)
-    {
         if (string.IsNullOrWhiteSpace(server.Command))
         {
             this.LogInvalidConfig(server.Key, "stdio transport requires a command");
@@ -64,7 +77,7 @@ public sealed partial class McpServerConnectionFactory : IMcpServerConnectionFac
             this.loggerFactory.CreateLogger<StdioMcpServerConnection>());
     }
 
-    private HttpMcpServerConnection? CreateHttp(McpServerConfig server, McpResolvedAuth auth)
+    private HttpMcpServerConnection? CreateHttp(McpServerConfig server)
     {
         if (string.IsNullOrWhiteSpace(server.Url) || !Uri.TryCreate(server.Url, UriKind.Absolute, out var endpoint))
         {
@@ -72,8 +85,39 @@ public sealed partial class McpServerConnectionFactory : IMcpServerConnectionFac
             return null;
         }
 
+        var serverKey = server.Key.ToLowerInvariant();
+
+        // OAuth path: explicit oauth, or auto once the user has connected it (tokens present).
+        var usesOAuth = this.oauthManager is not null
+            && (server.Auth == McpAuthMode.OAuth || (server.Auth == McpAuthMode.Auto && this.oauthManager.HasTokens(server)));
+        if (usesOAuth)
+        {
+            if (!this.oauthManager!.HasTokens(server))
+            {
+                // OAuth selected but not yet connected — surface a real "connect" signal.
+                this.LogNeedsAuth(server.Key, "oauth: connect this server to authorize");
+                return null;
+            }
+
+            var bearerSource = new McpOAuthBearerSource(this.oauthManager, server);
+            return new HttpMcpServerConnection(
+                serverKey,
+                endpoint,
+                bearerSource,
+                server.ToolAllowList,
+                this.loggerFactory.CreateLogger<HttpMcpServerConnection>());
+        }
+
+        // Static path: none / apiKey / auto-public.
+        var auth = this.authManager.Resolve(server);
+        if (auth.NeedsAuth)
+        {
+            this.LogNeedsAuth(server.Key, auth.NeedsAuthReason ?? "unknown");
+            return null;
+        }
+
         return new HttpMcpServerConnection(
-            server.Key.ToLowerInvariant(),
+            serverKey,
             endpoint,
             auth.Headers,
             server.ToolAllowList,
