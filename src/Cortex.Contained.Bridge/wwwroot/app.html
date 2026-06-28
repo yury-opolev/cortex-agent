@@ -1937,6 +1937,11 @@
                                                     <span x-show="!connecting[s.key]"><i class="bi bi-box-arrow-up-right me-1"></i>Connect</span>
                                                     <span x-show="connecting[s.key]"><span class="spinner-border spinner-border-sm me-1"></span>Waiting...</span>
                                                 </button>
+                                                <button class="btn btn-sm btn-outline-secondary" @click="reconnectServer(s)"
+                                                        :disabled="reconnecting[s.key]" title="Reconnect (apply rotated secret)">
+                                                    <span x-show="!reconnecting[s.key]"><i class="bi bi-arrow-clockwise"></i></span>
+                                                    <span x-show="reconnecting[s.key]"><span class="spinner-border spinner-border-sm"></span></span>
+                                                </button>
                                                 <button class="btn btn-sm btn-outline-secondary" @click="openEdit(s)" title="Edit">
                                                     <i class="bi bi-pencil"></i>
                                                 </button>

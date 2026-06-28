@@ -194,6 +194,25 @@ internal static class McpEndpoints
 #pragma warning restore CA1031
         }).RequireAuthorization();
 
+        // Force a disconnect + reconnect of one server (picks up a rotated secret without a restart).
+        app.MapPost("/api/mcp/servers/{key}/reconnect", (
+            string key,
+            McpConfigStore configStore,
+            McpHostService hostService) =>
+        {
+            var config = FindServer(configStore.GetSettings(), key);
+            if (config is null)
+            {
+                return Results.Json(new { error = $"No MCP server with key '{key}'." }, statusCode: 404);
+            }
+
+            // Fire-and-forget like the other mutating endpoints: spawning/handshaking must not block
+            // the HTTP save. The reconcile re-pushes the catalog when it changes.
+            _ = Task.Run(() => hostService.ForceReconnectAsync(config.Key, configStore.GetSettings(), CancellationToken.None));
+
+            return Results.Ok(new { success = true });
+        }).RequireAuthorization();
+
         // Master MCP enable toggle (live: drops/restores all tools).
         app.MapPost("/api/mcp/toggle", (
             McpToggleRequest request,

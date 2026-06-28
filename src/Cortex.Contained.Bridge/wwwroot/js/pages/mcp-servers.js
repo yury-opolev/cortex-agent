@@ -30,6 +30,7 @@ function mcpServersPage() {
         testing: {},        // key -> bool
         testResults: {},    // key -> { ok, tools?, error? }
         connecting: {},     // key -> bool
+        reconnecting: {},   // key -> bool
         _pollTimer: null,
 
         // ── Lifecycle ──────────────────────────────────────
@@ -217,6 +218,21 @@ function mcpServersPage() {
                 Alpine.store("toast").error("Test failed: " + e.message);
             } finally {
                 this.testing[s.key] = false;
+            }
+        },
+
+        // ── Force reconnect (picks up a rotated secret) ────
+        async reconnectServer(s) {
+            this.reconnecting[s.key] = true;
+            try {
+                await api.post("/api/mcp/servers/" + encodeURIComponent(s.key) + "/reconnect");
+                Alpine.store("toast").info("Reconnecting " + s.key + "…");
+                // Give the host a moment to dispose + re-handshake, then refresh status.
+                setTimeout(() => this.load(), 1500);
+            } catch (e) {
+                Alpine.store("toast").error("Reconnect failed: " + e.message);
+            } finally {
+                this.reconnecting[s.key] = false;
             }
         },
 
