@@ -339,6 +339,14 @@ Delivers: full management UX on the host.
 
 # PHASE 5 — Hardening, telemetry, security pass
 
+> **Carried-over items from the Phase 2 security review (address here):**
+> - **M1 — failed connections never retried across reconciles.** A server that errors during `ConnectAsync` stays in `McpHostService.connections` with `Status=Error` and is skipped by reconcile until config changes. Treat non-`Connected` status as "not running" during reconcile (dispose + recreate) or add a health/retry path with backoff (folds into Task 5.1).
+> - **M2 — secret rotation doesn't restart the server.** `McpHostService.Signature` hashes the `${secret:id}` token, not the resolved value, so rotating a secret under the same ref leaves the stale value running. Add a "force reconnect server" action (Web UI button in Phase 4 / endpoint) and document it (folds into 5.2).
+> - **M4 — catalog push runs while holding `reconcileLock`.** `RebuildCatalogAndNotifyAsync` awaits the pusher (SignalR I/O to every tenant) inside the lock; a slow tenant serializes all reconciles. Snapshot the catalog under the lock, fire the push outside it (folds into 5.1).
+> - **N2 — agent-facing error text echoes `ex.Message`** (`McpServerConnectionBase`). Sanitize so an endpoint URL with inline creds can't surface to the agent (folds into 5.3).
+> - **N3 — literal (non-`${secret:id}`) env value written verbatim to YAML.** Add a guard/warning when an `env` value looks like a secret but isn't a token, to harden the encryption-at-rest guarantee (folds into 5.3).
+
+
 ### Task 5.1: Reconnect/backoff + structured telemetry
 Auto-restart crashed stdio/dropped http with exponential backoff; `[LoggerMessage]` for connect/disconnect/invoke/auth-flow/catalog-push (server key + outcome, never secrets). Counters/metrics where the codebase already exposes them (grep existing `Metrics`/`Meter`). Tests for backoff + reconnect re-push. Commit.
 
