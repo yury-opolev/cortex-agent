@@ -879,11 +879,12 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
         // each tool runs in this round.
         var roundToolEntries = new List<Storage.ToolCallSummaryEntry>(toolCalls.Count);
 
-        // Persist the pre-tool text segment so UI history matches what was
-        // streamed to the user (voice TTS / text UI). Without this, only the
-        // final post-tool text ends up in MessageStore and users see "only
-        // the last half" of multi-segment responses.
-        long? roundRecordId = await delivery.PersistPreToolTextAsync(assistantContent, cancellationToken).ConfigureAwait(false);
+        // Deliver + persist the pre-tool text segment. Persistence makes UI history
+        // match what was streamed; delivery (OnResponseComplete) ensures finalize-only
+        // channels (e.g. Discord DM) actually post the narration instead of silently
+        // dropping it. Without this, only the final post-tool text reached Discord and
+        // users saw "only the last half" of multi-segment responses.
+        long? roundRecordId = await delivery.DeliverPreToolTextAsync(assistantContent, cancellationToken).ConfigureAwait(false);
 
         this.LogToolCallsRequested(session.ConversationId, toolCalls.Count, round + 1);
 

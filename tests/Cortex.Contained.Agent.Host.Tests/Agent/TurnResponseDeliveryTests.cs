@@ -50,31 +50,49 @@ public sealed class TurnResponseDeliveryTests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task PersistPreToolTextAsync_WithText_PersistsAndReturnsId()
+    public async Task DeliverPreToolTextAsync_WithText_DeliversToChannelAndPersists()
     {
         var delivery = this.NewDelivery();
 
-        var id = await delivery.PersistPreToolTextAsync("pre-tool text", CancellationToken.None);
+        var id = await delivery.DeliverPreToolTextAsync("pre-tool text", CancellationToken.None);
 
         Assert.NotNull(id);
+        // Finalize-only channels (Discord DM) need this to actually post the narration.
+        await this.client.Received(1).OnResponseComplete(Arg.Is<ResponseCompleteMessage>(
+            m => m.FullText == "pre-tool text" && m.ConversationId == "reply-conv"));
         var saved = await this.store.GetMessagesAsync("chan-1");
         Assert.Contains(saved, m => m.Content == "pre-tool text" && m.Role == "assistant");
     }
 
     [Fact]
-    public async Task PersistPreToolTextAsync_EmptyContent_ReturnsNull()
+    public async Task DeliverPreToolTextAsync_ProactiveMode_PersistsButDoesNotDeliver()
     {
-        var withStore = this.NewDelivery();
-        Assert.Null(await withStore.PersistPreToolTextAsync("", CancellationToken.None));
+        var delivery = this.NewDelivery(proactive: true);
+
+        var id = await delivery.DeliverPreToolTextAsync("scheduled narration", CancellationToken.None);
+
+        Assert.NotNull(id);
+        // Scheduled tasks never auto-deliver to user channels.
+        await this.client.DidNotReceive().OnResponseComplete(Arg.Any<ResponseCompleteMessage>());
+        var saved = await this.store.GetMessagesAsync("chan-1");
+        Assert.Contains(saved, m => m.Content == "scheduled narration");
     }
 
     [Fact]
-    public async Task PersistPreToolTextAsync_NoStore_ReturnsZeroRecordId()
+    public async Task DeliverPreToolTextAsync_EmptyContent_ReturnsNullAndDoesNotDeliver()
+    {
+        var withStore = this.NewDelivery();
+        Assert.Null(await withStore.DeliverPreToolTextAsync("", CancellationToken.None));
+        await this.client.DidNotReceive().OnResponseComplete(Arg.Any<ResponseCompleteMessage>());
+    }
+
+    [Fact]
+    public async Task DeliverPreToolTextAsync_NoStore_ReturnsZeroRecordId()
     {
         // The no-op NullMessageStore persists nothing; SaveMessageAsync returns row id 0,
         // which the tool-call attributor treats as "no real record".
         var noStore = this.NewDelivery(noStore: true);
-        Assert.Equal(0L, await noStore.PersistPreToolTextAsync("text", CancellationToken.None));
+        Assert.Equal(0L, await noStore.DeliverPreToolTextAsync("text", CancellationToken.None));
     }
 
     [Fact]

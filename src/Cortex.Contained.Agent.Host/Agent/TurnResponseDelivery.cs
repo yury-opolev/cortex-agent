@@ -94,11 +94,40 @@ internal sealed partial class TurnResponseDelivery
             cancellationToken: cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task<long?> PersistPreToolTextAsync(string? assistantContent, CancellationToken cancellationToken)
+    /// <summary>
+    /// Delivers AND persists a pre-tool text segment (text the model emitted before a
+    /// tool call, e.g. "Let me check the log first."). Persistence makes it appear in
+    /// history; the <see cref="IAgentHubClient.OnResponseComplete"/> call finalizes the
+    /// segment so finalize-only channels (e.g. Discord DM, whose live streaming is a
+    /// no-op) actually post it — previously these segments were persisted but never
+    /// delivered, so they showed in history/web but never reached Discord.
+    /// <para>
+    /// Scheduled-task (proactive) turns never auto-deliver to user channels — they only
+    /// persist — matching <see cref="DeliverFinalResponseAsync"/>.
+    /// </para>
+    /// </summary>
+    public async Task<long?> DeliverPreToolTextAsync(string? assistantContent, CancellationToken cancellationToken)
     {
         if (assistantContent is not { Length: > 0 })
         {
             return null;
+        }
+
+        var messageId = Guid.NewGuid().ToString("N");
+
+        if (!this.useProactiveDelivery)
+        {
+            // Finalize this segment as its own message. The matching live stream chunks
+            // were already emitted during generation; this closes the segment so the
+            // Bridge delivers it (Discord POST / web-UI finalize) instead of dropping it.
+            await this.client.OnResponseComplete(new ResponseCompleteMessage
+            {
+                ConversationId = this.replyConversationId,
+                MessageId = messageId,
+                FullText = assistantContent,
+                Timestamp = DateTimeOffset.UtcNow,
+                CorrelationId = this.correlationId,
+            }).ConfigureAwait(false);
         }
 
         return await this.messageStore.SaveMessageAsync(
@@ -107,7 +136,7 @@ internal sealed partial class TurnResponseDelivery
             role: "assistant",
             content: assistantContent,
             timestamp: DateTimeOffset.UtcNow,
-            messageId: Guid.NewGuid().ToString("N"),
+            messageId: messageId,
             cancellationToken: cancellationToken).ConfigureAwait(false);
     }
 
