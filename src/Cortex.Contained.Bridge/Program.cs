@@ -816,9 +816,24 @@ builder.Services.AddSingleton<Cortex.Contained.Bridge.Hosting.TenantConnectionBo
 builder.Services.AddSingleton<Cortex.Contained.Bridge.Hosting.ChannelLifecycleManager>();
 
 // --- MCP plugin system (Bridge is the MCP host + credential boundary) ---
-// Static auth (none/apiKey) resolves secrets from DPAPI; OAuth is a later phase.
+// Static auth (none/apiKey) resolves secrets from DPAPI; OAuth (oauth/auto) is layered on below.
+builder.Services.AddHttpClient("mcp-oauth");
 builder.Services.AddSingleton<Cortex.Contained.Bridge.Mcp.Auth.IMcpSecretResolver>(sp =>
     new Cortex.Contained.Bridge.Mcp.Auth.SecretManagerMcpSecretResolver(sp.GetRequiredService<SecretManager>()));
+builder.Services.AddSingleton<Cortex.Contained.Bridge.Mcp.Auth.IMcpTokenSecretStore>(sp =>
+    new Cortex.Contained.Bridge.Mcp.Auth.SecretManagerMcpTokenSecretStore(sp.GetRequiredService<SecretManager>()));
+builder.Services.AddSingleton<Cortex.Contained.Bridge.Mcp.Auth.McpTokenStore>(sp =>
+    new Cortex.Contained.Bridge.Mcp.Auth.McpTokenStore(
+        sp.GetRequiredService<Cortex.Contained.Bridge.Mcp.Auth.IMcpTokenSecretStore>(),
+        sp.GetRequiredService<ILogger<Cortex.Contained.Bridge.Mcp.Auth.McpTokenStore>>()));
+builder.Services.AddSingleton<Cortex.Contained.Bridge.Mcp.Auth.McpOAuthOptions>();
+builder.Services.AddSingleton<Cortex.Contained.Bridge.Mcp.Auth.IMcpOAuthManager>(sp =>
+    new Cortex.Contained.Bridge.Mcp.Auth.McpOAuthManager(
+        sp.GetRequiredService<IHttpClientFactory>(),
+        sp.GetRequiredService<Cortex.Contained.Bridge.Mcp.Auth.McpTokenStore>(),
+        sp.GetRequiredService<Cortex.Contained.Bridge.Mcp.Auth.McpOAuthOptions>(),
+        TimeProvider.System,
+        sp.GetRequiredService<ILogger<Cortex.Contained.Bridge.Mcp.Auth.McpOAuthManager>>()));
 builder.Services.AddSingleton<Cortex.Contained.Bridge.Mcp.Auth.IMcpAuthManager>(sp =>
     new Cortex.Contained.Bridge.Mcp.Auth.McpStaticAuth(
         sp.GetRequiredService<Cortex.Contained.Bridge.Mcp.Auth.IMcpSecretResolver>(),
@@ -984,6 +999,9 @@ app.MapSpeechEndpoints(cortexConfigPath);
 
 // --- Memory Management API ---
 app.MapMemoryEndpoints(cortexConfigPath);
+
+// --- MCP OAuth loopback callback (unauthenticated; state-protected) ---
+app.MapMcpOAuthCallbackEndpoint();
 // --- Message History API ---
 // All message persistence is owned by the Agent Host. The Bridge proxies
 // read/delete requests via the tenant's HubClient (SignalR).
