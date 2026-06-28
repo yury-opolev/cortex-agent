@@ -42,6 +42,33 @@ public sealed class McpServerRequestMapperTests
     }
 
     [Fact]
+    public void FindDuplicateKey_NoDuplicates_ReturnsNull()
+    {
+        Assert.Null(McpServerRequestMapper.FindDuplicateKey(["github", "filesystem", "weather"]));
+    }
+
+    [Fact]
+    public void FindDuplicateKey_CaseInsensitiveDuplicate_ReturnsTheKey()
+    {
+        // e.g. a hand-edited cortex.yml with two servers keyed "github" — the per-add validation
+        // can't catch this, so the whole-list check must.
+        var duplicate = McpServerRequestMapper.FindDuplicateKey(["github", "weather", "GitHub"]);
+
+        Assert.Equal("github", duplicate);
+    }
+
+    [Fact]
+    public void FullName_IsUniquePerDistinctKey_SoNoToolCollisionAcrossDistinctServers()
+    {
+        // Tool FullName = mcp__{serverKey}__{toolName}; server keys are unique and cannot contain
+        // a '__' run, so two distinct valid keys can never produce the same FullName for a tool.
+        var a = McpToolNamer.Full("alpha", "do_thing");
+        var b = McpToolNamer.Full("beta", "do_thing");
+
+        Assert.NotEqual(a, b);
+    }
+
+    [Fact]
     public void ToConfig_MapsAllEditableFields()
     {
         var request = new McpServerRequest

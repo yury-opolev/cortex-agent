@@ -37,6 +37,33 @@ public static class McpServerRequestMapper
         return null;
     }
 
+    /// <summary>
+    /// Returns the first case-insensitively duplicated server key in <paramref name="keys"/> (lowercased),
+    /// or <c>null</c> when all keys are unique. Catches duplicates the per-add <see cref="ValidateNewKey"/>
+    /// cannot — e.g. a hand-edited config — that would otherwise let one server silently shadow another.
+    /// </summary>
+    public static string? FindDuplicateKey(IEnumerable<string> keys)
+    {
+        ArgumentNullException.ThrowIfNull(keys);
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var key in keys)
+        {
+            var normalized = key?.Trim().ToLowerInvariant() ?? string.Empty;
+            if (normalized.Length == 0)
+            {
+                continue;
+            }
+
+            if (!seen.Add(normalized))
+            {
+                return normalized;
+            }
+        }
+
+        return null;
+    }
+
     /// <summary>Deterministic DPAPI secret id for a server's static API key.</summary>
     public static string ApiKeySecretId(string key)
     {

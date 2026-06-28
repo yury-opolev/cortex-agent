@@ -40,8 +40,22 @@ public sealed partial class McpConfigStore
     public void Persist()
     {
         this.WarnOnPlaintextEnvSecrets();
+        this.WarnOnDuplicateKeys();
         BridgeSettingsWriter.PersistSettingsToYaml(this.config, this.yamlPath);
         this.LogPersisted(this.config.Mcp.Servers.Count);
+    }
+
+    /// <summary>
+    /// Logs a warning when two servers share a key (e.g. a hand-edited config): the reconcile would
+    /// silently keep only one, so surface it. The Web-UI add path already blocks duplicates up front.
+    /// </summary>
+    private void WarnOnDuplicateKeys()
+    {
+        var duplicate = McpServerRequestMapper.FindDuplicateKey(this.config.Mcp.Servers.Select(s => s.Key));
+        if (duplicate is not null)
+        {
+            this.LogDuplicateKey(duplicate);
+        }
     }
 
     /// <summary>
@@ -65,6 +79,11 @@ public sealed partial class McpConfigStore
 
     [LoggerMessage(Level = LogLevel.Information, Message = "MCP settings persisted: {ServerCount} servers")]
     private partial void LogPersisted(int serverCount);
+
+    [LoggerMessage(
+        Level = LogLevel.Warning,
+        Message = "MCP config has a duplicate server key '{ServerKey}' — only one will run; remove the duplicate")]
+    private partial void LogDuplicateKey(string serverKey);
 
     [LoggerMessage(
         Level = LogLevel.Warning,
