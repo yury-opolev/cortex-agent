@@ -1,3 +1,5 @@
+using Cortex.Contained.Contracts.Messages;
+
 namespace Cortex.Contained.Agent.Host.Tools;
 
 /// <summary>
@@ -29,11 +31,17 @@ internal interface IProactiveMessageDispatcher
     /// receiving session's history won't get an automatic agent-side echo).
     /// </param>
     /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="attachments">
+    /// Optional media attachments (e.g. images) to deliver alongside the text. When
+    /// present, <paramref name="text"/> may be empty. Forwarded to the channel via
+    /// <see cref="Contracts.Hub.ProactiveMessage.Attachments"/>.
+    /// </param>
     Task<ProactiveDispatchResult> DispatchAsync(
         string channelId,
         string text,
         ToolExecutionContext? context,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken,
+        IReadOnlyList<MediaAttachment>? attachments = null);
 }
 
 /// <summary>Outcome of an <see cref="IProactiveMessageDispatcher.DispatchAsync"/> call.</summary>

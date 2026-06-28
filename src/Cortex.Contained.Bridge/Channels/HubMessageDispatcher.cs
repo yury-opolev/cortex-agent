@@ -398,7 +398,11 @@ public sealed partial class HubMessageDispatcher
                 MessageId = messageId,
                 ConversationId = deliveryConversationId,
                 ChannelId = channel.ChannelId,
-                Content = new MessageContent { Text = message.Text },
+                Content = new MessageContent
+                {
+                    Text = message.Text,
+                    Attachments = message.Attachments,
+                },
             };
 
             var result = await channel.SendMessageAsync(outbound, CancellationToken.None).ConfigureAwait(false);

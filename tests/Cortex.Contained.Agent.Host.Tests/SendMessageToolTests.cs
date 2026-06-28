@@ -10,7 +10,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Cortex.Contained.Agent.Host.Tests;
 
-public class SendMessageToolTests
+public class SendMessageToolTests : IDisposable
 {
     private static readonly ToolExecutionContext _context = new()
     {
@@ -23,6 +23,7 @@ public class SendMessageToolTests
     private readonly ActiveChannelStore _activeChannelStore;
     private readonly AgentSessionStore _sessionStore;
     private readonly SendMessageTool _tool;
+    private readonly string _sandbox;
 
     public SendMessageToolTests()
     {
@@ -41,7 +42,19 @@ public class SendMessageToolTests
             _accessor,
             messageStore,
             NullLogger<Cortex.Contained.Agent.Host.Tools.ProactiveMessageDispatcher>.Instance);
-        _tool = new SendMessageTool(_activeChannelStore, dispatcher);
+
+        _sandbox = Path.Combine(Path.GetTempPath(), "cortex-sendmsg-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_sandbox);
+        File.WriteAllBytes(Path.Combine(_sandbox, "chart.png"), [0x89, 0x50, 0x4E, 0x47, 1, 2, 3]);
+        var loader = new AttachmentLoader(_sandbox);
+
+        _tool = new SendMessageTool(_activeChannelStore, dispatcher, loader);
+    }
+
+    public void Dispose()
+    {
+        try { Directory.Delete(_sandbox, recursive: true); } catch (IOException) { }
+        GC.SuppressFinalize(this);
     }
 
     private void SetClient(IAgentHubClient mockClient, string connectionId = "conn-1")
@@ -70,11 +83,98 @@ public class SendMessageToolTests
         // Verify 'channel' property exists instead of old 'conversation_id'
         Assert.True(doc.RootElement.GetProperty("properties").TryGetProperty("channel", out _));
         Assert.False(doc.RootElement.GetProperty("properties").TryGetProperty("conversation_id", out _));
-        // Verify 'channel' is required
+        // 'channel' is required; 'text' is now optional (image-only sends are allowed).
         var required = doc.RootElement.GetProperty("required");
         var requiredValues = required.EnumerateArray().Select(e => e.GetString()).ToList();
-        Assert.Contains("text", requiredValues);
         Assert.Contains("channel", requiredValues);
+        Assert.DoesNotContain("text", requiredValues);
+        // 'attachments' property is exposed.
+        Assert.True(doc.RootElement.GetProperty("properties").TryGetProperty("attachments", out _));
+    }
+
+    // ── Image attachments ───────────────────────────────────────────────
+
+    [Fact]
+    public async Task ExecuteAsync_WithImageAttachment_SendsWithAttachment()
+    {
+        var mockClient = Substitute.For<IAgentHubClient>();
+        mockClient.OnProactiveMessage(Arg.Any<ProactiveMessage>())
+            .Returns(new ProactiveMessageResult { Success = true });
+        SetClient(mockClient);
+
+        var args = """{"text":"see chart","channel":"discord","attachments":["chart.png"]}""";
+
+        var result = await _tool.ExecuteAsync(args, _context, CancellationToken.None);
+
+        Assert.True(result.Success, result.Error);
+        await mockClient.Received(1).OnProactiveMessage(
+            Arg.Is<ProactiveMessage>(m =>
+                m.Attachments != null
+                && m.Attachments.Count == 1
+                && m.Attachments[0].FileName == "chart.png"
+                && m.Attachments[0].MimeType == "image/png"));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ImageOnlyNoText_Succeeds()
+    {
+        var mockClient = Substitute.For<IAgentHubClient>();
+        mockClient.OnProactiveMessage(Arg.Any<ProactiveMessage>())
+            .Returns(new ProactiveMessageResult { Success = true });
+        SetClient(mockClient);
+
+        var args = """{"channel":"discord","attachments":["chart.png"]}""";
+
+        var result = await _tool.ExecuteAsync(args, _context, CancellationToken.None);
+
+        Assert.True(result.Success, result.Error);
+        await mockClient.Received(1).OnProactiveMessage(
+            Arg.Is<ProactiveMessage>(m => m.Attachments != null && m.Attachments.Count == 1));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_AttachmentNotFound_ReturnsError()
+    {
+        var mockClient = Substitute.For<IAgentHubClient>();
+        SetClient(mockClient);
+
+        var args = """{"text":"x","channel":"discord","attachments":["missing.png"]}""";
+
+        var result = await _tool.ExecuteAsync(args, _context, CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Contains("not found", result.Error, StringComparison.OrdinalIgnoreCase);
+        // A failed attachment must NOT dispatch a partial message.
+        await mockClient.DidNotReceive().OnProactiveMessage(Arg.Any<ProactiveMessage>());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_TooManyAttachments_ReturnsError()
+    {
+        var mockClient = Substitute.For<IAgentHubClient>();
+        SetClient(mockClient);
+
+        var args = """{"text":"x","channel":"discord","attachments":["chart.png","chart.png","chart.png","chart.png","chart.png"]}""";
+
+        var result = await _tool.ExecuteAsync(args, _context, CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Contains("4", result.Error!);
+        await mockClient.DidNotReceive().OnProactiveMessage(Arg.Any<ProactiveMessage>());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_NoTextNoAttachments_ReturnsError()
+    {
+        var mockClient = Substitute.For<IAgentHubClient>();
+        SetClient(mockClient);
+
+        var args = """{"channel":"discord"}""";
+
+        var result = await _tool.ExecuteAsync(args, _context, CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Contains("text", result.Error, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

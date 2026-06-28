@@ -68,6 +68,35 @@ public class HubMessageDispatcherTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task OnProactiveMessage_WithAttachments_ForwardsToOutboundMessage()
+    {
+        var discordChannel = CreateMockChannel("discord-dm", ChannelType.Discord);
+        discordChannel.SendMessageAsync(Arg.Any<OutboundMessage>(), Arg.Any<CancellationToken>())
+            .Returns(new SendResult { Success = true });
+        _channelManager.RegisterChannel(discordChannel);
+
+        var message = new ProactiveMessage
+        {
+            Text = "see chart",
+            ChannelId = "discord-dm",
+            Attachments = new List<MediaAttachment>
+            {
+                new() { MimeType = "image/png", FileName = "chart.png", Data = [1, 2, 3] },
+            },
+        };
+
+        var result = await RaiseProactiveMessageEvent(message);
+
+        Assert.True(result.Success);
+        await discordChannel.Received(1).SendMessageAsync(
+            Arg.Is<OutboundMessage>(m =>
+                m.Content.Attachments != null
+                && m.Content.Attachments.Count == 1
+                && m.Content.Attachments[0].FileName == "chart.png"),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task OnProactiveMessage_WithoutChannel_ReturnsError()
     {
         var channel = CreateMockChannel("discord-dm", ChannelType.Discord);

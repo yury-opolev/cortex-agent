@@ -3,6 +3,7 @@ using Cortex.Contained.Agent.Host.Agent;
 using Cortex.Contained.Agent.Host.Hubs;
 using Cortex.Contained.Agent.Host.Storage;
 using Cortex.Contained.Contracts.Hub;
+using Cortex.Contained.Contracts.Messages;
 
 namespace Cortex.Contained.Agent.Host.Tools.BuiltIn;
 
@@ -14,15 +15,21 @@ namespace Cortex.Contained.Agent.Host.Tools.BuiltIn;
 /// </summary>
 internal sealed class SendMessageTool : IAgentTool
 {
+    /// <summary>Maximum image attachments per message — keeps the SignalR payload bounded.</summary>
+    private const int MaxAttachments = 4;
+
     private readonly ActiveChannelStore activeChannelStore;
     private readonly IProactiveMessageDispatcher dispatcher;
+    private readonly AttachmentLoader attachmentLoader;
 
     public SendMessageTool(
         ActiveChannelStore activeChannelStore,
-        IProactiveMessageDispatcher dispatcher)
+        IProactiveMessageDispatcher dispatcher,
+        AttachmentLoader attachmentLoader)
     {
         this.activeChannelStore = activeChannelStore;
         this.dispatcher = dispatcher;
+        this.attachmentLoader = attachmentLoader;
     }
 
     public string Name => "send_message";
@@ -38,6 +45,7 @@ internal sealed class SendMessageTool : IAgentTool
             {
                 var desc = "Send a message to the user proactively (without waiting for user input). " +
                            "Use this to send reminders, notifications, scheduled updates, or to initiate a conversation. " +
+                           "Can also send images: pass 'attachments' (image file paths within your data sandbox). " +
                            $"Available channels: {channelList}. " +
                            "You must specify the target channel.";
 
@@ -75,14 +83,19 @@ internal sealed class SendMessageTool : IAgentTool
                   "properties": {
                     "text": {
                       "type": "string",
-                      "description": "The message text to send"
+                      "description": "The message text to send. Optional when 'attachments' is provided (caption)."
                     },
                     "channel": {
                       "type": "string",
                       "description": "Target channel: {{channelList}}"
+                    },
+                    "attachments": {
+                      "type": "array",
+                      "items": { "type": "string" },
+                      "description": "Optional image file paths within your data sandbox to send (e.g. \"chart.png\"). Up to 4 images; png/jpg/jpeg/gif/webp, max 8 MB each."
                     }
                   },
-                  "required": ["text", "channel"]
+                  "required": ["channel"]
                 }
                 """;
         }
@@ -95,16 +108,49 @@ internal sealed class SendMessageTool : IAgentTool
             using var doc = JsonDocument.Parse(argumentsJson);
             var root = doc.RootElement;
 
-            if (!root.TryGetProperty("text", out var textElement))
+            var hasTextProperty = root.TryGetProperty("text", out var textElement)
+                && textElement.ValueKind == JsonValueKind.String;
+            var text = hasTextProperty ? (textElement.GetString() ?? string.Empty) : string.Empty;
+
+            // Parse optional attachment paths (sandbox-relative).
+            var attachmentPaths = new List<string>();
+            if (root.TryGetProperty("attachments", out var attachmentsElement)
+                && attachmentsElement.ValueKind == JsonValueKind.Array)
             {
-                return AgentToolResult.Fail("Missing required parameter: text");
+                foreach (var element in attachmentsElement.EnumerateArray())
+                {
+                    if (element.ValueKind == JsonValueKind.String)
+                    {
+                        var path = element.GetString();
+                        if (!string.IsNullOrWhiteSpace(path))
+                        {
+                            attachmentPaths.Add(path);
+                        }
+                    }
+                }
             }
 
-            var text = textElement.GetString() ?? string.Empty;
+            var hasAttachments = attachmentPaths.Count > 0;
 
-            if (string.IsNullOrWhiteSpace(text))
+            // Require text OR at least one attachment. Text alone keeps its original
+            // (test-pinned) error messages; image-only sends skip the text requirement.
+            if (!hasAttachments)
             {
-                return AgentToolResult.Fail("text cannot be empty");
+                if (!hasTextProperty)
+                {
+                    return AgentToolResult.Fail("Missing required parameter: text");
+                }
+
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                    return AgentToolResult.Fail("text cannot be empty");
+                }
+            }
+
+            if (attachmentPaths.Count > MaxAttachments)
+            {
+                return AgentToolResult.Fail(
+                    $"Too many attachments ({attachmentPaths.Count}); at most {MaxAttachments} allowed per message.");
             }
 
             var activeChannels = this.activeChannelStore.Get();
@@ -142,10 +188,28 @@ internal sealed class SendMessageTool : IAgentTool
                 return AgentToolResult.Fail($"Missing required parameter: channel. Available channels: {channelList}.{hint}");
             }
 
+            // Load + validate any attachments from the sandbox. Any failure aborts the
+            // whole send (no partial delivery) with a clear, LLM-relayable reason.
+            List<MediaAttachment>? attachments = null;
+            if (hasAttachments)
+            {
+                attachments = new List<MediaAttachment>(attachmentPaths.Count);
+                foreach (var path in attachmentPaths)
+                {
+                    var loaded = this.attachmentLoader.Load(path);
+                    if (!loaded.Success)
+                    {
+                        return AgentToolResult.Fail(loaded.Error ?? $"Failed to load attachment '{path}'.");
+                    }
+
+                    attachments.Add(loaded.Attachment!);
+                }
+            }
+
             // Delegate to the shared dispatcher (handles BridgeClient + MessageStore +
             // deferred-injection bookkeeping). Channel-name resolution and active-channel
             // validation stay here because they're send_message-specific UX concerns.
-            var dispatchResult = await this.dispatcher.DispatchAsync(channelId, text, context, cancellationToken).ConfigureAwait(false);
+            var dispatchResult = await this.dispatcher.DispatchAsync(channelId, text, context, cancellationToken, attachments).ConfigureAwait(false);
 
             if (dispatchResult.Success)
             {

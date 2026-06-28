@@ -32,14 +32,18 @@ internal sealed partial class ProactiveMessageDispatcher : IProactiveMessageDisp
         string channelId,
         string text,
         ToolExecutionContext? context,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IReadOnlyList<Contracts.Messages.MediaAttachment>? attachments = null)
     {
         if (string.IsNullOrWhiteSpace(channelId))
         {
             return new ProactiveDispatchResult { Success = false, Error = "channelId is required." };
         }
 
-        if (string.IsNullOrWhiteSpace(text))
+        var hasAttachments = attachments is { Count: > 0 };
+
+        // Text is optional when at least one attachment is present (image-only send).
+        if (string.IsNullOrWhiteSpace(text) && !hasAttachments)
         {
             return new ProactiveDispatchResult { Success = false, Error = "text is required." };
         }
@@ -54,8 +58,16 @@ internal sealed partial class ProactiveMessageDispatcher : IProactiveMessageDisp
         {
             Text = text,
             ChannelId = channelId,
+            Attachments = hasAttachments ? attachments : null,
             CorrelationId = context?.CorrelationId ?? Guid.NewGuid().ToString("N"),
         };
+
+        // History marker: chat UI + the agent's deferred-injection record only carry text,
+        // so annotate with the attachment file names (or a placeholder when text is empty)
+        // so a sent image is visible in history rather than silently absent.
+        var historyText = hasAttachments
+            ? AppendAttachmentMarker(text, attachments!)
+            : text;
 
         ProactiveMessageResult bridgeResult;
         try
@@ -91,7 +103,7 @@ internal sealed partial class ProactiveMessageDispatcher : IProactiveMessageDisp
         context?.ProactiveMessages.Add(new ProactiveMessageRecord
         {
             ChannelId = channelId,
-            Text = text,
+            Text = historyText,
         });
 
         // Persist for Bridge-side history (the chat UI). Forwards the caller's
@@ -100,7 +112,7 @@ internal sealed partial class ProactiveMessageDispatcher : IProactiveMessageDisp
             userId: "assistant",
             channelId: channelId,
             role: "assistant",
-            content: text,
+            content: historyText,
             timestamp: DateTimeOffset.UtcNow,
             category: MessageCategory.Proactive,
             cancellationToken: cancellationToken).ConfigureAwait(false);
@@ -126,4 +138,16 @@ internal sealed partial class ProactiveMessageDispatcher : IProactiveMessageDisp
     /// </summary>
     private static string Truncate(string s, int max = 200) =>
         s.Length <= max ? s : string.Concat(s.AsSpan(0, max), "…");
+
+    /// <summary>
+    /// Annotate persisted/history text with the attachment file names so a sent image
+    /// is visible in chat history (which carries text only). When the caption is empty
+    /// the marker stands alone (e.g. <c>"[image: chart.png]"</c>).
+    /// </summary>
+    private static string AppendAttachmentMarker(string text, IReadOnlyList<Contracts.Messages.MediaAttachment> attachments)
+    {
+        var names = string.Join(", ", attachments.Select(a => a.FileName ?? "image"));
+        var marker = $"[image: {names}]";
+        return string.IsNullOrWhiteSpace(text) ? marker : $"{text} {marker}";
+    }
 }

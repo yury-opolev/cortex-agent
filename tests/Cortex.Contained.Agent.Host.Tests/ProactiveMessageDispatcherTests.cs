@@ -2,6 +2,7 @@ using Cortex.Contained.Agent.Host.Hubs;
 using Cortex.Contained.Agent.Host.Storage;
 using Cortex.Contained.Agent.Host.Tools;
 using Cortex.Contained.Contracts.Hub;
+using Cortex.Contained.Contracts.Messages;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute.ExceptionExtensions;
@@ -202,6 +203,64 @@ public class ProactiveMessageDispatcherTests : IAsyncDisposable
         // Verify the MessageStore write still happened even though context was null.
         var stored = await this.messageStore.GetMessagesAsync("voice-default", limit: 10);
         Assert.Single(stored, m => m.Category == MessageCategory.Proactive);
+    }
+
+    [Fact]
+    public async Task DispatchAsync_WithAttachments_ForwardsToProactiveMessage()
+    {
+        var mockClient = SetClient();
+        mockClient.OnProactiveMessage(Arg.Any<ProactiveMessage>())
+            .Returns(new ProactiveMessageResult { Success = true });
+        var attachments = new List<MediaAttachment>
+        {
+            new() { MimeType = "image/png", FileName = "chart.png", Data = [1, 2, 3] },
+        };
+
+        var result = await this.dispatcher.DispatchAsync(
+            "discord-dm", "see chart", context: null, CancellationToken.None, attachments);
+
+        Assert.True(result.Success, result.Error);
+        await mockClient.Received(1).OnProactiveMessage(
+            Arg.Is<ProactiveMessage>(m =>
+                m.Attachments != null
+                && m.Attachments.Count == 1
+                && m.Attachments[0].FileName == "chart.png"));
+    }
+
+    [Fact]
+    public async Task DispatchAsync_EmptyTextWithAttachments_Succeeds()
+    {
+        var mockClient = SetClient();
+        mockClient.OnProactiveMessage(Arg.Any<ProactiveMessage>())
+            .Returns(new ProactiveMessageResult { Success = true });
+        var attachments = new List<MediaAttachment>
+        {
+            new() { MimeType = "image/png", FileName = "chart.png", Data = [1] },
+        };
+
+        var result = await this.dispatcher.DispatchAsync(
+            "discord-dm", "", context: null, CancellationToken.None, attachments);
+
+        Assert.True(result.Success, result.Error);
+    }
+
+    [Fact]
+    public async Task DispatchAsync_WithAttachments_PersistsMarkerInHistory()
+    {
+        var mockClient = SetClient();
+        mockClient.OnProactiveMessage(Arg.Any<ProactiveMessage>())
+            .Returns(new ProactiveMessageResult { Success = true });
+        var attachments = new List<MediaAttachment>
+        {
+            new() { MimeType = "image/png", FileName = "chart.png", Data = [1] },
+        };
+
+        await this.dispatcher.DispatchAsync(
+            "discord-dm", "see chart", context: null, CancellationToken.None, attachments);
+
+        var stored = await this.messageStore.GetMessagesAsync("discord-dm", limit: 10);
+        var msg = Assert.Single(stored, m => m.Category == MessageCategory.Proactive);
+        Assert.Contains("chart.png", msg.Content);
     }
 
     [Fact]

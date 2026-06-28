@@ -364,7 +364,8 @@ builder.Services.AddSingleton<IProactiveMessageDispatcher>(sp =>
 builder.Services.AddSingleton<IAgentTool>(sp =>
     new SendMessageTool(
         sp.GetRequiredService<ActiveChannelStore>(),
-        sp.GetRequiredService<IProactiveMessageDispatcher>()));
+        sp.GetRequiredService<IProactiveMessageDispatcher>(),
+        new AttachmentLoader(sandboxRoot)));
 
 builder.Services.Configure<TransferSessionOptions>(
     builder.Configuration.GetSection("Agent:TransferSession"));

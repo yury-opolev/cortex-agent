@@ -292,6 +292,13 @@ public sealed record ProactiveMessage
     /// </summary>
     public string? ConversationId { get; init; }
 
+    /// <summary>
+    /// Optional media attachments (e.g. images the agent is sending). The Bridge
+    /// copies these onto the outbound message so the channel uploads them.
+    /// Additive — older consumers ignore it.
+    /// </summary>
+    public IReadOnlyList<MediaAttachment>? Attachments { get; init; }
+
     /// <summary>Correlation ID for end-to-end request tracing.</summary>
     public string? CorrelationId { get; init; }
 }
