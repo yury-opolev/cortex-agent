@@ -76,9 +76,16 @@ public sealed class McpToolStore
         var logger = this.loggerFactory.CreateLogger<McpProxyTool>();
         var definitions = catalog?.Tools ?? [];
 
-        var rebuilt = definitions
-            .Select(IAgentTool (def) => new McpProxyTool(def, this.gateway, logger))
-            .ToFrozenDictionary(t => t.Name, StringComparer.OrdinalIgnoreCase);
+        // Build with last-wins on duplicate FullName so a malformed catalog from the Bridge
+        // never faults the hub invocation (ToFrozenDictionary would throw on a duplicate key).
+        var byName = new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase);
+        foreach (var def in definitions)
+        {
+            var tool = new McpProxyTool(def, this.gateway, logger);
+            byName[tool.Name] = tool;
+        }
+
+        var rebuilt = byName.ToFrozenDictionary(StringComparer.OrdinalIgnoreCase);
 
         lock (this.syncLock)
         {

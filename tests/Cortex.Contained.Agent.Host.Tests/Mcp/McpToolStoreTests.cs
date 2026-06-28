@@ -50,6 +50,22 @@ public class McpToolStoreTests
     }
 
     [Fact]
+    public void Update_DuplicateFullName_LastWins_DoesNotThrow()
+    {
+        var store = new McpToolStore(Substitute.For<IMcpGateway>());
+        var first = Def("srv", "a") with { Description = "first" };
+        var second = Def("srv", "a") with { Description = "second" };
+
+        // A malformed catalog with a duplicate FullName must not fault the hub invocation.
+        store.Update(new McpToolCatalog { Tools = [first, second] });
+
+        Assert.Single(store.Tools);
+        Assert.True(store.TryGet("mcp__srv__a", out var tool));
+        Assert.NotNull(tool);
+        Assert.Equal("second", tool.Description); // last-wins
+    }
+
+    [Fact]
     public void Update_WithEmptyCatalog_ClearsTools_AndBumpsVersionAgain()
     {
         var store = new McpToolStore(Substitute.For<IMcpGateway>());

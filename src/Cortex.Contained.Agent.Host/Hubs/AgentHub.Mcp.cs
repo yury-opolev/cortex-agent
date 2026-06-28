@@ -7,9 +7,10 @@ public sealed partial class AgentHub
     /// <inheritdoc />
     public Task UpdateMcpToolCatalog(McpToolCatalog catalog)
     {
-        var normalized = catalog.Tools is null ? new McpToolCatalog() : catalog;
-        this.mcpToolStore.Update(normalized);
-        this.LogMcpCatalogUpdated(normalized.Tools.Count);
+        // Tolerate a null catalog/Tools defensively even though the hub contract is non-nullable;
+        // McpToolStore.Update normalizes null to an empty set.
+        this.mcpToolStore.Update(catalog);
+        this.LogMcpCatalogUpdated(catalog?.Tools?.Count ?? 0);
         return Task.CompletedTask;
     }
 
