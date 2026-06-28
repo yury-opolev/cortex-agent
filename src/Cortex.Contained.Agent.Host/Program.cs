@@ -542,6 +542,21 @@ builder.Services.AddSingleton<IAgentTool>(sp =>
         sp.GetRequiredService<TodoStoreResolver>(),
         sp.GetRequiredService<ILogger<TodosDeleteTool>>()));
 
+// --- MCP plugin gateway + dynamic tool store ---
+// The Bridge (MCP host) pushes a namespaced tool catalog; McpToolStore holds the
+// dynamic mcp__server__tool proxies, which ToolRegistry merges with its static tools.
+builder.Services.AddOptions<Cortex.Contained.Agent.Host.Mcp.McpGatewayOptions>()
+    .Bind(builder.Configuration.GetSection("Mcp"));
+builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Mcp.IMcpGateway>(sp =>
+    new Cortex.Contained.Agent.Host.Mcp.SignalRMcpGateway(
+        sp.GetRequiredService<BridgeClientAccessor>(),
+        sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<Cortex.Contained.Agent.Host.Mcp.McpGatewayOptions>>().Value,
+        sp.GetRequiredService<ILoggerFactory>().CreateLogger<Cortex.Contained.Agent.Host.Mcp.SignalRMcpGateway>()));
+builder.Services.AddSingleton(sp =>
+    new Cortex.Contained.Agent.Host.Mcp.McpToolStore(
+        sp.GetRequiredService<Cortex.Contained.Agent.Host.Mcp.IMcpGateway>(),
+        sp.GetRequiredService<ILoggerFactory>()));
+
 builder.Services.AddSingleton<ToolRegistry>();
 
 builder.Services.AddSingleton<BridgeClientAccessor>();

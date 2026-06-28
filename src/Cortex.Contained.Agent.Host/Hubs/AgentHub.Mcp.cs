@@ -4,8 +4,15 @@ using Cortex.Contained.Contracts.Hub;
 
 public sealed partial class AgentHub
 {
-    // Temporary no-op: the real catalog-registration handler (delegating to
-    // McpToolStore) lands together with its DI wiring in the catalog-registration task.
     /// <inheritdoc />
-    public Task UpdateMcpToolCatalog(McpToolCatalog catalog) => Task.CompletedTask;
+    public Task UpdateMcpToolCatalog(McpToolCatalog catalog)
+    {
+        var normalized = catalog.Tools is null ? new McpToolCatalog() : catalog;
+        this.mcpToolStore.Update(normalized);
+        this.LogMcpCatalogUpdated(normalized.Tools.Count);
+        return Task.CompletedTask;
+    }
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "MCP catalog updated: {Count} tools")]
+    private partial void LogMcpCatalogUpdated(int count);
 }

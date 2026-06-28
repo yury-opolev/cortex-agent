@@ -37,6 +37,7 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
     private readonly Cortex.Contained.Speech.SpeakerId.IVoiceprintStore voiceprintStore;
     private readonly Cortex.Contained.Agent.Host.SpeakerId.SpeakerIdSettingsStore speakerIdSettingsStore;
     private readonly Cortex.Contained.Agent.Host.SpeakerId.EnrollmentOrchestrator? enrollmentOrchestrator;
+    private readonly Cortex.Contained.Agent.Host.Mcp.McpToolStore mcpToolStore;
     private readonly IHttpClientFactory httpClientFactory;
     private readonly AgentMetrics metrics;
     private readonly ILogger<AgentHub> logger;
@@ -57,6 +58,7 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
         CodingAgentEventBus externalAgentBus,
         Cortex.Contained.Speech.SpeakerId.IVoiceprintStore voiceprintStore,
         Cortex.Contained.Agent.Host.SpeakerId.SpeakerIdSettingsStore speakerIdSettingsStore,
+        Cortex.Contained.Agent.Host.Mcp.McpToolStore mcpToolStore,
         IHttpClientFactory httpClientFactory,
         AgentMetrics metrics,
         ILogger<AgentHub> logger,
@@ -78,6 +80,7 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
         this.voiceprintStore = voiceprintStore;
         this.speakerIdSettingsStore = speakerIdSettingsStore;
         this.enrollmentOrchestrator = enrollmentOrchestrator;
+        this.mcpToolStore = mcpToolStore;
         this.httpClientFactory = httpClientFactory;
         this.metrics = metrics;
         this.logger = logger;
