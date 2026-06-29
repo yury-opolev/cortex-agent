@@ -597,6 +597,8 @@ async function validateAndFetchModels() {
     try {
         const body = { provider: tmpl.id, apiKey };
         if (tokenType) body.tokenType = tokenType;
+        // Derive the Copilot models host from the configured GitHub host (GHE → copilot-api.<host>).
+        if (wizardState.copilotGithubBaseUrl) body.githubBaseUrl = wizardState.copilotGithubBaseUrl;
 
         const resp = await fetch("/api/setup/fetch-models", {
             method: "POST",

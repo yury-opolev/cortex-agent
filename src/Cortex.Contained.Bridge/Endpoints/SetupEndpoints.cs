@@ -37,7 +37,7 @@ internal static class SetupEndpoints
             {
                 using var httpClient = httpFactory.CreateClient();
                 var models = await SetupHelpers.FetchAvailableModelsAsync(
-                    request.Provider, request.ApiKey, httpClient, request.TokenType).ConfigureAwait(false);
+                    request.Provider, request.ApiKey, httpClient, request.TokenType, request.GithubBaseUrl).ConfigureAwait(false);
                 return Results.Ok(models);
             }
             catch (HttpRequestException ex)

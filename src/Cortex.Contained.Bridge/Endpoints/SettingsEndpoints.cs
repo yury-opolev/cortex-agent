@@ -257,7 +257,7 @@ internal static class SettingsEndpoints
                 try
                 {
                     models = await SetupHelpers.FetchAvailableModelsAsync(
-                        provider.Name, apiKey, httpClient, tokenType).ConfigureAwait(false);
+                        provider.Name, apiKey, httpClient, tokenType, provider.GithubBaseUrl).ConfigureAwait(false);
                 }
                 catch (HttpRequestException ex) when (
                     ex.StatusCode == System.Net.HttpStatusCode.Unauthorized
@@ -275,7 +275,7 @@ internal static class SettingsEndpoints
                     }
 
                     models = await SetupHelpers.FetchAvailableModelsAsync(
-                        provider.Name, refreshResult.AccessToken, httpClient, tokenType).ConfigureAwait(false);
+                        provider.Name, refreshResult.AccessToken, httpClient, tokenType, provider.GithubBaseUrl).ConfigureAwait(false);
                 }
 
                 var newIds = models.Select(m => m.Id).ToList();

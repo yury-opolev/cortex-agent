@@ -46,4 +46,25 @@ public static class GitHubOAuthUrls
     {
         return $"{NormalizeBaseUrl(baseUrl)}/login/oauth/authorize";
     }
+
+    /// <summary>
+    /// Derives the GitHub Copilot inference + models API host from the configured GitHub auth
+    /// host. For public github.com (or null/blank) this is the public
+    /// <c>https://api.githubcopilot.com</c>; for a GitHub Enterprise data-residency host it is
+    /// <c>https://copilot-api.&lt;host&gt;</c> (e.g. <c>copilot-api.microsoft.ghe.com</c>). A
+    /// GHE-issued device token is only valid at the GHE Copilot host — hitting the public host
+    /// with it returns 401 (the 0.2.293 D2/D5 gap). Mirrors OpenCode's <c>base(enterpriseUrl)</c>.
+    /// </summary>
+    /// <param name="githubBaseUrl">The configured GitHub auth host, or null for public github.com.</param>
+    public static string CopilotApiBaseUrl(string? githubBaseUrl)
+    {
+        var host = NormalizeBaseUrl(githubBaseUrl)
+            .Replace("https://", string.Empty, StringComparison.OrdinalIgnoreCase)
+            .Replace("http://", string.Empty, StringComparison.OrdinalIgnoreCase)
+            .TrimEnd('/');
+
+        return string.IsNullOrEmpty(host) || string.Equals(host, "github.com", StringComparison.OrdinalIgnoreCase)
+            ? "https://api.githubcopilot.com"
+            : $"https://copilot-api.{host}";
+    }
 }

@@ -104,4 +104,28 @@ public sealed class GitHubOAuthUrlsTests
 
         Assert.Equal("https://microsoft.ghe.com/login/oauth/authorize", result);
     }
+
+    // --- CopilotApiBaseUrl: derives the inference/models host from the auth host ---
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("https://github.com")]
+    [InlineData("https://github.com/")]
+    [InlineData("github.com")]
+    public void CopilotApiBaseUrl_PublicOrBlank_UsesPublicCopilotHost(string? input)
+    {
+        Assert.Equal("https://api.githubcopilot.com", GitHubOAuthUrls.CopilotApiBaseUrl(input));
+    }
+
+    [Theory]
+    [InlineData("https://microsoft.ghe.com")]
+    [InlineData("https://microsoft.ghe.com/")]
+    [InlineData("microsoft.ghe.com")]
+    [InlineData("http://microsoft.ghe.com")]
+    public void CopilotApiBaseUrl_EnterpriseHost_DerivesCopilotApiSubdomain(string input)
+    {
+        Assert.Equal("https://copilot-api.microsoft.ghe.com", GitHubOAuthUrls.CopilotApiBaseUrl(input));
+    }
 }

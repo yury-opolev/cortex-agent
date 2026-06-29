@@ -431,6 +431,10 @@ internal sealed partial class OpenAiCompatibleApiClient : IProviderApiClient
                 client.DefaultRequestHeaders.Add("Editor-Plugin-Version", "cortex-agent/1.0.0");
                 client.DefaultRequestHeaders.Add("Copilot-Integration-Id", "vscode-chat");
             }
+
+            // GitHub Enterprise Copilot hosts (copilot-api.<ghe-host>) require an explicit API
+            // version on /models and /chat/completions; harmless on the public host.
+            client.DefaultRequestHeaders.Add("X-GitHub-Api-Version", "2026-06-01");
         }
         else if (!string.IsNullOrEmpty(provider.Credential.ApiKey))
         {

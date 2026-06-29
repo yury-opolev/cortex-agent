@@ -326,7 +326,7 @@ public static class SetupHelpers
 
         var providerName = ResolveProviderName(request.Provider);
         var api = ResolveApi(request.Provider);
-        var baseUrl = ResolveBaseUrl(request.Provider);
+        var baseUrl = ResolveBaseUrl(request.Provider, request.GithubBaseUrl);
         // Pass "oauth" as authMethod when the request carries a refresh token (Anthropic OAuth)
         var authMethod = !string.IsNullOrEmpty(request.RefreshToken) ? "oauth" : null;
         var tokenType = ResolveTokenType(request.Provider, authMethod);
@@ -494,12 +494,18 @@ public static class SetupHelpers
         };
     }
 
-    /// <summary>Resolve base URL from provider key.</summary>
-    public static string? ResolveBaseUrl(string provider)
+    /// <summary>
+    /// Resolve the API base URL persisted to <c>cortex.yml</c> for a provider. For GitHub Copilot
+    /// this is the inference/models host, DERIVED from the configured GitHub auth host:
+    /// public github.com → <c>api.githubcopilot.com</c>; a GitHub Enterprise host →
+    /// <c>copilot-api.&lt;host&gt;</c>. Persisting this makes the runtime honor the right host via
+    /// <c>Credential.BaseUrl</c>.
+    /// </summary>
+    public static string? ResolveBaseUrl(string provider, string? githubBaseUrl = null)
     {
         return provider.ToLowerInvariant() switch
         {
-            "github-copilot-api" => "https://api.githubcopilot.com",
+            "github-copilot-api" => Setup.GitHubOAuthUrls.CopilotApiBaseUrl(githubBaseUrl),
             _ => null,
         };
     }
@@ -562,11 +568,13 @@ public static class SetupHelpers
         string apiKey,
         HttpClient httpClient,
         string? tokenType = null,
+        string? githubBaseUrl = null,
         CancellationToken cancellationToken = default)
     {
         return provider.ToLowerInvariant() switch
         {
-            "github-copilot-api" => await FetchCopilotApiModelsAsync(apiKey, httpClient, cancellationToken).ConfigureAwait(false),
+            "github-copilot-api" => await FetchCopilotApiModelsAsync(
+                apiKey, Setup.GitHubOAuthUrls.CopilotApiBaseUrl(githubBaseUrl), httpClient, cancellationToken).ConfigureAwait(false),
             "openai" => await FetchOpenAiModelsAsync(apiKey, httpClient, cancellationToken).ConfigureAwait(false),
             "anthropic" => await FetchAnthropicModelsAsync(apiKey, httpClient, tokenType, cancellationToken).ConfigureAwait(false),
             _ => [],
@@ -578,13 +586,15 @@ public static class SetupHelpers
     /// Requires a GitHub OAuth token (obtained via the device flow).
     /// </summary>
     internal static async Task<List<AvailableModel>> FetchCopilotApiModelsAsync(
-        string oauthToken, HttpClient httpClient, CancellationToken cancellationToken)
+        string oauthToken, string copilotApiBaseUrl, HttpClient httpClient, CancellationToken cancellationToken)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.githubcopilot.com/models");
+        using var request = new HttpRequestMessage(HttpMethod.Get, $"{copilotApiBaseUrl.TrimEnd('/')}/models");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", oauthToken);
         request.Headers.UserAgent.ParseAdd("cortex-agent/1.0.0");
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         request.Headers.Add("Openai-Intent", "conversation-edits");
+        // GitHub Enterprise Copilot hosts require an explicit API version on /models and /chat.
+        request.Headers.Add("X-GitHub-Api-Version", "2026-06-01");
 
         using var response = await httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
@@ -865,6 +875,13 @@ public sealed class FetchModelsRequest
     /// </summary>
     [JsonPropertyName("tokenType")]
     public string? TokenType { get; set; }
+
+    /// <summary>
+    /// GitHub auth host (only for <c>github-copilot-api</c>). Used to derive the Copilot
+    /// inference/models host (<c>copilot-api.&lt;host&gt;</c> for GHE). Null/empty → public.
+    /// </summary>
+    [JsonPropertyName("githubBaseUrl")]
+    public string? GithubBaseUrl { get; set; }
 }
 
 /// <summary>A model available from a provider.</summary>
