@@ -63,8 +63,16 @@ public static class GitHubOAuthUrls
             .Replace("http://", string.Empty, StringComparison.OrdinalIgnoreCase)
             .TrimEnd('/');
 
-        return string.IsNullOrEmpty(host) || string.Equals(host, "github.com", StringComparison.OrdinalIgnoreCase)
-            ? "https://api.githubcopilot.com"
+        if (string.IsNullOrEmpty(host) || string.Equals(host, "github.com", StringComparison.OrdinalIgnoreCase))
+        {
+            return "https://api.githubcopilot.com";
+        }
+
+        // Idempotent: a caller who pasted the Copilot host itself (copilot-api.<ghe>) into the
+        // GitHub-host field must not get a doubled "copilot-api." prefix. Any port on a
+        // custom-port GHE host is preserved best-effort (data-residency hosts normally have none).
+        return host.StartsWith("copilot-api.", StringComparison.OrdinalIgnoreCase)
+            ? $"https://{host}"
             : $"https://copilot-api.{host}";
     }
 }

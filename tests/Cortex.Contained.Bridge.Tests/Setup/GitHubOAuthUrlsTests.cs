@@ -128,4 +128,21 @@ public sealed class GitHubOAuthUrlsTests
     {
         Assert.Equal("https://copilot-api.microsoft.ghe.com", GitHubOAuthUrls.CopilotApiBaseUrl(input));
     }
+
+    [Theory]
+    [InlineData("copilot-api.microsoft.ghe.com")]
+    [InlineData("https://copilot-api.microsoft.ghe.com")]
+    [InlineData("https://copilot-api.microsoft.ghe.com/")]
+    public void CopilotApiBaseUrl_AlreadyCopilotHost_DoesNotDoublePrefix(string input)
+    {
+        Assert.Equal("https://copilot-api.microsoft.ghe.com", GitHubOAuthUrls.CopilotApiBaseUrl(input));
+    }
+
+    [Fact]
+    public void CopilotApiBaseUrl_HostWithPort_PreservesPort()
+    {
+        Assert.Equal(
+            "https://copilot-api.ghe.acme.com:8443",
+            GitHubOAuthUrls.CopilotApiBaseUrl("https://ghe.acme.com:8443"));
+    }
 }
