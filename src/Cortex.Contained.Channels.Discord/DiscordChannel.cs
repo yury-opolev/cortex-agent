@@ -881,6 +881,29 @@ public sealed partial class DiscordChannel : IChannelWithStreaming, IDiscordChan
             this.LogAudioTransportDeathSignal(logMsg.Source, handlers.Length);
         }
 
+        // DAVE end-to-end-encryption (MLS) failure. During the join race the
+        // add-proposal for the just-joined user can fail ("Unexpected user ID in
+        // add proposal"), wedging the encrypted group so the listener cannot
+        // decrypt the bot's audio — the agent "delivers" but the user hears
+        // silence, and the session never self-heals (2026-06-29 outage). Flag the
+        // voice handler(s) so the watchdog forces one clean rejoin; the handler
+        // ignores MLS failures outside the join-race window (benign epoch churn).
+        if (kind is DaveEventKind.MlsFailure)
+        {
+            DiscordVoiceHandler[] handlers;
+            lock (this.voiceHandlersLock)
+            {
+                handlers = [.. this.voiceHandlers.Values];
+            }
+
+            foreach (var handler in handlers)
+            {
+                handler.NotifyDaveSessionSuspect();
+            }
+
+            this.LogDaveMlsFailureSignal(handlers.Length);
+        }
+
         if (logMsg.Exception is not null)
         {
             this.LogDiscordLibError(logMsg.Source, logMsg.Exception.Message);
@@ -1202,6 +1225,9 @@ public sealed partial class DiscordChannel : IChannelWithStreaming, IDiscordChan
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Audio-transport death signal from [{Source}] — flagged {HandlerCount} voice handler(s) for watchdog reconnect")]
     private partial void LogAudioTransportDeathSignal(string source, int handlerCount);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "DAVE/MLS failure signal — flagged {HandlerCount} voice handler(s) to rejoin if within the join-race window")]
+    private partial void LogDaveMlsFailureSignal(int handlerCount);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Discord channel {ChannelId} synthesizing voice reply ({CharCount} chars)")]
     private partial void LogVoiceSynthesizing(string channelId, int charCount);

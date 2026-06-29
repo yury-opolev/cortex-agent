@@ -185,6 +185,46 @@ internal sealed partial class DiscordVoiceHandler : IAsyncDisposable
     /// <summary><see cref="TimeProvider.GetUtcNow"/> ticks of the last forced reconnect (0 = never).</summary>
     private long lastForcedReconnectTicks;
 
+    // ── DAVE/MLS join-race recovery (auto-heal silent, undecryptable audio) ──
+    //
+    // The 2026-06-29 outage: the proactive "ring" pulls the bot into voice at
+    // nearly the same instant the linked user joins; Discord's DAVE/MLS
+    // add-proposal for that user fails ("Unexpected user ID in add proposal"),
+    // wedging the E2EE group. The bot then transmits audio the listener cannot
+    // decrypt — synthesis/pacing/transmission all "succeed" while the user hears
+    // silence — and the session never self-heals. A full leave+rejoin rebuilds
+    // the MLS group cleanly with the user present (user-confirmed manual fix).
+    // We detect a join-race MLS failure (see DaveMlsRecoveryPolicy) and force one
+    // clean rejoin via the existing watchdog/ForceReconnect machinery, then
+    // re-speak the proactive message that was lost into the dead epoch.
+
+    /// <summary>Window after a (re)join within which an MLS failure is attributed
+    /// to the join race and triggers a rejoin. Outside it, MLS proposals are
+    /// treated as benign epoch churn.</summary>
+    private static readonly TimeSpan DaveMlsJoinRaceWindow = TimeSpan.FromSeconds(20);
+
+    /// <summary><see cref="TimeProvider.GetUtcNow"/> ticks of the last successful
+    /// (re)join (0 = never joined). Used to scope MLS-failure recovery to the
+    /// join-race window.</summary>
+    private long lastJoinTicks;
+
+    /// <summary>Set when a join-race DAVE MLS failure is observed (via
+    /// <see cref="NotifyDaveSessionSuspect"/>); consumed by the watchdog to force
+    /// a clean rejoin even though the transport reports <c>Connected</c>.</summary>
+    private volatile bool daveSessionSuspect;
+
+    /// <summary>Text of the most recent proactive message, kept so it can be
+    /// re-spoken after a DAVE-triggered rejoin (the original played into a wedged,
+    /// undecryptable epoch). Null when there is nothing to replay.</summary>
+    private volatile string? pendingProactiveReplay;
+
+    /// <summary>Language hint that accompanied <see cref="pendingProactiveReplay"/>.</summary>
+    private volatile string? pendingProactiveReplayHint;
+
+    /// <summary><see cref="TimeProvider.GetUtcNow"/> ticks when
+    /// <see cref="pendingProactiveReplay"/> was set — bounds replay staleness.</summary>
+    private long pendingProactiveReplayTicks;
+
     // ── Per-user audio state ─────────────────────────────────────────
 
     private readonly ConcurrentDictionary<ulong, UserAudioState> userAudioStates = new();
@@ -772,6 +812,30 @@ internal sealed partial class DiscordVoiceHandler : IAsyncDisposable
     }
 
     /// <summary>
+    /// Called by <see cref="DiscordChannel"/> when a DAVE <c>MLS Failure</c> log
+    /// line is observed. When the failure lands inside the join-race window after
+    /// a (re)join, the encrypted group is likely wedged so the listener can't
+    /// decrypt our audio (the 2026-06-29 silent-voice outage) — flag the session
+    /// suspect so the next watchdog tick forces a clean rejoin. MLS proposals
+    /// outside that window are normal epoch churn and ignored. See
+    /// <see cref="DaveMlsRecoveryPolicy"/>.
+    /// </summary>
+    public void NotifyDaveSessionSuspect()
+    {
+        if (this.disposed)
+        {
+            return;
+        }
+
+        var joinTicks = Interlocked.Read(ref this.lastJoinTicks);
+        var sinceJoinTicks = this.timeProvider.GetUtcNow().UtcTicks - joinTicks;
+        if (DaveMlsRecoveryPolicy.ShouldRecover(joinTicks != 0, sinceJoinTicks, DaveMlsJoinRaceWindow.Ticks))
+        {
+            this.daveSessionSuspect = true;
+        }
+    }
+
+    /// <summary>
     /// Unconditional teardown + rejoin under <see cref="connectionGate"/>. Unlike
     /// <see cref="EnsureConnectedAsync"/> it does NOT early-return when
     /// <see cref="IsConnected"/> is true — that is the whole point, since a silent
@@ -856,9 +920,11 @@ internal sealed partial class DiscordVoiceHandler : IAsyncDisposable
         }
 
         var isConnected = VoiceConnectionState.IsAlive(client.ConnectionState);
-        var suspect = this.suspectDead;
+        var audioDeathSuspect = this.suspectDead;
+        var daveSuspect = this.daveSessionSuspect;
+        var suspect = audioDeathSuspect || daveSuspect;
 
-        // Healthy and no death signal — the cheap steady-state path, no REST call.
+        // Healthy and no death/MLS signal — the cheap steady-state path, no REST call.
         if (isConnected && !suspect)
         {
             return;
@@ -879,12 +945,23 @@ internal sealed partial class DiscordVoiceHandler : IAsyncDisposable
             case WatchdogAction.Reconnect:
                 await EnsureConnectedAsync("watchdog").ConfigureAwait(false);
                 this.suspectDead = false;
+                this.daveSessionSuspect = false;
                 break;
 
             case WatchdogAction.ForceReconnect:
                 this.lastForcedReconnectTicks = nowTicks;
-                await ForceReconnectAsync("audio-death-signal").ConfigureAwait(false);
+                // A wedged MLS group reports a healthy transport, so it surfaces
+                // here as a force-reconnect just like a silent audio death. Label
+                // the trigger by cause, and — when the cause was an MLS failure —
+                // re-speak the proactive message that played into the dead epoch.
+                await ForceReconnectAsync(daveSuspect ? "dave-mls-failure" : "audio-death-signal").ConfigureAwait(false);
                 this.suspectDead = false;
+                this.daveSessionSuspect = false;
+                if (daveSuspect)
+                {
+                    await ReplayPendingProactiveAsync(nowTicks).ConfigureAwait(false);
+                }
+
                 break;
 
             case WatchdogAction.None:
@@ -898,6 +975,10 @@ internal sealed partial class DiscordVoiceHandler : IAsyncDisposable
                 }
 
                 this.suspectDead = false;
+                // NOTE: daveSessionSuspect is intentionally NOT cleared here. When a
+                // force is blocked only by the cooldown, the flag must persist so a
+                // later tick still heals the wedged MLS session; JoinVoiceChannelAsync
+                // clears it on the next successful (re)join.
                 break;
         }
     }
@@ -1059,9 +1140,55 @@ internal sealed partial class DiscordVoiceHandler : IAsyncDisposable
     /// </summary>
     private async Task SpeakProactiveAsync(string text, string? languageHint, CancellationToken ct)
     {
+        // Remember this message so it can be re-spoken if a join-race MLS failure
+        // wedges the encrypted session and the watchdog forces a clean rejoin —
+        // otherwise the user is promised a delivery they never hear.
+        this.pendingProactiveReplay = text;
+        this.pendingProactiveReplayHint = languageHint;
+        Interlocked.Exchange(ref this.pendingProactiveReplayTicks, this.timeProvider.GetUtcNow().UtcTicks);
+
         this.turnArbiter?.OnAgentFirstAudio();
         await this.SendVoiceAsync(text, languageHint, ct).ConfigureAwait(false);
         this.voiceOut?.MarkEndOfResponse();
+    }
+
+    /// <summary>
+    /// Re-speak the most recent proactive message after a DAVE-triggered rejoin.
+    /// Bounds staleness to roughly the join-race window so an old message cannot
+    /// resurface on an unrelated later reconnect. No-op when nothing is pending or
+    /// the pending message is too old. Runs on the watchdog thread after
+    /// <see cref="ForceReconnectAsync"/> has re-established a clean session.
+    /// </summary>
+    private async Task ReplayPendingProactiveAsync(long nowTicks)
+    {
+        var text = this.pendingProactiveReplay;
+        if (string.IsNullOrEmpty(text))
+        {
+            return;
+        }
+
+        var age = nowTicks - Interlocked.Read(ref this.pendingProactiveReplayTicks);
+        var maxAgeTicks = DaveMlsJoinRaceWindow.Ticks * 3;
+        if (age < 0 || age > maxAgeTicks)
+        {
+            this.pendingProactiveReplay = null;
+            return;
+        }
+
+        var hint = this.pendingProactiveReplayHint;
+        this.pendingProactiveReplay = null;
+
+        try
+        {
+            await this.SpeakProactiveAsync(text, hint, CancellationToken.None).ConfigureAwait(false);
+            this.LogDaveProactiveReplay(text.Length);
+        }
+        catch (VoiceNotConnectedException ex)
+        {
+            // The fresh session dropped again before we could replay — leave it to
+            // the next watchdog cycle rather than crash the loop.
+            this.LogVoiceGreetingSkipped(ex.Message);
+        }
     }
 
     /// <inheritdoc />
@@ -1269,9 +1396,12 @@ internal sealed partial class DiscordVoiceHandler : IAsyncDisposable
                 this.agentMessageBuilder.Clear();
             }
 
-            // Fresh transport — clear any stale death suspicion so the watchdog
-            // doesn't immediately force another reconnect.
+            // Fresh transport — clear any stale death/MLS suspicion so the watchdog
+            // doesn't immediately force another reconnect, and stamp the join time
+            // so a join-race MLS failure can be distinguished from later epoch churn.
             this.suspectDead = false;
+            this.daveSessionSuspect = false;
+            Interlocked.Exchange(ref this.lastJoinTicks, this.timeProvider.GetUtcNow().UtcTicks);
 
             this.LogVoiceJoined(voiceChannel.Name, voiceChannelId);
 
@@ -2137,6 +2267,9 @@ internal sealed partial class DiscordVoiceHandler : IAsyncDisposable
 
     [LoggerMessage(Level = LogLevel.Error, Message = "voice-in: connection recovery failed trigger={Trigger}: {Error}")]
     private partial void LogVoiceRecoveryFailed(string trigger, string error);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "voice-out: re-spoke proactive message after DAVE/MLS rejoin ({Chars} chars)")]
+    private partial void LogDaveProactiveReplay(int chars);
 
     [LoggerMessage(Level = LogLevel.Error, Message = "Failed to leave voice channel: {ErrorMessage}")]
     private partial void LogVoiceLeaveFailed(string errorMessage);

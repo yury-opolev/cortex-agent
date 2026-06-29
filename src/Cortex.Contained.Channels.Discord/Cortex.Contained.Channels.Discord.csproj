@@ -17,17 +17,16 @@
   </ItemGroup>
 
   <!--
-    Discord.Net is referenced from our local fork at lib/Discord.Net (branch
-    fix/rtp-padding-stripping) so we ship with the RFC 3550 RTP padding-strip
-    fix. See discord-net/Discord.Net#3262 / #3263 — when the fix is merged
-    and released on NuGet, revert this block to `<PackageReference
-    Include="Discord.Net" />` + `<PackageReference Include="Discord.Net.Dave" />`.
+    Discord.Net is the official NuGet release again (3.20.1, pinned in
+    Directory.Packages.props). The local fork at lib/Discord.Net existed only to
+    carry the RFC 3550 RTP padding-strip DAVE fix (discord-net/Discord.Net#3262 /
+    #3263); that fix shipped in 3.20.0, so we reverted from the submodule
+    ProjectReferences back to PackageReferences (2026-06-29). The lib/Discord.Net
+    submodule is no longer part of the build.
   -->
   <ItemGroup>
-    <ProjectReference Include="..\..\lib\Discord.Net\src\Discord.Net.Core\Discord.Net.Core.csproj" />
-    <ProjectReference Include="..\..\lib\Discord.Net\src\Discord.Net.Rest\Discord.Net.Rest.csproj" />
-    <ProjectReference Include="..\..\lib\Discord.Net\src\Discord.Net.WebSocket\Discord.Net.WebSocket.csproj" />
-    <ProjectReference Include="..\..\lib\Discord.Net\tools\Discord.Net.Dave\Discord.Net.Dave.csproj" />
+    <PackageReference Include="Discord.Net" />
+    <PackageReference Include="Discord.Net.Dave" />
   </ItemGroup>
 
   <ItemGroup>
