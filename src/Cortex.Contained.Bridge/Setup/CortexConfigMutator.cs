@@ -93,6 +93,12 @@ public static class CortexConfigMutator
             node.Add("clientId", p.ClientId);
         }
 
+        // GitHub Enterprise auth host, emitted only when set (blank → public github.com).
+        if (!string.IsNullOrWhiteSpace(p.GithubBaseUrl))
+        {
+            node.Add("githubBaseUrl", p.GithubBaseUrl);
+        }
+
         // Match SetupHelpers.GenerateYaml: defaultModel comes from p.DefaultModel
         // when set, otherwise falls back to the first listed model (preserves
         // the existing on-disk wire format so the Bridge still resolves the same

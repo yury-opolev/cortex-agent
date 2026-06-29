@@ -1,7 +1,9 @@
 using Cortex.Contained.Bridge.Security;
+using Cortex.Contained.Bridge.Setup;
 using Cortex.Contained.Bridge.Tenants;
 using Cortex.Contained.Common.Auth;
 using Cortex.Contained.Contracts.Config;
+using Microsoft.Extensions.Logging;
 
 namespace Cortex.Contained.Bridge.Endpoints;
 
@@ -65,30 +67,53 @@ internal static class SetupEndpoints
         }).RequireAuthorization();
 
         // --- Copilot OAuth Device Flow ---
-        app.MapPost("/api/setup/copilot-auth", async (CopilotAuthRequest request, IHttpClientFactory httpFactory) =>
+        app.MapPost("/api/setup/copilot-auth", async (CopilotAuthRequest request, IHttpClientFactory httpFactory, ILoggerFactory loggerFactory) =>
         {
+            var log = loggerFactory.CreateLogger("CopilotSetup");
+            var host = GitHubOAuthUrls.NormalizeBaseUrl(request.GithubBaseUrl);
+            var customClientId = !string.IsNullOrWhiteSpace(request.ClientId);
+            CopilotSetupLog.DeviceFlowInit(log, host, customClientId);
             try
             {
                 using var httpClient = httpFactory.CreateClient();
-                var result = await SetupHelpers.InitiateCopilotDeviceFlowAsync(httpClient, request.ClientId).ConfigureAwait(false);
+                var result = await SetupHelpers.InitiateCopilotDeviceFlowAsync(httpClient, request.ClientId, request.GithubBaseUrl).ConfigureAwait(false);
+                CopilotSetupLog.DeviceFlowInitOk(log, host);
                 return Results.Ok(result);
+            }
+            catch (CopilotSetupException ex)
+            {
+                CopilotSetupLog.DeviceFlowInitFailed(log, host, ex.StatusCode, ex.Message);
+                return Results.Json(new { error = ex.Message, status = ex.StatusCode }, statusCode: 502);
             }
             catch (HttpRequestException ex)
             {
+                CopilotSetupLog.DeviceFlowInitNetworkFailed(log, host, ex.Message);
                 return Results.Json(new { error = $"Failed to initiate device flow: {ex.Message}" }, statusCode: 502);
             }
         }).RequireAuthorization();
 
-        app.MapPost("/api/setup/copilot-poll", async (CopilotPollRequest request, IHttpClientFactory httpFactory) =>
+        app.MapPost("/api/setup/copilot-poll", async (CopilotPollRequest request, IHttpClientFactory httpFactory, ILoggerFactory loggerFactory) =>
         {
+            var log = loggerFactory.CreateLogger("CopilotSetup");
+            var host = GitHubOAuthUrls.NormalizeBaseUrl(request.GithubBaseUrl);
             try
             {
                 using var httpClient = httpFactory.CreateClient();
-                var result = await SetupHelpers.PollCopilotTokenAsync(request.DeviceCode, httpClient, request.ClientId).ConfigureAwait(false);
+                var result = await SetupHelpers.PollCopilotTokenAsync(request.DeviceCode, httpClient, request.ClientId, request.GithubBaseUrl).ConfigureAwait(false);
+                if (string.Equals(result.Status, "failed", StringComparison.Ordinal))
+                {
+                    CopilotSetupLog.TokenPollFailed(log, host, result.Error);
+                }
+                else if (string.Equals(result.Status, "success", StringComparison.Ordinal))
+                {
+                    CopilotSetupLog.TokenPollSuccess(log, host);
+                }
+
                 return Results.Ok(result);
             }
             catch (HttpRequestException ex)
             {
+                CopilotSetupLog.TokenPollNetworkFailed(log, host, ex.Message);
                 return Results.Json(new { error = $"Failed to poll token: {ex.Message}" }, statusCode: 502);
             }
         }).RequireAuthorization();

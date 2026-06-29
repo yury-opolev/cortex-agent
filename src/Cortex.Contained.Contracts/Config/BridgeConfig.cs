@@ -125,6 +125,15 @@ public sealed class LlmProviderConfig
     public string? ClientId { get; set; }
 
     /// <summary>
+    /// GitHub auth host for the OAuth device/authorization flow (only for a GitHub Copilot
+    /// provider). Null or empty means public <c>https://github.com</c>. Set to a GitHub
+    /// Enterprise host (e.g. <c>https://your-org.ghe.com</c>) to authenticate against an
+    /// enterprise instance. Used at setup/auth time; the runtime inference host is
+    /// <see cref="BaseUrl"/>.
+    /// </summary>
+    public string? GithubBaseUrl { get; set; }
+
+    /// <summary>
     /// OAuth refresh token (only used when <see cref="TokenType"/> is <c>"oauth"</c> for
     /// Anthropic Claude Pro/Max accounts). Loaded from encrypted storage at runtime; never
     /// stored in the YAML config file.

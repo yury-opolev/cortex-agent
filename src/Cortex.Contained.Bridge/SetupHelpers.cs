@@ -148,32 +148,93 @@ public static class SetupHelpers
     /// </param>
     /// <param name="cancellationToken">Cancellation token.</param>
     public static async Task<CopilotDeviceFlowResponse> InitiateCopilotDeviceFlowAsync(
-        HttpClient httpClient, string? clientId = null, CancellationToken cancellationToken = default)
+        HttpClient httpClient, string? clientId = null, string? githubBaseUrl = null, CancellationToken cancellationToken = default)
     {
         var effectiveClientId = string.IsNullOrWhiteSpace(clientId) ? DefaultCopilotOAuthClientId : clientId;
+        var host = Setup.GitHubOAuthUrls.NormalizeBaseUrl(githubBaseUrl);
+        var url = Setup.GitHubOAuthUrls.DeviceCodeUrl(githubBaseUrl);
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, "https://github.com/login/device/code");
-        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-        request.Headers.UserAgent.ParseAdd("cortex-agent/1.0.0");
-        request.Content = new StringContent(
-            JsonSerializer.Serialize(new { client_id = effectiveClientId, scope = "read:user" }),
-            Encoding.UTF8, "application/json");
-
-        using var response = await httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
-        response.EnsureSuccessStatusCode();
+        using var response = await SendOAuthWithRetryAsync(
+            httpClient,
+            () =>
+            {
+                var request = new HttpRequestMessage(HttpMethod.Post, url);
+                request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+                request.Headers.UserAgent.ParseAdd("cortex-agent/1.0.0");
+                request.Content = new StringContent(
+                    JsonSerializer.Serialize(new { client_id = effectiveClientId, scope = "read:user" }),
+                    Encoding.UTF8, "application/json");
+                return request;
+            },
+            host,
+            cancellationToken).ConfigureAwait(false);
 
         var json = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
         var deviceData = JsonSerializer.Deserialize<GitHubDeviceCodeResponse>(json, JsonCatalogOptions)
-            ?? throw new InvalidOperationException("Failed to parse device code response.");
+            ?? throw new Setup.CopilotSetupException("Failed to parse device code response.", host);
 
         return new CopilotDeviceFlowResponse
         {
-            DeviceCode = deviceData.DeviceCode ?? throw new InvalidOperationException("No device_code in response."),
-            UserCode = deviceData.UserCode ?? throw new InvalidOperationException("No user_code in response."),
-            VerificationUri = deviceData.VerificationUri ?? "https://github.com/login/device",
+            DeviceCode = deviceData.DeviceCode ?? throw new Setup.CopilotSetupException("No device_code in response.", host),
+            UserCode = deviceData.UserCode ?? throw new Setup.CopilotSetupException("No user_code in response.", host),
+            VerificationUri = deviceData.VerificationUri ?? $"{host}/login/device",
             ExpiresInSeconds = deviceData.ExpiresIn,
             PollingIntervalSeconds = deviceData.Interval > 0 ? deviceData.Interval : 5,
         };
+    }
+
+    /// <summary>Backoff base (ms) between transient device-flow retries; multiplied by the attempt number.</summary>
+    private const int RetryBackoffMs = 500;
+
+    /// <summary>
+    /// POST an OAuth request with bounded retry. Retries ONLY transient failures — 5xx responses
+    /// (per <see cref="Setup.DeviceFlowRetryPolicy"/>) and transient network errors — up to three
+    /// attempts. 4xx responses (including 400) are terminal and never retried (the user's explicit
+    /// rule). On a terminal non-success, reads GitHub's body and throws a
+    /// <see cref="Setup.CopilotSetupException"/> carrying the real <c>error_description</c> + status,
+    /// instead of discarding the body via <c>EnsureSuccessStatusCode</c>. Returns a successful
+    /// response that the caller must dispose.
+    /// </summary>
+    private static async Task<HttpResponseMessage> SendOAuthWithRetryAsync(
+        HttpClient httpClient, Func<HttpRequestMessage> requestFactory, string host, CancellationToken cancellationToken)
+    {
+        const int maxAttempts = 3;
+        for (var attempt = 1; ; attempt++)
+        {
+            using var request = requestFactory();
+            HttpResponseMessage response;
+            try
+            {
+                response = await httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            }
+            catch (HttpRequestException) when (attempt < maxAttempts)
+            {
+                await Task.Delay(RetryBackoffMs * attempt, cancellationToken).ConfigureAwait(false);
+                continue;
+            }
+
+            if (response.IsSuccessStatusCode)
+            {
+                return response;
+            }
+
+            if (Setup.DeviceFlowRetryPolicy.IsTransient(response.StatusCode) && attempt < maxAttempts)
+            {
+                response.Dispose();
+                await Task.Delay(RetryBackoffMs * attempt, cancellationToken).ConfigureAwait(false);
+                continue;
+            }
+
+            var errorBody = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            var status = (int)response.StatusCode;
+            response.Dispose();
+
+            var described = Setup.GitHubErrorParser.Describe(errorBody);
+            var message = described is not null
+                ? $"GitHub returned HTTP {status}: {described}"
+                : $"GitHub returned HTTP {status}.";
+            throw new Setup.CopilotSetupException(message, host, status);
+        }
     }
 
     /// <summary>
@@ -189,11 +250,11 @@ public static class SetupHelpers
     /// </param>
     /// <param name="cancellationToken">Cancellation token.</param>
     public static async Task<CopilotPollResult> PollCopilotTokenAsync(
-        string deviceCode, HttpClient httpClient, string? clientId = null, CancellationToken cancellationToken = default)
+        string deviceCode, HttpClient httpClient, string? clientId = null, string? githubBaseUrl = null, CancellationToken cancellationToken = default)
     {
         var effectiveClientId = string.IsNullOrWhiteSpace(clientId) ? DefaultCopilotOAuthClientId : clientId;
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, "https://github.com/login/oauth/access_token");
+        using var request = new HttpRequestMessage(HttpMethod.Post, Setup.GitHubOAuthUrls.AccessTokenUrl(githubBaseUrl));
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         request.Headers.UserAgent.ParseAdd("cortex-agent/1.0.0");
         request.Content = new StringContent(
@@ -208,7 +269,14 @@ public static class SetupHelpers
         using var response = await httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
-            return new CopilotPollResult { Status = "failed" };
+            // Surface GitHub's real error instead of a bare "failed" so the wizard can show why
+            // (e.g. device_flow_disabled, incorrect_client_credentials).
+            var errorBody = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            return new CopilotPollResult
+            {
+                Status = "failed",
+                Error = Setup.GitHubErrorParser.Describe(errorBody) ?? $"GitHub returned HTTP {(int)response.StatusCode}.",
+            };
         }
 
         var json = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
@@ -282,6 +350,12 @@ public static class SetupHelpers
             sb.AppendLine(CultureInfo.InvariantCulture, $"    clientId: {request.ClientId}");
         }
 
+        // Emit githubBaseUrl only when a custom (GitHub Enterprise) host is provided.
+        if (!string.IsNullOrWhiteSpace(request.GithubBaseUrl))
+        {
+            sb.AppendLine(CultureInfo.InvariantCulture, $"    githubBaseUrl: {request.GithubBaseUrl}");
+        }
+
         // Default model is the first selected model
         if (request.Models.Count > 0)
         {
@@ -342,6 +416,11 @@ public static class SetupHelpers
                 !string.Equals(p.ClientId, DefaultCopilotOAuthClientId, StringComparison.Ordinal))
             {
                 sb.AppendLine(CultureInfo.InvariantCulture, $"    clientId: {p.ClientId}");
+            }
+
+            if (!string.IsNullOrWhiteSpace(p.GithubBaseUrl))
+            {
+                sb.AppendLine(CultureInfo.InvariantCulture, $"    githubBaseUrl: {p.GithubBaseUrl}");
             }
 
         if (p.Models.Count > 0)
@@ -715,6 +794,13 @@ public sealed class SetupRequest
     public string? ClientId { get; set; }
 
     /// <summary>
+    /// GitHub auth host (only for <c>github-copilot-api</c>). Null/empty → public github.com;
+    /// set to a GitHub Enterprise host to persist it to <c>cortex.yml</c>.
+    /// </summary>
+    [JsonPropertyName("githubBaseUrl")]
+    public string? GithubBaseUrl { get; set; }
+
+    /// <summary>
     /// OAuth refresh token (only for Anthropic OAuth flow).
     /// Stored encrypted in DPAPI; never written to cortex.yml.
     /// </summary>
@@ -898,6 +984,14 @@ public sealed class CopilotPollResult
     [JsonPropertyName("retryAfterSeconds")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public int RetryAfterSeconds { get; init; }
+
+    /// <summary>
+    /// Human-readable error detail (only set on <c>"failed"</c>) — GitHub's real
+    /// <c>error_description</c> when available, so the wizard can show why instead of a bare "failed".
+    /// </summary>
+    [JsonPropertyName("error")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Error { get; init; }
 }
 
 /// <summary>Request to poll the Copilot OAuth device flow.</summary>
@@ -912,6 +1006,13 @@ public sealed class CopilotPollRequest
     /// </summary>
     [JsonPropertyName("clientId")]
     public string? ClientId { get; set; }
+
+    /// <summary>
+    /// GitHub auth host (e.g. <c>https://your-org.ghe.com</c>) for the access-token exchange.
+    /// Must match the host used to initiate the flow. Null/empty → public <c>github.com</c>.
+    /// </summary>
+    [JsonPropertyName("githubBaseUrl")]
+    public string? GithubBaseUrl { get; set; }
 }
 
 /// <summary>Request to initiate the Copilot OAuth device flow.</summary>
@@ -923,6 +1024,13 @@ public sealed class CopilotAuthRequest
     /// </summary>
     [JsonPropertyName("clientId")]
     public string? ClientId { get; set; }
+
+    /// <summary>
+    /// GitHub auth host (e.g. <c>https://your-org.ghe.com</c>) for the device-code request.
+    /// Null/empty → public <c>github.com</c>. Lets the wizard target a GitHub Enterprise host.
+    /// </summary>
+    [JsonPropertyName("githubBaseUrl")]
+    public string? GithubBaseUrl { get; set; }
 }
 
 // ── Copilot /models API DTOs ───────────────────────────────────────

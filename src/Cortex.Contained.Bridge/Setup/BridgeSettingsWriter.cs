@@ -61,6 +61,11 @@ internal static class BridgeSettingsWriter
                 sb.AppendLine(CultureInfo.InvariantCulture, $"    clientId: {p.ClientId}");
             }
 
+            if (!string.IsNullOrEmpty(p.GithubBaseUrl))
+            {
+                sb.AppendLine(CultureInfo.InvariantCulture, $"    githubBaseUrl: {p.GithubBaseUrl}");
+            }
+
             if (!string.IsNullOrEmpty(p.ApiKeyFrom))
             {
                 sb.AppendLine(CultureInfo.InvariantCulture, $"    apiKeyFrom: {p.ApiKeyFrom}");

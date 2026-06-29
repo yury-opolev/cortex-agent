@@ -25,6 +25,10 @@ const wizardState = {
     deviceCode: null,
     pollTimer: null,
     pollIntervalMs: 5000,
+
+    // GitHub Copilot advanced options (optional)
+    copilotClientId: null,       // overrides the built-in default OAuth App client ID
+    copilotGithubBaseUrl: null,  // overrides public github.com (for GitHub Enterprise)
 };
 
 // ── Utilities ──────────────────────────────────────────────────
@@ -104,6 +108,7 @@ async function loadExistingProviders() {
                 refreshToken: null,
                 tokenExpiresAt: 0,
                 clientId: null,
+                githubBaseUrl: null,
                 models: p.models || [],
                 defaultModel: p.defaultModel || (p.models && p.models[0]) || null,
                 isExisting: true,
@@ -220,6 +225,15 @@ function setupAuthPanel() {
         $("#auth-desc").textContent  = "Cortex needs access to GitHub Copilot. Authorize below — the code will appear in seconds.";
         $("#auth-oauth-section").style.display = "block";
         $("#btn-auth-next").style.display = "none";
+
+        // Reset advanced Copilot options so a second run starts fresh
+        wizardState.copilotClientId = null;
+        wizardState.copilotGithubBaseUrl = null;
+        const clientIdInput     = $("#copilot-client-id-input");
+        const githubBaseUrlInput = $("#copilot-github-base-url-input");
+        if (clientIdInput)     clientIdInput.value     = "";
+        if (githubBaseUrlInput) githubBaseUrlInput.value = "";
+
         startDeviceFlow();
 
     } else if (tmpl.supportsOAuth) {
@@ -489,7 +503,10 @@ async function startDeviceFlow() {
         const resp = await fetch("/api/setup/copilot-auth", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ clientId: wizardState.selectedTemplate?.clientId || null }),
+            body: JSON.stringify({
+                clientId:       wizardState.copilotClientId       || null,
+                githubBaseUrl:  wizardState.copilotGithubBaseUrl  || null,
+            }),
         });
         if (!resp.ok) {
             const err = await resp.json().catch(() => ({}));
@@ -517,8 +534,9 @@ async function pollForToken() {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-                deviceCode: wizardState.deviceCode,
-                clientId:   wizardState.selectedTemplate?.clientId || null,
+                deviceCode:    wizardState.deviceCode,
+                clientId:      wizardState.copilotClientId       || null,
+                githubBaseUrl: wizardState.copilotGithubBaseUrl  || null,
             }),
         });
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -537,7 +555,8 @@ async function pollForToken() {
 
         } else {
             const msgs = { expired: "The code expired. Please try again.", denied: "Authorization was denied.", failed: "Authorization failed. Please try again." };
-            showStatus("#auth-status", msgs[result.status] || "Authorization failed.", "error");
+            // Prefer GitHub's real error (e.g. device_flow_disabled) when the backend surfaces it.
+            showStatus("#auth-status", result.error || msgs[result.status] || "Authorization failed.", "error");
             resetOAuthUI();
         }
     } catch (err) {
@@ -747,7 +766,8 @@ function addProviderToList() {
         apiKey:       wizardState.apiKey,
         refreshToken: wizardState.anthropicRefreshToken,
         tokenExpiresAt: wizardState.anthropicTokenExpiresAt,
-        clientId:     null,
+        clientId:     wizardState.copilotClientId      || null,
+        githubBaseUrl: wizardState.copilotGithubBaseUrl || null,
         models:       orderedModels,
         defaultModel: wizardState.defaultModel,
         isExisting:   false,
@@ -768,6 +788,8 @@ function resetSubFlow() {
     wizardState.anthropicRefreshToken   = null;
     wizardState.anthropicTokenExpiresAt = 0;
     wizardState.anthropicAuthMode       = "apikey";
+    wizardState.copilotClientId         = null;
+    wizardState.copilotGithubBaseUrl    = null;
     stopDeviceFlow();
 }
 
@@ -849,6 +871,7 @@ async function saveSetup() {
         refreshToken:   p.refreshToken   || null,
         tokenExpiresAt: p.tokenExpiresAt || 0,
         clientId:       p.clientId       || null,
+        githubBaseUrl:  p.githubBaseUrl  || null,
         models:         p.models,
         isExisting:     p.isExisting,
     }));
@@ -919,6 +942,14 @@ function initEvents() {
         if (e.key === "Enter") { e.preventDefault(); if (!$("#btn-anthropic-connect").disabled) exchangeAnthropicCode(); }
     });
     $("#btn-anthropic-connect").addEventListener("click", exchangeAnthropicCode);
+
+    // Copilot advanced options — keep wizardState in sync as the user types
+    $("#copilot-client-id-input").addEventListener("input", e => {
+        wizardState.copilotClientId = e.target.value.trim() || null;
+    });
+    $("#copilot-github-base-url-input").addEventListener("input", e => {
+        wizardState.copilotGithubBaseUrl = e.target.value.trim() || null;
+    });
 
     // Copilot device flow
     $("#btn-start-flow").addEventListener("click", startDeviceFlow);
