@@ -315,10 +315,14 @@ internal static class SetupEndpoints
                     {
                         Name = providerName,
                         Api = SetupHelpers.ResolveApi(p.Provider),
-                        BaseUrl = SetupHelpers.ResolveBaseUrl(p.Provider),
+                        // Derive the inference/models host from the GitHub host so a GHE tenant
+                        // persists baseUrl = copilot-api.<host> (else the runtime hits the public
+                        // host with a GHE token → 401, forcing a manual tenant-settings fix).
+                        BaseUrl = SetupHelpers.ResolveBaseUrl(p.Provider, p.GithubBaseUrl),
                         ApiKey = p.ApiKey,
                         TokenType = tokenType,
                         ClientId = p.ClientId,
+                        GithubBaseUrl = p.GithubBaseUrl,
                         RefreshToken = p.RefreshToken,
                         TokenExpiresAt = p.TokenExpiresAt,
                         Models = p.Models,

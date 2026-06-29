@@ -592,6 +592,79 @@ h1, h2, h3, h4, h5, h6 { letter-spacing: -0.011em; }
     background: var(--danger-subtle);
 }
 
+/* ── Queued messages — type-ahead queue ──────────────────── */
+
+/* The whole message row dims to signal it is not yet sent. */
+.msg-queued {
+    opacity: 0.55;
+    transition: opacity var(--transition);
+}
+
+/* Show the queued label and action buttons on hover so the row
+   does not feel cluttered in a long queue. */
+.msg-queued:hover {
+    opacity: 0.85;
+}
+
+/* Small "queued" tag sits below the bubble text. */
+.msg-queued-label {
+    font-size: var(--text-2xs);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--ink-faint);
+    margin-top: var(--space-xs);
+    user-select: none;
+}
+
+/* Cancel / edit buttons — hidden until the row is hovered. */
+.msg-queued-actions {
+    display: flex;
+    gap: var(--space-xs);
+    margin-top: var(--space-xs);
+    opacity: 0;
+    transition: opacity var(--transition);
+}
+
+.msg-queued:hover .msg-queued-actions {
+    opacity: 1;
+}
+
+.msg-queued-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius-xs);
+    background: transparent;
+    color: var(--ink-faint);
+    cursor: pointer;
+    font-size: var(--text-sm);
+    line-height: 1;
+    transition: color var(--transition), border-color var(--transition), background var(--transition);
+}
+
+.msg-queued-edit:hover {
+    color: var(--accent-text);
+    border-color: var(--accent);
+    background: var(--accent-subtle);
+}
+
+.msg-queued-cancel:hover {
+    color: var(--danger);
+    border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+    background: var(--danger-subtle);
+}
+
+/* Stale queued bubbles (connection lost before dispatch). */
+.msg-queued-stale .msg-queued-label::after {
+    content: " · disconnected";
+    color: var(--danger);
+}
+
 .msg-time {
     font-size: var(--text-xs);
     color: var(--text-muted);

@@ -15,6 +15,8 @@ const state = {
     connection: null,
     isStreaming: false,
     streamingText: "",
+    messageQueue: [],   // Array of { id, text }
+    queueCounter: 0,    // Monotonic counter for stable queue item IDs
 };
 
 // -- DOM Elements (resolved lazily during initChat) -------------------
@@ -202,7 +204,7 @@ function setStreamingState(streaming) {
 }
 
 function updateSendButton() {
-    sendBtn.disabled = !messageInput.value.trim() || state.isStreaming;
+    sendBtn.disabled = !messageInput.value.trim();
 }
 
 function setConnectionStatus(status) {
@@ -260,20 +262,117 @@ async function loadHistory() {
 // -- Send Message -----------------------------------------------------
 async function sendMessage() {
     const text = messageInput.value.trim();
-    if (!text || state.isStreaming) return;
+    if (!text) return;
 
     // Clear input
     messageInput.value = "";
     autoResizeInput();
     updateSendButton();
 
-    // Show user message immediately
-    appendMessage("user", text);
-
     // Ensure chat is visible
     messagesContainer.classList.add("active");
 
-    // Start streaming state
+    // If a turn is in flight, or the queue is non-empty (preserve order),
+    // enqueue the message and show a greyed "queued" bubble.
+    if (state.isStreaming || state.messageQueue.length > 0) {
+        const queueId = ++state.queueCounter;
+        const el = appendQueuedMessage(text, queueId);
+        state.messageQueue.push({ id: queueId, text, el });
+        return;
+    }
+
+    // No turn in flight — render bubble immediately and dispatch.
+    appendMessage("user", text);
+    await dispatchMessage(text);
+}
+
+// Renders a user-aligned bubble in the "queued" state with cancel/edit affordances.
+function appendQueuedMessage(text, queueId) {
+    const msg = document.createElement("div");
+    msg.className = "msg msg-user msg-queued";
+    msg.dataset.queueId = queueId;
+
+    const bubble = document.createElement("div");
+    bubble.className = "msg-bubble msg-bubble-user";
+
+    const content = document.createElement("div");
+    content.className = "message-content";
+    content.textContent = text;
+
+    const queueLabel = document.createElement("div");
+    queueLabel.className = "msg-queued-label";
+    queueLabel.textContent = "queued";
+
+    const actions = document.createElement("div");
+    actions.className = "msg-queued-actions";
+
+    const editBtn = document.createElement("button");
+    editBtn.type = "button";
+    editBtn.className = "msg-queued-btn msg-queued-edit";
+    editBtn.title = "Edit queued message";
+    editBtn.innerHTML = '<i class="bi bi-pencil"></i>';
+    editBtn.addEventListener("click", () => editQueued(queueId, text));
+
+    const cancelBtn = document.createElement("button");
+    cancelBtn.type = "button";
+    cancelBtn.className = "msg-queued-btn msg-queued-cancel";
+    cancelBtn.title = "Cancel queued message";
+    cancelBtn.innerHTML = '<i class="bi bi-x"></i>';
+    cancelBtn.addEventListener("click", () => cancelQueued(queueId));
+
+    actions.appendChild(editBtn);
+    actions.appendChild(cancelBtn);
+
+    bubble.appendChild(content);
+    bubble.appendChild(queueLabel);
+    bubble.appendChild(actions);
+    msg.appendChild(bubble);
+
+    // Timestamp line
+    const timeStr = formatTimestamp(new Date());
+    if (timeStr) {
+        const timeLine = document.createElement("span");
+        timeLine.className = "msg-time";
+        timeLine.textContent = `You · ${timeStr}`;
+        msg.appendChild(timeLine);
+    }
+
+    messagesContainer.appendChild(msg);
+    scrollToBottom();
+    return msg;
+}
+
+// Promote the first queued message to a real send on turn completion.
+async function dispatchNextQueued() {
+    if (state.messageQueue.length === 0) return;
+    if (state.isStreaming) return;
+
+    const next = state.messageQueue.shift();
+
+    // Convert the queued bubble to a normal sent bubble.
+    if (next.el && next.el.parentNode) {
+        next.el.classList.remove("msg-queued");
+        next.el.removeAttribute("data-queue-id");
+        // Remove the queued-specific label and action buttons from the bubble.
+        const bubble = next.el.querySelector(".msg-bubble");
+        if (bubble) {
+            const label = bubble.querySelector(".msg-queued-label");
+            const actionsEl = bubble.querySelector(".msg-queued-actions");
+            if (label) {
+                label.remove();
+            }
+            if (actionsEl) {
+                actionsEl.remove();
+            }
+        }
+    }
+
+    await dispatchMessage(next.text);
+}
+
+// Low-level: invoke SendMessage on the hub. The caller is responsible for
+// rendering the user bubble and setting up streaming state before calling.
+async function dispatchMessage(text) {
     setStreamingState(true);
     state.streamingText = "";
 
@@ -284,6 +383,25 @@ async function sendMessage() {
         setStreamingState(false);
         createErrorMessage("Failed to send message. Please try again.");
     }
+}
+
+// Cancel a queued message: remove from queue array and from DOM.
+function cancelQueued(queueId) {
+    const index = state.messageQueue.findIndex((item) => item.id === queueId);
+    if (index === -1) return; // Already dispatched or not found
+    const [removed] = state.messageQueue.splice(index, 1);
+    if (removed.el && removed.el.parentNode) {
+        removed.el.parentNode.removeChild(removed.el);
+    }
+}
+
+// Edit a queued message: remove from queue, put text back in input.
+function editQueued(queueId, text) {
+    cancelQueued(queueId);
+    messageInput.value = text;
+    autoResizeInput();
+    updateSendButton();
+    messageInput.focus();
 }
 
 // -- Abort Generation -------------------------------------------------
@@ -321,6 +439,7 @@ function buildConnection() {
             appendMessage("assistant", text, messageId);
         }
         setStreamingState(false);
+        dispatchNextQueued().catch((err) => console.error("Queue dispatch failed:", err));
     });
 
     // Typing indicator
@@ -371,6 +490,7 @@ function buildConnection() {
 
         state.streamingText = "";
         setStreamingState(false);
+        dispatchNextQueued().catch((err) => console.error("Queue dispatch failed:", err));
     });
 
     // Error from the hub
@@ -378,6 +498,8 @@ function buildConnection() {
         if (conversationId !== CHANNEL_ID) return;
         setStreamingState(false);
         createErrorMessage(errorMessage);
+        // Still try to dispatch next queued message even after an error.
+        dispatchNextQueued().catch((err) => console.error("Queue dispatch failed:", err));
     });
 
     // -- Connection lifecycle --
@@ -393,6 +515,15 @@ function buildConnection() {
 
     connection.onclose(() => {
         setConnectionStatus("disconnected");
+        // Mark any queued-but-unsent bubbles as stale so the user can see
+        // them, but clear the dispatch queue so nothing fires on reconnect.
+        // The bubbles remain visible with their text; the user can re-type.
+        for (const item of state.messageQueue) {
+            if (item.el && item.el.parentNode) {
+                item.el.classList.add("msg-queued-stale");
+            }
+        }
+        state.messageQueue = [];
     });
 
     return connection;

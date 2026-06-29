@@ -220,21 +220,34 @@ function setupAuthPanel() {
     $("#btn-auth-next").style.display                 = "";
 
     if (tmpl.authMethod === "oauth") {
-        // GitHub Copilot device flow
+        // GitHub Copilot — show the host-choice sub-step first; device flow starts only after
+        // the user clicks "Connect to GitHub".
         $("#auth-title").textContent = "Connect GitHub Account";
-        $("#auth-desc").textContent  = "Cortex needs access to GitHub Copilot. Authorize below — the code will appear in seconds.";
+        $("#auth-desc").textContent  = "Choose where your GitHub Copilot subscription lives, then click Connect.";
         $("#auth-oauth-section").style.display = "block";
         $("#btn-auth-next").style.display = "none";
 
-        // Reset advanced Copilot options so a second run starts fresh
+        // Reset Copilot options so a second run starts clean
         wizardState.copilotClientId = null;
         wizardState.copilotGithubBaseUrl = null;
-        const clientIdInput     = $("#copilot-client-id-input");
+        const clientIdInput      = $("#copilot-client-id-input");
         const githubBaseUrlInput = $("#copilot-github-base-url-input");
-        if (clientIdInput)     clientIdInput.value     = "";
+        if (clientIdInput)      clientIdInput.value      = "";
         if (githubBaseUrlInput) githubBaseUrlInput.value = "";
 
-        startDeviceFlow();
+        // Reset radio to "Public GitHub" and hide enterprise fields
+        const radioPublic = $("#copilot-host-public");
+        if (radioPublic) radioPublic.checked = true;
+        $("#copilot-enterprise-fields").style.display = "none";
+        $("#copilot-host-error").style.display = "none";
+        $("#copilot-host-error").textContent = "";
+
+        // Show the host-choice step; hide device-flow sections until the user connects
+        $("#copilot-host-choice").style.display = "block";
+        $("#oauth-loading").style.display = "none";
+        $("#oauth-active").style.display  = "none";
+        $("#oauth-idle").style.display    = "none";
+        // Do NOT call startDeviceFlow() here — wait for #btn-copilot-connect click.
 
     } else if (tmpl.supportsOAuth) {
         // Anthropic — toggle between API key and OAuth
@@ -473,6 +486,34 @@ async function exchangeAnthropicCode() {
         btn.disabled  = false;
         btn.textContent = "Connect";
     }
+}
+
+// ── Panel 3: GitHub Copilot — host-choice connect button ──────
+function connectToGitHub() {
+    const isEnterprise = $("#copilot-host-enterprise").checked;
+    const errorEl      = $("#copilot-host-error");
+
+    errorEl.style.display = "none";
+    errorEl.textContent   = "";
+
+    if (isEnterprise) {
+        const hostRaw = ($("#copilot-github-base-url-input").value || "").trim();
+        if (!hostRaw) {
+            errorEl.textContent   = "Please enter your GitHub Enterprise host URL.";
+            errorEl.style.display = "block";
+            return;
+        }
+        wizardState.copilotGithubBaseUrl = hostRaw;
+        wizardState.copilotClientId      = ($("#copilot-client-id-input").value || "").trim() || null;
+    } else {
+        // Public GitHub — clear any previously set values
+        wizardState.copilotGithubBaseUrl = null;
+        wizardState.copilotClientId      = null;
+    }
+
+    // Hide the host-choice step and hand off to the device flow
+    $("#copilot-host-choice").style.display = "none";
+    startDeviceFlow();
 }
 
 // ── Panel 3: GitHub Copilot device flow ───────────────────────
@@ -793,6 +834,27 @@ function resetSubFlow() {
     wizardState.copilotClientId         = null;
     wizardState.copilotGithubBaseUrl    = null;
     stopDeviceFlow();
+
+    // Reset Copilot host-choice UI back to its initial state
+    const radioPublic = $("#copilot-host-public");
+    if (radioPublic) radioPublic.checked = true;
+    const clientIdInput      = $("#copilot-client-id-input");
+    const githubBaseUrlInput = $("#copilot-github-base-url-input");
+    if (clientIdInput)      clientIdInput.value      = "";
+    if (githubBaseUrlInput) githubBaseUrlInput.value = "";
+    const enterpriseFields = $("#copilot-enterprise-fields");
+    if (enterpriseFields) enterpriseFields.style.display = "none";
+    const hostError = $("#copilot-host-error");
+    if (hostError) { hostError.style.display = "none"; hostError.textContent = ""; }
+    const hostChoice = $("#copilot-host-choice");
+    if (hostChoice) hostChoice.style.display = "block";
+    // Ensure device-flow sections are hidden
+    const oauthLoading = $("#oauth-loading");
+    const oauthActive  = $("#oauth-active");
+    const oauthIdle    = $("#oauth-idle");
+    if (oauthLoading) oauthLoading.style.display = "none";
+    if (oauthActive)  oauthActive.style.display  = "none";
+    if (oauthIdle)    oauthIdle.style.display    = "none";
 }
 
 // ── Panel 5: Review & Reorder ─────────────────────────────────
@@ -945,13 +1007,19 @@ function initEvents() {
     });
     $("#btn-anthropic-connect").addEventListener("click", exchangeAnthropicCode);
 
-    // Copilot advanced options — keep wizardState in sync as the user types
-    $("#copilot-client-id-input").addEventListener("input", e => {
-        wizardState.copilotClientId = e.target.value.trim() || null;
+    // Copilot host-choice: reveal/hide enterprise fields when radio changes
+    $$("input[name='copilot-host-type']").forEach(radio => {
+        radio.addEventListener("change", () => {
+            const isEnterprise = $("#copilot-host-enterprise").checked;
+            $("#copilot-enterprise-fields").style.display = isEnterprise ? "flex" : "none";
+            // Clear error when user switches mode
+            $("#copilot-host-error").style.display = "none";
+            $("#copilot-host-error").textContent   = "";
+        });
     });
-    $("#copilot-github-base-url-input").addEventListener("input", e => {
-        wizardState.copilotGithubBaseUrl = e.target.value.trim() || null;
-    });
+
+    // Copilot host-choice connect button — validates host, sets wizardState, starts device flow
+    $("#btn-copilot-connect").addEventListener("click", connectToGitHub);
 
     // Copilot device flow
     $("#btn-start-flow").addEventListener("click", startDeviceFlow);

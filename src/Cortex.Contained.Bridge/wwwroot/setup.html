@@ -142,28 +142,43 @@
 
             <!-- GitHub Copilot device flow -->
             <div id="auth-oauth-section" class="oauth-section">
-                <!-- Advanced (optional) — collapsed by default -->
-                <details class="copilot-advanced" style="margin-bottom:14px">
-                    <summary style="cursor:pointer;font-size:13px;color:var(--text-muted);user-select:none">Advanced (optional)</summary>
-                    <div style="margin-top:10px;display:flex;flex-direction:column;gap:10px">
+                <!-- Step 1: Host choice — shown first, hidden once device flow starts -->
+                <div id="copilot-host-choice">
+                    <p style="font-weight:600;margin-bottom:12px">Where is your GitHub Copilot?</p>
+                    <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px">
+                        <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+                            <input type="radio" name="copilot-host-type" id="copilot-host-public" value="public" checked />
+                            <span>Public GitHub (github.com)</span>
+                        </label>
+                        <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+                            <input type="radio" name="copilot-host-type" id="copilot-host-enterprise" value="enterprise" />
+                            <span>GitHub Enterprise</span>
+                        </label>
+                    </div>
+
+                    <!-- Enterprise-only fields — revealed when "GitHub Enterprise" is selected -->
+                    <div id="copilot-enterprise-fields" style="display:none;flex-direction:column;gap:10px;margin-bottom:16px">
                         <div class="form-group" style="margin-bottom:0">
-                            <label for="copilot-client-id-input" style="font-size:13px">GitHub OAuth App Client ID</label>
+                            <label for="copilot-github-base-url-input" style="font-size:13px">GitHub Enterprise host <span style="color:var(--bs-danger)">*</span></label>
+                            <input type="text" id="copilot-github-base-url-input"
+                                   placeholder="https://your-org.ghe.com"
+                                   autocomplete="off" spellcheck="false" />
+                            <div class="hint">e.g. https://microsoft.ghe.com — used for both authentication and the Copilot inference endpoint.</div>
+                        </div>
+                        <div class="form-group" style="margin-bottom:0">
+                            <label for="copilot-client-id-input" style="font-size:13px">OAuth App Client ID <span style="color:var(--text-muted)">(optional)</span></label>
                             <input type="text" id="copilot-client-id-input"
                                    placeholder="Ov23li..."
                                    autocomplete="off" spellcheck="false" />
                             <div class="hint">Leave blank to use the built-in default.</div>
                         </div>
-                        <div class="form-group" style="margin-bottom:0">
-                            <label for="copilot-github-base-url-input" style="font-size:13px">GitHub Host</label>
-                            <input type="text" id="copilot-github-base-url-input"
-                                   placeholder="https://github.com"
-                                   autocomplete="off" spellcheck="false" />
-                            <div class="hint">For GitHub Enterprise, e.g. https://your-org.ghe.com. Leave blank for public GitHub.</div>
-                        </div>
                     </div>
-                </details>
 
-                <div id="oauth-loading">
+                    <div id="copilot-host-error" style="display:none;color:var(--bs-danger);font-size:13px;margin-bottom:10px"></div>
+                    <button id="btn-copilot-connect" class="btn btn-primary" type="button">Connect to GitHub</button>
+                </div>
+
+                <div id="oauth-loading" style="display:none">
                     <div class="oauth-waiting" style="justify-content:center;padding:24px 0">
                         <div class="spinner-border spinner-border-sm" role="status"></div>
                         <span>Starting authorization…</span>
