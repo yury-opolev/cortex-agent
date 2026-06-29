@@ -127,6 +127,7 @@ internal sealed partial class TurnResponseDelivery
                 FullText = assistantContent,
                 Timestamp = DateTimeOffset.UtcNow,
                 CorrelationId = this.correlationId,
+                IsThinking = true,
             }).ConfigureAwait(false);
         }
 

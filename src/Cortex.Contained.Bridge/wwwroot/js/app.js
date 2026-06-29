@@ -17,6 +17,11 @@ const state = {
     streamingText: "",
     messageQueue: [],   // Array of { id, text }
     queueCounter: 0,    // Monotonic counter for stable queue item IDs
+    // The thinking block for the turn currently in flight. Pre-tool narration
+    // segments ("Let me check…") finalize into this dimmed, collapsible lane
+    // instead of overwriting the answer bubble. Reset when an answer finalizes
+    // or a new user message is sent.
+    thinkingBlock: null,
 };
 
 // -- DOM Elements (resolved lazily during initChat) -------------------
@@ -184,6 +189,69 @@ function createErrorMessage(text) {
     scrollToBottom();
 }
 
+// -- Thinking lane ----------------------------------------------------
+// Pre-tool narration ("Let me check the log first.") arrives as a thinking
+// finalize. Rather than leaving it in the answer bubble (where the next
+// segment overwrites it — the "appears and disappears" flicker), it is moved
+// into a dimmed, collapsible "Thinking" block attached to the current turn.
+// Multiple thinking segments in one turn append into the same block.
+
+// Creates the per-turn thinking block at `anchor`'s position (or appended to
+// the messages container) and stores it on state.thinkingBlock.
+function createThinkingBlock(anchor) {
+    const block = document.createElement("div");
+    block.className = "thinking-block collapsed";
+
+    const header = document.createElement("button");
+    header.type = "button";
+    header.className = "thinking-header";
+    header.innerHTML = '<i class="bi bi-chevron-right thinking-chevron"></i><span class="thinking-title">Thinking</span>';
+    header.addEventListener("click", () => {
+        block.classList.toggle("collapsed");
+    });
+
+    const body = document.createElement("div");
+    body.className = "thinking-body";
+
+    block.appendChild(header);
+    block.appendChild(body);
+
+    if (anchor && anchor.parentNode === messagesContainer) {
+        messagesContainer.insertBefore(block, anchor);
+    } else {
+        messagesContainer.appendChild(block);
+    }
+
+    return block;
+}
+
+// Appends one thinking segment's text into the current turn's thinking block,
+// creating the block (positioned where `anchor` sits) if needed.
+function appendThinkingSegment(text, anchor) {
+    if (!state.thinkingBlock || !state.thinkingBlock.parentNode) {
+        state.thinkingBlock = createThinkingBlock(anchor);
+    }
+
+    const body = state.thinkingBlock.querySelector(".thinking-body");
+    const segment = document.createElement("div");
+    segment.className = "thinking-segment";
+    segment.innerHTML = renderMarkdown(text);
+    enhanceCodeBlocks(segment);
+    body.appendChild(segment);
+
+    scrollToBottom();
+}
+
+// Collapses (but keeps) the current turn's thinking block and stops tracking it,
+// so the next turn starts a fresh block. Called when an answer finalizes or a
+// new user message is sent.
+function finishThinkingBlock() {
+    if (state.thinkingBlock) {
+        state.thinkingBlock.classList.add("collapsed");
+    }
+    state.thinkingBlock = null;
+}
+
 function scrollToBottom() {
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
 }
@@ -240,6 +308,8 @@ async function loadHistory() {
         const data = await res.json();
         const messages = data?.messages || [];
         messagesContainer.innerHTML = "";
+        // The DOM was just wiped; drop any dangling thinking-block reference.
+        state.thinkingBlock = null;
 
         if (messages && messages.length > 0) {
             // Show chat area
@@ -375,6 +445,9 @@ async function dispatchNextQueued() {
 async function dispatchMessage(text) {
     setStreamingState(true);
     state.streamingText = "";
+    // A new user turn starts: release any prior turn's thinking block so the
+    // next pre-tool segment opens a fresh one positioned in this turn.
+    finishThinkingBlock();
 
     try {
         await state.connection.invoke("SendMessage", CHANNEL_ID, text);
@@ -471,12 +544,29 @@ function buildConnection() {
         scrollToBottom();
     });
 
-    // Streaming finalization
-    connection.on("OnStreamingFinalize", (conversationId, messageId, finalText) => {
+    // Streaming finalization. `isThinking` distinguishes pre-tool narration
+    // (which moves into the dimmed thinking lane) from the final answer.
+    connection.on("OnStreamingFinalize", (conversationId, messageId, finalText, isThinking) => {
         if (conversationId !== CHANNEL_ID) return;
 
-        // Replace streaming message with final version
         const streamingMsg = messagesContainer.querySelector(".msg.msg-agent.streaming");
+
+        if (isThinking) {
+            // Pre-tool segment: move the just-streamed text into the per-turn
+            // thinking block (positioned where the streaming bubble was), then
+            // remove the streaming bubble so the NEXT segment's OnStreamingUpdate
+            // creates a fresh one. The thinking text is never overwritten.
+            appendThinkingSegment(finalText, streamingMsg);
+            if (streamingMsg && streamingMsg.parentNode) {
+                streamingMsg.parentNode.removeChild(streamingMsg);
+            }
+
+            // A thinking segment does not end the turn — keep streaming state on.
+            state.streamingText = "";
+            return;
+        }
+
+        // Final answer: finalize the streaming bubble as the normal message.
         if (streamingMsg) {
             streamingMsg.classList.remove("streaming");
             streamingMsg.dataset.messageId = messageId;
@@ -487,6 +577,9 @@ function buildConnection() {
         } else {
             appendMessage("assistant", finalText, messageId);
         }
+
+        // Collapse and release the turn's thinking block, if any.
+        finishThinkingBlock();
 
         state.streamingText = "";
         setStreamingState(false);

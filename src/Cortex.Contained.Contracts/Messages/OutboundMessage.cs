@@ -22,4 +22,11 @@ public sealed record OutboundMessage
 
     /// <summary>Thread ID, if targeting a thread.</summary>
     public string? ThreadId { get; init; }
+
+    /// <summary>
+    /// When true, this message is pre-tool narration ("thinking") rather than the final
+    /// answer. Streaming channels (web chat) render it in a dimmed, collapsible lane;
+    /// non-streaming channels (Discord/voice) ignore it. Defaults to false.
+    /// </summary>
+    public bool IsThinking { get; init; }
 }

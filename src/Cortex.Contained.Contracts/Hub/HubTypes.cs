@@ -70,6 +70,14 @@ public sealed record ResponseCompleteMessage
     /// Defaults to <see cref="MessageCategory.Normal"/>.
     /// </summary>
     public MessageCategory Category { get; init; }
+
+    /// <summary>
+    /// When true, this segment is pre-tool narration (e.g. "Let me check the log first.")
+    /// rather than the final answer. The web chat renders thinking segments in a dimmed,
+    /// collapsible lane so they are never overwritten by later segments. Defaults to false;
+    /// finalize-only channels (Discord/voice) ignore it.
+    /// </summary>
+    public bool IsThinking { get; init; }
 }
 
 /// <summary>

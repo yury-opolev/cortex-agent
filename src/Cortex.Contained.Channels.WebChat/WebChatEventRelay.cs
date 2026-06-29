@@ -86,7 +86,8 @@ public sealed partial class WebChatEventRelay : IHostedService
             "OnStreamingFinalize",
             conversationId,
             finalMessage.MessageId,
-            finalMessage.Content.Text ?? string.Empty).ConfigureAwait(false);
+            finalMessage.Content.Text ?? string.Empty,
+            finalMessage.IsThinking).ConfigureAwait(false);
     }
 
     // ── LoggerMessage source-generated methods ───────────────────────
