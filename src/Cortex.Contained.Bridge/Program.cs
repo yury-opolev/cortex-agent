@@ -659,6 +659,67 @@ if (discordConfig is { Enabled: true })
     }
 }
 
+// --- Cloud Messaging Channel (AI Messenger cloud service connector) ---
+// Off by default: requires channels:cloud-messaging:enabled: true in cortex.yml.
+// Credentials: ServiceBaseUrl from settings; bridge token via DPAPI key "cloud-messaging-bridge-token".
+var cloudMsgConfig = earlyConfig.Channels.GetValueOrDefault("cloud-messaging");
+if (cloudMsgConfig is { Enabled: true })
+{
+    var serviceBaseUrl = cloudMsgConfig.Settings.GetValueOrDefault("ServiceBaseUrl") ?? "";
+    if (!string.IsNullOrWhiteSpace(serviceBaseUrl))
+    {
+        var bridgeToken = secretManager.GetApiKey("cloud-messaging-bridge-token") ?? "";
+
+        if (!string.IsNullOrWhiteSpace(bridgeToken))
+        {
+            var channelId = cloudMsgConfig.Settings.GetValueOrDefault("ChannelId")
+                ?? "cloud-messaging-default";
+
+            var channelOptions = new Cortex.Contained.Channels.CloudMessaging.CloudMessagingChannelOptions
+            {
+                ChannelId = channelId,
+                ServiceBaseUrl = serviceBaseUrl,
+            };
+
+            builder.Services.AddSingleton(channelOptions);
+
+            builder.Services.AddSingleton<Cortex.Contained.Channels.CloudMessaging.Auth.IBridgeCredentialProvider>(
+                _ => new Cortex.Contained.Channels.CloudMessaging.Auth.StaticTokenBridgeCredentialProvider(bridgeToken));
+
+            builder.Services.AddHttpClient("cloud-messaging-negotiate", c =>
+            {
+                c.Timeout = TimeSpan.FromSeconds(30);
+            });
+
+            builder.Services.AddSingleton<Cortex.Contained.Channels.CloudMessaging.Negotiate.ICloudNegotiateClient>(sp =>
+                new Cortex.Contained.Channels.CloudMessaging.Negotiate.CloudNegotiateClient(
+                    sp.GetRequiredService<IHttpClientFactory>().CreateClient("cloud-messaging-negotiate"),
+                    sp.GetRequiredService<Cortex.Contained.Channels.CloudMessaging.Auth.IBridgeCredentialProvider>(),
+                    serviceBaseUrl));
+
+            builder.Services.AddSingleton<Cortex.Contained.Channels.CloudMessaging.Transport.ICloudTransport>(
+                _ => new Cortex.Contained.Channels.CloudMessaging.Transport.WebSocketCloudTransport());
+
+            builder.Services.AddSingleton<Cortex.Contained.Channels.CloudMessaging.CloudMessagingChannel>(sp =>
+                new Cortex.Contained.Channels.CloudMessaging.CloudMessagingChannel(
+                    sp.GetRequiredService<ILogger<Cortex.Contained.Channels.CloudMessaging.CloudMessagingChannel>>(),
+                    sp.GetRequiredService<Cortex.Contained.Channels.CloudMessaging.CloudMessagingChannelOptions>(),
+                    sp.GetRequiredService<Cortex.Contained.Channels.CloudMessaging.Negotiate.ICloudNegotiateClient>(),
+                    sp.GetRequiredService<Cortex.Contained.Channels.CloudMessaging.Transport.ICloudTransport>(),
+                    sp.GetRequiredService<Cortex.Contained.Channels.WebChat.WebChatChannel>()));
+        }
+        else
+        {
+            Console.WriteLine("[WARNING] Cloud messaging channel is enabled but no bridge token is stored. " +
+                "Store it via DPAPI key 'cloud-messaging-bridge-token' using SecretManager.");
+        }
+    }
+    else
+    {
+        Console.WriteLine("[WARNING] Cloud messaging channel is enabled but 'ServiceBaseUrl' is not set in channels:cloud-messaging:settings.");
+    }
+}
+
 // --- Voice speaker identification (Bridge-side cache) ---
 // The cache resolves per-tenant HubClient instances via TenantRouter on every
 // call, since HubClient is per-tenant (not a singleton in DI).
