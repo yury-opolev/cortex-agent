@@ -8,6 +8,12 @@ namespace Cortex.Contained.Channels.CloudMessaging.Tests.Negotiate;
 /// <summary>
 /// Tests for <see cref="CloudNegotiateClient"/> using a fake HTTP handler
 /// to avoid any network dependency.
+/// The negotiate client now uses a two-step S2S flow:
+/// <list type="number">
+///   <item><see cref="IBridgeCredentialProvider.GetTokenAsync"/> returns a short-lived S2S bearer
+///   (the provider internally handles the <c>POST /oauth2/token</c> assertion exchange).</item>
+///   <item><c>POST /negotiate-bridge</c> with that bearer returns <c>{ "hubUrl": "...", "tenants": [...] }</c>.</item>
+/// </list>
 /// </summary>
 public class CloudNegotiateClientTests
 {
@@ -24,18 +30,34 @@ public class CloudNegotiateClientTests
         return new CloudNegotiateClient(httpClient, credentialProvider, BaseUrl);
     }
 
+    // ── Shape: { "hubUrl": "...", "tenants": [...] } ──────────────────
+
     [Fact]
-    public async Task NegotiateAsync_SuccessResponse_ReturnsUrlAndTenants()
+    public async Task NegotiateAsync_SuccessResponse_ReturnsHubUrlAndTenants()
     {
-        var json = """{"url":"wss://wps.example.com/client?access_token=abc","tenants":["t1","t2"]}""";
+        // The service now returns hubUrl (a path) + tenants.
+        var json = """{"hubUrl":"/hub","tenants":["t1","t2"]}""";
         var client = MakeClient(HttpStatusCode.OK, json);
 
         var result = await client.NegotiateAsync();
 
-        Assert.Equal("wss://wps.example.com/client?access_token=abc", result.Url);
+        // The client should build a fully-qualified URL: serviceBaseUrl + hubUrl
+        Assert.Equal("https://service.example.com/hub", result.HubUrl);
         Assert.Equal(2, result.Tenants.Count);
         Assert.Contains("t1", result.Tenants);
         Assert.Contains("t2", result.Tenants);
+    }
+
+    [Fact]
+    public async Task NegotiateAsync_AbsoluteHubUrl_ReturnedAsIs()
+    {
+        // If the service already returns an absolute URL, do not double-prefix.
+        var json = """{"hubUrl":"https://custom.example.com/hub","tenants":["t1"]}""";
+        var client = MakeClient(HttpStatusCode.OK, json);
+
+        var result = await client.NegotiateAsync();
+
+        Assert.Equal("https://custom.example.com/hub", result.HubUrl);
     }
 
     [Fact]
@@ -49,27 +71,29 @@ public class CloudNegotiateClientTests
     [Fact]
     public async Task NegotiateAsync_EmptyTenants_Throws()
     {
-        var json = """{"url":"wss://wps.example.com/client?access_token=abc","tenants":[]}""";
+        var json = """{"hubUrl":"/hub","tenants":[]}""";
         var client = MakeClient(HttpStatusCode.OK, json);
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => client.NegotiateAsync());
     }
 
     [Fact]
-    public async Task NegotiateAsync_MissingUrl_Throws()
+    public async Task NegotiateAsync_MissingHubUrl_Throws()
     {
-        var json = """{"url":"","tenants":["t1"]}""";
+        var json = """{"hubUrl":"","tenants":["t1"]}""";
         var client = MakeClient(HttpStatusCode.OK, json);
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => client.NegotiateAsync());
     }
+
+    // ── Token forwarding ──────────────────────────────────────────────
 
     [Fact]
     public async Task NegotiateAsync_SendsBearerToken()
     {
         var captureHandler = new CapturingHttpMessageHandler(
             HttpStatusCode.OK,
-            """{"url":"wss://x.example.com","tenants":["t1"]}""");
+            """{"hubUrl":"/hub","tenants":["t1"]}""");
 
         var httpClient = new HttpClient(captureHandler);
         var credentialProvider = new StaticTokenBridgeCredentialProvider(FakeToken);

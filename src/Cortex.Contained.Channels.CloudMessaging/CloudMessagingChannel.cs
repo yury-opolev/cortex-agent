@@ -14,8 +14,11 @@ namespace Cortex.Contained.Channels.CloudMessaging;
 
 /// <summary>
 /// Outbound <see cref="IChannel"/> that connects the home Bridge to the AI Messenger
-/// cloud service (Azure Web PubSub). Authenticates via a bridge credential, calls
-/// <c>POST /negotiate-bridge</c> to obtain a group-scoped Web PubSub URL, and then:
+/// cloud service (self-hosted SignalR). Authenticates via a two-step S2S flow
+/// (<c>POST /oauth2/token</c> with a <c>private_key_jwt</c> assertion, then
+/// <c>POST /negotiate-bridge</c>), then connects a <see cref="Microsoft.AspNetCore.SignalR.Client.HubConnection"/>
+/// to the returned hub URL. Inbound frames arrive via the hub's <c>"receive"</c> method;
+/// outbound frames are sent via <c>"SendFrame"</c>.
 /// <list type="bullet">
 ///   <item>Inbound: user "text" envelopes → <see cref="WebChatChannel.ReceiveFromBrowserAsync"/>.</item>
 ///   <item>Outbound: <see cref="WebChatChannel"/> events → cloud envelope frames sent to the tenant group.</item>
@@ -234,7 +237,7 @@ public sealed partial class CloudMessagingChannel : IChannelWithStreaming
                 this.allowedTenants = negotiateResult.Tenants;
                 this.LogNegotiated(this.ChannelId, negotiateResult.Tenants.Count);
 
-                await this.transport.ConnectAsync(negotiateResult.Url, ct).ConfigureAwait(false);
+                await this.transport.ConnectAsync(negotiateResult.HubUrl, ct).ConfigureAwait(false);
 
                 this.SetStatus(ChannelStatus.Connected, "Connected to cloud service");
                 this.LogConnected(this.ChannelId);

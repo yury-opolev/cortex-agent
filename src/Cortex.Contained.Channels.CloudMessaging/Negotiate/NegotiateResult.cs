@@ -1,17 +1,18 @@
 namespace Cortex.Contained.Channels.CloudMessaging.Negotiate;
 
 /// <summary>
-/// Result returned by <c>POST /negotiate-bridge</c>.
-/// The service issues a Web PubSub client URL scoped to the tenant groups
-/// this bridge serves, and returns the resolved tenant list.
+/// Result returned by the two-step S2S negotiate flow
+/// (<c>POST /oauth2/token</c> → <c>POST /negotiate-bridge</c>).
+/// <see cref="HubUrl"/> is the fully-qualified SignalR hub URL the bridge should
+/// connect to (e.g. <c>https://api.example.com/hub</c>).
 /// </summary>
 public sealed record NegotiateResult
 {
     /// <summary>
-    /// Web PubSub client WebSocket URL with embedded access token.
-    /// Connect directly — no separate auth header needed.
+    /// Fully-qualified SignalR hub URL (scheme + host + path).
+    /// Pass as the first argument to <see cref="Microsoft.AspNetCore.SignalR.Client.HubConnection"/>.
     /// </summary>
-    public required string Url { get; init; }
+    public required string HubUrl { get; init; }
 
     /// <summary>
     /// Tenant IDs this bridge is authorised to serve (returned by the service).
