@@ -661,16 +661,23 @@ if (discordConfig is { Enabled: true })
 
 // --- Cloud Messaging Channel (AI Messenger cloud service connector) ---
 // Off by default: requires channels:cloud-messaging:enabled: true in cortex.yml.
-// Credentials: ServiceBaseUrl from settings; bridge token via DPAPI key "cloud-messaging-bridge-token".
+// Credentials (all required):
+//   channels:cloud-messaging:settings:ClientId    — the bridge's registered OAuth client ID.
+//   channels:cloud-messaging:settings:ServiceBaseUrl — AI Messenger service base URL.
+//   DPAPI secret "cloud-messaging-private-key"    — PEM-encoded RSA private key for private_key_jwt.
+//     Store it via: SecretManager.StoreApiKey("cloud-messaging-private-key", "<pem>")
+// The Bridge exchanges a signed JWT assertion for a short-lived S2S access token
+// via POST {ServiceBaseUrl}/oauth2/token, then connects to the SignalR hub.
 var cloudMsgConfig = earlyConfig.Channels.GetValueOrDefault("cloud-messaging");
 if (cloudMsgConfig is { Enabled: true })
 {
     var serviceBaseUrl = cloudMsgConfig.Settings.GetValueOrDefault("ServiceBaseUrl") ?? "";
     if (!string.IsNullOrWhiteSpace(serviceBaseUrl))
     {
-        var bridgeToken = secretManager.GetApiKey("cloud-messaging-bridge-token") ?? "";
+        var cloudMsgClientId = cloudMsgConfig.Settings.GetValueOrDefault("ClientId") ?? "";
+        var cloudMsgPrivateKeyPem = secretManager.GetApiKey("cloud-messaging-private-key") ?? "";
 
-        if (!string.IsNullOrWhiteSpace(bridgeToken))
+        if (!string.IsNullOrWhiteSpace(cloudMsgClientId) && !string.IsNullOrWhiteSpace(cloudMsgPrivateKeyPem))
         {
             var channelId = cloudMsgConfig.Settings.GetValueOrDefault("ChannelId")
                 ?? "cloud-messaging-default";
@@ -683,13 +690,22 @@ if (cloudMsgConfig is { Enabled: true })
 
             builder.Services.AddSingleton(channelOptions);
 
-            builder.Services.AddSingleton<Cortex.Contained.Channels.CloudMessaging.Auth.IBridgeCredentialProvider>(
-                _ => new Cortex.Contained.Channels.CloudMessaging.Auth.StaticTokenBridgeCredentialProvider(bridgeToken));
+            builder.Services.AddHttpClient("cloud-messaging-token", c =>
+            {
+                c.Timeout = TimeSpan.FromSeconds(30);
+            });
 
             builder.Services.AddHttpClient("cloud-messaging-negotiate", c =>
             {
                 c.Timeout = TimeSpan.FromSeconds(30);
             });
+
+            builder.Services.AddSingleton<Cortex.Contained.Channels.CloudMessaging.Auth.IBridgeCredentialProvider>(sp =>
+                new Cortex.Contained.Channels.CloudMessaging.Auth.PrivateKeyJwtBridgeCredentialProvider(
+                    sp.GetRequiredService<IHttpClientFactory>().CreateClient("cloud-messaging-token"),
+                    tokenEndpointUrl: serviceBaseUrl.TrimEnd('/') + "/oauth2/token",
+                    clientId: cloudMsgClientId,
+                    rsaPrivateKeyPem: cloudMsgPrivateKeyPem));
 
             builder.Services.AddSingleton<Cortex.Contained.Channels.CloudMessaging.Negotiate.ICloudNegotiateClient>(sp =>
                 new Cortex.Contained.Channels.CloudMessaging.Negotiate.CloudNegotiateClient(
@@ -697,8 +713,11 @@ if (cloudMsgConfig is { Enabled: true })
                     sp.GetRequiredService<Cortex.Contained.Channels.CloudMessaging.Auth.IBridgeCredentialProvider>(),
                     serviceBaseUrl));
 
-            builder.Services.AddSingleton<Cortex.Contained.Channels.CloudMessaging.Transport.ICloudTransport>(
-                _ => new Cortex.Contained.Channels.CloudMessaging.Transport.WebSocketCloudTransport());
+            builder.Services.AddSingleton<Cortex.Contained.Channels.CloudMessaging.Transport.ICloudTransport>(sp =>
+                new Cortex.Contained.Channels.CloudMessaging.Transport.SignalRCloudTransport(
+                    async () => (string?)await sp.GetRequiredService<Cortex.Contained.Channels.CloudMessaging.Auth.IBridgeCredentialProvider>()
+                                                  .GetTokenAsync().ConfigureAwait(false),
+                    sp.GetRequiredService<ILogger<Cortex.Contained.Channels.CloudMessaging.Transport.SignalRCloudTransport>>()));
 
             builder.Services.AddSingleton<Cortex.Contained.Channels.CloudMessaging.CloudMessagingChannel>(sp =>
                 new Cortex.Contained.Channels.CloudMessaging.CloudMessagingChannel(
@@ -710,8 +729,9 @@ if (cloudMsgConfig is { Enabled: true })
         }
         else
         {
-            Console.WriteLine("[WARNING] Cloud messaging channel is enabled but no bridge token is stored. " +
-                "Store it via DPAPI key 'cloud-messaging-bridge-token' using SecretManager.");
+            Console.WriteLine("[WARNING] Cloud messaging channel is enabled but client credentials are missing. " +
+                "Set 'ClientId' in channels:cloud-messaging:settings and store the RSA private key via " +
+                "DPAPI key 'cloud-messaging-private-key' using SecretManager.");
         }
     }
     else

@@ -26,7 +26,8 @@ public class CloudNegotiateClientTests
     {
         var handler = new FakeHttpMessageHandler(statusCode, responseBody);
         var httpClient = new HttpClient(handler);
-        var credentialProvider = new StaticTokenBridgeCredentialProvider(FakeToken);
+        var credentialProvider = Substitute.For<IBridgeCredentialProvider>();
+        credentialProvider.GetTokenAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(FakeToken));
         return new CloudNegotiateClient(httpClient, credentialProvider, BaseUrl);
     }
 
@@ -96,7 +97,8 @@ public class CloudNegotiateClientTests
             """{"hubUrl":"/hub","tenants":["t1"]}""");
 
         var httpClient = new HttpClient(captureHandler);
-        var credentialProvider = new StaticTokenBridgeCredentialProvider(FakeToken);
+        var credentialProvider = Substitute.For<IBridgeCredentialProvider>();
+        credentialProvider.GetTokenAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(FakeToken));
         var client = new CloudNegotiateClient(httpClient, credentialProvider, BaseUrl);
 
         _ = await client.NegotiateAsync();
