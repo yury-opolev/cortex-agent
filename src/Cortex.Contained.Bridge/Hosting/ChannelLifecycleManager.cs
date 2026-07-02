@@ -1,6 +1,7 @@
 using Cortex.Contained.Bridge.Channels;
 using Cortex.Contained.Bridge.Hub;
 using Cortex.Contained.Bridge.Recording;
+using Cortex.Contained.Channels.CloudMessaging;
 using Cortex.Contained.Channels.Discord;
 using Cortex.Contained.Channels.Voice;
 using Cortex.Contained.Channels.WebChat;
@@ -27,6 +28,7 @@ public sealed partial class ChannelLifecycleManager
     private readonly VoiceChannel? voiceChannel;
     private readonly DiscordChannel? discordChannel;
     private readonly DiscordChannelOptions? discordOptions;
+    private readonly CloudMessagingChannel? cloudMessagingChannel;
     private readonly BridgeConfig config;
     private readonly Cortex.Contained.Speech.SpeakerId.ISpeakerVerifier? speakerVerifier;
     private readonly Cortex.Contained.Speech.SpeakerId.VerificationMetrics verificationMetrics;
@@ -53,7 +55,8 @@ public sealed partial class ChannelLifecycleManager
         IRecordingController? recordingController = null,
         Cortex.Contained.Speech.SpeakerId.ISpeakerEmbedder? speakerEmbedder = null,
         Cortex.Contained.Speech.Tts.ILanguageDetector? languageDetector = null,
-        Cortex.Contained.Speech.Tts.ChannelLanguageStore? languageStore = null)
+        Cortex.Contained.Speech.Tts.ChannelLanguageStore? languageStore = null,
+        CloudMessagingChannel? cloudMessagingChannel = null)
     {
         this.tenantRouter = tenantRouter;
         this.tenantRegistry = tenantRegistry;
@@ -64,6 +67,7 @@ public sealed partial class ChannelLifecycleManager
         this.voiceChannel = voiceChannel;
         this.discordChannel = discordChannel;
         this.discordOptions = discordOptions;
+        this.cloudMessagingChannel = cloudMessagingChannel;
         this.speakerVerifier = speakerVerifier;
         this.verificationMetrics = verificationMetrics ?? new Cortex.Contained.Speech.SpeakerId.VerificationMetrics();
         this.enrollmentProgressNotifier = enrollmentProgressNotifier;
@@ -85,6 +89,12 @@ public sealed partial class ChannelLifecycleManager
         {
             this.channelManager.RegisterChannel(this.voiceChannel);
             this.LogChannelRegistered("Voice", this.voiceChannel.ChannelId);
+        }
+
+        if (this.cloudMessagingChannel is not null)
+        {
+            this.channelManager.RegisterChannel(this.cloudMessagingChannel);
+            this.LogChannelRegistered("CloudMessaging", this.cloudMessagingChannel.ChannelId);
         }
 
         if (this.discordChannel is not null)

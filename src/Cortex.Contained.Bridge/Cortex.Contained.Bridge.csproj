@@ -16,6 +16,7 @@
 
     <ProjectReference Include="..\Cortex.Contained.Channels.Voice\Cortex.Contained.Channels.Voice.csproj" />
     <ProjectReference Include="..\Cortex.Contained.Channels.Discord\Cortex.Contained.Channels.Discord.csproj" />
+    <ProjectReference Include="..\Cortex.Contained.Channels.CloudMessaging\Cortex.Contained.Channels.CloudMessaging.csproj" />
   </ItemGroup>
 
   <ItemGroup>

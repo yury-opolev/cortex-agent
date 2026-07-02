@@ -7,7 +7,8 @@ public enum ChannelType
     Teams = 2,
     Telegram = 3,
     Voice = 4,
-    Discord = 5
+    Discord = 5,
+    CloudMessaging = 6,
 }
 
 /// <summary>Connection status of a channel.</summary>

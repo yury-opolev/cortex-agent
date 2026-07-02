@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Properties inherited from Directory.Build.props -->
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Cortex.Contained.Channels.CloudMessaging.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Cortex.Contained.Contracts\Cortex.Contained.Contracts.csproj" />
+    <ProjectReference Include="..\Cortex.Contained.Channels.WebChat\Cortex.Contained.Channels.WebChat.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Http" />
+  </ItemGroup>
+
+</Project>
