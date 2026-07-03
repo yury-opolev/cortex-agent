@@ -39,7 +39,9 @@ public sealed class CodaOptions
     /// <summary>
     /// Directory holding the orchestrator-curated <c>.mcp.json</c>, used only when
     /// <see cref="Mcp"/> is <see cref="CodaMcpPolicy.Curated"/>. Exported to the spawned coda as
-    /// <c>CODA_USER_MCP_DIR</c>. When blank, curated mode degrades to host behavior.
+    /// <c>CODA_USER_MCP_DIR</c>, which replaces only the <b>user</b> layer — a project-level
+    /// <c>&lt;cwd&gt;/.mcp.json</c> still loads and overrides it (see <see cref="CodaMcpPolicy.Curated"/>).
+    /// When blank, curated mode degrades to host behavior.
     /// </summary>
     public string? CuratedMcpDir { get; set; }
 

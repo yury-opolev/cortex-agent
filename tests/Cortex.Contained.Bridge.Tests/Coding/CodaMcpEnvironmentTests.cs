@@ -1,9 +1,25 @@
 using Cortex.Contained.Bridge.Coding;
+using Cortex.Contained.Contracts.Coding;
 
 namespace Cortex.Contained.Bridge.Tests.Coding;
 
 public sealed class CodaMcpEnvironmentTests
 {
+    // Locks the policy fan-out: the same policy must drive BOTH the serve args (--no-mcp) and the
+    // process env (CODA_USER_MCP_DIR) consistently — Curated = env only, Off = flag only, Host = neither.
+    [Theory]
+    [InlineData(CodaMcpPolicy.Host, false, false)]
+    [InlineData(CodaMcpPolicy.Curated, false, true)]
+    [InlineData(CodaMcpPolicy.Off, true, false)]
+    public void Policy_drives_args_and_env_consistently(CodaMcpPolicy policy, bool expectNoMcpFlag, bool expectEnv)
+    {
+        var args = CodaServeArgsBuilder.Build("s", "C:\\x", CodingPolicy.Prompt, isResume: false, mcp: policy);
+        var env = CodaMcpEnvironment.Resolve(policy, "C:\\curated");
+
+        Assert.Equal(expectNoMcpFlag, args.Contains("--no-mcp"));
+        Assert.Equal(expectEnv, env.ContainsKey(CodaMcpEnvironment.UserMcpDirVar));
+    }
+
     [Fact]
     public void Curated_with_dir_sets_CODA_USER_MCP_DIR()
     {

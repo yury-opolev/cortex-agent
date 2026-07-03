@@ -465,6 +465,13 @@ public sealed partial class CodaSession : IAsyncDisposable
         // Curated MCP policy exports CODA_USER_MCP_DIR so the spawned coda reads the curated
         // .mcp.json instead of the host user's personal one; Host/Off add nothing here.
         var extraEnv = CodaMcpEnvironment.Resolve(this.options.Mcp, this.options.CuratedMcpDir);
+        if (this.options.Mcp == CodaMcpPolicy.Curated && extraEnv.Count == 0)
+        {
+            // Curated was requested but CuratedMcpDir is blank — we fell back to host MCP config.
+            // Surface it so an operator isn't silently left with unintended host-server inheritance.
+            this.LogCuratedMcpMisconfigured(this.SessionId);
+        }
+
         var psi = BuildProcessStartInfo(this.options.CodaBinaryPath, this.WorkingFolder, args, extraEnv);
 
         var proc = new Process { StartInfo = psi, EnableRaisingEvents = true };
@@ -1186,4 +1193,8 @@ public sealed partial class CodaSession : IAsyncDisposable
     [LoggerMessage(EventId = 9208, Level = LogLevel.Information,
         Message = "Coda session {sessionId} error (exitCode={exitCode}): {message}")]
     private partial void LogSessionError(string sessionId, int? exitCode, string message);
+
+    [LoggerMessage(EventId = 9209, Level = LogLevel.Warning,
+        Message = "Coda session {sessionId}: MCP policy is Curated but CuratedMcpDir is blank — falling back to host MCP config (the coding engine will inherit the host's ~/.coda/.mcp.json)")]
+    private partial void LogCuratedMcpMisconfigured(string sessionId);
 }
