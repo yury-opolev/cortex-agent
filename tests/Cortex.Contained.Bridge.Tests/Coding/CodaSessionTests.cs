@@ -536,4 +536,15 @@ public sealed class CodaSessionProcessStartInfoTests
         Assert.Contains("serve", psi.ArgumentList);
         Assert.Contains("--telemetry", psi.ArgumentList);
     }
+
+    [Fact]
+    public void BuildProcessStartInfo_AppliesExtraEnv_ToProcessEnvironment()
+    {
+        string[] args = ["serve"];
+        var extraEnv = new Dictionary<string, string> { ["CODA_USER_MCP_DIR"] = @"C:\curated" };
+
+        var psi = CodaSession.BuildProcessStartInfo("coda", @"C:\wf", args, extraEnv);
+
+        Assert.Equal(@"C:\curated", psi.Environment["CODA_USER_MCP_DIR"]);
+    }
 }
