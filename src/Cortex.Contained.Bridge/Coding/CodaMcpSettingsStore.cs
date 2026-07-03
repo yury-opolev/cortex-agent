@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using Cortex.Contained.Bridge.Storage;
 
 namespace Cortex.Contained.Bridge.Coding;
@@ -41,6 +42,8 @@ public sealed class CodaMcpSettingsStore : JsonFileSettingsStore<CodaMcpSettings
     /// <summary>On-disk shape of the coda MCP settings document.</summary>
     public sealed class CodaMcpSettingsFile
     {
+        /// <summary>Serialized as the policy name (host/curated/off) so the file is human-editable.</summary>
+        [JsonConverter(typeof(JsonStringEnumConverter))]
         public CodaMcpPolicy? Mcp { get; set; }
 
         public string? CuratedMcpDir { get; set; }

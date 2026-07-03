@@ -922,9 +922,11 @@ function globalSettingsPage() {
 
         async saveCodaMcpSettings() {
             try {
+                const policy = this.codaMcp.policy || "host";
                 const payload = {
-                    mcp: this.codaMcp.policy || "host",
-                    curatedMcpDir: (this.codaMcp.curatedMcpDir || "").trim() || undefined,
+                    mcp: policy,
+                    // Only send the curated dir when it's relevant, so a stale value isn't persisted.
+                    curatedMcpDir: policy === "curated" ? (this.codaMcp.curatedMcpDir || "").trim() || undefined : undefined,
                 };
                 await api.put("/api/coding/mcp-settings", payload);
                 Alpine.store("toast").success("MCP policy saved");

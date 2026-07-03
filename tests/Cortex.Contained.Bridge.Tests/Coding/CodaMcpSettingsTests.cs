@@ -74,6 +74,35 @@ public sealed class CodaMcpSettingsTests
         Assert.Equal(["host", "curated", "off"], CodingMcpEndpoints.PolicyNames());
     }
 
+    // ── BuildDto: unset store reflects the cortex.yml value (no hardcoded host) ─────
+
+    [Fact]
+    public void BuildDto_unset_store_reflects_yaml_policy_and_dir()
+    {
+        var dto = CodingMcpEndpoints.BuildDto(new CodaMcpSettings(null, null), CodaMcpPolicy.Curated, "C:\\yaml");
+
+        Assert.Equal("curated", dto.Mcp);      // not a hardcoded "host"
+        Assert.Equal("C:\\yaml", dto.CuratedMcpDir);
+    }
+
+    [Fact]
+    public void BuildDto_store_overrides_yaml()
+    {
+        var dto = CodingMcpEndpoints.BuildDto(new CodaMcpSettings(CodaMcpPolicy.Off, null), CodaMcpPolicy.Curated, "C:\\yaml");
+
+        Assert.Equal("off", dto.Mcp);
+    }
+
+    [Fact]
+    public void Store_persists_policy_as_readable_string()
+    {
+        using var dir = new TempDir();
+        var path = Path.Combine(dir.Path, "coda-mcp.json");
+        new CodaMcpSettingsStore(path).Set(CodaMcpPolicy.Curated, null);
+
+        Assert.Contains("\"Curated\"", File.ReadAllText(path)); // name, not a number
+    }
+
     private sealed class TempDir : IDisposable
     {
         public string Path { get; } = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "coda-mcpui-" + Guid.NewGuid().ToString("N"));

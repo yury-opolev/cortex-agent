@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Options;
+
 namespace Cortex.Contained.Bridge.Coding;
 
 /// <summary>Response DTO for GET /api/coding/mcp-settings.</summary>
@@ -12,12 +14,12 @@ public static class CodingMcpEndpoints
 {
     public static void MapCodingMcpEndpoints(this WebApplication app)
     {
-        // GET — current policy (defaults to "host" when unset) + curated dir + the selectable policies.
-        app.MapGet("/api/coding/mcp-settings", (CodaMcpSettingsStore store) =>
+        // GET — the effective policy: the UI store when set, otherwise the cortex.yml value (NOT a
+        // hardcoded default), so the dropdown reflects reality and a Save can't silently downgrade it.
+        app.MapGet("/api/coding/mcp-settings", (CodaMcpSettingsStore store, IOptionsMonitor<CodaOptions> codaOptions) =>
         {
-            var settings = store.Get();
-            var policy = (settings.Mcp ?? CodaMcpPolicy.Host).ToString().ToLowerInvariant();
-            return Results.Ok(new CodaMcpSettingsDto(policy, settings.CuratedMcpDir, PolicyNames()));
+            var yaml = codaOptions.CurrentValue;
+            return Results.Ok(BuildDto(store.Get(), yaml.Mcp, yaml.CuratedMcpDir));
         }).RequireAuthorization();
 
         // PUT — validate + persist the selection.
@@ -46,6 +48,17 @@ public static class CodingMcpEndpoints
     }
 
     // ── Static testable helpers ────────────────────────────────────────────────
+
+    /// <summary>
+    /// Build the display DTO: the UI store's values win, otherwise the cortex.yml <paramref name="yamlMcp"/>
+    /// / <paramref name="yamlCuratedDir"/> — so an unset store shows the true effective policy.
+    /// </summary>
+    public static CodaMcpSettingsDto BuildDto(CodaMcpSettings stored, CodaMcpPolicy yamlMcp, string? yamlCuratedDir)
+    {
+        var policy = (stored.Mcp ?? yamlMcp).ToString().ToLowerInvariant();
+        var curatedDir = string.IsNullOrWhiteSpace(stored.CuratedMcpDir) ? yamlCuratedDir : stored.CuratedMcpDir;
+        return new CodaMcpSettingsDto(policy, curatedDir, PolicyNames());
+    }
 
     /// <summary>The selectable MCP policies, in display order.</summary>
     public static IReadOnlyList<string> PolicyNames() => ["host", "curated", "off"];
