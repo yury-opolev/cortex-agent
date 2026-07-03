@@ -857,6 +857,7 @@ builder.Services.AddOptions<Cortex.Contained.Bridge.Coding.CodaOptions>()
     });
 builder.Services.AddSingleton(sp => Cortex.Contained.Bridge.Coding.CodingFoldersStore.Default());
 builder.Services.AddSingleton(sp => Cortex.Contained.Bridge.Coding.CodaModelSettingsStore.Default());
+builder.Services.AddSingleton(sp => Cortex.Contained.Bridge.Coding.CodaMcpSettingsStore.Default());
 builder.Services.AddSingleton<Cortex.Contained.Bridge.Coding.CodaSessionManager>();
 builder.Services.AddSingleton<Cortex.Contained.Bridge.Coding.CodingHubBinder>();
 
@@ -1063,6 +1064,7 @@ app.MapTenantEndpoints();
 // --- Coding Folders API ---
 app.MapCodingFoldersEndpoints();
 app.MapCodingModelEndpoints();
+app.MapCodingMcpEndpoints();
 
 // --- Settings API ---
 app.MapSettingsEndpoints(cortexConfigPath);

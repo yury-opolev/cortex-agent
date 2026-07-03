@@ -152,6 +152,8 @@ function globalSettingsPage() {
         codaModel: { provider: "", model: "" },
         codaModelProviders: [],
         codaModelLoading: false,
+        codaMcp: { policy: "host", curatedMcpDir: "" },
+        codaMcpLoading: false,
 
         // ── Lifecycle ──────────────────────────────────────
 
@@ -904,6 +906,32 @@ function globalSettingsPage() {
             this.codaFoldersLoading = false;
             this.codaAuthLoading = false;
             await this.loadCodaModelSettings();
+            await this.loadCodaMcpSettings();
+        },
+
+        async loadCodaMcpSettings() {
+            this.codaMcpLoading = true;
+            try {
+                const data = await api.get("/api/coding/mcp-settings");
+                this.codaMcp = { policy: data.mcp || "host", curatedMcpDir: data.curatedMcpDir || "" };
+            } catch (e) {
+                // Silently ignore — endpoint may not be available yet
+            }
+            this.codaMcpLoading = false;
+        },
+
+        async saveCodaMcpSettings() {
+            try {
+                const payload = {
+                    mcp: this.codaMcp.policy || "host",
+                    curatedMcpDir: (this.codaMcp.curatedMcpDir || "").trim() || undefined,
+                };
+                await api.put("/api/coding/mcp-settings", payload);
+                Alpine.store("toast").success("MCP policy saved");
+                await this.loadCodaMcpSettings();
+            } catch (e) {
+                Alpine.store("toast").error(e.message);
+            }
         },
 
         async loadCodaModelSettings() {

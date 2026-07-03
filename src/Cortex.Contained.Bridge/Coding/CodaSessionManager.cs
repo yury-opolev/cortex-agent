@@ -27,6 +27,7 @@ public sealed partial class CodaSessionManager : IAsyncDisposable
     private readonly IOptionsMonitor<CodaOptions> codaOptions;
     private readonly CodingFoldersStore codingFoldersStore;
     private readonly CodaModelSettingsStore modelSettingsStore;
+    private readonly CodaMcpSettingsStore? mcpSettingsStore;
     private readonly string? machineHomeDir;
 
     public CodaSessionManager(
@@ -34,7 +35,8 @@ public sealed partial class CodaSessionManager : IAsyncDisposable
         IOptionsMonitor<CodaOptions> codaOptions,
         CodingFoldersStore codingFoldersStore,
         CodaModelSettingsStore modelSettingsStore,
-        string? machineHomeDir = null)
+        string? machineHomeDir = null,
+        CodaMcpSettingsStore? mcpSettingsStore = null)
     {
         this.loggerFactory = loggerFactory;
         this.logger = loggerFactory.CreateLogger<CodaSessionManager>();
@@ -42,6 +44,7 @@ public sealed partial class CodaSessionManager : IAsyncDisposable
         this.codingFoldersStore = codingFoldersStore;
         this.modelSettingsStore = modelSettingsStore;
         this.machineHomeDir = machineHomeDir;
+        this.mcpSettingsStore = mcpSettingsStore;
     }
 
     // -----------------------------------------------------------------------
@@ -173,14 +176,28 @@ public sealed partial class CodaSessionManager : IAsyncDisposable
     /// <see cref="ResolveProviderModel"/> (UI store → YAML → machine settings). All other
     /// fields come from the live YAML options.
     /// </summary>
-    private CodaOptions EffectiveOptions()
+    internal CodaOptions EffectiveOptions()
     {
         var (provider, model) = this.ResolveProviderModel();
-        // Clone so every other field (incl. the MCP policy) passes through unchanged; only the
-        // resolved provider/model are overridden. Cloning avoids silently dropping new fields.
+        // Clone so every other field passes through unchanged; only resolved fields are overridden.
         var effective = this.codaOptions.CurrentValue.Clone();
         effective.Provider = provider;
         effective.Model = model;
+
+        // The UI store (coda-mcp.json) overrides the cortex.yml Coding:Coda:Mcp policy when set.
+        if (this.mcpSettingsStore?.Get() is { } mcp)
+        {
+            if (mcp.Mcp is { } policy)
+            {
+                effective.Mcp = policy;
+            }
+
+            if (!string.IsNullOrWhiteSpace(mcp.CuratedMcpDir))
+            {
+                effective.CuratedMcpDir = mcp.CuratedMcpDir;
+            }
+        }
+
         return effective;
     }
 

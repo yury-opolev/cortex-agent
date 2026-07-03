@@ -1805,6 +1805,35 @@
                         </div>
                     </div>
 
+                    <!-- MCP policy -->
+                    <div class="mb-4">
+                        <h6 class="text-uppercase text-secondary border-bottom pb-2 mb-3">MCP servers</h6>
+                        <div x-show="codaMcpLoading" class="text-secondary small">Loading...</div>
+                        <div x-show="!codaMcpLoading" class="d-flex flex-column gap-2">
+                            <div>
+                                <label class="form-label small fw-semibold mb-1">Policy</label>
+                                <select class="form-select form-select-sm" x-model="codaMcp.policy">
+                                    <option value="host">Host — coding engine sees all your host MCP servers (default)</option>
+                                    <option value="curated">Curated — only a vetted set (isolated from repo .mcp.json)</option>
+                                    <option value="off">Off — no MCP servers</option>
+                                </select>
+                                <div class="form-text small">Controls which MCP servers the coda coding engine loads for a session.</div>
+                            </div>
+                            <div x-show="codaMcp.policy === 'curated'">
+                                <label class="form-label small fw-semibold mb-1">Curated MCP directory</label>
+                                <input type="text" class="form-control form-control-sm"
+                                       x-model="codaMcp.curatedMcpDir"
+                                       placeholder="Folder holding a vetted .mcp.json (e.g. %LOCALAPPDATA%\Cortex\mcp-curated)">
+                            </div>
+                            <div>
+                                <button class="btn btn-sm btn-outline-primary"
+                                        @click="saveCodaMcpSettings()">
+                                    <i class="bi bi-floppy me-1"></i>Save
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
                     <!-- Folder list -->
                     <div class="mb-4">
                         <h6 class="text-uppercase text-secondary border-bottom pb-2 mb-3">Allowed Folders</h6>

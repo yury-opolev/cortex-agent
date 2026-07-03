@@ -19,24 +19,56 @@ public sealed class CodaSessionManagerProviderTests : IDisposable
 
     private string MachineHome => Path.Combine(this.tempRoot, "home");
 
+    private string McpFilePath => Path.Combine(this.tempRoot, "coda-mcp.json");
+
     private CodaSessionManager NewManager(
         string? yamlProvider = null,
-        string? yamlModel = null)
+        string? yamlModel = null,
+        CodaMcpPolicy yamlMcp = CodaMcpPolicy.Host)
     {
         Directory.CreateDirectory(this.tempRoot);
 
         var options = Substitute.For<IOptionsMonitor<CodaOptions>>();
-        options.CurrentValue.Returns(new CodaOptions { Provider = yamlProvider, Model = yamlModel });
+        options.CurrentValue.Returns(new CodaOptions { Provider = yamlProvider, Model = yamlModel, Mcp = yamlMcp });
 
         var foldersStore = new CodingFoldersStore(Path.Combine(this.tempRoot, "coding-folders.json"));
         var modelStore = new CodaModelSettingsStore(this.ModelFilePath);
+        var mcpStore = new CodaMcpSettingsStore(this.McpFilePath);
 
         return new CodaSessionManager(
             NullLoggerFactory.Instance,
             options,
             foldersStore,
             modelStore,
-            this.MachineHome);
+            this.MachineHome,
+            mcpStore);
+    }
+
+    private void WriteMcpUiStore(CodaMcpPolicy? mcp, string? curatedDir)
+    {
+        new CodaMcpSettingsStore(this.McpFilePath).Set(mcp, curatedDir);
+    }
+
+    [Fact]
+    public void EffectiveOptions_UiMcpStore_OverridesYamlPolicy()
+    {
+        var manager = this.NewManager(yamlMcp: CodaMcpPolicy.Host);
+        this.WriteMcpUiStore(CodaMcpPolicy.Curated, "C:\\curated");
+
+        var effective = manager.EffectiveOptions();
+
+        Assert.Equal(CodaMcpPolicy.Curated, effective.Mcp);
+        Assert.Equal("C:\\curated", effective.CuratedMcpDir);
+    }
+
+    [Fact]
+    public void EffectiveOptions_FallsBackToYamlPolicy_WhenUiUnset()
+    {
+        var manager = this.NewManager(yamlMcp: CodaMcpPolicy.Off);
+
+        var effective = manager.EffectiveOptions();
+
+        Assert.Equal(CodaMcpPolicy.Off, effective.Mcp); // no UI override → cortex.yml value
     }
 
     private void WriteUiStore(string? provider, string? model)
