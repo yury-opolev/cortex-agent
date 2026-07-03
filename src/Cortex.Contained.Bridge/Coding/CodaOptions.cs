@@ -30,6 +30,38 @@ public sealed class CodaOptions
     public int PromptIdleTimeoutSeconds { get; set; } = 300;
 
     /// <summary>
+    /// How a spawned coda session sources its MCP servers. Default <see cref="CodaMcpPolicy.Host"/>
+    /// (coda uses the host's own <c>~/.coda/.mcp.json</c>). See <see cref="CuratedMcpDir"/> for
+    /// <see cref="CodaMcpPolicy.Curated"/>.
+    /// </summary>
+    public CodaMcpPolicy Mcp { get; set; } = CodaMcpPolicy.Host;
+
+    /// <summary>
+    /// Directory holding the orchestrator-curated <c>.mcp.json</c>, used only when
+    /// <see cref="Mcp"/> is <see cref="CodaMcpPolicy.Curated"/>. Exported to the spawned coda as
+    /// <c>CODA_USER_MCP_DIR</c>, which replaces only the <b>user</b> layer — a project-level
+    /// <c>&lt;cwd&gt;/.mcp.json</c> still loads and overrides it (see <see cref="CodaMcpPolicy.Curated"/>).
+    /// When blank, curated mode degrades to host behavior.
+    /// </summary>
+    public string? CuratedMcpDir { get; set; }
+
+    /// <summary>Returns a shallow copy of these options — so callers that override a couple of
+    /// fields (e.g. resolved provider/model) never silently drop the rest. Add new fields here.</summary>
+    public CodaOptions Clone() => new()
+    {
+        CodaBinaryPath = this.CodaBinaryPath,
+        MaxSessions = this.MaxSessions,
+        IdleHours = this.IdleHours,
+        Provider = this.Provider,
+        Model = this.Model,
+        StartTimeoutSeconds = this.StartTimeoutSeconds,
+        ControlTimeoutSeconds = this.ControlTimeoutSeconds,
+        PromptIdleTimeoutSeconds = this.PromptIdleTimeoutSeconds,
+        Mcp = this.Mcp,
+        CuratedMcpDir = this.CuratedMcpDir,
+    };
+
+    /// <summary>
     /// Returns the best coda binary path to use at runtime.
     /// If a bundled <c>coda/coda.exe</c> exists next to the application, that path is returned.
     /// Otherwise returns <c>"coda"</c> so the OS PATH is used (useful in dev).

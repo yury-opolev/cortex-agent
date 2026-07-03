@@ -175,19 +175,13 @@ public sealed partial class CodaSessionManager : IAsyncDisposable
     /// </summary>
     private CodaOptions EffectiveOptions()
     {
-        var base_ = this.codaOptions.CurrentValue;
         var (provider, model) = this.ResolveProviderModel();
-        return new CodaOptions
-        {
-            CodaBinaryPath = base_.CodaBinaryPath,
-            MaxSessions = base_.MaxSessions,
-            IdleHours = base_.IdleHours,
-            Provider = provider,
-            Model = model,
-            StartTimeoutSeconds = base_.StartTimeoutSeconds,
-            ControlTimeoutSeconds = base_.ControlTimeoutSeconds,
-            PromptIdleTimeoutSeconds = base_.PromptIdleTimeoutSeconds,
-        };
+        // Clone so every other field (incl. the MCP policy) passes through unchanged; only the
+        // resolved provider/model are overridden. Cloning avoids silently dropping new fields.
+        var effective = this.codaOptions.CurrentValue.Clone();
+        effective.Provider = provider;
+        effective.Model = model;
+        return effective;
     }
 
     public bool IsFolderAllowed(string absolutePath) => this.codingFoldersStore.IsAllowed(absolutePath);
