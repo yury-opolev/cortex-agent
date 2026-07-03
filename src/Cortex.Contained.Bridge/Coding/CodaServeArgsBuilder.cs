@@ -49,11 +49,17 @@ public static class CodaServeArgsBuilder
             args.Add("--session-memory");
         }
 
-        // MCP policy: Off disables coda's MCP client outright. Host/Curated leave MCP on — Curated
-        // is selected out-of-band via the CODA_USER_MCP_DIR env var (see CodaMcpEnvironment), not a flag.
+        // MCP policy: Off disables coda's MCP client outright. Curated selects an orchestrator set via
+        // CODA_USER_MCP_DIR (see CodaMcpEnvironment) AND suppresses the repo's <cwd>/.mcp.json with
+        // --no-project-mcp, so the coding engine sees only the vetted set (true isolation). Host adds
+        // nothing — coda sees the full host config.
         if (mcp == CodaMcpPolicy.Off)
         {
             args.Add("--no-mcp");
+        }
+        else if (mcp == CodaMcpPolicy.Curated)
+        {
+            args.Add("--no-project-mcp");
         }
 
         return args;

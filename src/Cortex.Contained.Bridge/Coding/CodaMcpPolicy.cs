@@ -9,15 +9,11 @@ public enum CodaMcpPolicy
     Host = 0,
 
     /// <summary>
-    /// coda uses an orchestrator-curated <b>user-level</b> config: <c>CODA_USER_MCP_DIR</c> is
-    /// pointed at <see cref="CodaOptions.CuratedMcpDir"/> so the coding engine gets the vetted MCP
-    /// set instead of the operator's personal <c>~/.coda</c>.
-    /// <para>
-    /// CAVEAT (not full isolation): coda still loads <c>&lt;cwd&gt;/.mcp.json</c> from the session's
-    /// working folder and it <b>overrides</b> the curated user layer. A repo that ships its own
-    /// <c>.mcp.json</c> can therefore still introduce servers. Use <see cref="Off"/> for a hard
-    /// guarantee that no external MCP servers load.
-    /// </para>
+    /// coda uses an orchestrator-curated config in <b>isolation</b>: <c>CODA_USER_MCP_DIR</c> is
+    /// pointed at <see cref="CodaOptions.CuratedMcpDir"/> (the vetted set instead of the operator's
+    /// personal <c>~/.coda</c>) <b>and</b> the serve process is spawned with <c>--no-project-mcp</c>,
+    /// so a repo's <c>&lt;cwd&gt;/.mcp.json</c> cannot override or add to the curated set. The coding
+    /// engine sees only the vetted servers. (Use <see cref="Off"/> for no external MCP at all.)
     /// </summary>
     Curated = 1,
 

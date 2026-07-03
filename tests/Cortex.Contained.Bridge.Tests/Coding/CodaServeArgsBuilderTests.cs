@@ -85,6 +85,23 @@ public sealed class CodaServeArgsBuilderTests
     }
 
     [Fact]
+    public void Build_mcp_curated_suppresses_project_layer()
+    {
+        // Curated = user (vetted) set only; the repo's <cwd>/.mcp.json must not override it.
+        var curated = CodaServeArgsBuilder.Build("s", "C:\\x", CodingPolicy.Prompt, isResume: false, mcp: CodaMcpPolicy.Curated);
+        Assert.Contains("--no-project-mcp", curated);
+    }
+
+    [Fact]
+    public void Build_mcp_host_keeps_full_host_visibility()
+    {
+        // Default policy: coda sees everything (user + project). No suppression flags.
+        var host = CodaServeArgsBuilder.Build("s", "C:\\x", CodingPolicy.Prompt, isResume: false, mcp: CodaMcpPolicy.Host);
+        Assert.DoesNotContain("--no-project-mcp", host);
+        Assert.DoesNotContain("--no-mcp", host);
+    }
+
+    [Fact]
     public void Build_default_mcp_is_host_and_omits_no_mcp_flag()
     {
         var args = CodaServeArgsBuilder.Build("s", "C:\\x", CodingPolicy.Prompt, isResume: false);
