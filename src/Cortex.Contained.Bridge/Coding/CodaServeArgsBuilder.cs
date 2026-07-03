@@ -12,7 +12,8 @@ public static class CodaServeArgsBuilder
         bool isResume,
         string? provider = null,
         string? goal = null,
-        bool sessionMemory = false)
+        bool sessionMemory = false,
+        CodaMcpPolicy mcp = CodaMcpPolicy.Host)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
         ArgumentException.ThrowIfNullOrWhiteSpace(workingFolder);
@@ -46,6 +47,13 @@ public static class CodaServeArgsBuilder
         if (sessionMemory)
         {
             args.Add("--session-memory");
+        }
+
+        // MCP policy: Off disables coda's MCP client outright. Host/Curated leave MCP on — Curated
+        // is selected out-of-band via the CODA_USER_MCP_DIR env var (see CodaMcpEnvironment), not a flag.
+        if (mcp == CodaMcpPolicy.Off)
+        {
+            args.Add("--no-mcp");
         }
 
         return args;

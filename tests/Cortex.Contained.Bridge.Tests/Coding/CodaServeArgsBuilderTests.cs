@@ -65,6 +65,32 @@ public sealed class CodaServeArgsBuilderTests
         Assert.Contains("--telemetry", args);
     }
 
+    [Fact]
+    public void Build_mcp_off_adds_no_mcp_flag()
+    {
+        var args = CodaServeArgsBuilder.Build("s", "C:\\x", CodingPolicy.Prompt, isResume: false, mcp: CodaMcpPolicy.Off);
+        Assert.Contains("--no-mcp", args);
+    }
+
+    [Fact]
+    public void Build_mcp_host_and_curated_do_not_add_no_mcp_flag()
+    {
+        // Host uses the machine ~/.coda/.mcp.json; Curated redirects it via CODA_USER_MCP_DIR
+        // (an env var, not a serve flag) — neither disables MCP, so no --no-mcp.
+        var host = CodaServeArgsBuilder.Build("s", "C:\\x", CodingPolicy.Prompt, isResume: false, mcp: CodaMcpPolicy.Host);
+        var curated = CodaServeArgsBuilder.Build("s", "C:\\x", CodingPolicy.Prompt, isResume: false, mcp: CodaMcpPolicy.Curated);
+
+        Assert.DoesNotContain("--no-mcp", host);
+        Assert.DoesNotContain("--no-mcp", curated);
+    }
+
+    [Fact]
+    public void Build_default_mcp_is_host_and_omits_no_mcp_flag()
+    {
+        var args = CodaServeArgsBuilder.Build("s", "C:\\x", CodingPolicy.Prompt, isResume: false);
+        Assert.DoesNotContain("--no-mcp", args);
+    }
+
     private static string ArgAfter(List<string> args, string flag)
     {
         var i = args.IndexOf(flag);
