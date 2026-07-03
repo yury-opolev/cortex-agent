@@ -22,6 +22,48 @@ public sealed class CodaOptionsTests
     }
 
     [Fact]
+    public void Defaults_Mcp_IsHost_AndNoCuratedDir()
+    {
+        var coda = new CodaOptions();
+
+        // Default = parity with today: coda serve uses the host's ~/.coda/.mcp.json.
+        Assert.Equal(CodaMcpPolicy.Host, coda.Mcp);
+        Assert.Null(coda.CuratedMcpDir);
+    }
+
+    [Fact]
+    public void Clone_CopiesAllFields_IncludingMcpPolicy()
+    {
+        var src = new CodaOptions
+        {
+            CodaBinaryPath = "x/coda.exe",
+            MaxSessions = 7,
+            IdleHours = 9,
+            Provider = "github-copilot",
+            Model = "m",
+            StartTimeoutSeconds = 11,
+            ControlTimeoutSeconds = 12,
+            PromptIdleTimeoutSeconds = 13,
+            Mcp = CodaMcpPolicy.Curated,
+            CuratedMcpDir = "C:\\curated",
+        };
+
+        var copy = src.Clone();
+
+        Assert.NotSame(src, copy);
+        Assert.Equal("x/coda.exe", copy.CodaBinaryPath);
+        Assert.Equal(7, copy.MaxSessions);
+        Assert.Equal(9, copy.IdleHours);
+        Assert.Equal("github-copilot", copy.Provider);
+        Assert.Equal("m", copy.Model);
+        Assert.Equal(11, copy.StartTimeoutSeconds);
+        Assert.Equal(12, copy.ControlTimeoutSeconds);
+        Assert.Equal(13, copy.PromptIdleTimeoutSeconds);
+        Assert.Equal(CodaMcpPolicy.Curated, copy.Mcp);
+        Assert.Equal("C:\\curated", copy.CuratedMcpDir);
+    }
+
+    [Fact]
     public void ResolveDefaultBinaryPath_WithoutBundledExe_ReturnsPathFallback()
     {
         // Arrange: temp dir with no coda/coda.exe present.
