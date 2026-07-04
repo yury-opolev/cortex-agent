@@ -30,6 +30,7 @@ public sealed partial class SubAgentStartTool : IAgentTool
     private readonly ILogger<SubAgentStartTool> logger;
     private readonly IOptionsMonitor<ImageAgingConfig>? imageAgingOptions;
     private readonly IImageDescriber? imageDescriber;
+    private readonly SystemPromptStore? systemPromptStore;
 
     /// <summary>Maximum memories to inject into subagent context.</summary>
     private const int MaxMemoryResults = 6;
@@ -51,7 +52,8 @@ public sealed partial class SubAgentStartTool : IAgentTool
         InMemoryTodoStore? todoStore = null,
         SkillRegistry? skillRegistry = null,
         IOptionsMonitor<ImageAgingConfig>? imageAgingOptions = null,
-        IImageDescriber? imageDescriber = null)
+        IImageDescriber? imageDescriber = null,
+        SystemPromptStore? systemPromptStore = null)
     {
         this.llmClient = llmClient;
         this.toolRegistryFactory = toolRegistryFactory;
@@ -67,6 +69,7 @@ public sealed partial class SubAgentStartTool : IAgentTool
         this.skillRegistry = skillRegistry;
         this.imageAgingOptions = imageAgingOptions;
         this.imageDescriber = imageDescriber;
+        this.systemPromptStore = systemPromptStore;
     }
 
     public string Name => "sub_agent_start";
@@ -559,49 +562,33 @@ public sealed partial class SubAgentStartTool : IAgentTool
 
     private string BuildSubagentSystemPrompt(string memories, string? bootstrapContext, string? skillName = null)
     {
-        var sb = new StringBuilder();
+        var config = this.systemPromptStore?.Read() ?? Cortex.Contained.Contracts.SystemPrompt.SystemPromptDefaults.Create();
 
+        var skillValue = string.Empty;
         if (skillName is not null && this.skillRegistry is not null)
         {
             var skillContent = this.skillRegistry.ReadSkillContent(skillName);
             if (skillContent is not null)
             {
-                sb.AppendLine(CultureInfo.InvariantCulture, $"## Skill: {skillName}");
-                sb.AppendLine();
-                sb.AppendLine(skillContent);
-                sb.AppendLine();
+                skillValue = $"## Skill: {skillName}\n\n{skillContent}\n\n";
             }
         }
 
-        sb.AppendLine("Complete the task described below using the tools available to you.");
-        sb.AppendLine("Be thorough. When finished, respond with a clear summary of what you found or accomplished.");
-        sb.AppendLine("Work autonomously — do not ask clarifying questions.");
-        sb.AppendLine("You have access to bash, python, file tools, and memory tools. Use them freely.");
-        sb.AppendLine("There may also be custom tools (scripts) in local files — check your memories for details if relevant.");
-        sb.AppendLine("Before starting work, plan your approach using todos_write. Update it regularly as you complete steps — your progress is shown in your system prompt and visible to the main agent.");
-
-        // Inject available skills list so subagents can discover and load skills
-        var skillsSection = this.skillRegistry?.FormatForSystemPrompt() ?? string.Empty;
-        if (skillsSection.Length > 0)
+        var values = new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            sb.Append(skillsSection);
-        }
+            ["personality"] = string.Empty,
+            ["skill"] = skillValue,
+            ["instructions"] = config.SubagentInstructions,
+            ["skills"] = this.skillRegistry?.FormatForSystemPrompt() ?? string.Empty,
+            ["bootstrap_context"] = string.IsNullOrWhiteSpace(bootstrapContext)
+                ? string.Empty
+                : $"\n## User context\n{bootstrapContext}",
+            ["recalled_memories"] = string.IsNullOrWhiteSpace(memories)
+                ? string.Empty
+                : $"\n## Recalled context\n{memories}",
+        };
 
-        if (!string.IsNullOrWhiteSpace(bootstrapContext))
-        {
-            sb.AppendLine();
-            sb.AppendLine("## User context");
-            sb.Append(bootstrapContext);
-        }
-
-        if (!string.IsNullOrWhiteSpace(memories))
-        {
-            sb.AppendLine();
-            sb.AppendLine("## Recalled context");
-            sb.Append(memories);
-        }
-
-        return sb.ToString();
+        return SystemPromptRenderer.Render(config.SubagentTemplate, values);
     }
 
     [LoggerMessage(Level = LogLevel.Information, Message = "[sub_agent_start] Started: {TaskId} — {Description}")]

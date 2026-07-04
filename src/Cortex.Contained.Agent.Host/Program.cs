@@ -505,7 +505,10 @@ builder.Services.AddSingleton<IAgentTool>(sp =>
         stateRoot,
         sp.GetRequiredService<IMemoryService>(),
         sp.GetRequiredService<InMemoryTodoStore>(),
-        sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.SkillRegistry>()));
+        sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.SkillRegistry>(),
+        imageAgingOptions: null,
+        imageDescriber: null,
+        systemPromptStore: sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.SystemPromptStore>()));
 builder.Services.AddSingleton<IAgentTool>(sp =>
     new SubAgentReadTool(
         sp.GetRequiredService<SubagentSessionStore>(),
