@@ -27,6 +27,14 @@ function tenantSettingsPage() {
         savingPersonality: false,
         personalityStatus: "",
 
+        // System Prompt
+        systemPrompt: { mainTemplate: "", subagentTemplate: "", voiceMode: "", codingRelay: "", subagentInstructions: "" },
+        systemPromptLoading: false,
+        savingSystemPrompt: false,
+        systemPromptErrors: [],
+        systemPromptWarnings: [],
+        systemPromptPreview: "",
+
         // Self-Notes
         selfNotes: "",
         selfNotesLoading: false,
@@ -65,7 +73,7 @@ function tenantSettingsPage() {
 
         async init() {
             await Promise.all([this.load(), this.loadBotInfo()]);
-            await Promise.all([this.loadPersonality(), this.loadSelfNotes(), this.loadVoiceId()]);
+            await Promise.all([this.loadPersonality(), this.loadSystemPrompt(), this.loadSelfNotes(), this.loadVoiceId()]);
         },
 
         async load() {
@@ -189,6 +197,61 @@ function tenantSettingsPage() {
                 Alpine.store("toast").error(e.message);
             }
             this.savingPersonality = false;
+        },
+
+        // ── System Prompt ────────────────────────────────────
+
+        async loadSystemPrompt() {
+            this.systemPromptLoading = true;
+            try {
+                const data = await api.get(`/api/tenants/${encodeURIComponent(this.tenantId)}/system-prompt`);
+                this.systemPrompt = data;
+                await this.refreshPreview();
+            } catch (e) {
+                Alpine.store("toast").error("Failed to load system prompt");
+            }
+            this.systemPromptLoading = false;
+        },
+
+        async saveSystemPrompt() {
+            this.savingSystemPrompt = true;
+            this.systemPromptErrors = [];
+            try {
+                const res = await api.put(`/api/tenants/${encodeURIComponent(this.tenantId)}/system-prompt`, this.systemPrompt);
+                this.systemPromptWarnings = res.warnings || [];
+                Alpine.store("toast").success("System prompt saved");
+                await this.refreshPreview();
+            } catch (e) {
+                this.systemPromptErrors = (e && e.body && e.body.errors) || [e.message || "Save failed"];
+            }
+            this.savingSystemPrompt = false;
+        },
+
+        async resetSystemPrompt() {
+            this.savingSystemPrompt = true;
+            try {
+                this.systemPrompt = await api.del(`/api/tenants/${encodeURIComponent(this.tenantId)}/system-prompt`);
+                this.systemPromptErrors = [];
+                this.systemPromptWarnings = [];
+                Alpine.store("toast").success("System prompt reset to default");
+                await this.refreshPreview();
+            } catch (e) {
+                Alpine.store("toast").error("Reset failed");
+            }
+            this.savingSystemPrompt = false;
+        },
+
+        async refreshPreview() {
+            try {
+                const data = await api.get(`/api/tenants/${encodeURIComponent(this.tenantId)}/system-prompt/preview?channel=web&voice=false`);
+                this.systemPromptPreview = data.preview || "";
+            } catch (e) {
+                // preview is best-effort
+            }
+        },
+
+        insertPlaceholder(field, name) {
+            this.systemPrompt[field] = (this.systemPrompt[field] || "") + "{{" + name + "}}";
         },
 
         // ── Self-Notes ──────────────────────────────────────

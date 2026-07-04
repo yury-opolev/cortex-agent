@@ -649,6 +649,84 @@
                     </div>
                 </div>
 
+                <!-- System Prompt Card -->
+                <div class="col-12">
+                    <div class="card">
+                        <div class="card-header"><i class="bi bi-file-earmark-code me-2"></i>System Prompt</div>
+                        <div class="card-body">
+                            <p class="text-secondary small mb-2">
+                                Advanced: edit the raw prompt templates the agent assembles for each turn. Placeholders in
+                                <code>{{curly_braces}}</code> are substituted at render time. Changes take effect on the next message.
+                            </p>
+
+                            <div x-show="systemPromptErrors.length" class="alert alert-danger py-2 px-3 small mb-2">
+                                <div><i class="bi bi-exclamation-triangle me-1"></i>Save failed:</div>
+                                <ul class="mb-0 ps-3">
+                                    <template x-for="err in systemPromptErrors" :key="err">
+                                        <li x-text="err"></li>
+                                    </template>
+                                </ul>
+                            </div>
+                            <div x-show="systemPromptWarnings.length" class="alert alert-warning py-2 px-3 small mb-2">
+                                <div><i class="bi bi-exclamation-circle me-1"></i>Warnings:</div>
+                                <ul class="mb-0 ps-3">
+                                    <template x-for="warn in systemPromptWarnings" :key="warn">
+                                        <li x-text="warn"></li>
+                                    </template>
+                                </ul>
+                            </div>
+
+                            <label class="form-label small fw-semibold mb-1">Main template</label>
+                            <div class="mb-2 d-flex flex-wrap gap-1">
+                                <template x-for="name in ['personality', 'self_notes', 'skills', 'channel', 'voice_mode', 'active_tasks', 'active_plans', 'coding_relay']" :key="name">
+                                    <button type="button" class="btn btn-sm btn-outline-secondary py-0"
+                                            @click="insertPlaceholder('mainTemplate', name)">
+                                        <span x-text="'{{' + name + '}}'"></span>
+                                    </button>
+                                </template>
+                            </div>
+                            <textarea class="form-control font-monospace mb-3" rows="6" x-model="systemPrompt.mainTemplate"
+                                      :disabled="systemPromptLoading"></textarea>
+
+                            <label class="form-label small fw-semibold mb-1">Subagent template</label>
+                            <div class="mb-2 d-flex flex-wrap gap-1">
+                                <template x-for="name in ['personality', 'skill', 'instructions', 'skills', 'bootstrap_context', 'recalled_memories']" :key="name">
+                                    <button type="button" class="btn btn-sm btn-outline-secondary py-0"
+                                            @click="insertPlaceholder('subagentTemplate', name)">
+                                        <span x-text="'{{' + name + '}}'"></span>
+                                    </button>
+                                </template>
+                            </div>
+                            <textarea class="form-control font-monospace mb-3" rows="6" x-model="systemPrompt.subagentTemplate"
+                                      :disabled="systemPromptLoading"></textarea>
+
+                            <label class="form-label small fw-semibold mb-1">Voice mode segment</label>
+                            <textarea class="form-control font-monospace mb-3" rows="3" x-model="systemPrompt.voiceMode"
+                                      :disabled="systemPromptLoading"></textarea>
+
+                            <label class="form-label small fw-semibold mb-1">Coding relay segment</label>
+                            <textarea class="form-control font-monospace mb-3" rows="3" x-model="systemPrompt.codingRelay"
+                                      :disabled="systemPromptLoading"></textarea>
+
+                            <label class="form-label small fw-semibold mb-1">Subagent instructions segment</label>
+                            <textarea class="form-control font-monospace mb-3" rows="3" x-model="systemPrompt.subagentInstructions"
+                                      :disabled="systemPromptLoading"></textarea>
+
+                            <div class="d-flex align-items-center gap-2 mb-3">
+                                <button class="btn btn-sm btn-primary" @click="saveSystemPrompt()" :disabled="savingSystemPrompt">
+                                    <i class="bi bi-check-lg me-1"></i>Save System Prompt
+                                </button>
+                                <button class="btn btn-sm btn-outline-secondary" @click="resetSystemPrompt()" :disabled="savingSystemPrompt">
+                                    <i class="bi bi-arrow-counterclockwise me-1"></i>Reset to Default
+                                </button>
+                            </div>
+
+                            <label class="form-label small fw-semibold mb-1">Live preview (web channel)</label>
+                            <pre class="bg-body-tertiary border rounded p-2 small" style="white-space: pre-wrap; max-height: 300px; overflow-y: auto;" x-text="systemPromptPreview"></pre>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Self-Notes Card -->
                 <div class="col-12">
                     <div class="card">

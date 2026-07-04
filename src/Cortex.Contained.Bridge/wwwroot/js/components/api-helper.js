@@ -45,7 +45,9 @@ const api = {
 
         if (!resp.ok) {
             const err = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
-            throw new Error(err.error || `HTTP ${resp.status}`);
+            const httpError = new Error(err.error || `HTTP ${resp.status}`);
+            httpError.body = err;
+            throw httpError;
         }
 
         const text = await resp.text();
