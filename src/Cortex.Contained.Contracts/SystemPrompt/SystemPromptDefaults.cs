@@ -165,16 +165,18 @@ public static class SystemPromptDefaults
 
         """;
 
-    /// <summary>Fixed subagent instructions — verbatim copy of the SubAgentStartTool block.</summary>
-    public const string SubagentInstructions = """
-        Complete the task described below using the tools available to you.
-        Be thorough. When finished, respond with a clear summary of what you found or accomplished.
-        Work autonomously — do not ask clarifying questions.
-        You have access to bash, python, file tools, and memory tools. Use them freely.
-        There may also be custom tools (scripts) in local files — check your memories for details if relevant.
-        Before starting work, plan your approach using todos_write. Update it regularly as you complete steps — your progress is shown in your system prompt and visible to the main agent.
-
-        """;
+    /// <summary>
+    /// Fixed subagent instructions — verbatim copy of the SubAgentStartTool block. Uses
+    /// explicit \n (not a raw string / AppendLine) so the byte content is independent of the
+    /// checkout's line-ending convention and matches the Linux container's Environment.NewLine.
+    /// </summary>
+    public const string SubagentInstructions =
+        "Complete the task described below using the tools available to you.\n" +
+        "Be thorough. When finished, respond with a clear summary of what you found or accomplished.\n" +
+        "Work autonomously — do not ask clarifying questions.\n" +
+        "You have access to bash, python, file tools, and memory tools. Use them freely.\n" +
+        "There may also be custom tools (scripts) in local files — check your memories for details if relevant.\n" +
+        "Before starting work, plan your approach using todos_write. Update it regularly as you complete steps — your progress is shown in your system prompt and visible to the main agent.\n";
 
     /// <summary>Create a config populated with all defaults.</summary>
     public static SystemPromptConfig Create() => new();

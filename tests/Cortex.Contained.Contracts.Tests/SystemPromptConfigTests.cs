@@ -33,6 +33,13 @@ public class SystemPromptConfigTests
     }
 
     [Fact]
+    public void SubagentInstructions_UsesLfNotCrlf()
+    {
+        Assert.DoesNotContain("\r", SystemPromptDefaults.SubagentInstructions, StringComparison.Ordinal);
+        Assert.EndsWith("\n", SystemPromptDefaults.SubagentInstructions, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Serialization_UsesCamelCaseNamedProperties_NoItem1()
     {
         var config = SystemPromptDefaults.Create();

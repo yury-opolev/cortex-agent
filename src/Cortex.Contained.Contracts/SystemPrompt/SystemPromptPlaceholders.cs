@@ -8,8 +8,12 @@ public static class SystemPromptPlaceholders
     /// <summary>Maximum characters for a template body.</summary>
     public const int TemplateMaxChars = 8000;
 
-    /// <summary>Maximum characters for an authorable prose segment.</summary>
-    public const int SegmentMaxChars = 4000;
+    /// <summary>
+    /// Maximum characters for an authorable prose segment. Set well above the verbatim
+    /// CodingRelay default (~8200 chars) so the built-in default validates and reset-to-default
+    /// always succeeds, while still bounding pasted-megabyte context bloat.
+    /// </summary>
+    public const int SegmentMaxChars = 12000;
 
     /// <summary>Placeholder names allowed in the main template.</summary>
     public static readonly FrozenSet<string> Main = FrozenSet.ToFrozenSet(
