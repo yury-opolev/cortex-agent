@@ -6,6 +6,7 @@ using Cortex.Contained.Channels.Discord;
 using Cortex.Contained.Contracts;
 using Cortex.Contained.Contracts.Config;
 using Cortex.Contained.Contracts.Hub;
+using Cortex.Contained.Contracts.SystemPrompt;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Cortex.Contained.Bridge.Tenants;
@@ -277,6 +278,104 @@ public static class TenantEndpoints
             {
                 await client.SetPersonalityAsync(PersonalityDefaults.DefaultPersonality, CancellationToken.None).ConfigureAwait(false);
                 return Results.Ok(new { success = true, personality = PersonalityDefaults.DefaultPersonality });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { error = ex.Message }, statusCode: 500);
+            }
+        }).RequireAuthorization();
+
+        // ── System Prompt ─────────────────────────────────────────────
+
+        // GET /api/tenants/{tenantId}/system-prompt — get the active system-prompt config
+        app.MapGet("/api/tenants/{tenantId}/system-prompt", async (
+            string tenantId, TenantRouter router) =>
+        {
+            var client = router.GetClient(tenantId);
+            if (client is null || !client.IsConnected)
+            {
+                return Results.Json(new { error = "Agent not connected" }, statusCode: 503);
+            }
+
+            try
+            {
+                var config = await client.GetSystemPromptConfigAsync(CancellationToken.None).ConfigureAwait(false);
+                return Results.Ok(config);
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { error = ex.Message }, statusCode: 500);
+            }
+        }).RequireAuthorization();
+
+        // PUT /api/tenants/{tenantId}/system-prompt — validate and persist a new system-prompt config
+        app.MapPut("/api/tenants/{tenantId}/system-prompt", async (
+            HttpContext ctx, string tenantId, TenantRouter router) =>
+        {
+            var client = router.GetClient(tenantId);
+            if (client is null || !client.IsConnected)
+            {
+                return Results.Json(new { error = "Agent not connected" }, statusCode: 503);
+            }
+
+            var body = await ctx.Request.ReadFromJsonAsync<SystemPromptConfig>().ConfigureAwait(false);
+            if (body is null)
+            {
+                return Results.BadRequest(new { error = "System-prompt config is required" });
+            }
+
+            try
+            {
+                var result = await client.SetSystemPromptConfigAsync(body, CancellationToken.None).ConfigureAwait(false);
+                if (!result.IsValid)
+                {
+                    return Results.BadRequest(new { errors = result.Errors });
+                }
+
+                return Results.Ok(new { ok = true, warnings = result.Warnings });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { error = ex.Message }, statusCode: 500);
+            }
+        }).RequireAuthorization();
+
+        // DELETE /api/tenants/{tenantId}/system-prompt — reset system-prompt config to defaults
+        app.MapDelete("/api/tenants/{tenantId}/system-prompt", async (
+            string tenantId, TenantRouter router) =>
+        {
+            var client = router.GetClient(tenantId);
+            if (client is null || !client.IsConnected)
+            {
+                return Results.Json(new { error = "Agent not connected" }, statusCode: 503);
+            }
+
+            try
+            {
+                var config = await client.ResetSystemPromptConfigAsync(CancellationToken.None).ConfigureAwait(false);
+                return Results.Ok(config);
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { error = ex.Message }, statusCode: 500);
+            }
+        }).RequireAuthorization();
+
+        // GET /api/tenants/{tenantId}/system-prompt/preview — render the exact live system prompt
+        app.MapGet("/api/tenants/{tenantId}/system-prompt/preview", async (
+            string tenantId, TenantRouter router, string? channel, bool? voice) =>
+        {
+            var client = router.GetClient(tenantId);
+            if (client is null || !client.IsConnected)
+            {
+                return Results.Json(new { error = "Agent not connected" }, statusCode: 503);
+            }
+
+            try
+            {
+                var preview = await client.GetSystemPromptPreviewAsync(
+                    channel ?? "web", voice ?? false, CancellationToken.None).ConfigureAwait(false);
+                return Results.Ok(new { preview });
             }
             catch (Exception ex)
             {

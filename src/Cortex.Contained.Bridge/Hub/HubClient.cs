@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Globalization;
 using Cortex.Contained.Contracts.Hub;
+using Cortex.Contained.Contracts.SystemPrompt;
 using Microsoft.AspNetCore.SignalR.Client;
 
 namespace Cortex.Contained.Bridge.Hub;
@@ -301,6 +302,39 @@ public sealed partial class HubClient : IAsyncDisposable
             nameof(IAgentHub.SetPersonality),
             personality,
             cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Get the active system-prompt configuration (templates + authorable segments).</summary>
+    public async Task<SystemPromptConfig> GetSystemPromptConfigAsync(CancellationToken cancellationToken)
+    {
+        EnsureConnected();
+        return await this.connection!.InvokeAsync<SystemPromptConfig>(
+            nameof(IAgentHub.GetSystemPromptConfig), cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Validate and, if valid, persist a new system-prompt configuration.</summary>
+    public async Task<SystemPromptValidationResult> SetSystemPromptConfigAsync(
+        SystemPromptConfig config, CancellationToken cancellationToken)
+    {
+        EnsureConnected();
+        return await this.connection!.InvokeAsync<SystemPromptValidationResult>(
+            nameof(IAgentHub.SetSystemPromptConfig), config, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Reset the system-prompt configuration to defaults and return it.</summary>
+    public async Task<SystemPromptConfig> ResetSystemPromptConfigAsync(CancellationToken cancellationToken)
+    {
+        EnsureConnected();
+        return await this.connection!.InvokeAsync<SystemPromptConfig>(
+            nameof(IAgentHub.ResetSystemPromptConfig), cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Render and return the exact system prompt the model would receive for a given channel.</summary>
+    public async Task<string> GetSystemPromptPreviewAsync(string channelId, bool isVoice, CancellationToken cancellationToken)
+    {
+        EnsureConnected();
+        return await this.connection!.InvokeAsync<string>(
+            nameof(IAgentHub.GetSystemPromptPreview), channelId, isVoice, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Get the agent's self-notes (operating principles).</summary>
