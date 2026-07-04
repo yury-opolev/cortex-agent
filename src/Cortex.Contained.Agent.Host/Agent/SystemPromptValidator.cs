@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Text.RegularExpressions;
 using Cortex.Contained.Contracts.SystemPrompt;
 
@@ -9,7 +10,7 @@ namespace Cortex.Contained.Agent.Host.Agent;
 /// </summary>
 public static partial class SystemPromptValidator
 {
-    [GeneratedRegex(@"\{\{([a-z_]+)\}\}", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"\{\{([^{}]*)\}\}", RegexOptions.CultureInvariant)]
     private static partial Regex PlaceholderRegex();
 
     /// <summary>Validate the configuration.</summary>
@@ -33,7 +34,7 @@ public static partial class SystemPromptValidator
 
     private static void ValidateTemplate(
         SystemPromptValidationResult result, string field, string template,
-        System.Collections.Frozen.FrozenSet<string> allowed, string[] recommended)
+        FrozenSet<string> allowed, string[] recommended)
     {
         if (template.Length > SystemPromptPlaceholders.TemplateMaxChars)
         {
@@ -44,8 +45,11 @@ public static partial class SystemPromptValidator
         foreach (Match m in PlaceholderRegex().Matches(template))
         {
             var name = m.Groups[1].Value;
-            used.Add(name);
-            if (!allowed.Contains(name))
+            if (allowed.Contains(name))
+            {
+                used.Add(name);
+            }
+            else
             {
                 result.Errors.Add($"{field} uses unknown placeholder {{{{{name}}}}}.");
             }

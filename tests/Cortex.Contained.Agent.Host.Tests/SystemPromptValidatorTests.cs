@@ -26,6 +26,22 @@ public class SystemPromptValidatorTests
         Assert.Contains(result.Errors, e => e.Contains("bogus_thing", StringComparison.Ordinal));
     }
 
+    [Theory]
+    [InlineData("{{Self_Notes}}")]   // uppercase
+    [InlineData("{{active-tasks}}")] // hyphen
+    [InlineData("{{skill 1}}")]      // space
+    [InlineData("{{bogus_thing}}")]  // valid syntax, unknown name
+    public void Validate_MalformedOrUnknownPlaceholder_IsError(string strayToken)
+    {
+        var config = SystemPromptDefaults.Create();
+        config.MainTemplate = "{{personality}} " + strayToken;
+
+        var result = SystemPromptValidator.Validate(config);
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, e => e.Contains("unknown placeholder", StringComparison.Ordinal));
+    }
+
     [Fact]
     public void Validate_OverCap_IsError()
     {
