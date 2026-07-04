@@ -1666,6 +1666,90 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
         }, cancellationToken);
     }
 
+    // ── System-prompt management ─────────────────────────────────────────
+
+    /// <inheritdoc />
+    public Task<Contracts.SystemPrompt.SystemPromptConfig> GetSystemPromptConfigAsync(CancellationToken cancellationToken)
+    {
+        return Task.FromResult(this.systemPromptStore?.Read() ?? Contracts.SystemPrompt.SystemPromptDefaults.Create());
+    }
+
+    /// <inheritdoc />
+    public Task<Contracts.SystemPrompt.SystemPromptValidationResult> SetSystemPromptConfigAsync(
+        Contracts.SystemPrompt.SystemPromptConfig config, CancellationToken cancellationToken)
+    {
+        var oldConfig = this.systemPromptStore?.Read() ?? Contracts.SystemPrompt.SystemPromptDefaults.Create();
+        var oldFingerprint = this.systemPromptStore?.Fingerprint() ?? "default";
+
+        var result = this.systemPromptStore is not null
+            ? this.systemPromptStore.Write(config)
+            : SystemPromptValidator.Validate(config);
+
+        if (result.IsValid)
+        {
+            var changedFields = DescribeChangedFields(oldConfig, config);
+            var newFingerprint = this.systemPromptStore?.Fingerprint() ?? "default";
+            this.LogSystemPromptUpdated(changedFields, oldFingerprint, newFingerprint, result.Warnings.Count);
+        }
+
+        return Task.FromResult(result);
+    }
+
+    /// <inheritdoc />
+    public Task<Contracts.SystemPrompt.SystemPromptConfig> ResetSystemPromptConfigAsync(CancellationToken cancellationToken)
+    {
+        var oldFingerprint = this.systemPromptStore?.Fingerprint() ?? "default";
+        var defaults = this.systemPromptStore?.Reset() ?? Contracts.SystemPrompt.SystemPromptDefaults.Create();
+        var newFingerprint = this.systemPromptStore?.Fingerprint() ?? "default";
+        this.LogSystemPromptUpdated("reset-to-defaults", oldFingerprint, newFingerprint, 0);
+        return Task.FromResult(defaults);
+    }
+
+    /// <inheritdoc />
+    public async Task<string> GetSystemPromptPreviewAsync(string channelId, bool isVoice, CancellationToken cancellationToken)
+    {
+        using var session = new AgentSession("system-prompt-preview");
+        var messages = await this.promptAssembler.BuildPromptAsync(session, cancellationToken, channelId, isVoice)
+            .ConfigureAwait(false);
+        return messages.FirstOrDefault(m => m.Role == "system")?.Content ?? string.Empty;
+    }
+
+    /// <summary>
+    /// Compares the old and new system-prompt configs field-by-field for the audit log.
+    /// Returns a comma-separated list of changed field names, or "none" if identical.
+    /// </summary>
+    private static string DescribeChangedFields(
+        Contracts.SystemPrompt.SystemPromptConfig oldConfig, Contracts.SystemPrompt.SystemPromptConfig newConfig)
+    {
+        var changed = new List<string>();
+        if (!string.Equals(oldConfig.MainTemplate, newConfig.MainTemplate, StringComparison.Ordinal))
+        {
+            changed.Add(nameof(Contracts.SystemPrompt.SystemPromptConfig.MainTemplate));
+        }
+
+        if (!string.Equals(oldConfig.SubagentTemplate, newConfig.SubagentTemplate, StringComparison.Ordinal))
+        {
+            changed.Add(nameof(Contracts.SystemPrompt.SystemPromptConfig.SubagentTemplate));
+        }
+
+        if (!string.Equals(oldConfig.VoiceMode, newConfig.VoiceMode, StringComparison.Ordinal))
+        {
+            changed.Add(nameof(Contracts.SystemPrompt.SystemPromptConfig.VoiceMode));
+        }
+
+        if (!string.Equals(oldConfig.CodingRelay, newConfig.CodingRelay, StringComparison.Ordinal))
+        {
+            changed.Add(nameof(Contracts.SystemPrompt.SystemPromptConfig.CodingRelay));
+        }
+
+        if (!string.Equals(oldConfig.SubagentInstructions, newConfig.SubagentInstructions, StringComparison.Ordinal))
+        {
+            changed.Add(nameof(Contracts.SystemPrompt.SystemPromptConfig.SubagentInstructions));
+        }
+
+        return changed.Count > 0 ? string.Join(",", changed) : "none";
+    }
+
     /// <summary>
     /// Detects voice gender from a personality description using a cheap LLM call.
     /// Returns "male" or "female".
@@ -2013,5 +2097,9 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Mid-turn message injected for {ConversationId}: source={Source}")]
     private partial void LogMessageInjectedMidTurn(string conversationId, string source);
+
+    [LoggerMessage(Level = LogLevel.Information,
+        Message = "[system-prompt] config updated: changed={ChangedFields} {OldFingerprint}->{NewFingerprint} warnings={WarningCount}")]
+    private partial void LogSystemPromptUpdated(string changedFields, string oldFingerprint, string newFingerprint, int warningCount);
 }
 

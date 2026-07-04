@@ -259,6 +259,30 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
     }
 
     /// <inheritdoc />
+    public Task<Contracts.SystemPrompt.SystemPromptConfig> GetSystemPromptConfig()
+    {
+        return this.runtime.GetSystemPromptConfigAsync(Context.ConnectionAborted);
+    }
+
+    /// <inheritdoc />
+    public Task<Contracts.SystemPrompt.SystemPromptValidationResult> SetSystemPromptConfig(Contracts.SystemPrompt.SystemPromptConfig config)
+    {
+        return this.runtime.SetSystemPromptConfigAsync(config, Context.ConnectionAborted);
+    }
+
+    /// <inheritdoc />
+    public Task<Contracts.SystemPrompt.SystemPromptConfig> ResetSystemPromptConfig()
+    {
+        return this.runtime.ResetSystemPromptConfigAsync(Context.ConnectionAborted);
+    }
+
+    /// <inheritdoc />
+    public Task<string> GetSystemPromptPreview(string channelId, bool isVoice)
+    {
+        return this.runtime.GetSystemPromptPreviewAsync(channelId, isVoice, Context.ConnectionAborted);
+    }
+
+    /// <inheritdoc />
     public Task SeedHistory(string channelId, HubChatMessage[] messages)
     {
         this.LogSeedHistory(channelId, messages.Length);

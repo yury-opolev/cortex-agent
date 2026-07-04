@@ -1,3 +1,5 @@
+using Cortex.Contained.Contracts.SystemPrompt;
+
 namespace Cortex.Contained.Contracts.Hub;
 
 /// <summary>
@@ -57,4 +59,22 @@ public interface IChatHub
     /// Unlike <see cref="ResetSession"/> (which just clears), this reloads recent messages.
     /// </summary>
     Task ResetAndReseedSession(string channelId);
+
+    /// <summary>Get the active system-prompt configuration (templates + authorable segments).</summary>
+    Task<SystemPromptConfig> GetSystemPromptConfig();
+
+    /// <summary>
+    /// Validate and, if valid, persist a new system-prompt configuration. Returns the
+    /// validation result — an invalid config is rejected without being persisted.
+    /// </summary>
+    Task<SystemPromptValidationResult> SetSystemPromptConfig(SystemPromptConfig config);
+
+    /// <summary>Reset the system-prompt configuration to defaults and return it.</summary>
+    Task<SystemPromptConfig> ResetSystemPromptConfig();
+
+    /// <summary>
+    /// Render and return the exact system prompt the model would receive for a given
+    /// channel, using the live self-notes/skills/operational state and the stored templates.
+    /// </summary>
+    Task<string> GetSystemPromptPreview(string channelId, bool isVoice);
 }

@@ -140,4 +140,24 @@ public interface IAgentRuntime
     /// Returns an empty array if not yet set.
     /// </summary>
     IReadOnlyList<string> GetActiveChannels();
+
+    /// <summary>Get the active system-prompt configuration (templates + authorable segments).</summary>
+    Task<Contracts.SystemPrompt.SystemPromptConfig> GetSystemPromptConfigAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Validate and, if valid, persist a new system-prompt configuration. Returns the
+    /// validation result — an invalid config is rejected without being persisted. Emits
+    /// an audit log describing the changed fields and fingerprint transition.
+    /// </summary>
+    Task<Contracts.SystemPrompt.SystemPromptValidationResult> SetSystemPromptConfigAsync(
+        Contracts.SystemPrompt.SystemPromptConfig config, CancellationToken cancellationToken);
+
+    /// <summary>Reset the system-prompt configuration to defaults and return it.</summary>
+    Task<Contracts.SystemPrompt.SystemPromptConfig> ResetSystemPromptConfigAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Render and return the exact system prompt the model would receive for a given
+    /// channel, using the live self-notes/skills/operational state and the stored templates.
+    /// </summary>
+    Task<string> GetSystemPromptPreviewAsync(string channelId, bool isVoice, CancellationToken cancellationToken);
 }
