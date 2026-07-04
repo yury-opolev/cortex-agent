@@ -31,8 +31,9 @@ namespace Cortex.Contained.Agent.Host.Agent;
 /// only so tests can construct an <see cref="AgentRuntime"/> cheaply without standing up the
 /// full graph (memory pipeline, SQLite stores, image describer, etc.). Those collaborators
 /// (<c>memoryExtraction</c>, <c>memoryService</c>, <c>embeddingService</c>, <c>subagentStore</c>,
-/// <c>todoResolver</c>, <c>selfNotesStore</c>, <c>skillRegistry</c>, <c>imageDescriber</c>,
-/// <c>compactionOptions</c>) are guarded with feature-presence checks at their (few) use sites.
+/// <c>todoResolver</c>, <c>selfNotesStore</c>, <c>systemPromptStore</c>, <c>skillRegistry</c>,
+/// <c>imageDescriber</c>, <c>compactionOptions</c>) are guarded with feature-presence checks at
+/// their (few) use sites.
 /// </para>
 /// <para>
 /// The one high-traffic exception is the message store: its <c>is not null</c> checks were the
@@ -71,6 +72,7 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
     private readonly SubagentSessionStore? subagentStore;
     private readonly TodoStoreResolver? todoResolver;
     private readonly SelfNotesStore? selfNotesStore;
+    private readonly SystemPromptStore? systemPromptStore;
     private readonly SkillRegistry? skillRegistry;
     private readonly IOptionsMonitor<ImageAgingConfig> imageAgingOptions;
     private readonly IImageDescriber? imageDescriber;
@@ -158,6 +160,7 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
         SubagentSessionStore? subagentStore = null,
         TodoStoreResolver? todoResolver = null,
         SelfNotesStore? selfNotesStore = null,
+        SystemPromptStore? systemPromptStore = null,
         SkillRegistry? skillRegistry = null,
         IImageDescriber? imageDescriber = null,
         IOptionsMonitor<ConversationCompactionConfig>? compactionOptions = null,
@@ -168,6 +171,7 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
         this.subagentStore = subagentStore;
         this.todoResolver = todoResolver;
         this.selfNotesStore = selfNotesStore;
+        this.systemPromptStore = systemPromptStore;
         this.skillRegistry = skillRegistry;
         this.sessions = sessions;
         this.llmClient = llmClient;
@@ -218,7 +222,8 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
             skillRegistry,
             subagentStore,
             todoResolver,
-            imageDescriber);
+            imageDescriber,
+            systemPromptStore);
         this.slashCommandHandler = new SlashCommandHandler(
             bridgeClientAccessor,
             this.messageStore,

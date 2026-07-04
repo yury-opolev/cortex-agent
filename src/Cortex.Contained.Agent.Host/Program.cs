@@ -171,6 +171,12 @@ builder.Services.AddSingleton<IAgentTool>(sp =>
 var selfNotesStore = new Cortex.Contained.Agent.Host.Agent.SelfNotesStore(Path.Combine(stateRoot, "self-notes.md"));
 builder.Services.AddSingleton(selfNotesStore);
 
+// System prompt: user-editable templates + authorable segments (injected into system prompt)
+builder.Services.AddSingleton(sp =>
+    new Cortex.Contained.Agent.Host.Agent.SystemPromptStore(
+        Path.Combine(sandboxRoot, "system-prompt.json"),
+        sp.GetRequiredService<ILogger<Cortex.Contained.Agent.Host.Agent.SystemPromptStore>>()));
+
 // --- External Agent (Claude Code) Relay ---
 builder.Services.AddOptions<Cortex.Contained.Agent.Host.Coding.CodingAgentOptions>()
     .Bind(builder.Configuration.GetSection("Coding"));
@@ -603,6 +609,7 @@ builder.Services.AddSingleton(sp =>
         sp.GetRequiredService<SubagentSessionStore>(),
         sp.GetRequiredService<TodoStoreResolver>(),
         selfNotesStore,
+        sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.SystemPromptStore>(),
         skillRegistry,
         imageDescriber: sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.IImageDescriber>(),
         compactionOptions: sp.GetRequiredService<IOptionsMonitor<ConversationCompactionConfig>>(),
