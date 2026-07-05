@@ -18,11 +18,11 @@ Two related cleanups to the cortex↔coda coding relay, enabled by coda now bein
    provider/model card are redundant.
 
 2. **No first-class control over which coda binary runs.** The MSIX bundles a "built-in"
-   `coda/coda.exe` and `Program.cs` prefers it (`CodaOptions.ResolveDefaultBinaryPath` →
-   bundled-if-present else host `coda` on PATH). This resolution is implicit, invisible in the
-   UI, and — as of the 0.2.300 build — the bundle is **missing from the installed MSIX**, so it
-   silently falls back to host coda. Users want to explicitly choose host vs built-in and see
-   which is active.
+   `coda/coda.exe` (verified present at `<install>/Bridge/coda/coda.exe` in 0.2.300) and
+   `Program.cs` prefers it (`CodaOptions.ResolveDefaultBinaryPath` → bundled-if-present else host
+   `coda` on PATH). This resolution is implicit and invisible in the UI. Users want to explicitly
+   choose host vs built-in and see which is active (e.g. to update coda via `dotnet tool update`
+   without rebuilding cortex).
 
 ## Approved decisions
 
@@ -31,7 +31,8 @@ Two related cleanups to the cortex↔coda coding relay, enabled by coda now bein
    migration).
 2. **Part B — add** a `CodaSource` setting (`Auto | Host | Bundled`, default **Auto**),
    runtime-mutable, with a Settings→Coding UI card showing the selected source, the resolved
-   binary path, and its `coda --version`. **Fix the bundling** so `Bundled` actually ships.
+   binary path, and its `coda --version`. (Bundling already works — verified — so no build change
+   is needed; the plan includes a verification step only.)
 3. MCP-policy machinery (`CodaMcpSettingsStore`, `--no-*-mcp`, curated dir) is **untouched**.
 
 ## Part A — remove provider/model resolution
@@ -87,10 +88,10 @@ config/docs.
 (Auto / Host / Built-in), a read-only line showing **resolved path** + **detected version** +
 a "built-in available: yes/no" indicator, and a Save that re-queries the resolved state.
 
-**Bundling fix:** investigate why the 0.2.300 MSIX shipped no `coda/coda.exe` despite
-`Build-Launcher.ps1`'s publish step, and fix `Build-Launcher.ps1` / MSIX packaging so the bundle
-reliably lands at `<install>/coda/coda.exe`. Verify the installed MSIX contains it and
-`ResolveDefaultBinaryPath` picks it up.
+**Bundling (already works):** `Build-Launcher.ps1` publishes coda self-contained to
+`<OutputDir>/Bridge/coda/coda.exe` and the 0.2.300 install contains it (verified). No build change
+is required; the plan only re-verifies the bundle ships after the rebuild so `Bundled`/`Auto`
+resolve to it.
 
 ## Components
 
@@ -102,9 +103,10 @@ reliably lands at `<install>/coda/coda.exe`. Verify the installed MSIX contains 
 | `CodaOptions` | remove `Provider`/`Model`; add `Source`; resolve binary by source |
 | `CodaSource` (enum, Contracts) + `CodaSourceStore` | new: setting + runtime store |
 | `CodingCodaSourceEndpoints` (new) | GET/PUT coda-source (source, resolvedPath, version) |
-| `Program.cs` | drop model-settings/endpoints; register source store + endpoints |
+| `CodaBinaryResolver` (new, pure) | resolve binary path from source (Host/Bundled/Auto) |
+| `Program.cs` | drop model-settings/endpoints; register source store + endpoints; use resolver |
 | Web UI (`app.html`, `global-settings.js`) | replace provider/model card with coda-source card |
-| `Build-Launcher.ps1` / MSIX | make the coda bundle reliably ship |
+| `Build-Launcher.ps1` / MSIX | unchanged — bundling verified working (re-verify after rebuild) |
 
 ## Telemetry / error handling
 - Log the resolved coda binary path + source at session spawn (aids "which coda ran?").
