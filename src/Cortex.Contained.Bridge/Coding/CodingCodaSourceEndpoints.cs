@@ -25,18 +25,18 @@ public static class CodingCodaSourceEndpoints
     {
         // GET — the effective source: the UI store when set, otherwise the cortex.yml value (NOT a
         // hardcoded default), so the UI reflects reality and a Save can't silently downgrade it.
-        app.MapGet("/api/coding/coda-source", async (CodaSourceStore store, IOptionsMonitor<CodaOptions> codaOptions) =>
+        app.MapGet("/api/coding/coda-source", async (CodaSourceStore store, IOptionsMonitor<CodaOptions> codaOptions, CancellationToken cancellationToken) =>
         {
             var source = store.Get() ?? codaOptions.CurrentValue.Source;
-            var state = await BuildStateAsync(source).ConfigureAwait(false);
+            var state = await BuildStateAsync(source, cancellationToken).ConfigureAwait(false);
             return Results.Ok(state);
         }).RequireAuthorization();
 
         // PUT — validate + persist the selection, then return the freshly-resolved state so the UI
         // updates its resolved-path / version display without a second round-trip.
-        app.MapPut("/api/coding/coda-source", async (HttpContext ctx, CodaSourceStore store) =>
+        app.MapPut("/api/coding/coda-source", async (HttpContext ctx, CodaSourceStore store, CancellationToken cancellationToken) =>
         {
-            var body = await ctx.Request.ReadFromJsonAsync<CodaSourceRequest>().ConfigureAwait(false);
+            var body = await ctx.Request.ReadFromJsonAsync<CodaSourceRequest>(cancellationToken).ConfigureAwait(false);
             if (body is null)
             {
                 return Results.BadRequest(new { error = "Request body is required" });
@@ -49,7 +49,7 @@ public static class CodingCodaSourceEndpoints
             }
 
             store.Set(source);
-            var state = await BuildStateAsync(source).ConfigureAwait(false);
+            var state = await BuildStateAsync(source, cancellationToken).ConfigureAwait(false);
             return Results.Ok(state);
         }).RequireAuthorization();
     }
@@ -107,7 +107,13 @@ public static class CodingCodaSourceEndpoints
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(TimeSpan.FromSeconds(3));
 
+            // Drain stderr concurrently so a binary that writes a banner/warning to stderr can't fill
+            // the (finite) stderr pipe and stall its own stdout write — which would yield a false
+            // "unknown version" after the full timeout. Fire-and-forget; swallow (best-effort probe).
+            var drainStderr = DrainAsync(proc.StandardError, timeout.Token);
+
             var line = await proc.StandardOutput.ReadLineAsync(timeout.Token).ConfigureAwait(false);
+            _ = drainStderr; // observed via its own try/catch; nothing to await here.
             return string.IsNullOrWhiteSpace(line) ? null : line.Trim();
         }
         catch
@@ -130,6 +136,19 @@ public static class CodingCodaSourceEndpoints
             }
 
             proc?.Dispose();
+        }
+    }
+
+    /// <summary>Read a stream to end to keep its pipe drained; swallow any fault (best-effort).</summary>
+    private static async Task DrainAsync(StreamReader reader, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            // Timeout/cancellation or the process was killed — nothing to observe.
         }
     }
 
