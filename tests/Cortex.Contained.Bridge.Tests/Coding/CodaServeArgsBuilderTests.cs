@@ -49,16 +49,17 @@ public sealed class CodaServeArgsBuilderTests
     [Fact]
     public void Build_always_forces_telemetry_and_never_pins_model()
     {
-        var args = CodaServeArgsBuilder.Build("s", "C:\\x", CodingPolicy.Prompt, isResume: false, provider: "github-copilot");
+        var args = CodaServeArgsBuilder.Build("s", "C:\\x", CodingPolicy.Prompt, isResume: false);
 
         Assert.Contains("--telemetry", args);
         Assert.DoesNotContain("--model", args);
-        Assert.Equal("github-copilot", ArgAfter(args, "--provider"));
     }
 
     [Fact]
-    public void Build_without_provider_omits_provider_flag_but_keeps_telemetry()
+    public void Build_never_emits_provider_flag_but_keeps_telemetry()
     {
+        // coda is single-provider and self-resolves its one connected provider — the Bridge
+        // never pins --provider.
         var args = CodaServeArgsBuilder.Build("s", "C:\\x", CodingPolicy.Prompt, isResume: false);
 
         Assert.DoesNotContain("--provider", args);

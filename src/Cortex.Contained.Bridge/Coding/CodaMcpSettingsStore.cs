@@ -6,7 +6,7 @@ namespace Cortex.Contained.Bridge.Coding;
 /// <summary>
 /// Runtime-mutable store for the coda MCP policy selection (set from the web UI). Persists to a JSON
 /// file and reads on demand, so changes are picked up without a restart. Takes precedence over the
-/// <c>Coding:Coda:Mcp</c> value in cortex.yml (mirrors how <see cref="CodaModelSettingsStore"/> works).
+/// <c>Coding:Coda:Mcp</c> value in cortex.yml.
 /// </summary>
 public sealed class CodaMcpSettingsStore : JsonFileSettingsStore<CodaMcpSettingsStore.CodaMcpSettingsFile>
 {

@@ -10,12 +10,6 @@ public sealed class CodaOptions
 
     public int IdleHours { get; set; } = 6;
 
-    /// <summary>Optional coda provider id (null → coda's default).</summary>
-    public string? Provider { get; set; }
-
-    /// <summary>Optional coda model id (null → coda's default).</summary>
-    public string? Model { get; set; }
-
     /// <summary>
     /// Seconds to wait for the coda <c>initialize</c> handshake before giving up. Default 30.
     /// Startup is spawn + handshake only (no LLM work), so a bad config should fail fast — and
@@ -46,14 +40,12 @@ public sealed class CodaOptions
     public string? CuratedMcpDir { get; set; }
 
     /// <summary>Returns a shallow copy of these options — so callers that override a couple of
-    /// fields (e.g. resolved provider/model) never silently drop the rest. Add new fields here.</summary>
+    /// fields (e.g. the MCP policy) never silently drop the rest. Add new fields here.</summary>
     public CodaOptions Clone() => new()
     {
         CodaBinaryPath = this.CodaBinaryPath,
         MaxSessions = this.MaxSessions,
         IdleHours = this.IdleHours,
-        Provider = this.Provider,
-        Model = this.Model,
         StartTimeoutSeconds = this.StartTimeoutSeconds,
         ControlTimeoutSeconds = this.ControlTimeoutSeconds,
         PromptIdleTimeoutSeconds = this.PromptIdleTimeoutSeconds,

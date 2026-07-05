@@ -33,15 +33,11 @@ public sealed class GetSessionTenantIdTests : IDisposable
 
         var foldersStore = new CodingFoldersStore(
             Path.Combine(this.tempRoot, "coding-folders.json"));
-        var modelStore = new CodaModelSettingsStore(
-            Path.Combine(this.tempRoot, "coda-model.json"));
 
         return new CodaSessionManager(
             NullLoggerFactory.Instance,
             options,
-            foldersStore,
-            modelStore,
-            machineHomeDir: Path.Combine(this.tempRoot, "home"));
+            foldersStore);
     }
 
     private static CodaSession MakeSession(string sessionId, string tenantId)

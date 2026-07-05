@@ -457,7 +457,6 @@ public sealed partial class CodaSession : IAsyncDisposable
             this.WorkingFolder,
             this.Policy,
             isResume,
-            this.options.Provider,
             this.Goal,
             this.SessionMemory,
             this.options.Mcp);

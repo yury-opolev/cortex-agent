@@ -26,24 +26,18 @@ public sealed partial class CodaSessionManager : IAsyncDisposable
     private readonly ILogger<CodaSessionManager> logger;
     private readonly IOptionsMonitor<CodaOptions> codaOptions;
     private readonly CodingFoldersStore codingFoldersStore;
-    private readonly CodaModelSettingsStore modelSettingsStore;
     private readonly CodaMcpSettingsStore? mcpSettingsStore;
-    private readonly string? machineHomeDir;
 
     public CodaSessionManager(
         ILoggerFactory loggerFactory,
         IOptionsMonitor<CodaOptions> codaOptions,
         CodingFoldersStore codingFoldersStore,
-        CodaModelSettingsStore modelSettingsStore,
-        string? machineHomeDir = null,
         CodaMcpSettingsStore? mcpSettingsStore = null)
     {
         this.loggerFactory = loggerFactory;
         this.logger = loggerFactory.CreateLogger<CodaSessionManager>();
         this.codaOptions = codaOptions;
         this.codingFoldersStore = codingFoldersStore;
-        this.modelSettingsStore = modelSettingsStore;
-        this.machineHomeDir = machineHomeDir;
         this.mcpSettingsStore = mcpSettingsStore;
     }
 
@@ -155,34 +149,13 @@ public sealed partial class CodaSessionManager : IAsyncDisposable
     }
 
     /// <summary>
-    /// Resolves the coda provider/model with precedence: Bridge UI setting (coda-model.json)
-    /// → YAML config → machine ~/.coda/settings.json. Returns nulls when nothing is configured.
-    /// </summary>
-    internal (string? Provider, string? Model) ResolveProviderModel()
-    {
-        var stored = this.modelSettingsStore.Get();
-        var base_ = this.codaOptions.CurrentValue;
-        var (machineProvider, machineModel) = CodaMachineSettingsReader.Read(this.machineHomeDir);
-
-        var provider = Blank(stored.Provider) ?? Blank(base_.Provider) ?? Blank(machineProvider);
-        var model = Blank(stored.Model) ?? Blank(base_.Model) ?? Blank(machineModel);
-        return (provider, model);
-
-        static string? Blank(string? v) => string.IsNullOrWhiteSpace(v) ? null : v;
-    }
-
-    /// <summary>
-    /// Returns a <see cref="CodaOptions"/> with Provider/Model resolved via
-    /// <see cref="ResolveProviderModel"/> (UI store → YAML → machine settings). All other
-    /// fields come from the live YAML options.
+    /// Returns a <see cref="CodaOptions"/> with the MCP policy resolved via the UI store
+    /// (coda-mcp.json), falling back to the live YAML options for everything else.
     /// </summary>
     internal CodaOptions EffectiveOptions()
     {
-        var (provider, model) = this.ResolveProviderModel();
         // Clone so every other field passes through unchanged; only resolved fields are overridden.
         var effective = this.codaOptions.CurrentValue.Clone();
-        effective.Provider = provider;
-        effective.Model = model;
 
         // The UI store (coda-mcp.json) overrides the cortex.yml Coding:Coda:Mcp policy when set.
         if (this.mcpSettingsStore?.Get() is { } mcp)
@@ -247,12 +220,6 @@ public sealed partial class CodaSessionManager : IAsyncDisposable
         }
 
         var effective = this.EffectiveOptions();
-        if (string.IsNullOrWhiteSpace(effective.Provider))
-        {
-            throw new CodingAgentException(
-                CodingAgentErrorCodes.NoProvider,
-                "No coda provider configured. Set one in Settings → Coding, or configure ~/.coda/settings.json (defaultProvider). The model is taken from coda's own default.");
-        }
 
         var sessionId = Guid.NewGuid().ToString("D");
         var session = new CodaSession(
@@ -366,12 +333,6 @@ public sealed partial class CodaSessionManager : IAsyncDisposable
         }
 
         var effective = this.EffectiveOptions();
-        if (string.IsNullOrWhiteSpace(effective.Provider))
-        {
-            throw new CodingAgentException(
-                CodingAgentErrorCodes.NoProvider,
-                "No coda provider configured. Set one in Settings → Coding, or configure ~/.coda/settings.json (defaultProvider). The model is taken from coda's own default.");
-        }
 
         var session = new CodaSession(
             request.SessionId,

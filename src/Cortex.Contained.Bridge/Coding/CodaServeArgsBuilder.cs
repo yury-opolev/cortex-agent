@@ -10,7 +10,6 @@ public static class CodaServeArgsBuilder
         string workingFolder,
         CodingPolicy policy,
         bool isResume,
-        string? provider = null,
         string? goal = null,
         bool sessionMemory = false,
         CodaMcpPolicy mcp = CodaMcpPolicy.Host)
@@ -29,15 +28,9 @@ public static class CodaServeArgsBuilder
             "--telemetry",
         };
 
-        // NOTE: we intentionally do NOT pass --model. Cortex pins only the provider; the model is
-        // resolved by coda from its own configured default (~/.coda/settings.json defaultModel),
-        // so a stale model can't be injected here.
-        if (!string.IsNullOrWhiteSpace(provider))
-        {
-            args.Add("--provider");
-            args.Add(provider);
-        }
-
+        // NOTE: we intentionally do NOT pass --provider or --model. coda is single-provider and
+        // self-resolves its one connected provider; the model comes from coda's own configured
+        // default (~/.coda/settings.json defaultModel), so neither can be pinned here.
         if (!string.IsNullOrWhiteSpace(goal))
         {
             args.Add("--goal");

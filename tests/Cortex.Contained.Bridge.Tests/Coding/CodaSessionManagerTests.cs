@@ -6,41 +6,32 @@ using Microsoft.Extensions.Options;
 namespace Cortex.Contained.Bridge.Tests.Coding;
 
 /// <summary>
-/// Tests for <see cref="CodaSessionManager.ResolveProviderModel"/> precedence and the
-/// fail-fast gate that prevents spawning a doomed coda session when no provider/model is
-/// configured. The gate runs before <c>new CodaSession(...)</c>, so these tests never launch
-/// a real coda process.
+/// Tests for <see cref="CodaSessionManager.EffectiveOptions"/>: the UI MCP-policy store
+/// (coda-mcp.json) overrides the cortex.yml <c>Coding:Coda:Mcp</c> value when set, and falls
+/// back to it when unset. coda is single-provider and self-resolves its provider, so the
+/// Bridge no longer resolves/pins one — this class covers only the MCP-policy override that
+/// survives that removal.
 /// </summary>
-public sealed class CodaSessionManagerProviderTests : IDisposable
+public sealed class CodaSessionManagerEffectiveOptionsTests : IDisposable
 {
     private readonly string tempRoot = Path.Combine(Path.GetTempPath(), "cortex-b1-" + Guid.NewGuid().ToString("N"));
 
-    private string ModelFilePath => Path.Combine(this.tempRoot, "coda-model.json");
-
-    private string MachineHome => Path.Combine(this.tempRoot, "home");
-
     private string McpFilePath => Path.Combine(this.tempRoot, "coda-mcp.json");
 
-    private CodaSessionManager NewManager(
-        string? yamlProvider = null,
-        string? yamlModel = null,
-        CodaMcpPolicy yamlMcp = CodaMcpPolicy.Host)
+    private CodaSessionManager NewManager(CodaMcpPolicy yamlMcp = CodaMcpPolicy.Host)
     {
         Directory.CreateDirectory(this.tempRoot);
 
         var options = Substitute.For<IOptionsMonitor<CodaOptions>>();
-        options.CurrentValue.Returns(new CodaOptions { Provider = yamlProvider, Model = yamlModel, Mcp = yamlMcp });
+        options.CurrentValue.Returns(new CodaOptions { Mcp = yamlMcp });
 
         var foldersStore = new CodingFoldersStore(Path.Combine(this.tempRoot, "coding-folders.json"));
-        var modelStore = new CodaModelSettingsStore(this.ModelFilePath);
         var mcpStore = new CodaMcpSettingsStore(this.McpFilePath);
 
         return new CodaSessionManager(
             NullLoggerFactory.Instance,
             options,
             foldersStore,
-            modelStore,
-            this.MachineHome,
             mcpStore);
     }
 
@@ -69,124 +60,6 @@ public sealed class CodaSessionManagerProviderTests : IDisposable
         var effective = manager.EffectiveOptions();
 
         Assert.Equal(CodaMcpPolicy.Off, effective.Mcp); // no UI override → cortex.yml value
-    }
-
-    private void WriteUiStore(string? provider, string? model)
-    {
-        new CodaModelSettingsStore(this.ModelFilePath).Set(provider, model);
-    }
-
-    private void WriteMachineSettings(string provider, string model)
-    {
-        var dir = Path.Combine(this.MachineHome, ".coda");
-        Directory.CreateDirectory(dir);
-        File.WriteAllText(
-            Path.Combine(dir, "settings.json"),
-            $$"""{ "defaultProvider": "{{provider}}", "defaultModel": "{{model}}" }""");
-    }
-
-    [Fact]
-    public void Resolve_PrefersUiStore_OverMachineSettings()
-    {
-        var manager = this.NewManager();
-        this.WriteUiStore("providerU", "modelU");
-        this.WriteMachineSettings("providerM", "modelM");
-
-        var (provider, model) = manager.ResolveProviderModel();
-
-        Assert.Equal("providerU", provider);
-        Assert.Equal("modelU", model);
-    }
-
-    [Fact]
-    public void Resolve_FallsBackToMachineSettings_WhenUiAndYamlUnset()
-    {
-        var manager = this.NewManager(yamlProvider: null, yamlModel: null);
-        this.WriteMachineSettings("providerM", "modelM");
-
-        var (provider, model) = manager.ResolveProviderModel();
-
-        Assert.Equal("providerM", provider);
-        Assert.Equal("modelM", model);
-    }
-
-    [Fact]
-    public void Resolve_AllUnset_ReturnsNulls()
-    {
-        var manager = this.NewManager();
-
-        var (provider, model) = manager.ResolveProviderModel();
-
-        Assert.Null(provider);
-        Assert.Null(model);
-    }
-
-    [Fact]
-    public async Task Start_NoProviderConfigured_ThrowsNoProvider()
-    {
-        var manager = this.NewManager();
-
-        // An allowed, existing working folder so we pass the folder gate and reach the provider gate.
-        var workingFolder = Path.Combine(this.tempRoot, "work");
-        Directory.CreateDirectory(workingFolder);
-        var foldersStore = new CodingFoldersStore(Path.Combine(this.tempRoot, "coding-folders.json"));
-        foldersStore.Add(workingFolder, label: "work", CodingPolicy.YoloSafe);
-
-        var request = new CodingStartRequest
-        {
-            ChannelId = "chan-1",
-            WorkingFolder = workingFolder,
-        };
-
-        var ex = await Assert.ThrowsAsync<CodingAgentException>(
-            () => manager.StartAsync("default", request, CancellationToken.None));
-
-        Assert.Equal(CodingAgentErrorCodes.NoProvider, ex.ErrorCode);
-    }
-
-    [Fact]
-    public async Task StartAsync_Cap_IsEnforcedPerTenant_NotGlobally()
-    {
-        var manager = this.NewManager();
-
-        // An allowed, existing working folder so we pass the folder + allowlist gates.
-        var workingFolder = Path.Combine(this.tempRoot, "work");
-        Directory.CreateDirectory(workingFolder);
-        var foldersStore = new CodingFoldersStore(Path.Combine(this.tempRoot, "coding-folders.json"));
-        foldersStore.Add(workingFolder, label: "work", CodingPolicy.YoloSafe);
-
-        // Fill tenantA's budget (MaxSessions defaults to 3) with pre-built, non-started sessions.
-        for (var i = 0; i < 3; i++)
-        {
-            var filler = new CodaSession(
-                Guid.NewGuid().ToString("D"),
-                channelId: "chan-" + i,
-                workingFolder: workingFolder,
-                policy: CodingPolicy.YoloSafe,
-                options: new CodaOptions(),
-                logger: NullLogger<CodaSession>.Instance)
-            {
-                TenantId = "tenantA",
-            };
-            manager.RegisterSessionForTesting(filler);
-        }
-
-        var request = new CodingStartRequest
-        {
-            ChannelId = "chan-new",
-            WorkingFolder = workingFolder,
-        };
-
-        // tenantA is at its per-tenant ceiling → MaxSessionsReached (gate hit before any spawn).
-        var exA = await Assert.ThrowsAsync<CodingAgentException>(
-            () => manager.StartAsync("tenantA", request, CancellationToken.None));
-        Assert.Equal(CodingAgentErrorCodes.MaxSessionsReached, exA.ErrorCode);
-
-        // tenantB has its own budget → passes the cap gate, then fails at the provider gate.
-        // Proves the cap is per-tenant, not global. (No provider configured in NewManager.)
-        var exB = await Assert.ThrowsAsync<CodingAgentException>(
-            () => manager.StartAsync("tenantB", request, CancellationToken.None));
-        Assert.Equal(CodingAgentErrorCodes.NoProvider, exB.ErrorCode);
     }
 
     public void Dispose()
@@ -509,15 +382,12 @@ public sealed class CodaSessionManagerStartFailureTests : IDisposable
         var options = Substitute.For<IOptionsMonitor<CodaOptions>>();
         options.CurrentValue.Returns(new CodaOptions
         {
-            Provider = "github-copilot",
-            Model = "some-model",
             CodaBinaryPath = bogusBinary,
             StartTimeoutSeconds = 5,
         });
 
-        var modelStore = new CodaModelSettingsStore(Path.Combine(this.tempRoot, "coda-model.json"));
         var manager = new CodaSessionManager(
-            NullLoggerFactory.Instance, options, foldersStore, modelStore, Path.Combine(this.tempRoot, "home"));
+            NullLoggerFactory.Instance, options, foldersStore);
 
         var request = new CodingStartRequest { ChannelId = "c1", WorkingFolder = workingFolder, RequestedPolicy = CodingPolicy.Yolo };
 
@@ -554,9 +424,7 @@ public sealed class CodaSessionManagerSendReadinessTests : IDisposable
         return new CodaSessionManager(
             NullLoggerFactory.Instance,
             options,
-            new CodingFoldersStore(Path.Combine(this.tempRoot, "coding-folders.json")),
-            new CodaModelSettingsStore(Path.Combine(this.tempRoot, "coda-model.json")),
-            Path.Combine(this.tempRoot, "home"));
+            new CodingFoldersStore(Path.Combine(this.tempRoot, "coding-folders.json")));
     }
 
     [Fact]
@@ -611,9 +479,7 @@ public sealed class CodaSessionManagerHistoryTests : IDisposable
         return new CodaSessionManager(
             NullLoggerFactory.Instance,
             options,
-            new CodingFoldersStore(Path.Combine(this.tempRoot, "coding-folders.json")),
-            new CodaModelSettingsStore(Path.Combine(this.tempRoot, "coda-model.json")),
-            Path.Combine(this.tempRoot, "home"));
+            new CodingFoldersStore(Path.Combine(this.tempRoot, "coding-folders.json")));
     }
 
     private async Task<(CodaSessionManager Manager, FakeCoda.FakeCodaServer Server, CodaSession Session)> NewLiveSessionAsync(string sessionId)
@@ -768,9 +634,7 @@ public sealed class CodaSessionManagerLivenessTests : IDisposable
         return new CodaSessionManager(
             NullLoggerFactory.Instance,
             options,
-            new CodingFoldersStore(Path.Combine(this.tempRoot, "coding-folders.json")),
-            new CodaModelSettingsStore(Path.Combine(this.tempRoot, "coda-model.json")),
-            Path.Combine(this.tempRoot, "home"));
+            new CodingFoldersStore(Path.Combine(this.tempRoot, "coding-folders.json")));
     }
 
     /// <summary>

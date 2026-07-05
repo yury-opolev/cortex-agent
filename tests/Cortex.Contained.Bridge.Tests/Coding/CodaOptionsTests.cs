@@ -39,8 +39,6 @@ public sealed class CodaOptionsTests
             CodaBinaryPath = "x/coda.exe",
             MaxSessions = 7,
             IdleHours = 9,
-            Provider = "github-copilot",
-            Model = "m",
             StartTimeoutSeconds = 11,
             ControlTimeoutSeconds = 12,
             PromptIdleTimeoutSeconds = 13,
@@ -54,8 +52,6 @@ public sealed class CodaOptionsTests
         Assert.Equal("x/coda.exe", copy.CodaBinaryPath);
         Assert.Equal(7, copy.MaxSessions);
         Assert.Equal(9, copy.IdleHours);
-        Assert.Equal("github-copilot", copy.Provider);
-        Assert.Equal("m", copy.Model);
         Assert.Equal(11, copy.StartTimeoutSeconds);
         Assert.Equal(12, copy.ControlTimeoutSeconds);
         Assert.Equal(13, copy.PromptIdleTimeoutSeconds);
