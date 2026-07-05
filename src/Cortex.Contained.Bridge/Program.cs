@@ -1057,6 +1057,7 @@ app.MapTenantEndpoints();
 // --- Coding Folders API ---
 app.MapCodingFoldersEndpoints();
 app.MapCodingMcpEndpoints();
+app.MapCodaSourceEndpoints();
 
 // --- Settings API ---
 app.MapSettingsEndpoints(cortexConfigPath);
