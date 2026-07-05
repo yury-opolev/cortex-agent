@@ -149,9 +149,9 @@ function globalSettingsPage() {
         codaFolders: [],
         codaAddForm: { path: "", label: "", policy: "YoloSafe" },
         codaAddError: "",
-        codaModel: { provider: "", model: "" },
-        codaModelProviders: [],
-        codaModelLoading: false,
+        codaSource: { source: "auto", resolvedPath: "", version: "", bundlePresent: false },
+        codaSourceLoading: false,
+        codaSourceSaving: false,
         codaMcp: { policy: "host", curatedMcpDir: "" },
         codaMcpLoading: false,
 
@@ -905,7 +905,7 @@ function globalSettingsPage() {
             }
             this.codaFoldersLoading = false;
             this.codaAuthLoading = false;
-            await this.loadCodaModelSettings();
+            await this.loadCodaSource();
             await this.loadCodaMcpSettings();
         },
 
@@ -936,30 +936,29 @@ function globalSettingsPage() {
             }
         },
 
-        async loadCodaModelSettings() {
-            this.codaModelLoading = true;
+        // Which coda binary the Bridge launches: Auto (bundled-else-host) / Host (PATH) /
+        // Built-in (bundled). Route is not tenant-scoped — a single setting per Bridge,
+        // mirroring the MCP-policy card. GET/PUT return the freshly-resolved state
+        // (source + resolvedPath + version + bundlePresent).
+        async loadCodaSource() {
+            this.codaSourceLoading = true;
             try {
-                const data = await api.get("/api/coding/model-settings");
-                this.codaModel = { provider: data.provider || "", model: data.model || "" };
-                this.codaModelProviders = data.availableProviders || [];
+                this.codaSource = await api.get("/api/coding/coda-source");
             } catch (e) {
-                // Silently ignore — endpoint may not be available yet
+                Alpine.store("toast").error("Failed to load coda source");
             }
-            this.codaModelLoading = false;
+            this.codaSourceLoading = false;
         },
 
-        async saveCodaModelSettings() {
+        async saveCodaSource() {
+            this.codaSourceSaving = true;
             try {
-                const payload = {
-                    provider: this.codaModel.provider || undefined,
-                    model: (this.codaModel.model || "").trim() || undefined,
-                };
-                await api.put("/api/coding/model-settings", payload);
-                Alpine.store("toast").success("Provider/model saved");
-                await this.loadCodaModelSettings();
+                this.codaSource = await api.put("/api/coding/coda-source", { source: this.codaSource.source });
+                Alpine.store("toast").success("Coda source saved");
             } catch (e) {
                 Alpine.store("toast").error(e.message);
             }
+            this.codaSourceSaving = false;
         },
 
         async addCodingFolder() {
