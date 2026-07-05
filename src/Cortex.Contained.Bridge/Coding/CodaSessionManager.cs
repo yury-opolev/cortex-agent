@@ -28,13 +28,15 @@ public sealed partial class CodaSessionManager : IAsyncDisposable
     private readonly CodingFoldersStore codingFoldersStore;
     private readonly CodaMcpSettingsStore? mcpSettingsStore;
     private readonly CodaSourceStore? sourceStore;
+    private readonly ICodaProcessGroup? processGroup;
 
     public CodaSessionManager(
         ILoggerFactory loggerFactory,
         IOptionsMonitor<CodaOptions> codaOptions,
         CodingFoldersStore codingFoldersStore,
         CodaMcpSettingsStore? mcpSettingsStore = null,
-        CodaSourceStore? sourceStore = null)
+        CodaSourceStore? sourceStore = null,
+        ICodaProcessGroup? processGroup = null)
     {
         this.loggerFactory = loggerFactory;
         this.logger = loggerFactory.CreateLogger<CodaSessionManager>();
@@ -42,6 +44,7 @@ public sealed partial class CodaSessionManager : IAsyncDisposable
         this.codingFoldersStore = codingFoldersStore;
         this.mcpSettingsStore = mcpSettingsStore;
         this.sourceStore = sourceStore;
+        this.processGroup = processGroup;
     }
 
     // -----------------------------------------------------------------------
@@ -259,7 +262,8 @@ public sealed partial class CodaSessionManager : IAsyncDisposable
             effective,
             this.loggerFactory.CreateLogger<CodaSession>(),
             request.Goal,
-            request.SessionMemory);
+            request.SessionMemory,
+            this.processGroup);
 
         session.TenantId = tenantId;
         this.WireSessionEvents(session);
@@ -369,7 +373,8 @@ public sealed partial class CodaSessionManager : IAsyncDisposable
             request.WorkingFolder,
             policy,
             effective,
-            this.loggerFactory.CreateLogger<CodaSession>());
+            this.loggerFactory.CreateLogger<CodaSession>(),
+            processGroup: this.processGroup);
 
         session.TenantId = tenantId;
         this.WireSessionEvents(session);

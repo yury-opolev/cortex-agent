@@ -516,6 +516,41 @@ public sealed class CodaSessionManagerSendReadinessTests : IDisposable
         Assert.Equal(CodingAgentErrorCodes.SessionNotReady, ex.ErrorCode);
         Assert.Contains("No message was delivered", ex.Message);
     }
+
+    [Fact]
+    public async Task Crash_ReapsOwnedCodaProcess()
+    {
+        var (server, clientStream) = FakeCoda.FakeCodaServer.Create();
+        await using var _ = server;
+        var connection = new CodaJsonRpcConnection(clientStream, clientStream);
+        var session = new CodaSession(
+            "reap-session", "c1", Path.Combine(this.tempRoot, "wf"), CodingPolicy.Prompt, connection, NullLogger<CodaSession>.Instance);
+
+        // A real, long-running stand-in for the coda process: cmd.exe blocks reading redirected stdin.
+        using var proc = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("cmd.exe")
+        {
+            RedirectStandardInput = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        })!;
+        session.AttachProcessForTesting(proc);
+
+        var errorSignal = new TaskCompletionSource<CodaErrorEvent>(TaskCreationOptions.RunContinuationsAsynchronously);
+        session.Error += evt => errorSignal.TrySetResult(evt);
+
+        server.Scenario = FakeCoda.FakeCodaScenario.Crash;
+        await session.StartAsync(isResume: false, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+        await session.WriteUserMessageAsync("go", CancellationToken.None);
+        await errorSignal.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var exited = proc.WaitForExit(5000);
+        if (!exited)
+        {
+            try { proc.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
+        }
+
+        Assert.True(exited, "a crash must reap (kill) the owned coda process so it does not orphan");
+    }
 }
 
 /// <summary>

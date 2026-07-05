@@ -851,6 +851,10 @@ builder.Services.AddOptions<Cortex.Contained.Bridge.Coding.CodaOptions>()
 builder.Services.AddSingleton(sp => Cortex.Contained.Bridge.Coding.CodingFoldersStore.Default());
 builder.Services.AddSingleton(sp => Cortex.Contained.Bridge.Coding.CodaMcpSettingsStore.Default());
 builder.Services.AddSingleton(sp => Cortex.Contained.Bridge.Coding.CodaSourceStore.Default());
+// KILL_ON_JOB_CLOSE job so no coda process can outlive the Bridge (belt to the per-session reap).
+builder.Services.AddSingleton<Cortex.Contained.Bridge.Coding.ICodaProcessGroup>(sp =>
+    new Cortex.Contained.Bridge.Coding.WindowsJobProcessGroup(
+        sp.GetRequiredService<ILogger<Cortex.Contained.Bridge.Coding.WindowsJobProcessGroup>>()));
 builder.Services.AddSingleton<Cortex.Contained.Bridge.Coding.CodaSessionManager>();
 builder.Services.AddSingleton<Cortex.Contained.Bridge.Coding.CodingHubBinder>();
 

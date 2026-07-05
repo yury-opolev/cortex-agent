@@ -24,6 +24,7 @@ public sealed partial class CodaSession : IAsyncDisposable
     private readonly ILogger<CodaSession> logger;
     private readonly CodaOptions options;
     private readonly bool ownsProcess;
+    private readonly ICodaProcessGroup? processGroup;
     private readonly Lock stateLock = new();
     private readonly StringBuilder stderrBuffer = new();
     private readonly ConcurrentQueue<CodingToolCall> currentTaskToolCalls = new();
@@ -69,7 +70,8 @@ public sealed partial class CodaSession : IAsyncDisposable
         CodaOptions options,
         ILogger<CodaSession> logger,
         string? goal = null,
-        bool sessionMemory = false)
+        bool sessionMemory = false,
+        ICodaProcessGroup? processGroup = null)
     {
         this.SessionId = sessionId;
         this.ChannelId = channelId;
@@ -78,6 +80,7 @@ public sealed partial class CodaSession : IAsyncDisposable
         this.options = options;
         this.logger = logger;
         this.ownsProcess = true;
+        this.processGroup = processGroup;
         this.CreatedAt = DateTimeOffset.UtcNow;
         this.LastActivityAt = this.CreatedAt;
         this.Goal = goal;
@@ -376,17 +379,8 @@ public sealed partial class CodaSession : IAsyncDisposable
 
                 // Mark crashed WITHOUT firing the generic Error event — the stall is relayed once,
                 // via Stalled, so the agent never receives a duplicate crashed+stalled injection.
+                // MarkCrashed reaps the coda process tree, so no separate kill is needed here.
                 this.MarkCrashed(message);
-
-                try
-                {
-                    this.process?.Kill(entireProcessTree: true);
-                }
-                catch (InvalidOperationException)
-                {
-                    // Already exited (or test seam with no process).
-                }
-
                 return;
             }
         }
@@ -480,6 +474,10 @@ public sealed partial class CodaSession : IAsyncDisposable
         {
             throw new InvalidOperationException($"Failed to launch '{this.options.CodaBinaryPath}'.");
         }
+
+        // Enroll in the Bridge's kill-on-close job so this coda can never outlive the Bridge, even
+        // if the Bridge is force-killed before the session's own reactive reap can run.
+        this.processGroup?.Register(proc);
 
         lock (this.stateLock)
         {
@@ -994,6 +992,41 @@ public sealed partial class CodaSession : IAsyncDisposable
         }
 
         this.LastError = message;
+
+        // Reap the coda process: on a fatal error coda serve does NOT self-exit (it stays in serve
+        // mode awaiting RPC), so without this the OS process orphans. Kill the whole tree. Done
+        // AFTER State is Crashed so the resulting OnProcessExited sees a terminal state and does not
+        // raise a duplicate Error. Harmless if it already exited (OnProcessExited path).
+        this.KillOwnedProcessTree();
+    }
+
+    /// <summary>
+    /// Force-kill the owned coda process and its children. No-op when there is no owned process
+    /// (the resume/test-connection seam) or it already exited.
+    /// </summary>
+    private void KillOwnedProcessTree()
+    {
+        var proc = this.process;
+        if (proc is null)
+        {
+            return;
+        }
+
+        try
+        {
+            proc.Kill(entireProcessTree: true);
+            this.LogReapedProcess(this.SessionId);
+        }
+        catch (InvalidOperationException)
+        {
+            // Already exited — nothing to reap.
+        }
+    }
+
+    /// <summary>Test seam: attach a real throwaway process so the crash-reap path can be exercised.</summary>
+    internal void AttachProcessForTesting(Process testProcess)
+    {
+        this.process = testProcess;
     }
 
     private void RaiseError(int? exitCode, string? stderrTail, string message)
@@ -1196,4 +1229,8 @@ public sealed partial class CodaSession : IAsyncDisposable
     [LoggerMessage(EventId = 9209, Level = LogLevel.Warning,
         Message = "Coda session {sessionId}: MCP policy is Curated but CuratedMcpDir is blank — falling back to host MCP config (the coding engine will inherit the host's ~/.coda/.mcp.json)")]
     private partial void LogCuratedMcpMisconfigured(string sessionId);
+
+    [LoggerMessage(EventId = 9210, Level = LogLevel.Information,
+        Message = "Coda session {sessionId}: reaped coda process tree on crash")]
+    private partial void LogReapedProcess(string sessionId);
 }

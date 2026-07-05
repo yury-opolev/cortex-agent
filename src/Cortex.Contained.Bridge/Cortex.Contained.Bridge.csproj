@@ -3,6 +3,8 @@
   <PropertyGroup>
     <!-- Bridge runs as a Windows Service; target windows for DPAPI support -->
     <TargetFramework>net10.0-windows</TargetFramework>
+    <!-- Required by [LibraryImport] source-generated P/Invoke (WindowsJobProcessGroup). -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>
