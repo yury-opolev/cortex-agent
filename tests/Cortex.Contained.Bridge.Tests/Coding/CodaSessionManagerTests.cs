@@ -400,6 +400,68 @@ public sealed class CodaSessionManagerStartFailureTests : IDisposable
             manager.ListSessions(),
             s => s.State is not (CodingSessionState.Crashed or CodingSessionState.Ended));
     }
+
+    /// <summary>
+    /// Proves the <see cref="CodaSessionAdmission.CheckTenantCeiling"/> cap wiring inside
+    /// <see cref="CodaSessionManager.StartAsync"/> is enforced PER TENANT, not globally: tenantA
+    /// filled to its ceiling is rejected with <c>MaxSessionsReached</c> before any spawn is
+    /// attempted, while tenantB (an empty budget) passes the cap gate for the exact same request
+    /// and only then fails at the spawn step (bogus binary → <c>StartFailed</c>) — the same
+    /// no-real-process pattern as <see cref="StartAsync_SpawnFails_ThrowsStartFailed_AndLeavesNoPhantom"/>.
+    /// </summary>
+    [Fact]
+    public async Task StartAsync_Cap_IsEnforcedPerTenant_NotGlobally()
+    {
+        Directory.CreateDirectory(this.tempRoot);
+        var workingFolder = Path.Combine(this.tempRoot, "repo");
+        Directory.CreateDirectory(workingFolder);
+
+        var foldersStore = new CodingFoldersStore(Path.Combine(this.tempRoot, "coding-folders.json"));
+        foldersStore.Add(workingFolder, label: "repo", CodingPolicy.Yolo);
+
+        var bogusBinary = Path.Combine(this.tempRoot, "does-not-exist-coda.exe");
+        var options = Substitute.For<IOptionsMonitor<CodaOptions>>();
+        options.CurrentValue.Returns(new CodaOptions
+        {
+            CodaBinaryPath = bogusBinary,
+            StartTimeoutSeconds = 5,
+            MaxSessions = 1,
+        });
+
+        var manager = new CodaSessionManager(
+            NullLoggerFactory.Instance, options, foldersStore);
+
+        // Fill tenantA's per-tenant budget (MaxSessions = 1) with a pre-built, non-started session.
+        var filler = new CodaSession(
+            Guid.NewGuid().ToString("D"),
+            channelId: "chan-filler",
+            workingFolder: workingFolder,
+            policy: CodingPolicy.Yolo,
+            options: new CodaOptions(),
+            logger: NullLogger<CodaSession>.Instance)
+        {
+            TenantId = "tenantA",
+        };
+        manager.RegisterSessionForTesting(filler);
+
+        var request = new CodingStartRequest
+        {
+            ChannelId = "chan-new",
+            WorkingFolder = workingFolder,
+            RequestedPolicy = CodingPolicy.Yolo,
+        };
+
+        // tenantA is at its per-tenant ceiling → MaxSessionsReached (gate hit before any spawn).
+        var exA = await Assert.ThrowsAsync<CodingAgentException>(
+            () => manager.StartAsync("tenantA", request, CancellationToken.None));
+        Assert.Equal(CodingAgentErrorCodes.MaxSessionsReached, exA.ErrorCode);
+
+        // tenantB has its own (empty) budget → passes the cap gate, then fails at the spawn step
+        // because of the bogus binary. Proves the cap is per-tenant, not global.
+        var exB = await Assert.ThrowsAsync<CodingAgentException>(
+            () => manager.StartAsync("tenantB", request, CancellationToken.None));
+        Assert.Equal(CodingAgentErrorCodes.StartFailed, exB.ErrorCode);
+    }
 }
 
 /// <summary>
