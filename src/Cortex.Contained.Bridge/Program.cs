@@ -847,16 +847,10 @@ builder.Services.AddSingleton<Cortex.Contained.Bridge.Tenants.IContainerManager,
 
 // --- Coda Coding Engine ---
 builder.Services.AddOptions<Cortex.Contained.Bridge.Coding.CodaOptions>()
-    .Bind(builder.Configuration.GetSection("Coding:Coda"))
-    .PostConfigure(o =>
-    {
-        if (string.IsNullOrWhiteSpace(o.CodaBinaryPath) || o.CodaBinaryPath == "coda")
-        {
-            o.CodaBinaryPath = Cortex.Contained.Bridge.Coding.CodaOptions.ResolveDefaultBinaryPath();
-        }
-    });
+    .Bind(builder.Configuration.GetSection("Coding:Coda"));
 builder.Services.AddSingleton(sp => Cortex.Contained.Bridge.Coding.CodingFoldersStore.Default());
 builder.Services.AddSingleton(sp => Cortex.Contained.Bridge.Coding.CodaMcpSettingsStore.Default());
+builder.Services.AddSingleton(sp => Cortex.Contained.Bridge.Coding.CodaSourceStore.Default());
 builder.Services.AddSingleton<Cortex.Contained.Bridge.Coding.CodaSessionManager>();
 builder.Services.AddSingleton<Cortex.Contained.Bridge.Coding.CodingHubBinder>();
 

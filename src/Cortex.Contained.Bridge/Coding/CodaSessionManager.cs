@@ -27,18 +27,21 @@ public sealed partial class CodaSessionManager : IAsyncDisposable
     private readonly IOptionsMonitor<CodaOptions> codaOptions;
     private readonly CodingFoldersStore codingFoldersStore;
     private readonly CodaMcpSettingsStore? mcpSettingsStore;
+    private readonly CodaSourceStore? sourceStore;
 
     public CodaSessionManager(
         ILoggerFactory loggerFactory,
         IOptionsMonitor<CodaOptions> codaOptions,
         CodingFoldersStore codingFoldersStore,
-        CodaMcpSettingsStore? mcpSettingsStore = null)
+        CodaMcpSettingsStore? mcpSettingsStore = null,
+        CodaSourceStore? sourceStore = null)
     {
         this.loggerFactory = loggerFactory;
         this.logger = loggerFactory.CreateLogger<CodaSessionManager>();
         this.codaOptions = codaOptions;
         this.codingFoldersStore = codingFoldersStore;
         this.mcpSettingsStore = mcpSettingsStore;
+        this.sourceStore = sourceStore;
     }
 
     // -----------------------------------------------------------------------
@@ -150,7 +153,9 @@ public sealed partial class CodaSessionManager : IAsyncDisposable
 
     /// <summary>
     /// Returns a <see cref="CodaOptions"/> with the MCP policy resolved via the UI store
-    /// (coda-mcp.json), falling back to the live YAML options for everything else.
+    /// (coda-mcp.json) and the coda binary path resolved via the effective <see cref="CodaSource"/>
+    /// (the UI store <c>coda-source.json</c> overrides the cortex.yml <c>Coding:Coda:Source</c>
+    /// when set), falling back to the live YAML options for everything else.
     /// </summary>
     internal CodaOptions EffectiveOptions()
     {
@@ -169,6 +174,24 @@ public sealed partial class CodaSessionManager : IAsyncDisposable
             {
                 effective.CuratedMcpDir = mcp.CuratedMcpDir;
             }
+        }
+
+        // Resolve the coda binary path from the effective CodaSource — BUT only when the path was
+        // left at its "coda" default. An explicitly-configured CodaBinaryPath (cortex.yml override
+        // or a test injecting a specific/bogus binary) always wins; this mirrors the retired
+        // PostConfigure, which likewise only defaulted a blank/"coda" path. The UI store
+        // (coda-source.json) overrides the cortex.yml Coding:Coda:Source when set.
+        if (string.IsNullOrWhiteSpace(effective.CodaBinaryPath) || effective.CodaBinaryPath == "coda")
+        {
+            var source = this.sourceStore?.Get() ?? effective.Source;
+            var (binPath, fellBack) = CodaBinaryResolver.Resolve(source, AppContext.BaseDirectory, System.IO.File.Exists);
+            effective.CodaBinaryPath = binPath;
+            if (fellBack)
+            {
+                this.LogBundledCodaMissing(binPath);
+            }
+
+            this.LogResolvedCodaBinary(source, binPath);
         }
 
         return effective;
@@ -881,4 +904,12 @@ public sealed partial class CodaSessionManager : IAsyncDisposable
     [LoggerMessage(EventId = 9303, Level = LogLevel.Warning,
         Message = "CodaSessionManager: respond for requestId={requestId} — session={sessionId} no longer live")]
     private partial void LogRespondSessionGone(string requestId, string sessionId);
+
+    [LoggerMessage(EventId = 9304, Level = LogLevel.Warning,
+        Message = "CodaSessionManager: bundled coda binary missing — falling back to host 'coda' on PATH (expected at {binPath})")]
+    private partial void LogBundledCodaMissing(string binPath);
+
+    [LoggerMessage(EventId = 9305, Level = LogLevel.Information,
+        Message = "CodaSessionManager: resolved coda binary source={source} path={binPath}")]
+    private partial void LogResolvedCodaBinary(CodaSource source, string binPath);
 }

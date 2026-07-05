@@ -39,6 +39,9 @@ public sealed class CodaOptions
     /// </summary>
     public string? CuratedMcpDir { get; set; }
 
+    /// <summary>Which coda binary to launch. YAML: Coding:Coda:Source. Default Auto.</summary>
+    public Cortex.Contained.Contracts.Coding.CodaSource Source { get; set; } = Cortex.Contained.Contracts.Coding.CodaSource.Auto;
+
     /// <summary>Returns a shallow copy of these options — so callers that override a couple of
     /// fields (e.g. the MCP policy) never silently drop the rest. Add new fields here.</summary>
     public CodaOptions Clone() => new()
@@ -51,16 +54,6 @@ public sealed class CodaOptions
         PromptIdleTimeoutSeconds = this.PromptIdleTimeoutSeconds,
         Mcp = this.Mcp,
         CuratedMcpDir = this.CuratedMcpDir,
+        Source = this.Source,
     };
-
-    /// <summary>
-    /// Returns the best coda binary path to use at runtime.
-    /// If a bundled <c>coda/coda.exe</c> exists next to the application, that path is returned.
-    /// Otherwise returns <c>"coda"</c> so the OS PATH is used (useful in dev).
-    /// </summary>
-    public static string ResolveDefaultBinaryPath()
-    {
-        var bundled = Path.Combine(AppContext.BaseDirectory, "coda", "coda.exe");
-        return File.Exists(bundled) ? bundled : "coda";
-    }
 }
