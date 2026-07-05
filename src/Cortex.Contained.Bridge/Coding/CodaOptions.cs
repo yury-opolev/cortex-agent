@@ -1,3 +1,5 @@
+using Cortex.Contained.Contracts.Coding;
+
 namespace Cortex.Contained.Bridge.Coding;
 
 /// <summary>YAML-bound options for the coda serve backend.</summary>
@@ -40,7 +42,7 @@ public sealed class CodaOptions
     public string? CuratedMcpDir { get; set; }
 
     /// <summary>Which coda binary to launch. YAML: Coding:Coda:Source. Default Auto.</summary>
-    public Cortex.Contained.Contracts.Coding.CodaSource Source { get; set; } = Cortex.Contained.Contracts.Coding.CodaSource.Auto;
+    public CodaSource Source { get; set; } = CodaSource.Auto;
 
     /// <summary>Returns a shallow copy of these options — so callers that override a couple of
     /// fields (e.g. the MCP policy) never silently drop the rest. Add new fields here.</summary>

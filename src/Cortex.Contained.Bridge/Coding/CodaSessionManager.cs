@@ -193,6 +193,12 @@ public sealed partial class CodaSessionManager : IAsyncDisposable
 
             this.LogResolvedCodaBinary(source, binPath);
         }
+        else
+        {
+            // Explicit path pinned — the resolver is bypassed, but still record which binary this
+            // session will launch so "which coda ran?" is answerable for every session.
+            this.LogPinnedCodaBinary(effective.CodaBinaryPath);
+        }
 
         return effective;
     }
@@ -912,4 +918,8 @@ public sealed partial class CodaSessionManager : IAsyncDisposable
     [LoggerMessage(EventId = 9305, Level = LogLevel.Information,
         Message = "CodaSessionManager: resolved coda binary source={source} path={binPath}")]
     private partial void LogResolvedCodaBinary(CodaSource source, string binPath);
+
+    [LoggerMessage(EventId = 9306, Level = LogLevel.Information,
+        Message = "CodaSessionManager: using explicitly-configured coda binary path={binPath} (source resolution bypassed)")]
+    private partial void LogPinnedCodaBinary(string binPath);
 }

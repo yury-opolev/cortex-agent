@@ -1,4 +1,5 @@
 using Cortex.Contained.Bridge.Coding;
+using Cortex.Contained.Contracts.Coding;
 
 namespace Cortex.Contained.Bridge.Tests.Coding;
 
@@ -35,7 +36,7 @@ public sealed class CodaOptionsTests
     public void Defaults_Source_IsAuto()
     {
         // Default = parity with today's implicit bundled-if-present-else-host resolution.
-        Assert.Equal(Cortex.Contained.Contracts.Coding.CodaSource.Auto, new CodaOptions().Source);
+        Assert.Equal(CodaSource.Auto, new CodaOptions().Source);
     }
 
     [Fact]
@@ -51,7 +52,7 @@ public sealed class CodaOptionsTests
             PromptIdleTimeoutSeconds = 13,
             Mcp = CodaMcpPolicy.Curated,
             CuratedMcpDir = "C:\\curated",
-            Source = Cortex.Contained.Contracts.Coding.CodaSource.Bundled,
+            Source = CodaSource.Bundled,
         };
 
         var copy = src.Clone();
@@ -65,6 +66,6 @@ public sealed class CodaOptionsTests
         Assert.Equal(13, copy.PromptIdleTimeoutSeconds);
         Assert.Equal(CodaMcpPolicy.Curated, copy.Mcp);
         Assert.Equal("C:\\curated", copy.CuratedMcpDir);
-        Assert.Equal(Cortex.Contained.Contracts.Coding.CodaSource.Bundled, copy.Source);
+        Assert.Equal(CodaSource.Bundled, copy.Source);
     }
 }
