@@ -190,6 +190,8 @@ public sealed class FakeCodaServer : IAsyncDisposable
             FakeCodaScenario.LimitReached => await this.RunLimitReachedAsync(ct),
             FakeCodaScenario.SlowDrip => await this.RunSlowDripAsync(ct),
             FakeCodaScenario.SlowStream => await this.RunSlowStreamAsync(ct),
+            FakeCodaScenario.SlowToolProgress => await this.RunSlowToolProgressAsync(ct),
+            FakeCodaScenario.ToolCallThenStall => await this.RunToolCallThenStallAsync(ct),
             FakeCodaScenario.Goal => await this.RunGoalAsync(ct),
             _ => await this.RunHappyAsync(ct),
         };
@@ -359,6 +361,40 @@ public sealed class FakeCodaServer : IAsyncDisposable
         return new JsonObject { ["ok"] = true, ["stopReason"] = "end_turn", ["interrupted"] = false };
     }
 
+    private async Task<JsonNode?> RunSlowToolProgressAsync(CancellationToken ct)
+    {
+        // A turn whose only mid-flight liveness is the TOOL-execution pulse: a long tool runs,
+        // emitting event/toolProgress spaced wider than the idle window, with NO other events
+        // until it finishes. This is exactly the stall the watchdog used to be blind to (a long
+        // run_command between turns) — the incident this fix addresses.
+        await this.serverRpc.NotifyWithParameterObjectAsync(
+            "event/toolCall", new { toolName = "run_command", inputJson = "{\"command\":\"dotnet build\"}" });
+
+        for (var i = 1; i <= 4; i++)
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(400), ct).ConfigureAwait(false);
+            await this.serverRpc.NotifyWithParameterObjectAsync(
+                "event/toolProgress", new { toolName = "run_command", elapsedMs = (long)(i * 400) });
+        }
+
+        await this.serverRpc.NotifyWithParameterObjectAsync(
+            "event/assistantText", new { delta = this.AssistantText });
+        await this.serverRpc.NotifyWithParameterObjectAsync(
+            "event/turnComplete", new { stopReason = "end_turn", interrupted = false });
+
+        return new JsonObject { ["ok"] = true, ["stopReason"] = "end_turn", ["interrupted"] = false };
+    }
+
+    private async Task<JsonNode?> RunToolCallThenStallAsync(CancellationToken ct)
+    {
+        // Emit a tool call, then go silent forever. The watchdog fires and its stall message
+        // should salvage the recent tool call so the agent retains context after the reap.
+        await this.serverRpc.NotifyWithParameterObjectAsync(
+            "event/toolCall", new { toolName = "run_command", inputJson = "{\"command\":\"git status\"}" });
+        await Task.Delay(Timeout.Infinite, ct).ConfigureAwait(false);
+        return null;
+    }
+
 #pragma warning disable CA1822 // Member does not access instance data; kept instance for switch-dispatch symmetry.
     private async Task<JsonNode?> RunStallAsync(CancellationToken ct)
     {
@@ -410,5 +446,7 @@ public enum FakeCodaScenario
     LimitReached,
     SlowDrip,
     SlowStream,
+    SlowToolProgress,
+    ToolCallThenStall,
     Goal,
 }

@@ -120,6 +120,33 @@ public sealed class CodaJsonRpcConnectionTests
     }
 
     [Fact]
+    public async Task ToolProgress_Notification_RaisesEventWithFields()
+    {
+        var (clientStream, serverStream) = FullDuplexStream.CreatePair();
+
+        var formatter = new SystemTextJsonFormatter();
+        var serverRpc = new JsonRpc(new HeaderDelimitedMessageHandler(serverStream, serverStream, formatter));
+        serverRpc.StartListening();
+
+        await using var conn = new CodaJsonRpcConnection(clientStream, clientStream);
+
+        var got = new TaskCompletionSource<ToolProgressDto>(TaskCreationOptions.RunContinuationsAsynchronously);
+        conn.ToolProgress += dto => got.TrySetResult(dto);
+
+        conn.Start();
+
+        await serverRpc.NotifyWithParameterObjectAsync(
+            "event/toolProgress",
+            new { toolName = "run_command", elapsedMs = 42_000L });
+
+        var dto = await got.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal("run_command", dto.ToolName);
+        Assert.Equal(42_000L, dto.ElapsedMs);
+        serverRpc.Dispose();
+    }
+
+    [Fact]
     public async Task SetGoalAsync_returns_echoed_goal_config()
     {
         var (clientStream, serverStream) = FullDuplexStream.CreatePair();

@@ -95,6 +95,16 @@ public sealed record StreamProgressDto(
     [property: JsonPropertyName("chars")] int Chars,
     [property: JsonPropertyName("elapsedMs")] long ElapsedMs);
 
+/// <summary>
+/// Payload of the <c>event/toolProgress</c> notification — coda's tool-execution liveness
+/// pulse (the counterpart to <see cref="StreamProgressDto"/> for the tool phase). Consumed
+/// as liveness so a long-running tool never trips the idle watchdog. <c>elapsedMs</c> is how
+/// long the tool has been running so far.
+/// </summary>
+public sealed record ToolProgressDto(
+    [property: JsonPropertyName("toolName")] string ToolName,
+    [property: JsonPropertyName("elapsedMs")] long ElapsedMs);
+
 /// <summary>Server-initiated <c>request/permission</c> params.</summary>
 public sealed record PermissionDto(
     [property: JsonPropertyName("toolName")] string ToolName,
@@ -176,6 +186,9 @@ public sealed class CodaJsonRpcConnection : IAsyncDisposable
 
     /// <summary>Raised when <c>event/streamProgress</c> is received from coda (LLM stream liveness pulse).</summary>
     public event Action<StreamProgressDto>? StreamProgress;
+
+    /// <summary>Raised when <c>event/toolProgress</c> is received from coda (tool-execution liveness pulse).</summary>
+    public event Action<ToolProgressDto>? ToolProgress;
 
     /// <summary>
     /// Called when coda sends <c>request/permission</c>. Return <c>true</c> to allow, <c>false</c> to deny.
@@ -402,6 +415,14 @@ public sealed class CodaJsonRpcConnection : IAsyncDisposable
             new Func<string, int, int, long, Task>((phase, chunks, chars, elapsedMs) =>
             {
                 this.StreamProgress?.Invoke(new StreamProgressDto(phase, chunks, chars, elapsedMs));
+                return Task.CompletedTask;
+            }));
+
+        this.rpc.AddLocalRpcMethod(
+            "event/toolProgress",
+            new Func<string, long, Task>((toolName, elapsedMs) =>
+            {
+                this.ToolProgress?.Invoke(new ToolProgressDto(toolName, elapsedMs));
                 return Task.CompletedTask;
             }));
 

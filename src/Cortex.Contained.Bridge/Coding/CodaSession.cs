@@ -364,7 +364,8 @@ public sealed partial class CodaSession : IAsyncDisposable
                 var idleForSeconds = (int)idleFor.TotalSeconds;
                 this.LogWatchdogFrozen(this.SessionId, idleForSeconds);
 
-                var message = $"coda appears stalled — no activity for {idleForSeconds}s; terminating session.";
+                var message = $"coda appears stalled — no activity for {idleForSeconds}s; terminating session."
+                    + this.DescribeRecentActivityForStall();
 
                 // Stall-specific signal (carries liveness context) so the orchestrator can relay
                 // status=stalled and resume rather than churn. The generic Error path is also kept
@@ -804,6 +805,7 @@ public sealed partial class CodaSession : IAsyncDisposable
         this.connection.AssistantText += this.OnAssistantText;
         this.connection.Usage += this.OnUsage;
         this.connection.StreamProgress += this.OnStreamProgress;
+        this.connection.ToolProgress += this.OnToolProgress;
 
         this.connection.OnPermission = this.HandlePermissionRequestAsync;
         this.connection.OnQuestion = this.HandleQuestionRequestAsync;
@@ -909,6 +911,49 @@ public sealed partial class CodaSession : IAsyncDisposable
                 ? $"streaming LLM response ({dto.Chars} chars, {dto.Chunks} chunks)"
                 : null;
         }
+    }
+
+    private void OnToolProgress(ToolProgressDto dto)
+    {
+        // The tool-execution counterpart to OnStreamProgress. While a tool runs, coda emits no
+        // assistantText/usage/streamProgress, so without this pulse the idle watchdog was blind
+        // during a long tool call and would reap a healthy session (the original stall bug).
+        this.LastActivityAt = DateTimeOffset.UtcNow;
+
+        lock (this.stateLock)
+        {
+            this.currentActivity = $"running {dto.ToolName} ({dto.ElapsedMs / 1000}s)";
+        }
+    }
+
+    /// <summary>
+    /// A compact summary of what coda was last doing, appended to the stall message so a reaped
+    /// session still hands the agent some context — the process is gone, so its live history
+    /// can no longer be queried. Empty when there is nothing to report.
+    /// </summary>
+    private string DescribeRecentActivityForStall()
+    {
+        var parts = new List<string>();
+
+        var recent = this.recentToolCallHistory.ToArray();
+        if (recent.Length > 0)
+        {
+            var calls = string.Join(", ", recent.TakeLast(3).Select(c =>
+                string.IsNullOrEmpty(c.ArgsSummary) ? c.Name : $"{c.Name}({c.ArgsSummary})"));
+            parts.Add($"last tools: {calls}");
+        }
+
+        // Prefer the in-flight partial (what the CURRENT, stalled turn was saying) over
+        // LastAssistantSummary, which only holds the previous COMPLETED turn's text.
+        var summary = string.IsNullOrWhiteSpace(this.assistantBuffer)
+            ? this.LastAssistantSummary
+            : this.assistantBuffer;
+        if (!string.IsNullOrWhiteSpace(summary))
+        {
+            parts.Add($"last message: \"{Truncate(summary, 200)}\"");
+        }
+
+        return parts.Count == 0 ? string.Empty : " (" + string.Join("; ", parts) + ")";
     }
 
     private Task<bool> HandlePermissionRequestAsync(PermissionDto dto)

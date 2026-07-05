@@ -332,6 +332,47 @@ public sealed class CodaSessionTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task ToolProgress_KeepsSessionAlive_DuringLongToolExecution()
+    {
+        var (session, server) = StartedSession(new CodaOptions { PromptIdleTimeoutSeconds = 1 }, FakeCodaScenario.SlowToolProgress);
+        await using var _ = server;
+        await session.StartAsync(isResume: false, CancellationToken.None);
+
+        var errored = false;
+        session.Error += _ => errored = true;
+        session.Stalled += _ => errored = true;
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        session.FinalResult += _ => done.TrySetResult();
+
+        await session.WriteUserMessageAsync("run a long tool", CancellationToken.None);
+
+        // The tool-progress pulses (spaced ~400ms across >1.5s) keep the 1s watchdog from firing —
+        // exactly the production case (coda mid-long-tool) the watchdog used to be blind to.
+        await done.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.False(errored, "tool-progress pulses must keep the watchdog from reaping a healthy long tool");
+        Assert.Equal(CodingSessionState.Idle, session.State);
+    }
+
+    [Fact]
+    public async Task StalledEvent_SalvagesRecentToolCalls_InTheMessage()
+    {
+        var (session, server) = StartedSession(new CodaOptions { PromptIdleTimeoutSeconds = 1 }, FakeCodaScenario.ToolCallThenStall);
+        await using var _ = server;
+        await session.StartAsync(isResume: false, CancellationToken.None);
+
+        var stalled = new TaskCompletionSource<CodaStalledEvent>(TaskCreationOptions.RunContinuationsAsynchronously);
+        session.Stalled += e => stalled.TrySetResult(e);
+
+        await session.WriteUserMessageAsync("work", CancellationToken.None);
+        var evt = await stalled.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        // A reaped session can no longer be queried, so the stall message salvages what it was doing.
+        Assert.Contains("run_command", evt.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("last tools", evt.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task Watchdog_OnStall_RaisesStalledEventWithContext()
     {
         var (session, server) = StartedSession(new CodaOptions { PromptIdleTimeoutSeconds = 1 }, FakeCodaScenario.Stall);
