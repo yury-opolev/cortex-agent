@@ -17,7 +17,6 @@ public static class CodingAgentErrorCodes
     public const string SessionUnknown = "session_unknown";
     public const string TaskNotAwaiting = "task_not_awaiting";
     public const string TaskUnknown = "task_unknown";
-    public const string NoProvider = "coda_no_provider";
     public const string StartTimeout = "coda_start_timeout";
     public const string StartFailed = "coda_start_failed";
     public const string SessionNotReady = "session_not_ready";
