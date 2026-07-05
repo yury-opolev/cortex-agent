@@ -187,3 +187,15 @@ per-tool allow-list.
 Tools only (MCP *resources*/*prompts* deferred). Per-tenant config. The bespoke **Coda** coding
 engine is intentionally *not* an MCP server — its streaming/steering/permission semantics don't map
 to MCP's request/response model.
+
+**Coda is single-provider.** Coda connects to exactly one LLM provider, so the Bridge no longer
+resolves or passes a provider/model when it launches a coding session — the former `--provider`
+argument and the `Coding:Coda:Provider` / `Coding:Coda:Model` settings (and their Settings→Coding
+provider/model picker) are gone. Coda self-resolves its single connected provider from its own
+configuration. Which coda *binary* the Bridge launches is controlled by **`Coding:Coda:Source`**
+(`Auto` | `Host` | `Bundled`, default `Auto`): `Auto` prefers the bundled `coda/coda.exe` next to
+the Bridge and falls back to a host `coda` on `PATH`; `Host` always uses the host `coda`; `Bundled`
+uses the bundled binary, falling back to a host `coda` (with a warning) only if it is missing. The
+setting is runtime-mutable from **Settings → Coding** (or via
+`GET` / `PUT /api/coding/coda-source`), which also surfaces the resolved binary path, its detected
+`--version`, and whether a bundled coda is present.
