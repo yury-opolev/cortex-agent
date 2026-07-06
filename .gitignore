@@ -91,3 +91,6 @@ cortex.yml
 # Playwright MCP session artifacts (screenshots, snapshots, console logs)
 .playwright-mcp/
 build-*.log
+
+# coda runtime state when a coding session runs in this repo (transcripts, cache)
+.coda/
