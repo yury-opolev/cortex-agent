@@ -200,3 +200,29 @@ if ($LASTEXITCODE -ne 0) { throw "SignTool sign failed" }
 
 Write-Host "`nMSIX ready: $msixPath" -ForegroundColor Green
 Write-Host "Signed with thumbprint: $signingThumbprint" -ForegroundColor Green
+
+# Emit the version-keyed build manifest — the verifiable build->deploy contract the self-update
+# pipeline reads (it never globs artifacts\*.msix). The sha256 + cert thumbprint let the deploy
+# refuse a stale, unsigned, or half-written package BEFORE it ever calls Add-AppxPackage — the one
+# failure mode that would otherwise brick the Bridge. Image tags follow the Build-AgentImage
+# convention (cortex-agent is tagged with the cortex version; voice-id tracks :latest).
+$manifestPath = Join-Path $repoRoot "artifacts\update-manifest.json"
+$msixSha256 = (Get-FileHash -Algorithm SHA256 -Path $msixPath).Hash.ToLowerInvariant()
+$gitCommit = ''
+try { $gitCommit = (& git -C $repoRoot rev-parse HEAD 2>$null).Trim() } catch { }
+$manifest = [ordered]@{
+    version   = $version
+    gitCommit = $gitCommit
+    msix      = [ordered]@{
+        path           = "artifacts/CortexLauncher-$version.msix"
+        sha256         = $msixSha256
+        certThumbprint = $signingThumbprint
+    }
+    images    = [ordered]@{
+        'cortex-agent' = "cortex-agent:$version"
+        'voice-id'     = 'voice-id:latest'
+    }
+    builtAt   = (Get-Date).ToUniversalTime().ToString('o')
+}
+$manifest | ConvertTo-Json -Depth 5 | Set-Content -Path $manifestPath -Encoding UTF8
+Write-Host "Build manifest: $manifestPath" -ForegroundColor Green
