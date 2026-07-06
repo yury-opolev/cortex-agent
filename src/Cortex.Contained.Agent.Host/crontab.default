@@ -1,0 +1,36 @@
+# Cortex agent — in-container job scheduler (supercronic crontab).
+#
+# WHERE THIS LIVES
+#   This file is seeded on first start to:
+#       /app/data/cron/crontab
+#   /app/data is a persistent Docker volume (cortex-data), so any entries you
+#   add here survive container restarts AND image upgrades. This baked copy
+#   (/usr/local/share/cortex/crontab.default) is only used to seed the volume
+#   the first time; after that the volume copy is authoritative.
+#
+# HOW IT RUNS
+#   Loaded automatically at container startup by docker-entrypoint.sh and run
+#   by supercronic as the non-root 'app' user (uid 1654) with the container's
+#   environment. supercronic watches this file (-inotify) and hot-reloads it
+#   whenever you edit it — no container restart needed.
+#
+# FORMAT (standard cron, 5 fields; supercronic also accepts an optional 6th
+# "year" field and a leading "seconds" field for finer schedules):
+#
+#   ┌── minute (0-59)
+#   │ ┌── hour (0-23)
+#   │ │ ┌── day of month (1-31)
+#   │ │ │ ┌── month (1-12)
+#   │ │ │ │ ┌── day of week (0-6, Sunday=0)
+#   │ │ │ │ │
+#   * * * * * command-to-run
+#
+# EXAMPLES (uncomment / add your own below):
+#   # Prune agent logs older than 14 days, every day at 03:00
+#   0 3 * * * find /app/data/logs -type f -mtime +14 -delete
+#
+#   # Heartbeat every 5 minutes (shows up in `docker logs cortex-agent`)
+#   */5 * * * * echo "cortex scheduler heartbeat"
+#
+# No schedules are defined by default — the scheduler starts and idles until
+# you add entries here.
