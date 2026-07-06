@@ -21,6 +21,19 @@ dotnet build src/Cortex.Contained.Agent.Host/Cortex.Contained.Agent.Host.csproj
 .\scripts\Build-AgentImage.ps1
 ```
 
+## Deploying a change (self-update)
+
+To put the **running** install onto a built change (Bridge MSIX + agent image). Safe to run from a coda session — coda runs on the host and triggers the deploy **detached**:
+
+```powershell
+# 1. build the exact artifacts (+ emit artifacts/update-manifest.json); note the auto-bumped version
+.\scripts\Build-All.ps1 -CertThumbprint F578A5879BE57511D40288B6DA3A0F383BD74EEE
+# 2. verify + test-gate + schedule the detached deploy of that EXACT version, then report and exit
+.\scripts\Self-Update.ps1 -Schedule -SkipPull -TargetVersion <version>
+```
+
+`-Schedule` verifies the pinned version's manifest (sha256 + signature), runs the test gate, and schedules a one-shot task that deploys ~45s later. Installing the MSIX force-restarts the Bridge, which **ends the coda session** — that is expected; the deploy continues detached, polls `/health`, and **auto-rolls-back** on failure. After scheduling, tell the user "restarting into v\<version> in ~45s". Do NOT run `-Apply` inline from coda (it would be killed mid-deploy — see the guide). Full guide: **[docs/self-update.md](docs/self-update.md)**.
+
 ## Tests
 
 ```bash
@@ -115,6 +128,7 @@ scripts/
 - [MCP plugin system](docs/mcp-plugin-system.md) — host-side MCP servers (stdio + HTTP) as native agent tools; how the catalog/invocations ride the Bridge↔agent SignalR hub; host-side auth (DPAPI / OAuth 2.1)
 - [Design reference](docs/design-reference.md) — design patterns and conventions
 - [Setup guide](docs/setup-guide.md) — installation and configuration
+- [Self-update](docs/self-update.md) — how to deploy a cortex change to the running install (MSIX + agent image), detached from a coda session
 
 ## Build configuration
 
