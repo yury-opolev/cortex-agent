@@ -29,17 +29,26 @@ So the deploy must be a **detached orchestrator** that (a) lives outside the Bri
 (b) coordinates *both* artifacts. That orchestrator is this feature; it is the load-bearing 80% of
 any future distribution story (Store/App Installer can only ever do the MSIX half).
 
-## Architecture
+## Architecture — triggered HOST-SIDE by coda (not from the container)
+
+coda runs on the **host** (spawned by the Bridge; `source=Host`), so `coda`'s `run_command`
+executes `Self-Update.ps1` **on the host** directly — the container/agent is never involved. So there
+is no agent tool, no hub method, no Bridge handler: coda itself registers the detached task. (An
+agent-tool → hub → Bridge path is possible but is *container-side triggering* and was explicitly not
+wanted; keep it as a later, optional alternative if the agent should ever self-initiate.)
 
 ```
-agent tool  cortex_self_update  (Agent.Host, runs in Docker)
-      │  invokes over SignalR (like the coding_* tools)
+coda (host, in a coding session): fix → commit → push → build (Build-All)
+      │  runs:  Self-Update.ps1 -Schedule -TargetVersion X [-MsixPath …]
       ▼
-IAgentHub.ScheduleSelfUpdate  →  Bridge handler (host)
-      │  registers a ONE-SHOT Scheduled Task (Task Scheduler service owns it →
-      │  NOT in coda's Job Object → survives the Bridge/coda death), then returns
+Self-Update.ps1 -Schedule  (host):
+      • verify manifest for the pinned version X (sha256 + signature + thumbprint), test-gate
+      • Register-ScheduledTask "CortexSelfUpdate" → fires ~45s later, runs Self-Update.ps1 -Apply
+        with the pin (-TargetVersion X). Task Scheduler owns it → NOT in coda's Job Object →
+        survives the Bridge/coda death. Concurrency-guarded (refuses to stack).
+      • returns immediately → coda reports "restarting into vX in ~45s" and lets itself be killed
       ▼
-Task Scheduler (~20s later)  →  Self-Update.ps1 -Apply   (detached)
+Task Scheduler (~45s later)  →  Self-Update.ps1 -Apply -TargetVersion X   (detached)
       1. git pull <ref>                         (resolve sources)
       2. Build-All.ps1                          (agent+voice-id images + signed MSIX + manifest)
       3. dotnet test  → GATE (abort if red, before touching anything)
@@ -107,14 +116,34 @@ auto-update* is **resolve version → artifacts**:
   verify/deploy/rollback/report half. (App Installer `.appinstaller` can then auto-update the MSIX;
   the Bridge still pulls the matching image tags — the half the OS updater can't do.)
 
+## How coda triggers it (the recipe)
+
+After a coding task that changes cortex, coda runs (on the host, via `run_command`):
+
+```powershell
+# 1. build the exact artifacts (also emits artifacts/update-manifest.json)
+./scripts/Build-All.ps1 -CertThumbprint <thumb>
+# 2. schedule the detached deploy of that EXACT version, then report + exit
+./scripts/Self-Update.ps1 -Schedule -SkipPull -TargetVersion <X>
+```
+
+`-Schedule` verifies the manifest for the pinned `<X>` (sha256 + signature + thumbprint), runs the
+test-gate, registers the one-shot `CortexSelfUpdate` task (fires ~45s later, `-Apply -TargetVersion
+<X>`), and returns. coda then tells cortex "restarting into vX in ~45s" and lets itself be killed.
+Modes: `-Schedule` (detached, for coda) · default = dry-run · `-Apply` (inline deploy) ·
+`-SkipPull` (deploy current tree) · `-SkipBuild`/`-SkipTests` (used by the detached task).
+
 ## Increments
 
-1. **Spec** (this doc).
-2. **Manifest emission** — `Build-Launcher.ps1` writes `update-manifest.json`. Low risk.
-3. **`Self-Update.ps1`** — the full pipeline, **dry-run default**; deploy/rollback behind `-Apply`.
-   Safe to build + exercise without ever deploying.
-4. **Agent tool + hub + Bridge scheduler** (TDD the C# orchestration) + status→proactive report.
-   The *armed* step — last, after review.
+1. ✅ **Spec** (this doc).
+2. ✅ **Manifest emission** — `Build-Launcher.ps1` writes `update-manifest.json`.
+3. ✅ **`Self-Update.ps1`** — full pipeline: dry-run default; `-Schedule` (host-side coda trigger,
+   detached, version-pinned) + `-Apply` (deploy/rollback). Verify + schedule + pin tested; the
+   `-Apply` deploy/rollback is written but awaits a deliberate live test.
+4. **Live-test `-Apply`** in a controlled/scratch env (it force-restarts the Bridge + recreates the
+   container). Then a small `-Apply` smoke.
+5. *(optional, later)* Agent tool + hub + Bridge scheduler — only if cortex should self-*initiate*
+   from the container. Not needed for the coda-host-side trigger.
 
 ## Test plan
 

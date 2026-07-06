@@ -28,9 +28,15 @@
 [CmdletBinding()]
 param(
     [switch]$Apply,
+    [switch]$Schedule,
     [string]$Ref = '',
     [switch]$SkipBuild,
     [switch]$SkipTests,
+    [switch]$SkipPull,
+    [int]$DelaySeconds = 45,
+    [string]$TaskName = 'CortexSelfUpdate',
+    [string]$TargetVersion = '',
+    [string]$MsixPath = '',
     [string]$CertThumbprint = $env:CORTEX_SIGNING_THUMBPRINT,
     [string]$HealthUrl = 'http://localhost:5080/health',
     [string]$Aumid = 'Cortex.Contained.Launcher_hnfrhv5dkzjbe!CortexLauncher',
@@ -72,6 +78,29 @@ function Test-HealthAt([string]$expectVersion) {
     return $false
 }
 
+function Register-DeployTask([string]$version) {
+    # Register a ONE-SHOT Scheduled Task that runs THIS script with -Apply after a short delay.
+    # The Task Scheduler service owns the task's process — it is NOT in coda's / the Bridge's Job
+    # Object — so it survives the shutdown the deploy triggers. This is what lets coda "schedule the
+    # deploy and let itself be killed". The task re-verifies the manifest and rolls back on failure.
+    if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
+        throw "A deploy task '$TaskName' is already registered — refusing to stack. Remove it first."
+    }
+    $pwshExe = (Get-Process -Id $PID).Path
+    # Pin the exact target into the detached task so it re-verifies the SAME version/file when it
+    # fires — if a build bumped the version in the delay window, the deploy refuses instead of
+    # shipping the wrong thing.
+    $argLine = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Apply -SkipBuild -SkipTests -SkipPull -TargetVersion $version"
+    if ($MsixPath) { $argLine += " -MsixPath `"$MsixPath`"" }
+    if ($CertThumbprint) { $argLine += " -CertThumbprint $CertThumbprint" }
+    $action    = New-ScheduledTaskAction -Execute $pwshExe -Argument $argLine
+    $trigger   = New-ScheduledTaskTrigger -Once -At ((Get-Date).AddSeconds($DelaySeconds))
+    $principal = New-ScheduledTaskPrincipal -UserId ([System.Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType Interactive -RunLevel Limited
+    $settings  = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
+    Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
+    Say "detached deploy scheduled: task '$TaskName' fires in ${DelaySeconds}s -> deploys $version" 'Green'
+}
+
 function Write-Status([bool]$ok, [string]$from, [string]$to, [bool]$rolledBack, [string]$reason) {
     $status = [ordered]@{
         ok          = $ok
@@ -102,7 +131,9 @@ try {
     Say "current installed version: $fromVersion"
 
     # --- 1. Resolve sources --------------------------------------------------
-    if (-not $SkipBuild) {
+    # SkipPull builds/deploys the CURRENT working tree (coda deploying what it just built);
+    # otherwise fast-forward to the target ref (updating to latest from origin).
+    if (-not $SkipPull -and -not $SkipBuild) {
         if (-not $Ref) {
             $Ref = (& git -C $repoRoot rev-parse --abbrev-ref '@{u}' 2>$null)
             if (-not $Ref) { $Ref = 'origin/main' }
@@ -112,8 +143,10 @@ try {
         & git -C $repoRoot merge --ff-only $Ref 2>&1 | ForEach-Object { Say "git: $_" 'Gray' }
         if ($LASTEXITCODE -ne 0) { throw "git merge --ff-only $Ref failed (local commits? resolve manually)." }
         & git -C $repoRoot submodule update --init --recursive 2>&1 | Out-Null
-    } else {
+    } elseif ($SkipBuild) {
         Say "SkipBuild — using existing artifacts/manifest" 'Yellow'
+    } else {
+        Say "SkipPull — building the current working tree" 'Yellow'
     }
 
     # --- 2. Build ------------------------------------------------------------
@@ -126,34 +159,54 @@ try {
     }
 
     # --- 3. Test-gate --------------------------------------------------------
-    if (-not $SkipTests -and -not $SkipBuild) {
+    # Runs before scheduling/deploying (unless -SkipTests). The detached deploy task passes
+    # -SkipTests because the gate already ran here, in the scheduling/build step.
+    if (-not $SkipTests) {
         Say "running tests (gate)..."
         & dotnet test (Join-Path $repoRoot 'cortex-contained.sln') --nologo 2>&1 | ForEach-Object { if ($_ -match 'Passed!|Failed!|error') { Say "test: $_" 'Gray' } }
         if ($LASTEXITCODE -ne 0) { throw "TEST GATE FAILED — aborting before any deploy." }
-    } elseif ($SkipTests) {
-        Say "SkipTests — test gate bypassed (NOT recommended)" 'Yellow'
+    } else {
+        Say "SkipTests — test gate bypassed" 'Yellow'
     }
 
     # --- 4. Verify the manifest (the build->deploy contract) -----------------
     if (-not (Test-Path $manifestPath)) { throw "No build manifest at $manifestPath." }
     $m = Get-Content $manifestPath -Raw | ConvertFrom-Json
-    $targetVersion = $m.version
-    $msixFile = Join-Path $repoRoot ($m.msix.path -replace '/', '\')
-    Say "target version $targetVersion (commit $($m.gitCommit)); msix $($m.msix.path)"
 
-    if (-not (Test-Path $msixFile)) { throw "Manifest MSIX not found: $msixFile" }
+    # coda pins the EXACT version it intends via -TargetVersion. Check the pin against the manifest
+    # BEFORE resolving a local — PowerShell variables are case-insensitive, so assigning
+    # $resolvedVersion would silently clobber the $TargetVersion pin (use a distinct name).
+    if ($TargetVersion -and ($m.version -ne $TargetVersion)) {
+        throw "Manifest version $($m.version) != requested -TargetVersion $TargetVersion — refusing (artifacts drifted?)."
+    }
+    $resolvedVersion = if ($TargetVersion) { $TargetVersion } else { $m.version }
+
+    $msixFile = if ($MsixPath) {
+        if ([System.IO.Path]::IsPathRooted($MsixPath)) { $MsixPath } else { Join-Path $repoRoot ($MsixPath -replace '/', '\') }
+    } else {
+        Join-Path $repoRoot ($m.msix.path -replace '/', '\')
+    }
+    Say "target version $resolvedVersion (commit $($m.gitCommit)); msix $msixFile"
+
+    if (-not (Test-Path $msixFile)) { throw "Target MSIX not found: $msixFile" }
     $actualSha = (Get-FileHash -Algorithm SHA256 -Path $msixFile).Hash.ToLowerInvariant()
-    if ($actualSha -ne $m.msix.sha256.ToLowerInvariant()) { throw "MSIX sha256 mismatch — refusing (stale/corrupt)." }
+    if ($actualSha -ne $m.msix.sha256.ToLowerInvariant()) { throw "MSIX sha256 mismatch — refusing (stale/corrupt or wrong file)." }
     $sig = Get-AuthenticodeSignature -FilePath $msixFile
     if ($sig.Status -ne 'Valid') { throw "MSIX signature not Valid ($($sig.Status)) — refusing." }
     $sigThumb = $sig.SignerCertificate.Thumbprint
     if ($sigThumb -ne $m.msix.certThumbprint) { throw "MSIX signer thumbprint $sigThumb != manifest $($m.msix.certThumbprint) — refusing." }
     Say "manifest verified: sha256 OK, signature Valid, thumbprint OK" 'Green'
 
-    # --- 5. Gate: dry run stops here -----------------------------------------
+    # --- 5. Gate: schedule (detached, for coda) / dry-run / deploy inline -----
+    if ($Schedule) {
+        Register-DeployTask $resolvedVersion
+        Write-Status -ok $true -from $fromVersion -to $resolvedVersion -rolledBack $false -reason "scheduled(+${DelaySeconds}s)"
+        Say "coda can now report the pending restart and exit — the detached task owns the deploy." 'Green'
+        return
+    }
     if (-not $Apply) {
-        Say "DRY RUN — verified and ready. Pass -Apply to deploy $fromVersion -> $targetVersion." 'Green'
-        Write-Status -ok $true -from $fromVersion -to $targetVersion -rolledBack $false -reason 'dry-run'
+        Say "DRY RUN — verified and ready. Pass -Schedule (detached, for coda) or -Apply (inline) to deploy $fromVersion -> $resolvedVersion." 'Green'
+        Write-Status -ok $true -from $fromVersion -to $resolvedVersion -rolledBack $false -reason 'dry-run'
         return
     }
 
@@ -168,16 +221,16 @@ try {
     Say "recreating containers ($($m.images.'cortex-agent'), $($m.images.'voice-id'))..."
     & docker compose -f (Join-Path $repoRoot 'docker-compose.yml') up -d --force-recreate --no-deps cortex-agent voice-id 2>&1 | ForEach-Object { Say "docker: $_" 'Gray' }
 
-    Say "installing MSIX $targetVersion (stops the Bridge)..."
+    Say "installing MSIX $resolvedVersion (stops the Bridge)..."
     Add-AppxPackage -Path $msixFile -ForceUpdateFromAnyVersion -ForceApplicationShutdown
     Say "relaunching Bridge via $Aumid"
     Start-Process "shell:AppsFolder\$Aumid"
 
     # --- 8. Runtime verify ---------------------------------------------------
-    Say "verifying /health reports $targetVersion..."
-    if (Test-HealthAt $targetVersion) {
-        Say "HEALTHY on $targetVersion — update complete" 'Green'
-        Write-Status -ok $true -from $fromVersion -to $targetVersion -rolledBack $false -reason 'deployed'
+    Say "verifying /health reports $resolvedVersion..."
+    if (Test-HealthAt $resolvedVersion) {
+        Say "HEALTHY on $resolvedVersion — update complete" 'Green'
+        Write-Status -ok $true -from $fromVersion -to $resolvedVersion -rolledBack $false -reason 'deployed'
         return
     }
 
@@ -196,7 +249,7 @@ try {
     } else {
         Say "no last-known-good MSIX — cannot roll back automatically. MANUAL INTERVENTION NEEDED." 'Red'
     }
-    Write-Status -ok $false -from $fromVersion -to $targetVersion -rolledBack $rolledBack -reason 'health-gate-failed'
+    Write-Status -ok $false -from $fromVersion -to $resolvedVersion -rolledBack $rolledBack -reason 'health-gate-failed'
     throw "Self-update failed its health gate (rolledBack=$rolledBack)."
 }
 finally {
