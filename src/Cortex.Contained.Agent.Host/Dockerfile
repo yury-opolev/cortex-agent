@@ -64,6 +64,10 @@ RUN curl -fsSLO "https://github.com/aptible/supercronic/releases/download/${SUPE
 # /app/data/cron/crontab (a persistent volume) if none exists yet, so the live
 # schedule survives restarts and image upgrades while this copy only seeds once.
 COPY --chmod=444 ["src/Cortex.Contained.Agent.Host/crontab.default", "/usr/local/share/cortex/crontab.default"]
+# `COPY --chmod=444` also stamps 444 onto the implicitly-created parent dir, dropping its
+# execute bit so the non-root 'app' user cannot traverse it to read the file — the entrypoint
+# seed then silently fails and supercronic exits. Restore the dir's traverse bit.
+RUN chmod 0755 /usr/local/share/cortex
 
 # Run as non-root user (app user is pre-created in the aspnet base image)
 # Pre-create all data subdirectories so they're owned by app from the start.
