@@ -8,3 +8,5 @@
 *.bash       text eol=lf
 Dockerfile   text eol=lf
 *.dockerfile text eol=lf
+# Seeded verbatim as the container's crontab (Linux) — must stay LF.
+crontab.default text eol=lf

@@ -42,6 +42,46 @@ fix_data_ownership() {
     fi
 }
 
+# Run a command as the 'app' user: via runuser when we are currently root
+# (dev / compose `user:` override), or directly when we are already app
+# (the production default — the image's final USER is app). This guarantees
+# neither the scheduler daemon nor its jobs ever gain privileges (constraint A).
+run_as_app() {
+    if [ "$(id -u)" = "0" ]; then
+        runuser -u app -- "$@"
+    else
+        "$@"
+    fi
+}
+
+# Seed the persistent crontab (once) and launch supercronic in the background,
+# running as 'app'. Any problem here is logged and ignored: a scheduler hiccup
+# must never stop the agent host from starting.
+start_scheduler() {
+    if [ ! -x "$SCHEDULER_BIN" ]; then
+        echo "docker-entrypoint: $SCHEDULER_BIN not found; job scheduler disabled" >&2
+        return 0
+    fi
+
+    # Seed from the baked default on first run only. The live crontab lives on
+    # the persistent /app/data volume and is created as 'app' so it is
+    # app-owned and editable at runtime (constraint C). We mkdir at runtime
+    # because an existing (upgraded) volume won't contain a newly-added image
+    # directory — named volumes only copy image contents when first empty.
+    if [ ! -f "$SCHEDULER_CRON_FILE" ] && [ -f "$SCHEDULER_CRON_DEFAULT" ]; then
+        if ! run_as_app mkdir -p "$SCHEDULER_CRON_DIR" \
+                || ! run_as_app cp "$SCHEDULER_CRON_DEFAULT" "$SCHEDULER_CRON_FILE"; then
+            echo "docker-entrypoint: could not seed $SCHEDULER_CRON_FILE; job scheduler disabled" >&2
+            return 0
+        fi
+    fi
+
+    # -inotify: hot-reload when 'app' edits the crontab at runtime (no restart).
+    # -no-reap: tini (compose `init: true`) is PID 1 and already reaps zombies.
+    run_as_app "$SCHEDULER_BIN" -inotify -no-reap "$SCHEDULER_CRON_FILE" &
+    echo "docker-entrypoint: job scheduler (supercronic) started on $SCHEDULER_CRON_FILE" >&2
+}
+
 fix_data_ownership
 
 if [ "$(id -u)" = "0" ]; then
@@ -55,9 +95,14 @@ if [ "$(id -u)" = "0" ]; then
             ;;
     esac
 
-    # Non-dev: drop to app user and exec the command
+    # Non-dev root invocation: start the scheduler as app in the background,
+    # then drop to app and exec the command in the foreground.
+    start_scheduler
     exec runuser -u app -- "$@"
 fi
 
-# Already running as non-root (production) — just exec
+# Already running as non-root app (production default): start the scheduler in
+# the background, then exec the command in the FOREGROUND so it (dotnet) is the
+# signal-receiving process and shuts down gracefully on SIGTERM/SIGINT.
+start_scheduler
 exec "$@"
