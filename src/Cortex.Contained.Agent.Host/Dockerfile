@@ -44,11 +44,32 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     jq \
     && rm -rf /var/lib/apt/lists/*
 
+# Install supercronic — a container-native, ROOTLESS cron runner. System cron
+# (Vixie/cronie) needs root (the crond daemon) plus a setuid 'crontab' helper,
+# which would violate the "runtime user stays 'app', no added privileges"
+# constraint. supercronic is a single static binary that runs fine as the
+# non-root 'app' user: it reads a standard crontab file, hot-reloads it on
+# change (-inotify), and logs to stdout. Installing it here as root is a
+# BUILD-time step that grants NO runtime privilege — the entrypoint launches it
+# as 'app'. Pinned to a release + SHA-1 verified.
+# https://github.com/aptible/supercronic/releases
+ENV SUPERCRONIC_VERSION=v0.2.47 \
+    SUPERCRONIC_SHA1SUM=712d2ece75da6f6e530192a151488578153e4e96
+RUN curl -fsSLO "https://github.com/aptible/supercronic/releases/download/${SUPERCRONIC_VERSION}/supercronic-linux-amd64" \
+    && echo "${SUPERCRONIC_SHA1SUM}  supercronic-linux-amd64" | sha1sum -c - \
+    && chmod +x supercronic-linux-amd64 \
+    && mv supercronic-linux-amd64 /usr/local/bin/supercronic
+
+# Baked default crontab. On first start docker-entrypoint.sh seeds this to
+# /app/data/cron/crontab (a persistent volume) if none exists yet, so the live
+# schedule survives restarts and image upgrades while this copy only seeds once.
+COPY --chmod=444 ["src/Cortex.Contained.Agent.Host/crontab.default", "/usr/local/share/cortex/crontab.default"]
+
 # Run as non-root user (app user is pre-created in the aspnet base image)
 # Pre-create all data subdirectories so they're owned by app from the start.
 # Without this, subdirectories created at runtime via volume mounts can end up
 # owned by root, causing "readonly database" errors for SQLite stores.
-RUN mkdir -p /app/data /app/data/logs \
+RUN mkdir -p /app/data /app/data/logs /app/data/cron \
              /app/state /app/state/scheduler /app/state/maintenance /app/state/memory \
              /app/config && \
     chown -R app:app /app
