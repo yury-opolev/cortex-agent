@@ -208,6 +208,39 @@ public class SubagentRunnerRegistryTests
         Assert.Equal(0, callbackCount);
     }
 
+    // ── Per-task cancellation ────────────────────────────────────────────
+
+    [Fact]
+    public void GetCancellationToken_Registered_ReturnsLiveToken()
+    {
+        _registry.TryRegister("task-1", CreateRunner());
+        var token = _registry.GetCancellationToken("task-1");
+        Assert.False(token.IsCancellationRequested);
+        Assert.True(token.CanBeCanceled);
+    }
+
+    [Fact]
+    public void TryCancel_Running_CancelsToken()
+    {
+        _registry.TryRegister("task-1", CreateRunner());
+        var token = _registry.GetCancellationToken("task-1");
+
+        Assert.True(_registry.TryCancel("task-1"));
+        Assert.True(token.IsCancellationRequested);
+    }
+
+    [Fact]
+    public void TryCancel_Unknown_ReturnsFalse()
+    {
+        Assert.False(_registry.TryCancel("nope"));
+    }
+
+    [Fact]
+    public void GetCancellationToken_Unknown_ReturnsNone()
+    {
+        Assert.Equal(CancellationToken.None, _registry.GetCancellationToken("nope"));
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────
 
     private static SubagentRunner CreateRunner()

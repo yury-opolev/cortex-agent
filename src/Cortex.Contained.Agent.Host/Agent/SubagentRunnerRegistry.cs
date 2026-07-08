@@ -13,8 +13,10 @@ public sealed partial class SubagentRunnerRegistry
     private const int MinConcurrent = 1;
     private const int MaxConcurrentLimit = 20;
 
-    private readonly ConcurrentDictionary<string, SubagentRunner> runners = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, RunnerEntry> runners = new(StringComparer.Ordinal);
     private readonly ILogger<SubagentRunnerRegistry> logger;
+
+    private sealed record RunnerEntry(SubagentRunner Runner, CancellationTokenSource Cts);
 
     private readonly Lock capLock = new();
 
@@ -49,7 +51,7 @@ public sealed partial class SubagentRunnerRegistry
             return false;
         }
 
-        this.runners[taskId] = runner;
+        this.runners[taskId] = new RunnerEntry(runner, new CancellationTokenSource());
         this.LogRunnerRegistered(taskId, this.runners.Count);
         return true;
     }
@@ -59,9 +61,10 @@ public sealed partial class SubagentRunnerRegistry
     /// </summary>
     public bool Remove(string taskId)
     {
-        var removed = this.runners.TryRemove(taskId, out _);
+        var removed = this.runners.TryRemove(taskId, out var entry);
         if (removed)
         {
+            entry!.Cts.Dispose();
             this.LogRunnerRemoved(taskId, this.runners.Count);
         }
 
@@ -70,7 +73,27 @@ public sealed partial class SubagentRunnerRegistry
 
     /// <summary>Get a runner by task ID, or null if not active.</summary>
     public SubagentRunner? TryGet(string taskId)
-        => this.runners.GetValueOrDefault(taskId);
+        => this.runners.TryGetValue(taskId, out var entry) ? entry.Runner : null;
+
+    /// <summary>The cancellation token for a registered task, or <see cref="CancellationToken.None"/>.</summary>
+    public CancellationToken GetCancellationToken(string taskId)
+        => this.runners.TryGetValue(taskId, out var entry) ? entry.Cts.Token : CancellationToken.None;
+
+    /// <summary>
+    /// Cancel a running task's loop. Returns true if a runner was registered under
+    /// <paramref name="taskId"/> (its token is cancelled); false if not found.
+    /// </summary>
+    public bool TryCancel(string taskId)
+    {
+        if (!this.runners.TryGetValue(taskId, out var entry))
+        {
+            return false;
+        }
+
+        entry.Cts.Cancel();
+        this.LogRunnerCancelled(taskId);
+        return true;
+    }
 
     /// <summary>Check if a concurrency slot is available without registering.</summary>
     public bool HasAvailableSlot => this.runners.Count < this.maxConcurrent;
@@ -130,4 +153,7 @@ public sealed partial class SubagentRunnerRegistry
 
     [LoggerMessage(Level = LogLevel.Information, Message = "[subagent-registry] Max concurrent changed: {Previous} -> {Current}")]
     private partial void LogMaxConcurrentChanged(int previous, int current);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "[subagent-registry] Runner cancelled: {TaskId}")]
+    private partial void LogRunnerCancelled(string taskId);
 }
