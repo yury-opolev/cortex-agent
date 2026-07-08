@@ -16,6 +16,8 @@ public sealed partial class SubagentRunnerRegistry
     private readonly ConcurrentDictionary<string, SubagentRunner> runners = new(StringComparer.Ordinal);
     private readonly ILogger<SubagentRunnerRegistry> logger;
 
+    private readonly Lock capLock = new();
+
     private volatile int maxConcurrent;
     private Action? slotsOpenedCallback;
 
@@ -81,7 +83,13 @@ public sealed partial class SubagentRunnerRegistry
     /// Register a callback invoked when concurrency slots open (cap raised). The
     /// consumer (SubAgentStartTool) uses it to start queued subagents immediately.
     /// </summary>
-    public void SetSlotsOpenedCallback(Action callback) => this.slotsOpenedCallback = callback;
+    public void SetSlotsOpenedCallback(Action callback)
+    {
+        lock (this.capLock)
+        {
+            this.slotsOpenedCallback = callback;
+        }
+    }
 
     /// <summary>
     /// Set the live concurrency cap (clamped to [1,20]). Raising it invokes the
@@ -91,13 +99,23 @@ public sealed partial class SubagentRunnerRegistry
     public void SetMaxConcurrent(int value)
     {
         var clamped = Math.Clamp(value, MinConcurrent, MaxConcurrentLimit);
-        var previous = this.maxConcurrent;
-        this.maxConcurrent = clamped;
-        this.LogMaxConcurrentChanged(previous, clamped);
+        int previous;
+        Action? callback;
+        lock (this.capLock)
+        {
+            previous = this.maxConcurrent;
+            this.maxConcurrent = clamped;
+            callback = this.slotsOpenedCallback;
+        }
+
+        if (clamped != previous)
+        {
+            this.LogMaxConcurrentChanged(previous, clamped);
+        }
 
         if (clamped > previous)
         {
-            this.slotsOpenedCallback?.Invoke();
+            callback?.Invoke();
         }
     }
 

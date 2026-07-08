@@ -196,6 +196,18 @@ public class SubagentRunnerRegistryTests
         Assert.Equal(expected, _registry.MaxConcurrent);
     }
 
+    [Fact]
+    public void SetMaxConcurrent_EqualToCurrent_DoesNotInvokeCallback()
+    {
+        var callbackCount = 0;
+        _registry.SetSlotsOpenedCallback(() => callbackCount++);
+
+        _registry.SetMaxConcurrent(2); // equals the fixture's cap of 2
+
+        Assert.Equal(2, _registry.MaxConcurrent);
+        Assert.Equal(0, callbackCount);
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────
 
     private static SubagentRunner CreateRunner()
