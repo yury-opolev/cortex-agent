@@ -526,6 +526,11 @@ builder.Services.AddSingleton<IAgentTool>(sp =>
             .ProcessSubagentCompletionAsync(taskId, result),
         sp.GetRequiredService<ILogger<SubAgentSendTool>>(),
         sp.GetRequiredService<InMemoryTodoStore>()));
+builder.Services.AddSingleton<IAgentTool>(sp =>
+    new SubAgentStopTool(
+        sp.GetRequiredService<SubagentSessionStore>(),
+        sp.GetRequiredService<SubagentRunnerRegistry>(),
+        sp.GetRequiredService<ILogger<SubAgentStopTool>>()));
 
 // --- Todo List Infrastructure ---
 builder.Services.AddSingleton(sp =>
