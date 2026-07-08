@@ -185,7 +185,7 @@ public sealed partial class SubagentSessionStore : SqliteStoreBase
                 SET state = $state,
                     result = COALESCE($result, result),
                     eval_response = COALESCE($evalResponse, eval_response),
-                    completed_at = CASE WHEN $state IN ('completed', 'failed') THEN $now ELSE completed_at END
+                    completed_at = CASE WHEN $state IN ('completed', 'failed', 'cancelled') THEN $now ELSE completed_at END
                 WHERE task_id = $taskId
                 """;
             cmd.Parameters.AddWithValue("$taskId", taskId);
@@ -311,7 +311,7 @@ public sealed partial class SubagentSessionStore : SqliteStoreBase
             cmd1.CommandText = """
                 UPDATE subagent_tasks
                 SET messages_json = '[]'
-                WHERE state IN ('completed', 'failed')
+                WHERE state IN ('completed', 'failed', 'cancelled')
                   AND completed_at IS NOT NULL
                   AND completed_at <= $cutoff
                   AND messages_json != '[]'
@@ -322,7 +322,7 @@ public sealed partial class SubagentSessionStore : SqliteStoreBase
             using var cmd2 = this.Connection.CreateCommand();
             cmd2.CommandText = """
                 DELETE FROM subagent_tasks
-                WHERE state IN ('completed', 'failed')
+                WHERE state IN ('completed', 'failed', 'cancelled')
                   AND completed_at IS NOT NULL
                   AND completed_at <= $cutoff
                 """;

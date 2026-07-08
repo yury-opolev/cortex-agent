@@ -321,6 +321,29 @@ public class SubagentSessionStoreTests : IDisposable
         Assert.Equal(state, SubagentTaskStateExtensions.Parse(expected));
     }
 
+    [Fact]
+    public void UpdateState_Cancelled_SetsCompletedAt_AndExcludesFromQueue()
+    {
+        var task = new SubagentTask
+        {
+            TaskId = "sa-cancel-1",
+            ParentConversation = "conv-1",
+            ParentChannel = "webchat-default",
+            Description = "test",
+            Prompt = "do it",
+            State = SubagentTaskState.Queued,
+        };
+        _store.Create(task);
+
+        _store.UpdateState("sa-cancel-1", SubagentTaskState.Cancelled, result: "[Subagent stopped]");
+
+        var reloaded = _store.GetById("sa-cancel-1");
+        Assert.NotNull(reloaded);
+        Assert.Equal(SubagentTaskState.Cancelled, reloaded!.State);
+        Assert.NotNull(reloaded.CompletedAt);            // terminal → completed_at stamped
+        Assert.Null(_store.GetOldestQueued());            // cancelled is not queued
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────
 
     private static SubagentTask CreateTask(
