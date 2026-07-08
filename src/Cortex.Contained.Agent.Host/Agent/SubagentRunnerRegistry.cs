@@ -77,7 +77,21 @@ public sealed partial class SubagentRunnerRegistry
 
     /// <summary>The cancellation token for a registered task, or <see cref="CancellationToken.None"/>.</summary>
     public CancellationToken GetCancellationToken(string taskId)
-        => this.runners.TryGetValue(taskId, out var entry) ? entry.Cts.Token : CancellationToken.None;
+    {
+        if (!this.runners.TryGetValue(taskId, out var entry))
+        {
+            return CancellationToken.None;
+        }
+
+        try
+        {
+            return entry.Cts.Token;
+        }
+        catch (ObjectDisposedException)
+        {
+            return CancellationToken.None;
+        }
+    }
 
     /// <summary>
     /// Cancel a running task's loop. Returns true if a runner was registered under
@@ -90,7 +104,15 @@ public sealed partial class SubagentRunnerRegistry
             return false;
         }
 
-        entry.Cts.Cancel();
+        try
+        {
+            entry.Cts.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            return false;
+        }
+
         this.LogRunnerCancelled(taskId);
         return true;
     }
