@@ -10,9 +10,14 @@ namespace Cortex.Contained.Agent.Host.Agent;
 /// </summary>
 public sealed partial class SubagentRunnerRegistry
 {
+    private const int MinConcurrent = 1;
+    private const int MaxConcurrentLimit = 20;
+
     private readonly ConcurrentDictionary<string, SubagentRunner> runners = new(StringComparer.Ordinal);
-    private readonly int maxConcurrent;
     private readonly ILogger<SubagentRunnerRegistry> logger;
+
+    private volatile int maxConcurrent;
+    private Action? slotsOpenedCallback;
 
     public SubagentRunnerRegistry(int maxConcurrent, ILogger<SubagentRunnerRegistry> logger)
     {
@@ -23,6 +28,9 @@ public sealed partial class SubagentRunnerRegistry
 
     /// <summary>Number of currently active runners.</summary>
     public int ActiveCount => this.runners.Count;
+
+    /// <summary>The current live concurrency cap.</summary>
+    public int MaxConcurrent => this.maxConcurrent;
 
     /// <summary>
     /// Try to register a runner if a concurrency slot is available.
@@ -69,6 +77,30 @@ public sealed partial class SubagentRunnerRegistry
     public IReadOnlyList<string> GetActiveTaskIds()
         => [.. this.runners.Keys];
 
+    /// <summary>
+    /// Register a callback invoked when concurrency slots open (cap raised). The
+    /// consumer (SubAgentStartTool) uses it to start queued subagents immediately.
+    /// </summary>
+    public void SetSlotsOpenedCallback(Action callback) => this.slotsOpenedCallback = callback;
+
+    /// <summary>
+    /// Set the live concurrency cap (clamped to [1,20]). Raising it invokes the
+    /// slots-opened callback so waiting subagents start without a restart. Lowering
+    /// it only caps NEW registrations — running subagents are never force-stopped.
+    /// </summary>
+    public void SetMaxConcurrent(int value)
+    {
+        var clamped = Math.Clamp(value, MinConcurrent, MaxConcurrentLimit);
+        var previous = this.maxConcurrent;
+        this.maxConcurrent = clamped;
+        this.LogMaxConcurrentChanged(previous, clamped);
+
+        if (clamped > previous)
+        {
+            this.slotsOpenedCallback?.Invoke();
+        }
+    }
+
     [LoggerMessage(Level = LogLevel.Debug, Message = "[subagent-registry] No slot for {TaskId}: {ActiveCount}/{MaxConcurrent} active")]
     private partial void LogSlotUnavailable(string taskId, int activeCount, int maxConcurrent);
 
@@ -77,4 +109,7 @@ public sealed partial class SubagentRunnerRegistry
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "[subagent-registry] Runner removed: {TaskId} ({ActiveCount} active)")]
     private partial void LogRunnerRemoved(string taskId, int activeCount);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "[subagent-registry] Max concurrent changed: {Previous} -> {Current}")]
+    private partial void LogMaxConcurrentChanged(int previous, int current);
 }

@@ -154,6 +154,48 @@ public class SubagentRunnerRegistryTests
             new SubagentRunnerRegistry(0, NullLogger<SubagentRunnerRegistry>.Instance));
     }
 
+    // ── Live cap ─────────────────────────────────────────────────────────
+
+    [Fact]
+    public void SetMaxConcurrent_Raise_OpensSlotsAndInvokesCallback()
+    {
+        // fill the cap of 2
+        _registry.TryRegister("task-1", CreateRunner());
+        _registry.TryRegister("task-2", CreateRunner());
+        Assert.False(_registry.HasAvailableSlot);
+
+        var callbackCount = 0;
+        _registry.SetSlotsOpenedCallback(() => callbackCount++);
+
+        _registry.SetMaxConcurrent(4);
+
+        Assert.Equal(4, _registry.MaxConcurrent);
+        Assert.True(_registry.HasAvailableSlot);
+        Assert.Equal(1, callbackCount);
+    }
+
+    [Fact]
+    public void SetMaxConcurrent_Lower_DoesNotInvokeCallback()
+    {
+        var callbackCount = 0;
+        _registry.SetSlotsOpenedCallback(() => callbackCount++);
+
+        _registry.SetMaxConcurrent(1);
+
+        Assert.Equal(1, _registry.MaxConcurrent);
+        Assert.Equal(0, callbackCount);
+    }
+
+    [Theory]
+    [InlineData(0, 1)]
+    [InlineData(25, 20)]
+    [InlineData(7, 7)]
+    public void SetMaxConcurrent_Clamps_To_1_20(int input, int expected)
+    {
+        _registry.SetMaxConcurrent(input);
+        Assert.Equal(expected, _registry.MaxConcurrent);
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────
 
     private static SubagentRunner CreateRunner()
