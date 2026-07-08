@@ -97,6 +97,19 @@ public sealed class SubAgentStopToolTests : IDisposable
         Assert.False(result.Success);
     }
 
+    [Fact]
+    public async Task Stop_RunningButNoLiveRunner_MarksCancelledDefensively()
+    {
+        // State says Running, but no runner is registered (mid-transition window):
+        // TryCancel returns false, so the tool marks the task Cancelled defensively.
+        Seed("sa-5", SubagentTaskState.Running);
+
+        var result = await _tool.ExecuteAsync("""{"task_id":"sa-5"}""", Ctx(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Equal(SubagentTaskState.Cancelled, _store.GetById("sa-5")!.State);
+    }
+
     public void Dispose()
     {
         _store.Dispose();
