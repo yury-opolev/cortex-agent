@@ -80,6 +80,7 @@ function globalSettingsPage() {
         defaultModels: {},
         memoryModels: {},
         maxSubagentRounds: 0,
+        maxConcurrentSubagents: 5,
         webUiInfo: "",
         agentConnected: false,
         dirty: false,
@@ -171,6 +172,7 @@ function globalSettingsPage() {
                 this.providers = data.providers || [];
                 this.fallbackOrder = [...(data.fallbackOrder || [])];
                 this.maxSubagentRounds = data.maxSubagentRounds ?? 0;
+                this.maxConcurrentSubagents = data.maxConcurrentSubagents ?? 5;
 
                 this.defaultModels = {};
                 this.memoryModels = {};
@@ -188,6 +190,7 @@ function globalSettingsPage() {
                     defaultModels: { ...this.defaultModels },
                     memoryModels: { ...this.memoryModels },
                     maxSubagentRounds: this.maxSubagentRounds,
+                    maxConcurrentSubagents: this.maxConcurrentSubagents,
                 };
                 this.dirty = false;
 
@@ -227,7 +230,8 @@ function globalSettingsPage() {
                 JSON.stringify(this.fallbackOrder) !== JSON.stringify(o.fallbackOrder) ||
                 JSON.stringify(this.defaultModels) !== JSON.stringify(o.defaultModels) ||
                 JSON.stringify(this.memoryModels) !== JSON.stringify(o.memoryModels) ||
-                this.maxSubagentRounds !== o.maxSubagentRounds
+                this.maxSubagentRounds !== o.maxSubagentRounds ||
+                this.maxConcurrentSubagents !== o.maxConcurrentSubagents
             );
         },
 
@@ -243,6 +247,11 @@ function globalSettingsPage() {
 
         onMaxRoundsInput(value) {
             this.maxSubagentRounds = parseInt(value, 10) || 0;
+            this.checkDirty();
+        },
+
+        onMaxConcurrentSubagentsInput(value) {
+            this.maxConcurrentSubagents = Math.min(20, Math.max(1, parseInt(value, 10) || 5));
             this.checkDirty();
         },
 
@@ -365,6 +374,9 @@ function globalSettingsPage() {
             if (this.maxSubagentRounds !== o.maxSubagentRounds) {
                 payload.maxSubagentRounds = this.maxSubagentRounds;
             }
+            if (this.maxConcurrentSubagents !== o.maxConcurrentSubagents) {
+                payload.maxConcurrentSubagents = this.maxConcurrentSubagents;
+            }
 
             try {
                 await api.post("/api/settings", payload);
@@ -373,14 +385,15 @@ function globalSettingsPage() {
                     defaultModels: { ...this.defaultModels },
                     memoryModels: { ...this.memoryModels },
                     maxSubagentRounds: this.maxSubagentRounds,
+                    maxConcurrentSubagents: this.maxConcurrentSubagents,
                 };
                 this.dirty = false;
                 Alpine.store("toast").success("Settings saved");
                 await this.loadSettings();
 
                 // LLM provider config (fallback order, default/memory models,
-                // maxSubagentRounds) is wired at startup — DirectLlmClient and
-                // AgentRuntime capture it at boot. Offer an immediate restart
+                // maxSubagentRounds, maxConcurrentSubagents) is wired at startup —
+                // DirectLlmClient and AgentRuntime capture it at boot. Offer an immediate restart
                 // so the user doesn't have to chase the change manually.
                 if (Object.keys(payload).length > 0 && window.cortexRestart) {
                     window.cortexRestart.promptAndRestart({
