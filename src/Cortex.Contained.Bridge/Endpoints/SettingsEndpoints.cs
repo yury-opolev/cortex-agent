@@ -3,6 +3,7 @@ using Cortex.Contained.Bridge.Logging;
 using Cortex.Contained.Bridge.Setup;
 using Cortex.Contained.Bridge.Tenants;
 using Cortex.Contained.Contracts.Config;
+using Cortex.Contained.Contracts.Hub;
 
 namespace Cortex.Contained.Bridge.Endpoints;
 
@@ -56,6 +57,7 @@ internal static class SettingsEndpoints
                 },
                 memory = new { enabled = config.Memory.Enabled },
                 maxSubagentRounds = config.MaxSubagentRounds,
+                maxConcurrentSubagents = config.MaxConcurrentSubagents,
             });
         }).RequireAuthorization();
 
@@ -199,6 +201,22 @@ internal static class SettingsEndpoints
             {
                 config.MaxSubagentRounds = request.MaxSubagentRounds.Value;
                 changed = true;
+            }
+
+            // Update max concurrent subagents — persist (restart durability) AND push live.
+            if (request.MaxConcurrentSubagents.HasValue)
+            {
+                var clamped = Math.Clamp(request.MaxConcurrentSubagents.Value, 1, 20);
+                config.MaxConcurrentSubagents = clamped;
+                changed = true;
+
+                var agent = tenantRouter.GetDefaultClient();
+                if (agent is not null && agent.IsConnected)
+                {
+                    await agent.UpdateConfigAsync(
+                        new AgentConfigUpdate { MaxConcurrentSubagents = clamped },
+                        CancellationToken.None).ConfigureAwait(false);
+                }
             }
 
             // Persist to cortex.yml if anything changed
