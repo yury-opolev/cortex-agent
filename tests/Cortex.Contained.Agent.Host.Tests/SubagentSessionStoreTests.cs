@@ -128,6 +128,46 @@ public class SubagentSessionStoreTests : IDisposable
         Assert.Null(oldest);
     }
 
+    [Fact]
+    public void TryClaimOldestQueued_ClaimsOnce_MarksRunning_SecondCallSkipsIt()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var t1 = new SubagentTask
+        {
+            TaskId = "sa-q1",
+            ParentConversation = "conv-1",
+            ParentChannel = "webchat-default",
+            Description = "first",
+            Prompt = "p",
+            State = SubagentTaskState.Queued,
+            CreatedAt = now, // explicit ordering gap so 'first' is unambiguously oldest
+        };
+        var t2 = new SubagentTask
+        {
+            TaskId = "sa-q2",
+            ParentConversation = "conv-1",
+            ParentChannel = "webchat-default",
+            Description = "second",
+            Prompt = "p",
+            State = SubagentTaskState.Queued,
+            CreatedAt = now.AddSeconds(1),
+        };
+        _store.Create(t1);
+        _store.Create(t2);
+
+        var claimedA = _store.TryClaimOldestQueued();
+        Assert.NotNull(claimedA);
+        Assert.Equal("sa-q1", claimedA!.TaskId);
+        Assert.Equal(SubagentTaskState.Running, claimedA.State);
+        Assert.Equal(SubagentTaskState.Running, _store.GetById("sa-q1")!.State); // persisted, not just in-memory
+
+        var claimedB = _store.TryClaimOldestQueued();
+        Assert.NotNull(claimedB);
+        Assert.Equal("sa-q2", claimedB!.TaskId); // NOT sa-q1 again — first claim removed it from the queue
+
+        Assert.Null(_store.TryClaimOldestQueued()); // nothing left queued
+    }
+
     // ── Update state ─────────────────────────────────────────────────────
 
     [Fact]
@@ -319,6 +359,29 @@ public class SubagentSessionStoreTests : IDisposable
     {
         Assert.Equal(expected, state.ToStorageValue());
         Assert.Equal(state, SubagentTaskStateExtensions.Parse(expected));
+    }
+
+    [Fact]
+    public void UpdateState_Cancelled_SetsCompletedAt_AndExcludesFromQueue()
+    {
+        var task = new SubagentTask
+        {
+            TaskId = "sa-cancel-1",
+            ParentConversation = "conv-1",
+            ParentChannel = "webchat-default",
+            Description = "test",
+            Prompt = "do it",
+            State = SubagentTaskState.Queued,
+        };
+        _store.Create(task);
+
+        _store.UpdateState("sa-cancel-1", SubagentTaskState.Cancelled, result: "[Subagent stopped]");
+
+        var reloaded = _store.GetById("sa-cancel-1");
+        Assert.NotNull(reloaded);
+        Assert.Equal(SubagentTaskState.Cancelled, reloaded!.State);
+        Assert.NotNull(reloaded.CompletedAt);            // terminal → completed_at stamped
+        Assert.Null(_store.GetOldestQueued());            // cancelled is not queued
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────

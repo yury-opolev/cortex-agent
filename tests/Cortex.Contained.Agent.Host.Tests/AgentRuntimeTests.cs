@@ -88,6 +88,38 @@ public class AgentRuntimeTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task UpdateConfigAsync_AppliesMaxConcurrentSubagents()
+    {
+        var registry = new SubagentRunnerRegistry(2, NullLogger<SubagentRunnerRegistry>.Instance);
+        var sessionConfig = new SessionConfig();
+        var sessions = new AgentSessionStore(sessionConfig, new MemorySettingsStore(), NullLogger<AgentSessionStore>.Instance);
+        var mockLlmClient = Substitute.For<ILlmClient>();
+        var activeChannelStore = new ActiveChannelStore();
+        var toolRegistry = new ToolRegistry([], activeChannelStore, NullLogger<ToolRegistry>.Instance);
+        var messageChannel = new AgentMessageChannel();
+
+        var hubContext = Substitute.For<IHubContext<AgentHub, IAgentHubClient>>();
+        var hubClients = Substitute.For<IHubClients<IAgentHubClient>>();
+        hubContext.Clients.Returns(hubClients);
+        var bridgeAccessor = new BridgeClientAccessor(hubContext);
+
+        var mockCaller = Substitute.For<IAgentHubClient>();
+        hubClients.Client(Arg.Any<string>()).Returns(mockCaller);
+        bridgeAccessor.SetConnectionId("test-conn");
+
+        var httpClientFactory = Substitute.For<IHttpClientFactory>();
+        var imageAgingMonitor = Substitute.For<IOptionsMonitor<ImageAgingConfig>>();
+        imageAgingMonitor.CurrentValue.Returns(new ImageAgingConfig());
+        var runtime = new AgentRuntime(sessions, mockLlmClient, toolRegistry, sessionConfig, messageChannel, bridgeAccessor, activeChannelStore, httpClientFactory, Path.GetTempPath(), Path.GetTempPath(), NullLogger<AgentRuntime>.Instance, new ModelProvider(), imageAgingMonitor, subagentRegistry: registry);
+
+        await runtime.UpdateConfigAsync(new AgentConfigUpdate { MaxConcurrentSubagents = 9 }, CancellationToken.None);
+
+        Assert.Equal(9, registry.MaxConcurrent);
+
+        await runtime.StopProcessingAsync(CancellationToken.None);
+    }
+
+    [Fact]
     public async Task HandleMessageAsync_AcceptsAndQueuesMessages()
     {
         // With the queue-based design, messages are always accepted (queued)

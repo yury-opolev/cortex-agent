@@ -174,6 +174,41 @@ public sealed partial class SubagentSessionStore : SqliteStoreBase
         }
     }
 
+    /// <summary>
+    /// Atomically claim the oldest queued task: transition it to Running and return it
+    /// (now Running), or null if none are queued. The SELECT and the UPDATE happen under
+    /// a single lock so two concurrent dequeue callers can never claim the same task.
+    /// </summary>
+    public SubagentTask? TryClaimOldestQueued()
+    {
+        lock (this.syncLock)
+        {
+            using var selectCmd = this.Connection.CreateCommand();
+            selectCmd.CommandText = """
+                SELECT * FROM subagent_tasks
+                WHERE state = 'queued'
+                ORDER BY created_at
+                LIMIT 1
+                """;
+            var tasks = ReadTasks(selectCmd);
+            if (tasks.Count == 0)
+            {
+                return null;
+            }
+
+            var task = tasks[0];
+
+            using var updateCmd = this.Connection.CreateCommand();
+            updateCmd.CommandText = "UPDATE subagent_tasks SET state = 'running' WHERE task_id = $taskId";
+            updateCmd.Parameters.AddWithValue("$taskId", task.TaskId);
+            updateCmd.ExecuteNonQuery();
+
+            task.State = SubagentTaskState.Running;
+            this.LogTaskStateChanged(task.TaskId, "running");
+            return task;
+        }
+    }
+
     /// <summary>Update a task's state and optional result fields.</summary>
     public void UpdateState(string taskId, SubagentTaskState state, string? result = null, string? evalResponse = null)
     {
@@ -185,7 +220,7 @@ public sealed partial class SubagentSessionStore : SqliteStoreBase
                 SET state = $state,
                     result = COALESCE($result, result),
                     eval_response = COALESCE($evalResponse, eval_response),
-                    completed_at = CASE WHEN $state IN ('completed', 'failed') THEN $now ELSE completed_at END
+                    completed_at = CASE WHEN $state IN ('completed', 'failed', 'cancelled') THEN $now ELSE completed_at END
                 WHERE task_id = $taskId
                 """;
             cmd.Parameters.AddWithValue("$taskId", taskId);
@@ -311,7 +346,7 @@ public sealed partial class SubagentSessionStore : SqliteStoreBase
             cmd1.CommandText = """
                 UPDATE subagent_tasks
                 SET messages_json = '[]'
-                WHERE state IN ('completed', 'failed')
+                WHERE state IN ('completed', 'failed', 'cancelled')
                   AND completed_at IS NOT NULL
                   AND completed_at <= $cutoff
                   AND messages_json != '[]'
@@ -322,7 +357,7 @@ public sealed partial class SubagentSessionStore : SqliteStoreBase
             using var cmd2 = this.Connection.CreateCommand();
             cmd2.CommandText = """
                 DELETE FROM subagent_tasks
-                WHERE state IN ('completed', 'failed')
+                WHERE state IN ('completed', 'failed', 'cancelled')
                   AND completed_at IS NOT NULL
                   AND completed_at <= $cutoff
                 """;

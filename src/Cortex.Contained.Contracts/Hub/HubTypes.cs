@@ -471,6 +471,12 @@ public sealed record AgentConfigUpdate
     /// this is a safety-net circuit breaker.
     /// </summary>
     public int? MaxSubagentRounds { get; init; }
+
+    /// <summary>
+    /// Maximum number of subagents that may run concurrently (1–20). Applied live
+    /// to the SubagentRunnerRegistry without a container restart.
+    /// </summary>
+    public int? MaxConcurrentSubagents { get; init; }
 }
 
 /// <summary>Pushed speaker-identification (voice-id) settings.</summary>

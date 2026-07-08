@@ -61,6 +61,7 @@ public sealed partial class SubAgentStartTool : IAgentTool
         this.agentConfig = agentConfig;
         this.store = store;
         this.registry = registry;
+        this.registry.SetSlotsOpenedCallback(this.StartQueuedTasks);
         this.onCompletion = onCompletion;
         this.logger = logger;
         this.bootstrapContextPath = Path.Combine(stateRoot, "context-bootstrap.md");
@@ -458,20 +459,27 @@ public sealed partial class SubAgentStartTool : IAgentTool
             return;
         }
 
+        var token = this.registry.GetCancellationToken(taskId);
+
         _ = Task.Run(async () =>
         {
             try
             {
                 // Retrieve relevant context before starting the loop
                 var memories = await RetrieveSubagentContextAsync(
-                    prompt, cancellationToken).ConfigureAwait(false);
+                    prompt, token).ConfigureAwait(false);
 
                 var bootstrapContext = LoadBootstrapContext();
                 var systemPrompt = BuildSubagentSystemPrompt(memories, bootstrapContext, skillName);
 
                 await runner.RunAsync(
                     this.modelProvider.DefaultModel, systemPrompt, prompt,
-                    $"subagent-{taskId}", cancellationToken).ConfigureAwait(false);
+                    $"subagent-{taskId}", token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                this.LogSubAgentCancelled(taskId);
+                this.store.UpdateState(taskId, SubagentTaskState.Cancelled, result: "[Subagent stopped]");
             }
 #pragma warning disable CA1031 // Background task must not crash the process
             catch (Exception ex)
@@ -485,13 +493,13 @@ public sealed partial class SubAgentStartTool : IAgentTool
                 // Remove frees the slot (count decreases). Always safe to call.
                 this.registry.Remove(taskId);
 
-                // On crash: notify main agent and dequeue next task
+                // On stop/crash: notify main agent and dequeue next task.
                 var task = this.store.GetById(taskId);
-                if (task?.State == SubagentTaskState.Failed)
+                if (task?.State is SubagentTaskState.Failed or SubagentTaskState.Cancelled)
                 {
                     try
                     {
-                        await this.onCompletion(taskId, task.Result ?? "[Subagent crashed]").ConfigureAwait(false);
+                        await this.onCompletion(taskId, task.Result ?? "[Subagent stopped]").ConfigureAwait(false);
                     }
 #pragma warning disable CA1031
                     catch { /* must not throw */ }
@@ -500,7 +508,7 @@ public sealed partial class SubAgentStartTool : IAgentTool
                     DequeueNext();
                 }
             }
-        }, CancellationToken.None); // Don't pass parent's token — runner already has it
+        }, CancellationToken.None); // Task.Run lifetime is independent; cancellation is via the per-task token.
     }
 
     private async Task OnRunnerCompletedAsync(string taskId, string result)
@@ -521,13 +529,12 @@ public sealed partial class SubAgentStartTool : IAgentTool
     {
         while (this.registry.HasAvailableSlot)
         {
-            var next = this.store.GetOldestQueued();
+            var next = this.store.TryClaimOldestQueued();
             if (next is null)
             {
                 break;
             }
 
-            this.store.UpdateState(next.TaskId, SubagentTaskState.Running);
             this.LogSubAgentDequeued(next.TaskId, next.Description);
             FireRunner(next.TaskId, next.Description, next.Prompt, skillName: null, next.ParentConversation, CancellationToken.None);
         }
@@ -535,10 +542,14 @@ public sealed partial class SubAgentStartTool : IAgentTool
 
     private void DequeueNext()
     {
-        var next = this.store.GetOldestQueued();
-        if (next is not null && this.registry.HasAvailableSlot)
+        if (!this.registry.HasAvailableSlot)
         {
-            this.store.UpdateState(next.TaskId, SubagentTaskState.Running);
+            return;
+        }
+
+        var next = this.store.TryClaimOldestQueued();
+        if (next is not null)
+        {
             this.LogSubAgentDequeued(next.TaskId, next.Description);
             FireRunner(next.TaskId, next.Description, next.Prompt, skillName: null, next.ParentConversation, CancellationToken.None);
         }
@@ -602,6 +613,9 @@ public sealed partial class SubAgentStartTool : IAgentTool
 
     [LoggerMessage(Level = LogLevel.Error, Message = "[sub_agent_start] Subagent crashed: {TaskId} — {ErrorMessage}")]
     private partial void LogSubAgentCrashed(string taskId, string errorMessage);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "[sub_agent_start] Subagent stopped: {TaskId}")]
+    private partial void LogSubAgentCancelled(string taskId);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "[sub_agent_start] Retrieved {Count} memories for subagent context")]
     private partial void LogSubAgentMemoriesRetrieved(int count);

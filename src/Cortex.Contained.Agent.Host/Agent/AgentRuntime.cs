@@ -78,6 +78,7 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
     private readonly IImageDescriber? imageDescriber;
     private readonly IOptionsMonitor<ConversationCompactionConfig>? compactionOptions;
     private readonly AgentMetrics? metrics;
+    private readonly SubagentRunnerRegistry? subagentRegistry;
 
     // ── Extracted collaborators (constructed in the ctor from existing deps) ──
     private readonly PromptAssembler promptAssembler;
@@ -166,7 +167,8 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
         IOptionsMonitor<ConversationCompactionConfig>? compactionOptions = null,
         AgentMetrics? metrics = null,
         ILoggerFactory? loggerFactory = null,
-        Memory.MemorySettingsStore? memorySettingsStore = null)
+        Memory.MemorySettingsStore? memorySettingsStore = null,
+        SubagentRunnerRegistry? subagentRegistry = null)
     {
         this.subagentStore = subagentStore;
         this.todoResolver = todoResolver;
@@ -194,6 +196,7 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
         this.imageDescriber = imageDescriber;
         this.compactionOptions = compactionOptions;
         this.metrics = metrics;
+        this.subagentRegistry = subagentRegistry;
 
         // Construct the extracted collaborators from already-injected dependencies.
         // Done here (rather than via DI) so the many test construction sites that use
@@ -1489,6 +1492,11 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
         if (config.Temperature.HasValue)
         {
             this.temperature = config.Temperature.Value;
+        }
+
+        if (config.MaxConcurrentSubagents.HasValue)
+        {
+            this.subagentRegistry?.SetMaxConcurrent(config.MaxConcurrentSubagents.Value);
         }
 
         this.LogConfigUpdated(this.defaultModel, this.maxTokens, this.temperature);

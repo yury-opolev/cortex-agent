@@ -526,6 +526,11 @@ builder.Services.AddSingleton<IAgentTool>(sp =>
             .ProcessSubagentCompletionAsync(taskId, result),
         sp.GetRequiredService<ILogger<SubAgentSendTool>>(),
         sp.GetRequiredService<InMemoryTodoStore>()));
+builder.Services.AddSingleton<IAgentTool>(sp =>
+    new SubAgentStopTool(
+        sp.GetRequiredService<SubagentSessionStore>(),
+        sp.GetRequiredService<SubagentRunnerRegistry>(),
+        sp.GetRequiredService<ILogger<SubAgentStopTool>>()));
 
 // --- Todo List Infrastructure ---
 builder.Services.AddSingleton(sp =>
@@ -618,7 +623,8 @@ builder.Services.AddSingleton(sp =>
         compactionOptions: sp.GetRequiredService<IOptionsMonitor<ConversationCompactionConfig>>(),
         metrics: sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.AgentMetrics>(),
         loggerFactory: sp.GetRequiredService<ILoggerFactory>(),
-        memorySettingsStore: sp.GetRequiredService<Cortex.Contained.Agent.Host.Memory.MemorySettingsStore>()));
+        memorySettingsStore: sp.GetRequiredService<Cortex.Contained.Agent.Host.Memory.MemorySettingsStore>(),
+        subagentRegistry: sp.GetRequiredService<SubagentRunnerRegistry>()));
 builder.Services.AddSingleton<IAgentRuntime>(sp => sp.GetRequiredService<AgentRuntime>());
 
 // Bootstrap context store removed — replaced by self-notes

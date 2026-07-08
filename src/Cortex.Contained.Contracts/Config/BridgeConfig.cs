@@ -38,6 +38,9 @@ public sealed class BridgeConfig
     /// </summary>
     public int MaxSubagentRounds { get; set; }
 
+    /// <summary>Maximum number of subagents that may run concurrently (1–20). Default 5.</summary>
+    public int MaxConcurrentSubagents { get; set; } = 5;
+
     /// <summary>Multi-tenant configuration. Maps tenant ID → tenant config.</summary>
     public Dictionary<string, TenantConfig> Tenants { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 

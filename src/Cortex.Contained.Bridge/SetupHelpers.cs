@@ -1200,6 +1200,10 @@ public sealed class SettingsUpdateRequest
     /// </summary>
     [JsonPropertyName("maxSubagentRounds")]
     public int? MaxSubagentRounds { get; set; }
+
+    /// <summary>Maximum number of subagents that may run concurrently (1–20). Null = no change.</summary>
+    [JsonPropertyName("maxConcurrentSubagents")]
+    public int? MaxConcurrentSubagents { get; set; }
 }
 
 /// <summary>Request to refresh available models for an already-configured provider.</summary>

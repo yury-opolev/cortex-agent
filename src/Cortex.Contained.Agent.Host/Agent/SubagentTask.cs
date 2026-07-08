@@ -21,6 +21,9 @@ public enum SubagentTaskState
 
     /// <summary>Subagent failed (LLM error, max rounds, crash).</summary>
     Failed,
+
+    /// <summary>Subagent was stopped via sub_agent_stop (running loop cancelled or queued task dropped).</summary>
+    Cancelled,
 }
 
 /// <summary>
@@ -81,6 +84,7 @@ public static class SubagentTaskStateExtensions
         SubagentTaskState.Revising => "revising",
         SubagentTaskState.Completed => "completed",
         SubagentTaskState.Failed => "failed",
+        SubagentTaskState.Cancelled => "cancelled",
         _ => "queued",
     };
 
@@ -91,6 +95,7 @@ public static class SubagentTaskStateExtensions
         "revising" => SubagentTaskState.Revising,
         "completed" => SubagentTaskState.Completed,
         "failed" => SubagentTaskState.Failed,
+        "cancelled" => SubagentTaskState.Cancelled,
         _ => SubagentTaskState.Queued,
     };
 }
