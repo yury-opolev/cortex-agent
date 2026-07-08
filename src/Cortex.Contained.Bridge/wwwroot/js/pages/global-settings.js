@@ -391,11 +391,12 @@ function globalSettingsPage() {
                 Alpine.store("toast").success("Settings saved");
                 await this.loadSettings();
 
-                // LLM provider config (fallback order, default/memory models,
-                // maxSubagentRounds, maxConcurrentSubagents) is wired at startup —
-                // DirectLlmClient and AgentRuntime capture it at boot. Offer an immediate restart
-                // so the user doesn't have to chase the change manually.
-                if (Object.keys(payload).length > 0 && window.cortexRestart) {
+                // LLM provider config (fallback order, default/memory models, maxSubagentRounds) is
+                // wired at startup — DirectLlmClient and AgentRuntime capture it at boot, so those
+                // need a Bridge restart. maxConcurrentSubagents is pushed live via UpdateConfigAsync
+                // and does NOT require a restart.
+                const restartRequiringKeys = Object.keys(payload).filter(k => k !== 'maxConcurrentSubagents');
+                if (restartRequiringKeys.length > 0 && window.cortexRestart) {
                     window.cortexRestart.promptAndRestart({
                         reason: "LLM provider changes need a Bridge restart to take effect.",
                     });
