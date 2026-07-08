@@ -529,13 +529,12 @@ public sealed partial class SubAgentStartTool : IAgentTool
     {
         while (this.registry.HasAvailableSlot)
         {
-            var next = this.store.GetOldestQueued();
+            var next = this.store.TryClaimOldestQueued();
             if (next is null)
             {
                 break;
             }
 
-            this.store.UpdateState(next.TaskId, SubagentTaskState.Running);
             this.LogSubAgentDequeued(next.TaskId, next.Description);
             FireRunner(next.TaskId, next.Description, next.Prompt, skillName: null, next.ParentConversation, CancellationToken.None);
         }
@@ -543,10 +542,14 @@ public sealed partial class SubAgentStartTool : IAgentTool
 
     private void DequeueNext()
     {
-        var next = this.store.GetOldestQueued();
-        if (next is not null && this.registry.HasAvailableSlot)
+        if (!this.registry.HasAvailableSlot)
         {
-            this.store.UpdateState(next.TaskId, SubagentTaskState.Running);
+            return;
+        }
+
+        var next = this.store.TryClaimOldestQueued();
+        if (next is not null)
+        {
             this.LogSubAgentDequeued(next.TaskId, next.Description);
             FireRunner(next.TaskId, next.Description, next.Prompt, skillName: null, next.ParentConversation, CancellationToken.None);
         }
