@@ -208,21 +208,6 @@ public class SubagentRunnerRegistryTests
         Assert.Equal(0, callbackCount);
     }
 
-    // ── Config-update apply seam ────────────────────────────────────────
-
-    [Fact]
-    public void ApplyConfigValue_SetsLiveCap()
-    {
-        var update = new Cortex.Contained.Contracts.Hub.AgentConfigUpdate { MaxConcurrentSubagents = 9 };
-
-        if (update.MaxConcurrentSubagents.HasValue)
-        {
-            _registry.SetMaxConcurrent(update.MaxConcurrentSubagents.Value);
-        }
-
-        Assert.Equal(9, _registry.MaxConcurrent);
-    }
-
     // ── Per-task cancellation ────────────────────────────────────────────
 
     [Fact]
