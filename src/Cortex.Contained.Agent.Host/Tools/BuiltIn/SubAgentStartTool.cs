@@ -157,7 +157,7 @@ public sealed partial class SubAgentStartTool : IAgentTool
         if (this.registry.HasAvailableSlot)
         {
             this.store.UpdateState(taskId, SubagentTaskState.Running);
-            FireRunner(taskId, description, prompt, skillName, context.ConversationId, cancellationToken);
+            FireRunner(taskId, description, prompt, skillName, context.ConversationId);
 
             this.LogSubAgentStarted(taskId, description);
             return Task.FromResult(AgentToolResult.Ok($"Subagent started.\n" +
@@ -444,7 +444,7 @@ public sealed partial class SubAgentStartTool : IAgentTool
     }
 
     /// <summary>Fire a SubagentRunner on a background task.</summary>
-    internal void FireRunner(string taskId, string description, string prompt, string? skillName, string conversationId, CancellationToken cancellationToken)
+    internal void FireRunner(string taskId, string description, string prompt, string? skillName, string conversationId)
     {
         var maxRounds = this.agentConfig.CurrentValue.MaxSubagentRounds;
         var runner = new SubagentRunner(
@@ -536,7 +536,7 @@ public sealed partial class SubAgentStartTool : IAgentTool
             }
 
             this.LogSubAgentDequeued(next.TaskId, next.Description);
-            FireRunner(next.TaskId, next.Description, next.Prompt, skillName: null, next.ParentConversation, CancellationToken.None);
+            FireRunner(next.TaskId, next.Description, next.Prompt, skillName: null, next.ParentConversation);
         }
     }
 
@@ -551,7 +551,7 @@ public sealed partial class SubAgentStartTool : IAgentTool
         if (next is not null)
         {
             this.LogSubAgentDequeued(next.TaskId, next.Description);
-            FireRunner(next.TaskId, next.Description, next.Prompt, skillName: null, next.ParentConversation, CancellationToken.None);
+            FireRunner(next.TaskId, next.Description, next.Prompt, skillName: null, next.ParentConversation);
         }
     }
 

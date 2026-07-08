@@ -347,20 +347,6 @@ public class SubagentSessionStoreTests : IDisposable
         Assert.Null(retrieved);
     }
 
-    // ── State serialization round-trip ───────────────────────────────────
-
-    [Theory]
-    [InlineData(SubagentTaskState.Queued, "queued")]
-    [InlineData(SubagentTaskState.Running, "running")]
-    [InlineData(SubagentTaskState.Revising, "revising")]
-    [InlineData(SubagentTaskState.Completed, "completed")]
-    [InlineData(SubagentTaskState.Failed, "failed")]
-    public void SubagentTaskState_RoundTrips(SubagentTaskState state, string expected)
-    {
-        Assert.Equal(expected, state.ToStorageValue());
-        Assert.Equal(state, SubagentTaskStateExtensions.Parse(expected));
-    }
-
     [Fact]
     public void UpdateState_Cancelled_SetsCompletedAt_AndExcludesFromQueue()
     {

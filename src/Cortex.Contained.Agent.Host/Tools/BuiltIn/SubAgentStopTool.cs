@@ -47,11 +47,13 @@ public sealed partial class SubAgentStopTool : IAgentTool
     public Task<AgentToolResult> ExecuteAsync(
         string argumentsJson, ToolExecutionContext context, CancellationToken cancellationToken)
     {
-        string taskId;
+        string? taskId;
         try
         {
             using var doc = JsonDocument.Parse(argumentsJson);
-            taskId = doc.RootElement.GetProperty("task_id").GetString() ?? string.Empty;
+            taskId = doc.RootElement.TryGetProperty("task_id", out var taskIdElement)
+                ? taskIdElement.GetString()
+                : null;
         }
 #pragma warning disable CA1031 // Bad arguments should not crash the agent
         catch (Exception ex)
