@@ -18,6 +18,7 @@ public sealed class DaveRequiredCloseClassifierTests
     [InlineData("Voice", "Disconnected: 4014")]
     [InlineData("Voice", "")]
     [InlineData("Voice", null)]
+    [InlineData("Gateway", "reconnect in 4017ms")]
     public void IsDaveRequired_Unrelated_ReturnsFalse(string? source, string? message)
     {
         Assert.False(DaveRequiredCloseClassifier.IsDaveRequired(source, message));

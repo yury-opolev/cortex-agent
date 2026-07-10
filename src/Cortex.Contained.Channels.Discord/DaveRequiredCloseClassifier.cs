@@ -17,11 +17,21 @@ public static class DaveRequiredCloseClassifier
             return false;
         }
 
-        if (message.Contains("4017", StringComparison.Ordinal))
+        if (message.Contains("EndToEndEncryptionDAVEProtocolRequired", StringComparison.OrdinalIgnoreCase))
         {
             return true;
         }
 
-        return message.Contains("EndToEndEncryptionDAVEProtocolRequired", StringComparison.OrdinalIgnoreCase);
+        // "4017" alone is a bare, unanchored substring match — it also matches
+        // coincidental numbers (e.g. "reconnect in 4017ms", a snowflake or
+        // byte-count containing 4017), which would spuriously fire the loud
+        // "re-enable DAVE" warning. Require close/disconnect context alongside it.
+        if (!message.Contains("4017", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return message.Contains("clos", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("disconnect", StringComparison.OrdinalIgnoreCase);
     }
 }

@@ -242,10 +242,6 @@ internal sealed partial class DiscordVoiceHandler : IAsyncDisposable
 
     private readonly DaveDecryptBurstTracker decryptBurstTracker = new();
 
-    /// <summary>Set by the watchdog when a sustained decrypt-flood is detected;
-    /// consumed on the same tick to force a clean rejoin.</summary>
-    private volatile bool decryptFloodSuspect;
-
     // ── Per-user audio state ─────────────────────────────────────────
 
     private readonly ConcurrentDictionary<ulong, UserAudioState> userAudioStates = new();
@@ -863,6 +859,18 @@ internal sealed partial class DiscordVoiceHandler : IAsyncDisposable
     /// </summary>
     internal void NotifyDecryptFailure(ulong userId, string resultCode)
     {
+        // DiscordChannel.OnDiscordLog broadcasts every decrypt-failure log line to
+        // ALL voice handlers (the log has no per-tenant routing), so without this
+        // guard a bystander's — or another tenant's — DAVE desync could trip this
+        // handler's flood watchdog and force-reconnect a healthy linked-user
+        // session. LinkedUserId == 0 means no link is configured (single-user
+        // setups without an explicit link); preserve today's behaviour there and
+        // record everyone.
+        if (this.config.LinkedUserId != 0 && userId != this.config.LinkedUserId)
+        {
+            return;
+        }
+
         this.decryptBurstTracker.RecordFailure(userId, resultCode, this.timeProvider.GetUtcNow().UtcTicks);
     }
 
@@ -973,7 +981,6 @@ internal sealed partial class DiscordVoiceHandler : IAsyncDisposable
 
         var userPresent = await IsUserInTargetChannelAsync(ct).ConfigureAwait(false);
         var floodSuspect = floodCandidate && userPresent;
-        this.decryptFloodSuspect = floodSuspect;
         var nowTicks = this.timeProvider.GetUtcNow().UtcTicks;
         var action = VoiceWatchdogDecision.Decide(
             userPresent,
@@ -989,7 +996,6 @@ internal sealed partial class DiscordVoiceHandler : IAsyncDisposable
                 await EnsureConnectedAsync("watchdog").ConfigureAwait(false);
                 this.suspectDead = false;
                 this.daveSessionSuspect = false;
-                this.decryptFloodSuspect = false;
                 break;
 
             case WatchdogAction.ForceReconnect:
@@ -1001,8 +1007,17 @@ internal sealed partial class DiscordVoiceHandler : IAsyncDisposable
                 await ForceReconnectAsync(ForceReconnectTrigger.Resolve(daveSuspect, floodSuspect)).ConfigureAwait(false);
                 this.suspectDead = false;
                 this.daveSessionSuspect = false;
-                this.decryptFloodSuspect = false;
-                this.decryptBurstTracker.ResetAll(nowTicksForFlood);
+
+                // Log the shape of any run that was active *at* the forced
+                // reconnect — the exact scenario this watchdog targets — so the
+                // burst-summary diagnostic isn't silently dropped just because
+                // the run was ended by a rejoin instead of a successful commit.
+                var endedBursts = this.decryptBurstTracker.ResetAll(nowTicksForFlood);
+                foreach (var s in endedBursts)
+                {
+                    this.LogDecryptBurstEnded(s.UserId, s.FailureCount, s.DurationMs, s.ResultCode);
+                }
+
                 if (daveSuspect)
                 {
                     await ReplayPendingProactiveAsync(nowTicks).ConfigureAwait(false);
@@ -1447,8 +1462,17 @@ internal sealed partial class DiscordVoiceHandler : IAsyncDisposable
             // so a join-race MLS failure can be distinguished from later epoch churn.
             this.suspectDead = false;
             this.daveSessionSuspect = false;
-            Interlocked.Exchange(ref this.lastJoinTicks, this.timeProvider.GetUtcNow().UtcTicks);
-            this.decryptBurstTracker.ResetAll(this.timeProvider.GetUtcNow().UtcTicks);
+            var joinNowTicks = this.timeProvider.GetUtcNow().UtcTicks;
+            Interlocked.Exchange(ref this.lastJoinTicks, joinNowTicks);
+
+            // Any decrypt-failure run still active across this (re)join is ending
+            // here rather than via a successful commit — log its shape too so the
+            // burst-summary diagnostic covers this path as well.
+            var endedBurstsOnJoin = this.decryptBurstTracker.ResetAll(joinNowTicks);
+            foreach (var s in endedBurstsOnJoin)
+            {
+                this.LogDecryptBurstEnded(s.UserId, s.FailureCount, s.DurationMs, s.ResultCode);
+            }
 
             this.LogVoiceJoined(voiceChannel.Name, voiceChannelId);
 
