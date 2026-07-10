@@ -103,18 +103,28 @@ reversibly, without a rebuild.
 join voice, speak. Either it connects clean (→ eliminate DAVE permanently) or it
 4017s (→ revert; rely on Components 2–3 and drive Stage 2).
 
-## Component 2 — DAVE diagnostic instrumentation
+## Component 2 — DAVE decrypt-flood instrumentation (at cortex's layer)
 
-In the vendored `Discord.Net.Dave` managed layer, enrich the log emitted on each
-inbound decrypt failure (and epoch/ratchet transition) with the fields needed to
-pin the desync:
+**Constraint discovered in planning:** the build consumes `Discord.Net` /
+`Discord.Net.Dave` from **NuGet 3.20.1** (pinned in `Directory.Packages.props`;
+the `lib/Discord.Net` submodule is vestigial — the fork was deliberately dropped
+on 2026-06-29). Modifying the vendored `DaveDecryptStream` would therefore have
+**no effect**, and re-vendoring the fork just to add logging is not worth
+reversing that decision. So instrumentation lives in **cortex's own code**.
 
-- sender user id, current **MLS epoch**, **ratchet generation**, and the
-  `DecryptorResultCode`.
+cortex already classifies every decrypt-failure log line in
+`DiscordChannel.OnDiscordLog` (`DaveEventStats.Classify` +
+`DaveEventStats.TryParseUserId`), giving us **user id + `DecryptorResultCode`**
+(RTP sequence/timestamp of the *failed* packet is dropped inside the NuGet
+`DaveDecryptStream` before it reaches us — not recoverable without re-vendoring).
 
-Purpose: make the *next* wedge fully diagnosable so Stage 2 fixes the real
-divergence rather than guessing. Logging-only — no behavior change. Scope the
-change tightly; do not refactor surrounding library code.
+Track per-**burst** decrypt-failure state (consecutive run of failures for a
+user, uninterrupted by a success/commit) and emit a concise summary log when a
+burst ends: `userId, failureCount, durationMs, dominant resultCode`. This
+characterizes burst size/cadence for Stage 2 and — crucially — **is the same
+accumulator Component 3 trips its recovery on** (the two components share one
+mechanism). Richer RTP-level instrumentation is explicitly out of scope (would
+require re-vendoring the fork).
 
 ## Component 3 — Burst-aware decrypt-flood recovery watchdog
 
@@ -177,12 +187,16 @@ for tests.
 - `src/Cortex.Contained.Channels.Discord/DiscordVoiceHandler.cs` — decrypt-flood
   sampling, `decryptFloodSuspect` flag, watchdog wiring, `dave-decrypt-flood`
   trigger.
+- `src/Cortex.Contained.Channels.Discord/DaveDecryptBurstTracker.cs` — **new**
+  per-user decrypt-failure burst accumulator (instrumentation summary log +
+  the signal Component 3 consumes).
 - `src/Cortex.Contained.Channels.Discord/DaveEventStats.cs` — expose any snapshot
-  helpers the policy needs (if not already present).
-- `lib/Discord.Net` (vendored submodule) — DAVE decrypt-failure log enrichment
-  (epoch/ratchet/generation).
-- Tests under `tests/Cortex.Contained.Channels.Discord.Tests/` — new policy unit
-  tests + config-plumbing tests (red/green TDD).
+  helpers the tracker/policy needs (if not already present).
+- Tests under `tests/Cortex.Contained.Channels.Discord.Tests/` — new policy +
+  burst-tracker unit tests + config default test (red/green TDD).
+
+*(Not touched: `lib/Discord.Net` — the build uses NuGet Discord.Net 3.20.1, so
+the submodule has no effect on the shipped binary.)*
 
 ## Testing
 
