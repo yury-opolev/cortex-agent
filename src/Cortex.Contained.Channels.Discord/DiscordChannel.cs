@@ -161,7 +161,7 @@ public sealed partial class DiscordChannel : IChannelWithStreaming, IDiscordChan
             // libdave (Discord Audio/Video End-to-End Encryption) is required by Discord
             // for voice connections as of March 1st, 2026. Requires Discord.Net.Dave package
             // and the native libdave.dll library in the output directory.
-            EnableVoiceDaveEncryption = true,
+            EnableVoiceDaveEncryption = this.options.EnableVoiceDaveEncryption,
         };
 
         this.client = new DiscordSocketClient(config);
