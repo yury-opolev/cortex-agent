@@ -904,6 +904,27 @@ public sealed partial class DiscordChannel : IChannelWithStreaming, IDiscordChan
             this.LogDaveMlsFailureSignal(handlers.Length);
         }
 
+        // Inbound decrypt failures feed the per-handler flood tracker that drives
+        // decrypt-flood recovery (2026-07-08 deaf-bot outage).
+        if (kind is DaveEventKind.DecryptFailure)
+        {
+            var failUserId = DaveEventStats.TryParseUserId(logMsg.Message);
+            if (failUserId is { } uid)
+            {
+                var resultCode = ClassifyDecryptResultCode(logMsg.Message);
+                DiscordVoiceHandler[] handlers;
+                lock (this.voiceHandlersLock)
+                {
+                    handlers = [.. this.voiceHandlers.Values];
+                }
+
+                foreach (var handler in handlers)
+                {
+                    handler.NotifyDecryptFailure(uid, resultCode);
+                }
+            }
+        }
+
         // A DAVE-disabled experiment against a channel that mandates E2EE is
         // rejected by the voice gateway with close code 4017. Surface it loudly
         // so the operator knows to re-enable enableVoiceDaveEncryption.
@@ -931,6 +952,17 @@ public sealed partial class DiscordChannel : IChannelWithStreaming, IDiscordChan
         }
 
         return Task.CompletedTask;
+    }
+
+    private static string ClassifyDecryptResultCode(string? message)
+    {
+        if (string.IsNullOrEmpty(message))
+        {
+            return "Unknown";
+        }
+
+        var idx = message.LastIndexOf(": ", StringComparison.Ordinal);
+        return idx >= 0 && idx + 2 < message.Length ? message[(idx + 2)..] : "Unknown";
     }
 
     /// <summary>
