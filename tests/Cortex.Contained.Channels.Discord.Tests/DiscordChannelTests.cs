@@ -162,6 +162,20 @@ public class DiscordChannelOptionsTests
         Assert.Equal(2000, options.SilenceTimeoutMs);
         Assert.False(options.EnableBargeIn);
     }
+
+    [Fact]
+    public void EnableVoiceDaveEncryption_Default_IsTrue()
+    {
+        var options = new DiscordChannelOptions { BotToken = "t" };
+        Assert.True(options.EnableVoiceDaveEncryption);
+    }
+
+    [Fact]
+    public void EnableVoiceDaveEncryption_CanBeDisabled()
+    {
+        var options = new DiscordChannelOptions { BotToken = "t", EnableVoiceDaveEncryption = false };
+        Assert.False(options.EnableVoiceDaveEncryption);
+    }
 }
 
 public class DiscordChannelOptionsSlimTests

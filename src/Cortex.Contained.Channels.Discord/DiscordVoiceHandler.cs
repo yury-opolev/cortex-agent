@@ -225,6 +225,23 @@ internal sealed partial class DiscordVoiceHandler : IAsyncDisposable
     /// <see cref="pendingProactiveReplay"/> was set — bounds replay staleness.</summary>
     private long pendingProactiveReplayTicks;
 
+    // ── DAVE inbound decrypt-flood recovery (auto-heal a deaf bot) ────
+    //
+    // The 2026-07-08 outage: a join-race-seeded MLS ratchet desync makes inbound
+    // audio fail to decrypt in bursts whenever the user resumes speaking, so the
+    // bot hears nothing and never replies while the transport reports Connected.
+    // We accumulate decrypt failures (reset by any successful commit) and force
+    // one clean rejoin once the flood is sustained. See DaveDecryptFloodPolicy.
+
+    /// <summary>Accumulated decrypt failures past which a sustained flood is suspected.</summary>
+    private const long DecryptFloodThreshold = 50;
+
+    /// <summary>Minimum age of the flood before forcing a rejoin (~13x faster than
+    /// the user's manual recovery, well clear of transient epoch-transition bursts).</summary>
+    private static readonly TimeSpan DecryptFloodMinWindow = TimeSpan.FromSeconds(30);
+
+    private readonly DaveDecryptBurstTracker decryptBurstTracker = new();
+
     // ── Per-user audio state ─────────────────────────────────────────
 
     private readonly ConcurrentDictionary<ulong, UserAudioState> userAudioStates = new();
@@ -836,6 +853,28 @@ internal sealed partial class DiscordVoiceHandler : IAsyncDisposable
     }
 
     /// <summary>
+    /// Called for each inbound DAVE decrypt-failure log line (from
+    /// <see cref="DiscordChannel.OnDiscordLog"/>). Feeds the burst tracker that
+    /// drives decrypt-flood recovery and the diagnostic summary log.
+    /// </summary>
+    internal void NotifyDecryptFailure(ulong userId, string resultCode)
+    {
+        // DiscordChannel.OnDiscordLog broadcasts every decrypt-failure log line to
+        // ALL voice handlers (the log has no per-tenant routing), so without this
+        // guard a bystander's — or another tenant's — DAVE desync could trip this
+        // handler's flood watchdog and force-reconnect a healthy linked-user
+        // session. LinkedUserId == 0 means no link is configured (single-user
+        // setups without an explicit link); preserve today's behaviour there and
+        // record everyone.
+        if (this.config.LinkedUserId != 0 && userId != this.config.LinkedUserId)
+        {
+            return;
+        }
+
+        this.decryptBurstTracker.RecordFailure(userId, resultCode, this.timeProvider.GetUtcNow().UtcTicks);
+    }
+
+    /// <summary>
     /// Unconditional teardown + rejoin under <see cref="connectionGate"/>. Unlike
     /// <see cref="EnsureConnectedAsync"/> it does NOT early-return when
     /// <see cref="IsConnected"/> is true — that is the whole point, since a silent
@@ -922,15 +961,26 @@ internal sealed partial class DiscordVoiceHandler : IAsyncDisposable
         var isConnected = VoiceConnectionState.IsAlive(client.ConnectionState);
         var audioDeathSuspect = this.suspectDead;
         var daveSuspect = this.daveSessionSuspect;
-        var suspect = audioDeathSuspect || daveSuspect;
 
-        // Healthy and no death/MLS signal — the cheap steady-state path, no REST call.
+        var nowTicksForFlood = this.timeProvider.GetUtcNow().UtcTicks;
+        var floodProbe = this.decryptBurstTracker.WorstActive(nowTicksForFlood);
+        var floodCandidate = DaveDecryptFloodPolicy.ShouldRecover(
+            userPresent: true, // real user-presence confirmed after the gate
+            failuresSinceCommit: floodProbe.FailuresSinceReset,
+            ticksSinceFirstFailure: floodProbe.TicksSinceFirstFailure,
+            floodThreshold: DecryptFloodThreshold,
+            minWindowTicks: DecryptFloodMinWindow.Ticks);
+
+        var suspect = audioDeathSuspect || daveSuspect || floodCandidate;
+
+        // Healthy and no death/MLS/flood signal — the cheap steady-state path, no REST call.
         if (isConnected && !suspect)
         {
             return;
         }
 
         var userPresent = await IsUserInTargetChannelAsync(ct).ConfigureAwait(false);
+        var floodSuspect = floodCandidate && userPresent;
         var nowTicks = this.timeProvider.GetUtcNow().UtcTicks;
         var action = VoiceWatchdogDecision.Decide(
             userPresent,
@@ -954,9 +1004,20 @@ internal sealed partial class DiscordVoiceHandler : IAsyncDisposable
                 // here as a force-reconnect just like a silent audio death. Label
                 // the trigger by cause, and — when the cause was an MLS failure —
                 // re-speak the proactive message that played into the dead epoch.
-                await ForceReconnectAsync(daveSuspect ? "dave-mls-failure" : "audio-death-signal").ConfigureAwait(false);
+                await ForceReconnectAsync(ForceReconnectTrigger.Resolve(daveSuspect, floodSuspect)).ConfigureAwait(false);
                 this.suspectDead = false;
                 this.daveSessionSuspect = false;
+
+                // Log the shape of any run that was active *at* the forced
+                // reconnect — the exact scenario this watchdog targets — so the
+                // burst-summary diagnostic isn't silently dropped just because
+                // the run was ended by a rejoin instead of a successful commit.
+                var endedBursts = this.decryptBurstTracker.ResetAll(nowTicksForFlood);
+                foreach (var s in endedBursts)
+                {
+                    this.LogDecryptBurstEnded(s.UserId, s.FailureCount, s.DurationMs, s.ResultCode);
+                }
+
                 if (daveSuspect)
                 {
                     await ReplayPendingProactiveAsync(nowTicks).ConfigureAwait(false);
@@ -1401,7 +1462,17 @@ internal sealed partial class DiscordVoiceHandler : IAsyncDisposable
             // so a join-race MLS failure can be distinguished from later epoch churn.
             this.suspectDead = false;
             this.daveSessionSuspect = false;
-            Interlocked.Exchange(ref this.lastJoinTicks, this.timeProvider.GetUtcNow().UtcTicks);
+            var joinNowTicks = this.timeProvider.GetUtcNow().UtcTicks;
+            Interlocked.Exchange(ref this.lastJoinTicks, joinNowTicks);
+
+            // Any decrypt-failure run still active across this (re)join is ending
+            // here rather than via a successful commit — log its shape too so the
+            // burst-summary diagnostic covers this path as well.
+            var endedBurstsOnJoin = this.decryptBurstTracker.ResetAll(joinNowTicks);
+            foreach (var s in endedBurstsOnJoin)
+            {
+                this.LogDecryptBurstEnded(s.UserId, s.FailureCount, s.DurationMs, s.ResultCode);
+            }
 
             this.LogVoiceJoined(voiceChannel.Name, voiceChannelId);
 
@@ -1809,6 +1880,16 @@ internal sealed partial class DiscordVoiceHandler : IAsyncDisposable
                                     daveDelta.UnknownUser,
                                     daveDelta.MlsFailure);
                             }
+                        }
+
+                        // A successful commit means inbound audio is getting
+                        // through — clear any decrypt-flood run and log its
+                        // shape for later diagnosis.
+                        var floodSummary = this.decryptBurstTracker.Reset(
+                            state.UserId, this.timeProvider.GetUtcNow().UtcTicks);
+                        if (floodSummary is { } fs)
+                        {
+                            this.LogDecryptBurstEnded(fs.UserId, fs.FailureCount, fs.DurationMs, fs.ResultCode);
                         }
 
                         // Phase transition fires only on a real dispatch — not on
@@ -2396,6 +2477,9 @@ internal sealed partial class DiscordVoiceHandler : IAsyncDisposable
 
     [LoggerMessage(Level = LogLevel.Information, Message = "voice-in: DAVE drops for turn utt={UtteranceId} decryptFail={DecryptFail} missingKeyRatchet={MissingKeyRatchet} invalidNonce={InvalidNonce} malformed={Malformed} unknownSsrc={UnknownSsrc} unknownUser={UnknownUser} mlsFail={MlsFail}")]
     private partial void LogDaveDropsForTurn(string utteranceId, long decryptFail, long missingKeyRatchet, long invalidNonce, long malformed, long unknownSsrc, long unknownUser, long mlsFail);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "voice-in: DAVE decrypt burst ended user={UserId} failures={FailureCount} durationMs={DurationMs} code={ResultCode}")]
+    private partial void LogDecryptBurstEnded(ulong userId, long failureCount, long durationMs, string resultCode);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "voice-in: speaker-id rejected utt={UtteranceId} tenant={TenantId} score={Score:F3}")]
     private partial void LogSpeakerIdRejected(string utteranceId, string tenantId, float score);

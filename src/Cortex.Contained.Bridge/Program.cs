@@ -601,6 +601,10 @@ if (discordConfig is { Enabled: true })
                 discordConfig.Settings.GetValueOrDefault("EnableBargeIn")
                     ?? builder.Configuration["Discord:EnableBargeIn"],
                 out var enableBargeIn) || enableBargeIn, // default true
+            EnableVoiceDaveEncryption = !bool.TryParse(
+                discordConfig.Settings.GetValueOrDefault("EnableVoiceDaveEncryption")
+                    ?? builder.Configuration["Discord:EnableVoiceDaveEncryption"],
+                out var enableVoiceDave) || enableVoiceDave, // default true
             UseStreamingStt = !bool.TryParse(
                 discordConfig.Settings.GetValueOrDefault("UseStreamingStt")
                     ?? builder.Configuration["Discord:UseStreamingStt"],

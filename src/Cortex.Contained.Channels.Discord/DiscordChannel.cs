@@ -161,7 +161,7 @@ public sealed partial class DiscordChannel : IChannelWithStreaming, IDiscordChan
             // libdave (Discord Audio/Video End-to-End Encryption) is required by Discord
             // for voice connections as of March 1st, 2026. Requires Discord.Net.Dave package
             // and the native libdave.dll library in the output directory.
-            EnableVoiceDaveEncryption = true,
+            EnableVoiceDaveEncryption = this.options.EnableVoiceDaveEncryption,
         };
 
         this.client = new DiscordSocketClient(config);
@@ -904,6 +904,36 @@ public sealed partial class DiscordChannel : IChannelWithStreaming, IDiscordChan
             this.LogDaveMlsFailureSignal(handlers.Length);
         }
 
+        // Inbound decrypt failures feed the per-handler flood tracker that drives
+        // decrypt-flood recovery (2026-07-08 deaf-bot outage).
+        if (kind is DaveEventKind.DecryptFailure)
+        {
+            var failUserId = DaveEventStats.TryParseUserId(logMsg.Message);
+            if (failUserId is { } uid)
+            {
+                var resultCode = ClassifyDecryptResultCode(logMsg.Message);
+                DiscordVoiceHandler[] handlers;
+                lock (this.voiceHandlersLock)
+                {
+                    handlers = [.. this.voiceHandlers.Values];
+                }
+
+                foreach (var handler in handlers)
+                {
+                    handler.NotifyDecryptFailure(uid, resultCode);
+                }
+            }
+        }
+
+        // A DAVE-disabled experiment against a channel that mandates E2EE is
+        // rejected by the voice gateway with close code 4017. Surface it loudly
+        // so the operator knows to re-enable enableVoiceDaveEncryption.
+        if (DaveRequiredCloseClassifier.IsDaveRequired(logMsg.Source, logMsg.Message)
+            || DaveRequiredCloseClassifier.IsDaveRequired(logMsg.Source, logMsg.Exception?.Message))
+        {
+            this.LogDaveRequiredByChannel();
+        }
+
         if (logMsg.Exception is not null)
         {
             this.LogDiscordLibError(logMsg.Source, logMsg.Exception.Message);
@@ -922,6 +952,17 @@ public sealed partial class DiscordChannel : IChannelWithStreaming, IDiscordChan
         }
 
         return Task.CompletedTask;
+    }
+
+    private static string ClassifyDecryptResultCode(string? message)
+    {
+        if (string.IsNullOrEmpty(message))
+        {
+            return "Unknown";
+        }
+
+        var idx = message.LastIndexOf(": ", StringComparison.Ordinal);
+        return idx >= 0 && idx + 2 < message.Length ? message[(idx + 2)..] : "Unknown";
     }
 
     /// <summary>
@@ -1228,6 +1269,9 @@ public sealed partial class DiscordChannel : IChannelWithStreaming, IDiscordChan
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "DAVE/MLS failure signal — flagged {HandlerCount} voice handler(s) to rejoin if within the join-race window")]
     private partial void LogDaveMlsFailureSignal(int handlerCount);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Voice rejected with close code 4017 (DAVE required by this channel). Set channels.discord.settings.EnableVoiceDaveEncryption=true and restart the Bridge to restore voice.")]
+    private partial void LogDaveRequiredByChannel();
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Discord channel {ChannelId} synthesizing voice reply ({CharCount} chars)")]
     private partial void LogVoiceSynthesizing(string channelId, int charCount);

@@ -37,6 +37,14 @@ public sealed record DiscordChannelOptions
     public bool EnableBargeIn { get; init; } = true;
 
     /// <summary>
+    /// Whether the bot advertises Discord DAVE (voice E2EE) support. Default true.
+    /// Discord requires DAVE for non-stage voice as of March 2026 — setting this
+    /// false makes the bot connect without E2EE and Discord may reject the voice
+    /// join with close code 4017. Internal/experimental (cortex.yml only).
+    /// </summary>
+    public bool EnableVoiceDaveEncryption { get; init; } = true;
+
+    /// <summary>
     /// When true AND an <c>IStreamingSpeechToText</c> service is registered, the
     /// voice handler feeds audio frames incrementally to the streaming recognizer
     /// and asks it for a final transcription on silence (typically faster than a
