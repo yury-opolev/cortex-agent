@@ -64,7 +64,7 @@ public class SubAgentToolTests : IDisposable
             _registry,
             executor,
             RunnerFactory,
-            (_, _) => Task.CompletedTask,
+            new AgentMessageChannel(),
             NullLogger<SubagentExecutionCoordinator>.Instance);
 
         _coordinators.Add(coordinator);

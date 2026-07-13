@@ -11,6 +11,11 @@ public sealed partial class AgentHub
         // McpToolStore.Update normalizes null to an empty set.
         this.mcpToolStore.Update(catalog);
         this.LogMcpCatalogUpdated(catalog?.Tools?.Count ?? 0);
+
+        // Signal readiness AFTER the store update. An EMPTY catalog still counts as ready —
+        // "no MCP tools configured" is a valid, fully-initialized state.
+        this.subagentCoordinator.MarkMcpCatalogReady();
+
         return Task.CompletedTask;
     }
 

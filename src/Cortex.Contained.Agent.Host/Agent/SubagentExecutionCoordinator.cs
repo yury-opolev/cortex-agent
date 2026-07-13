@@ -9,6 +9,10 @@ namespace Cortex.Contained.Agent.Host.Agent;
 /// resumed runs via <see cref="ISubagentExecutor"/>, records the terminal result EXACTLY ONCE
 /// (never overwriting a Failed/Cancelled as Completed), requeues (not fails) in-flight work on host
 /// shutdown, and only dispatches once Bridge + credentials + MCP-catalog readiness are all signaled.
+/// It also owns durable completion delivery: pending terminal-result notifications are claimed
+/// (→ Enqueued) and pushed onto the <see cref="AgentMessageChannel"/> with an awaited enqueue;
+/// the claim stays Enqueued until <see cref="AgentRuntime"/> confirms the parent turn delivered
+/// the response (or releases it for redelivery on failure) — at-least-once, never silently lost.
 /// </summary>
 public sealed partial class SubagentExecutionCoordinator : IHostedService, IDisposable
 {
@@ -16,7 +20,7 @@ public sealed partial class SubagentExecutionCoordinator : IHostedService, IDisp
     private readonly SubagentRunnerRegistry registry;
     private readonly ISubagentExecutor executor;
     private readonly Func<SubagentTask, SubagentRunner> runnerFactory;
-    private readonly Func<string, string, Task> onCompletion;
+    private readonly AgentMessageChannel messageChannel;
     private readonly ILogger<SubagentExecutionCoordinator> logger;
 
     /// <summary>
@@ -49,14 +53,14 @@ public sealed partial class SubagentExecutionCoordinator : IHostedService, IDisp
         SubagentRunnerRegistry registry,
         ISubagentExecutor executor,
         Func<SubagentTask, SubagentRunner> runnerFactory,
-        Func<string, string, Task> onCompletion,
+        AgentMessageChannel messageChannel,
         ILogger<SubagentExecutionCoordinator> logger)
     {
         this.store = store;
         this.registry = registry;
         this.executor = executor;
         this.runnerFactory = runnerFactory;
-        this.onCompletion = onCompletion;
+        this.messageChannel = messageChannel;
         this.logger = logger;
 
         // A freed slot (Remove) or a raised cap (SetMaxConcurrent) wakes the dispatch loop.
@@ -71,10 +75,19 @@ public sealed partial class SubagentExecutionCoordinator : IHostedService, IDisp
         this.wakeChannel.Writer.TryWrite(0);
     }
 
-    /// <summary>The Bridge connected; enable dispatch once all readiness signals are set.</summary>
+    /// <summary>
+    /// The Bridge connected. Credential and MCP-catalog readiness are RESET: a (re)connected
+    /// Bridge must push both again before any dispatch — stale readiness from a previous
+    /// connection must never open the gate onto a credential-less or catalog-less agent.
+    /// </summary>
     public void OnBridgeConnected()
     {
-        this.SetReadiness(bridge: true);
+        lock (this.readinessLock)
+        {
+            this.bridgeConnected = true;
+            this.credentialsReady = false;
+            this.mcpCatalogReady = false;
+        }
     }
 
     /// <summary>The Bridge disconnected; stop dispatching new work until it returns.</summary>
@@ -98,16 +111,11 @@ public sealed partial class SubagentExecutionCoordinator : IHostedService, IDisp
         this.SetReadiness(mcp: true);
     }
 
-    private void SetReadiness(bool? bridge = null, bool? credentials = null, bool? mcp = null)
+    private void SetReadiness(bool? credentials = null, bool? mcp = null)
     {
         bool ready;
         lock (this.readinessLock)
         {
-            if (bridge.HasValue)
-            {
-                this.bridgeConnected = bridge.Value;
-            }
-
             if (credentials.HasValue)
             {
                 this.credentialsReady = credentials.Value;
@@ -206,6 +214,7 @@ public sealed partial class SubagentExecutionCoordinator : IHostedService, IDisp
                 }
 
                 this.DispatchReadyWork(stopping);
+                await this.EnqueuePendingNotificationsAsync(stopping).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException)
@@ -271,7 +280,7 @@ public sealed partial class SubagentExecutionCoordinator : IHostedService, IDisp
         try
         {
             var result = await this.executor.ExecuteAsync(task, token).ConfigureAwait(false);
-            await this.RecordTerminalAndNotifyAsync(taskId, result).ConfigureAwait(false);
+            this.RecordTerminalResult(taskId, result);
         }
         catch (OperationCanceledException) when (stopping.IsCancellationRequested)
         {
@@ -286,19 +295,17 @@ public sealed partial class SubagentExecutionCoordinator : IHostedService, IDisp
         catch (OperationCanceledException)
         {
             // Per-task cancellation (sub_agent_stop cancelled the registry-owned token).
-            await this.RecordTerminalAndNotifyAsync(
-                taskId, new SubagentExecutionResult(SubagentTaskState.Cancelled, "[Subagent stopped]"))
-                .ConfigureAwait(false);
+            this.RecordTerminalResult(
+                taskId, new SubagentExecutionResult(SubagentTaskState.Cancelled, "[Subagent stopped]"));
         }
 #pragma warning disable CA1031 // A crashing subagent must not crash the host; record it as Failed.
         catch (Exception ex)
 #pragma warning restore CA1031
         {
             this.LogSubagentCrashed(taskId, ex.Message);
-            await this.RecordTerminalAndNotifyAsync(
+            this.RecordTerminalResult(
                 taskId, new SubagentExecutionResult(
-                    SubagentTaskState.Failed, $"[Subagent crashed: {Sanitize(ex.Message)}]"))
-                .ConfigureAwait(false);
+                    SubagentTaskState.Failed, $"[Subagent crashed: {Sanitize(ex.Message)}]"));
         }
         finally
         {
@@ -311,28 +318,82 @@ public sealed partial class SubagentExecutionCoordinator : IHostedService, IDisp
     }
 
     /// <summary>
-    /// Records the terminal result exactly once through the guarded conditional update (a Failed or
-    /// Cancelled task can never be overwritten as Completed) and then notifies the main agent with the
-    /// durable result — whichever terminal write actually won.
+    /// Records the terminal result exactly once through the guarded conditional update (a Failed
+    /// or Cancelled task can never be overwritten as Completed). The guarded write marks the
+    /// durable completion notification Pending in the same transaction — BEFORE any synthetic
+    /// message exists — so a crash after this point can never lose the completion. The dispatch
+    /// loop's notification pass then delivers it once readiness allows.
     /// </summary>
-    private async Task RecordTerminalAndNotifyAsync(string taskId, SubagentExecutionResult result)
+    private void RecordTerminalResult(string taskId, SubagentExecutionResult result)
     {
         this.store.TrySetTerminalResult(taskId, result);
+    }
 
-        // Notify with the durable result (the first terminal write wins), not necessarily this one.
-        var finalTask = this.store.GetById(taskId);
-        var deliveredResult = finalTask?.Result ?? result.Result;
+    // ── Durable completion delivery ──────────────────────────────────────
 
-        try
+    /// <summary>
+    /// Claims pending terminal-result notifications (→ Enqueued) and pushes each onto the
+    /// parent conversation's message queue with an AWAITED enqueue (backpressure — never
+    /// <c>TryEnqueue</c>, which would silently drop on a full channel). The claim stays
+    /// Enqueued while <see cref="AgentRuntime"/> processes the parent turn; a throw or
+    /// cancellation releases it back to Pending for redelivery.
+    /// Gated on full readiness: the parent turn needs a connected Bridge and working LLM.
+    /// </summary>
+    private async Task EnqueuePendingNotificationsAsync(CancellationToken stopping)
+    {
+        while (this.IsReady && !stopping.IsCancellationRequested)
         {
-            await this.onCompletion(taskId, deliveredResult).ConfigureAwait(false);
-        }
-#pragma warning disable CA1031 // Completion notification must never fault the execution path.
-        catch (Exception ex)
+            var task = this.store.TryClaimOldestPendingNotification();
+            if (task is null)
+            {
+                return;
+            }
+
+            var message = new AgentMessage
+            {
+                ConversationId = task.ParentConversation,
+                ChannelId = task.ParentChannel,
+                Text = BuildCompletionTriggerText(task),
+                Source = AgentMessageSource.SubagentCompletion,
+                SubagentTaskId = task.TaskId,
+            };
+
+            try
+            {
+                await this.messageChannel.EnqueueAsync(message, stopping).ConfigureAwait(false);
+                this.LogCompletionEnqueued(task.TaskId, task.ParentConversation);
+            }
+            catch (OperationCanceledException)
+            {
+                // Shutdown mid-enqueue: release so the next start redelivers.
+                this.store.ReleaseNotification(task.TaskId);
+                throw;
+            }
+#pragma warning disable CA1031 // A failed enqueue must release the claim, never lose it.
+            catch (Exception ex)
 #pragma warning restore CA1031
-        {
-            this.LogCompletionNotifyFailed(taskId, ex.Message);
+            {
+                this.store.ReleaseNotification(task.TaskId);
+                this.LogCompletionEnqueueFailed(task.TaskId, ex.Message);
+                return;
+            }
         }
+    }
+
+    /// <summary>
+    /// The synthetic parent-turn instruction for a completed subagent task, built from the
+    /// DURABLE terminal record (whichever terminal write won).
+    /// </summary>
+    private static string BuildCompletionTriggerText(SubagentTask task)
+    {
+        var result = task.Result ?? "[no result recorded]";
+        return
+            $"[Background task completed]\n" +
+            $"Task: \"{task.Description}\" ({task.TaskId})\n\n" +
+            $"Result:\n{result}\n\n" +
+            $"Review the result and respond to the user. " +
+            $"If there is a follow-up task to do, use sub_agent_start. " +
+            $"Use sub_agent_read('{task.TaskId}') if you need more details.";
     }
 
     private static string Sanitize(string message)
@@ -373,8 +434,11 @@ public sealed partial class SubagentExecutionCoordinator : IHostedService, IDisp
     [LoggerMessage(Level = LogLevel.Error, Message = "[subagent-coordinator] Subagent crashed: {TaskId} — {ErrorMessage}")]
     private partial void LogSubagentCrashed(string taskId, string errorMessage);
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "[subagent-coordinator] Completion notification failed for {TaskId}: {ErrorMessage}")]
-    private partial void LogCompletionNotifyFailed(string taskId, string errorMessage);
+    [LoggerMessage(Level = LogLevel.Information, Message = "[subagent-coordinator] Completion notification for {TaskId} enqueued to parent {ConversationId}")]
+    private partial void LogCompletionEnqueued(string taskId, string conversationId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "[subagent-coordinator] Completion notification enqueue failed for {TaskId}, released for retry: {ErrorMessage}")]
+    private partial void LogCompletionEnqueueFailed(string taskId, string errorMessage);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "[subagent-coordinator] Dispatch loop failed: {ErrorMessage}")]
     private partial void LogDispatchLoopFailed(string errorMessage);

@@ -459,6 +459,15 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
         // Resolve the per-source processing policy once; all source-conditional branches below use it.
         var behavior = MessageSourceBehavior.For(message.Source);
 
+        // Durable subagent completion notifications consumed by this turn (the triggering
+        // message plus any injected between tool rounds). Confirmed Delivered only after the
+        // final response lands; anything left here is released back to Pending for redelivery.
+        var consumedSubagentTaskIds = new HashSet<string>(StringComparer.Ordinal);
+        if (message.SubagentTaskId is not null)
+        {
+            consumedSubagentTaskIds.Add(message.SubagentTaskId);
+        }
+
         // Scheduled tasks run in isolated ephemeral sessions (D12):
         // fresh empty session, no history, discard after execution.
         // Subagent completions are NOT ephemeral — they run on the parent conversation.
@@ -522,6 +531,7 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
         if (string.IsNullOrWhiteSpace(sanitizedText) && message.Attachments is null or { Count: 0 })
         {
             this.LogEmptyMessageRejected(session.ConversationId, message.ChannelId);
+            this.ReleaseSubagentNotifications(consumedSubagentTaskIds);
             return;
         }
 
@@ -574,7 +584,7 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
             // since clocks across processes aren't perfectly aligned.
             var queueWaitMs = (long)Math.Max(0, (DateTimeOffset.UtcNow - message.Timestamp).TotalMilliseconds);
 
-            await GenerateResponseAsync(session, message.ConversationId, message.ChannelId, message.CorrelationId, useProactiveDelivery, messageText, message.IsVoice, queueWaitMs, generationToken)
+            await GenerateResponseAsync(session, message.ConversationId, message.ChannelId, message.CorrelationId, useProactiveDelivery, messageText, message.IsVoice, queueWaitMs, consumedSubagentTaskIds, generationToken)
                 .ConfigureAwait(false);
 
             // Memory extraction: append to the extraction buffer. The buffer
@@ -643,6 +653,10 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
         {
             session.EndGeneration();
 
+            // At-least-once: any completion notification consumed by this turn but NOT
+            // confirmed delivered (LLM error, delivery failure, cancellation, shutdown)
+            // is released back to Pending so the coordinator redelivers it.
+            this.ReleaseSubagentNotifications(consumedSubagentTaskIds);
         }
     }
 
@@ -655,6 +669,7 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
         string? instructionText,
         bool isVoice,
         long queueWaitMs,
+        HashSet<string> consumedSubagentTaskIds,
         CancellationToken cancellationToken)
     {
         var client = this.bridgeClientAccessor.Client;
@@ -735,7 +750,7 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
             if (streamed.ToolCalls.Count > 0)
             {
                 var assistantContent = streamed.Text.Length > 0 ? streamed.Text : null;
-                if (await this.ExecuteToolRoundAsync(session, delivery, turnContext, streamed.ToolCalls, assistantContent, doomLoopDetector, round, replyConversationId, latency, cancellationToken).ConfigureAwait(false) == ToolRoundOutcome.DoomHalted)
+                if (await this.ExecuteToolRoundAsync(session, delivery, turnContext, streamed.ToolCalls, assistantContent, doomLoopDetector, round, replyConversationId, latency, consumedSubagentTaskIds, cancellationToken).ConfigureAwait(false) == ToolRoundOutcome.DoomHalted)
                 {
                     return;
                 }
@@ -755,6 +770,10 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
             var messageId = Guid.NewGuid().ToString("N");
             await delivery.DeliverFinalResponseAsync(
                 session, responseText, instructionText, streamed.Usage, streamed.SequenceNumber, messageId, cancellationToken).ConfigureAwait(false);
+
+            // The final response is delivered — confirm every subagent completion
+            // notification this turn consumed so none is ever re-announced.
+            this.ConfirmSubagentNotificationsDelivered(consumedSubagentTaskIds);
 
             // Done -- exit the tool loop
             break;
@@ -899,6 +918,7 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
         int round,
         string replyConversationId,
         TurnLatencyTracker latency,
+        HashSet<string> consumedSubagentTaskIds,
         CancellationToken cancellationToken)
     {
         // Add the assistant message with tool calls to history
@@ -990,6 +1010,13 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
         {
             foreach (var pending in pendingMessages)
             {
+                // A durable completion notification injected mid-turn is consumed by THIS
+                // turn — track it so the owning turn's final delivery acknowledges it.
+                if (pending.SubagentTaskId is not null)
+                {
+                    consumedSubagentTaskIds.Add(pending.SubagentTaskId);
+                }
+
                 var pendingBehavior = MessageSourceBehavior.For(pending.Source);
                 var userText = pendingBehavior.PendingInjectionLabelPrefix is { } prefix
                     ? prefix + pending.Text
@@ -2038,59 +2065,84 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
     [LoggerMessage(Level = LogLevel.Warning, Message = "Context overflow detected for {ConversationId}, attempting emergency compaction. LLM error: {ErrorMessage}")]
     private partial void LogContextOverflowRetry(string conversationId, string errorMessage);
 
-    // ── Subagent completion handling ────────────────────────────────────
+    // ── Subagent completion acknowledgement ────────────────────────────
+    // The synthetic completion message itself is created by SubagentExecutionCoordinator
+    // (which claims the durable notification and enqueues with an awaited EnqueueAsync).
+    // The runtime's only responsibility is the acknowledgement side of the at-least-once
+    // protocol: confirm Delivered after the parent turn's final response actually lands,
+    // or release the claim so the coordinator redelivers.
 
     /// <summary>
-    /// Called when a background subagent completes. Makes a dedicated LLM call to evaluate
-    /// the result quality and either deliver a curated response to the user or resume the
-    /// subagent with steering instructions.
+    /// Confirms delivery of every subagent completion notification consumed by a turn.
+    /// Clears the set so the release path in the turn's finally block leaves them alone.
     /// </summary>
-    internal Task ProcessSubagentCompletionAsync(string taskId, string result)
+    private void ConfirmSubagentNotificationsDelivered(HashSet<string> consumedSubagentTaskIds)
     {
-        if (this.subagentStore is null)
+        if (consumedSubagentTaskIds.Count == 0 || this.subagentStore is null)
         {
-            return Task.CompletedTask;
+            return;
         }
 
-        var task = this.subagentStore.GetById(taskId);
-        if (task is null)
+        foreach (var taskId in consumedSubagentTaskIds)
         {
-            this.LogSubagentCompletionTaskNotFound(taskId);
-            return Task.CompletedTask;
+            try
+            {
+                if (this.subagentStore.MarkNotificationDelivered(taskId))
+                {
+                    this.LogSubagentNotificationDelivered(taskId);
+                }
+            }
+#pragma warning disable CA1031 // A failed confirm leaves the claim Enqueued; restart recovery re-pends it (replay, not loss).
+            catch (Exception ex)
+#pragma warning restore CA1031
+            {
+                this.LogSubagentNotificationUpdateFailed(taskId, ex.Message);
+            }
         }
 
-        // Terminal state is already durable: the SubagentExecutionCoordinator recorded it (exactly
-        // once, guarded) via TrySetTerminalResult BEFORE invoking this notification. Do NOT write the
-        // state here — an unguarded UpdateState(Completed) could overwrite a Failed/Cancelled result.
-
-        // Enqueue a completion notification into the parent conversation.
-        // The main agent processes it through the full tool loop and decides
-        // what to do: respond to user, start a follow-up task, or both.
-        var triggerText =
-            $"[Background task completed]\n" +
-            $"Task: \"{task.Description}\" ({task.TaskId})\n\n" +
-            $"Result:\n{result}\n\n" +
-            $"Review the result and respond to the user. " +
-            $"If there is a follow-up task to do, use sub_agent_start. " +
-            $"Use sub_agent_read('{task.TaskId}') if you need more details.";
-
-        this.messageQueue.TryEnqueue(new AgentMessage
-        {
-            ConversationId = task.ParentConversation,
-            ChannelId = task.ParentChannel,
-            Text = triggerText,
-            Source = AgentMessageSource.SubagentCompletion,
-        });
-
-        this.LogSubagentCompletionEnqueued(taskId, task.ParentConversation);
-        return Task.CompletedTask;
+        consumedSubagentTaskIds.Clear();
     }
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "[subagent-completion] Task {TaskId} result enqueued for processing on {ConversationId}")]
-    private partial void LogSubagentCompletionEnqueued(string taskId, string conversationId);
+    /// <summary>
+    /// Releases every unconfirmed subagent completion notification back to Pending so the
+    /// coordinator redelivers it (at-least-once — a replay is acceptable; silent loss is not).
+    /// Runs in the turn's finally block, so it must never throw.
+    /// </summary>
+    private void ReleaseSubagentNotifications(HashSet<string> consumedSubagentTaskIds)
+    {
+        if (consumedSubagentTaskIds.Count == 0 || this.subagentStore is null)
+        {
+            return;
+        }
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "[subagent-completion] Task {TaskId} not found in store")]
-    private partial void LogSubagentCompletionTaskNotFound(string taskId);
+        foreach (var taskId in consumedSubagentTaskIds)
+        {
+            try
+            {
+                if (this.subagentStore.ReleaseNotification(taskId))
+                {
+                    this.LogSubagentNotificationReleased(taskId);
+                }
+            }
+#pragma warning disable CA1031 // A failed release leaves the claim Enqueued; restart recovery re-pends it (replay, not loss).
+            catch (Exception ex)
+#pragma warning restore CA1031
+            {
+                this.LogSubagentNotificationUpdateFailed(taskId, ex.Message);
+            }
+        }
+
+        consumedSubagentTaskIds.Clear();
+    }
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "[subagent-completion] Notification for {TaskId} confirmed delivered with the parent turn's response")]
+    private partial void LogSubagentNotificationDelivered(string taskId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "[subagent-completion] Notification for {TaskId} released for redelivery (turn did not complete)")]
+    private partial void LogSubagentNotificationReleased(string taskId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "[subagent-completion] Notification state update failed for {TaskId}: {ErrorMessage}")]
+    private partial void LogSubagentNotificationUpdateFailed(string taskId, string errorMessage);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Idle compaction performed for {ConversationId}: conversation summarized instead of wiped")]
     private partial void LogIdleCompactionPerformed(string conversationId);

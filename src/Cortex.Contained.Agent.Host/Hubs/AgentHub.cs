@@ -40,6 +40,7 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
     private readonly Cortex.Contained.Agent.Host.Mcp.McpToolStore mcpToolStore;
     private readonly IHttpClientFactory httpClientFactory;
     private readonly AgentMetrics metrics;
+    private readonly SubagentExecutionCoordinator subagentCoordinator;
     private readonly ILogger<AgentHub> logger;
 
     public AgentHub(
@@ -61,6 +62,7 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
         Cortex.Contained.Agent.Host.Mcp.McpToolStore mcpToolStore,
         IHttpClientFactory httpClientFactory,
         AgentMetrics metrics,
+        SubagentExecutionCoordinator subagentCoordinator,
         ILogger<AgentHub> logger,
         Cortex.Contained.Agent.Host.SpeakerId.EnrollmentOrchestrator? enrollmentOrchestrator = null)
     {
@@ -83,6 +85,7 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
         this.mcpToolStore = mcpToolStore;
         this.httpClientFactory = httpClientFactory;
         this.metrics = metrics;
+        this.subagentCoordinator = subagentCoordinator;
         this.logger = logger;
     }
 
@@ -98,13 +101,29 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
 
         this.LogBridgeConnected(Context.ConnectionId);
         this.bridgeClientAccessor.SetConnectionId(Context.ConnectionId);
+
+        // Readiness gate: the Bridge is connected, but this signal also RESETS credential
+        // and MCP-catalog readiness — the new connection must push both before queued or
+        // recovered subagent work is allowed to dispatch.
+        this.subagentCoordinator.OnBridgeConnected();
+
         await base.OnConnectedAsync().ConfigureAwait(false);
     }
 
     public override Task OnDisconnectedAsync(Exception? exception)
     {
         this.LogBridgeDisconnected(Context.ConnectionId, exception?.Message);
+
+        // Close the dispatch/recovery gate only when the ACTIVE bridge connection drops —
+        // a rejected duplicate connection's disconnect must not stall the live bridge.
+        var wasActiveBridge = string.Equals(
+            this.bridgeClientAccessor.CurrentConnectionId, Context.ConnectionId, StringComparison.Ordinal);
         this.bridgeClientAccessor.ClearConnection(Context.ConnectionId);
+        if (wasActiveBridge)
+        {
+            this.subagentCoordinator.OnBridgeDisconnected();
+        }
+
         return base.OnDisconnectedAsync(exception);
     }
 
@@ -210,6 +229,10 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
 
         // Set the memory model (may be null, in which case the default model is used)
         this.runtime.SetMemoryModel(result.MemoryModel);
+
+        // Signal readiness AFTER the credentials are applied so recovered subagent work
+        // never dispatches into a credential-less LLM client. An empty push marks NOT ready.
+        this.subagentCoordinator.MarkCredentialsReady(this.llmClient.HasCredentials);
 
         return Task.CompletedTask;
     }

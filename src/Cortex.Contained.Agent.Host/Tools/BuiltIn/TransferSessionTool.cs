@@ -295,34 +295,35 @@ internal sealed partial class TransferSessionTool : IAgentTool
         var targetTenantId = sourceTenantId ?? "default";
         var targetConversationId = this.conversationResolver.ResolveConversationId(targetChannelId, targetTenantId);
 
-        // Repoint in-flight subagents that belong to the CURRENT TOPIC. The slicer's
+        // Repoint transferable subagents that belong to the CURRENT TOPIC. The slicer's
         // BoundaryIndex marks where the current topic starts in source history;
         // subagents spawned at or after that message's timestamp were started during
-        // the current topic and should follow the user to the target. Older active
+        // the current topic and should follow the user to the target. Older
         // subagents belonged to a prior topic — leaving them pinned to source means
         // their completion notification lands where that conversation continues.
         //
-        // Active = queued/running/revising. Completed/failed tasks are not touched
-        // (their result has already been delivered or has no delivery left to do).
+        // Transferable = active (queued/running/revising) PLUS terminal tasks whose
+        // completion notification is still pending/enqueued — an undelivered result
+        // must follow the user. Delivered terminal history is NOT moved.
         var topicStartTime = success.BoundaryIndex < sourceHistory.Count
             ? sourceHistory[success.BoundaryIndex].Timestamp
             : DateTimeOffset.MaxValue;
 
-        foreach (var activeTask in this.subagentStore.GetActive())
+        foreach (var transferableTask in this.subagentStore.GetTransferableTasks())
         {
-            if (!string.Equals(activeTask.ParentConversation, context.ConversationId, StringComparison.Ordinal))
+            if (!string.Equals(transferableTask.ParentConversation, context.ConversationId, StringComparison.Ordinal))
             {
                 continue;
             }
 
-            if (activeTask.CreatedAt >= topicStartTime)
+            if (transferableTask.CreatedAt >= topicStartTime)
             {
-                this.subagentStore.RepointParent(activeTask.TaskId, targetConversationId, targetChannelId);
-                this.LogSubagentRepointed(activeTask.TaskId, targetConversationId, targetChannelId);
+                this.subagentStore.RepointParent(transferableTask.TaskId, targetConversationId, targetChannelId);
+                this.LogSubagentRepointed(transferableTask.TaskId, targetConversationId, targetChannelId);
             }
             else
             {
-                this.LogSubagentLeftPinned(activeTask.TaskId, context.ConversationId);
+                this.LogSubagentLeftPinned(transferableTask.TaskId, context.ConversationId);
             }
         }
 

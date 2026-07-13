@@ -526,8 +526,7 @@ builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Agent.SubagentExecutio
         sp.GetRequiredService<SubagentRunnerRegistry>(),
         sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.ISubagentExecutor>(),
         runnerFactory,
-        (taskId, result) => sp.GetRequiredService<AgentRuntime>()
-            .ProcessSubagentCompletionAsync(taskId, result),
+        sp.GetRequiredService<AgentMessageChannel>(),
         loggerFactory.CreateLogger<Cortex.Contained.Agent.Host.Agent.SubagentExecutionCoordinator>());
 });
 builder.Services.AddHostedService(sp =>

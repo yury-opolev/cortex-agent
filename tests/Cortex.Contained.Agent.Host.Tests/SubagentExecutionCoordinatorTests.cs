@@ -273,7 +273,7 @@ public sealed class SubagentExecutionCoordinatorTests : IDisposable
             registry,
             executor,
             RunnerFactory,
-            (_, _) => Task.CompletedTask,
+            new AgentMessageChannel(),
             NullLogger<SubagentExecutionCoordinator>.Instance);
 
         coordinator.StartAsync(CancellationToken.None).GetAwaiter().GetResult();
