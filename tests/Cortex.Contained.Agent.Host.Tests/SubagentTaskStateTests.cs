@@ -16,4 +16,42 @@ public class SubagentTaskStateTests
         Assert.Equal(expected, state.ToStorageValue());
         Assert.Equal(state, SubagentTaskStateExtensions.Parse(expected));
     }
+
+    [Fact]
+    public void TaskState_ParseUnknown_Throws()
+    {
+        Assert.Throws<InvalidDataException>(() => SubagentTaskStateExtensions.Parse("garbage"));
+    }
+
+    [Theory]
+    [InlineData(SubagentRunMode.New, "new")]
+    [InlineData(SubagentRunMode.Resume, "resume")]
+    public void RunMode_ToStorageValueAndParse_RoundTrips(SubagentRunMode runMode, string expected)
+    {
+        Assert.Equal(expected, runMode.ToStorageValue());
+        Assert.Equal(runMode, SubagentRunModeExtensions.Parse(expected));
+    }
+
+    [Theory]
+    [InlineData(SubagentNotificationState.None, "none")]
+    [InlineData(SubagentNotificationState.Pending, "pending")]
+    [InlineData(SubagentNotificationState.Enqueued, "enqueued")]
+    [InlineData(SubagentNotificationState.Delivered, "delivered")]
+    public void NotificationState_ToStorageValueAndParse_RoundTrips(SubagentNotificationState state, string expected)
+    {
+        Assert.Equal(expected, state.ToStorageValue());
+        Assert.Equal(state, SubagentNotificationStateExtensions.Parse(expected));
+    }
+
+    [Fact]
+    public void RunMode_ParseUnknown_Throws()
+    {
+        Assert.Throws<InvalidDataException>(() => SubagentRunModeExtensions.Parse("garbage"));
+    }
+
+    [Fact]
+    public void NotificationState_ParseUnknown_Throws()
+    {
+        Assert.Throws<InvalidDataException>(() => SubagentNotificationStateExtensions.Parse("garbage"));
+    }
 }

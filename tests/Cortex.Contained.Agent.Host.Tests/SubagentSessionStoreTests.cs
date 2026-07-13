@@ -234,20 +234,297 @@ public class SubagentSessionStoreTests : IDisposable
     // ── Crash recovery ───────────────────────────────────────────────────
 
     [Fact]
-    public void ResetRunningTasks_MarksRunningAndRevisingAsFailed()
+    public void RecoverInterruptedWork_RequeuesRunningAndRevising()
     {
         _store.Create(CreateTask("sa-030", "Running 1", SubagentTaskState.Running));
         _store.Create(CreateTask("sa-031", "Revising 1", SubagentTaskState.Revising));
         _store.Create(CreateTask("sa-032", "Queued 1", SubagentTaskState.Queued));
         _store.Create(CreateTask("sa-033", "Completed 1", SubagentTaskState.Completed));
 
-        var resetCount = _store.ResetRunningTasks();
+        var recovered = _store.RecoverInterruptedWork();
 
-        Assert.Equal(2, resetCount); // running + revising only
-        Assert.Equal(SubagentTaskState.Failed, _store.GetById("sa-030")!.State);
-        Assert.Equal(SubagentTaskState.Failed, _store.GetById("sa-031")!.State);
-        Assert.Equal(SubagentTaskState.Queued, _store.GetById("sa-032")!.State); // preserved for startup dequeue
+        Assert.Equal(2, recovered); // running + revising only
+        var requeuedRunning = _store.GetById("sa-030");
+        var requeuedRevising = _store.GetById("sa-031");
+        Assert.NotNull(requeuedRunning);
+        Assert.NotNull(requeuedRevising);
+        Assert.Equal(SubagentTaskState.Queued, requeuedRunning.State);
+        Assert.Equal(SubagentTaskState.Queued, requeuedRevising.State);
+        Assert.Null(requeuedRunning.CompletedAt);
+        Assert.Equal(1, requeuedRunning.RestartCount);
+        Assert.Equal(SubagentTaskState.Queued, _store.GetById("sa-032")!.State); // untouched
+        Assert.Equal(0, _store.GetById("sa-032")!.RestartCount);
         Assert.Equal(SubagentTaskState.Completed, _store.GetById("sa-033")!.State); // untouched
+    }
+
+    [Fact]
+    public void RecoverInterruptedWork_UsesResumeModeWhenMessagesExist()
+    {
+        var withMessages = CreateTask("sa-034", "Has history", SubagentTaskState.Running);
+        withMessages.Messages = [new LlmMessage { Role = "user", Content = "step 1" }];
+        _store.Create(withMessages);
+        _store.Create(CreateTask("sa-035", "No history", SubagentTaskState.Running));
+
+        _store.RecoverInterruptedWork();
+
+        Assert.Equal(SubagentRunMode.Resume, _store.GetById("sa-034")!.RunMode);
+        Assert.Equal(SubagentRunMode.New, _store.GetById("sa-035")!.RunMode);
+    }
+
+    [Fact]
+    public void RecoverInterruptedWork_PreservesTerminalStates()
+    {
+        var completed = CreateTask("sa-036", "Done", SubagentTaskState.Completed);
+        completed.CompletedAt = DateTimeOffset.UtcNow;
+        completed.NotificationState = SubagentNotificationState.Delivered;
+        var failed = CreateTask("sa-037", "Broken", SubagentTaskState.Failed);
+        failed.CompletedAt = DateTimeOffset.UtcNow;
+        failed.NotificationState = SubagentNotificationState.Delivered;
+        var cancelled = CreateTask("sa-038", "Stopped", SubagentTaskState.Cancelled);
+        cancelled.CompletedAt = DateTimeOffset.UtcNow;
+        cancelled.NotificationState = SubagentNotificationState.Delivered;
+        _store.Create(completed);
+        _store.Create(failed);
+        _store.Create(cancelled);
+
+        var recovered = _store.RecoverInterruptedWork();
+
+        Assert.Equal(0, recovered);
+        Assert.Equal(SubagentTaskState.Completed, _store.GetById("sa-036")!.State);
+        Assert.Equal(SubagentTaskState.Failed, _store.GetById("sa-037")!.State);
+        Assert.Equal(SubagentTaskState.Cancelled, _store.GetById("sa-038")!.State);
+        Assert.NotNull(_store.GetById("sa-036")!.CompletedAt);
+    }
+
+    [Fact]
+    public void RecoverInterruptedWork_ReleasesEnqueuedNotifications()
+    {
+        var task = CreateTask("sa-039", "Claimed but undelivered", SubagentTaskState.Completed);
+        task.CompletedAt = DateTimeOffset.UtcNow;
+        task.NotificationState = SubagentNotificationState.Enqueued;
+        task.NotificationAttempts = 1;
+        _store.Create(task);
+
+        var recovered = _store.RecoverInterruptedWork();
+
+        Assert.Equal(1, recovered);
+        var reloaded = _store.GetById("sa-039");
+        Assert.NotNull(reloaded);
+        Assert.Equal(SubagentTaskState.Completed, reloaded.State); // still terminal
+        Assert.Equal(SubagentNotificationState.Pending, reloaded.NotificationState); // retryable again
+    }
+
+    // ── Resume queueing ──────────────────────────────────────────────────
+
+    [Fact]
+    public void TryQueueResume_AppendsMessageAndQueuesResume()
+    {
+        var task = CreateTask("sa-040", "Resumable", SubagentTaskState.Completed);
+        task.Messages =
+        [
+            new LlmMessage { Role = "user", Content = "original" },
+            new LlmMessage { Role = "assistant", Content = "done" },
+        ];
+        task.CompletedAt = DateTimeOffset.UtcNow;
+        task.NotificationState = SubagentNotificationState.Delivered;
+        _store.Create(task);
+
+        var queued = _store.TryQueueResume("sa-040", "keep going");
+
+        Assert.True(queued);
+        var reloaded = _store.GetById("sa-040");
+        Assert.NotNull(reloaded);
+        Assert.Equal(SubagentTaskState.Queued, reloaded.State);
+        Assert.Equal(SubagentRunMode.Resume, reloaded.RunMode);
+        Assert.Null(reloaded.CompletedAt);
+        Assert.Equal(3, reloaded.Messages.Count);
+        Assert.Equal("user", reloaded.Messages[2].Role);
+        Assert.Equal("keep going", reloaded.Messages[2].Content);
+        Assert.Equal(SubagentNotificationState.None, reloaded.NotificationState);
+    }
+
+    [Fact]
+    public void TryQueueResume_UnknownTask_ReturnsFalse()
+    {
+        Assert.False(_store.TryQueueResume("sa-missing", "hello"));
+    }
+
+    // ── Terminal results ─────────────────────────────────────────────────
+
+    [Fact]
+    public void TrySetTerminalResult_FailedCannotBeOverwrittenByCompleted()
+    {
+        _store.Create(CreateTask("sa-050", "Fails first", SubagentTaskState.Running));
+
+        var failedApplied = _store.TrySetTerminalResult(
+            "sa-050", new SubagentExecutionResult(SubagentTaskState.Failed, "boom"));
+        var completedApplied = _store.TrySetTerminalResult(
+            "sa-050", new SubagentExecutionResult(SubagentTaskState.Completed, "all good"));
+
+        Assert.True(failedApplied);
+        Assert.False(completedApplied);
+        var reloaded = _store.GetById("sa-050");
+        Assert.NotNull(reloaded);
+        Assert.Equal(SubagentTaskState.Failed, reloaded.State);
+        Assert.Equal("boom", reloaded.Result);
+    }
+
+    [Fact]
+    public void TrySetTerminalResult_CancelledCannotBeOverwrittenByCompleted()
+    {
+        _store.Create(CreateTask("sa-051", "Cancelled first", SubagentTaskState.Running));
+
+        var cancelledApplied = _store.TrySetTerminalResult(
+            "sa-051", new SubagentExecutionResult(SubagentTaskState.Cancelled, "[stopped]"));
+        var completedApplied = _store.TrySetTerminalResult(
+            "sa-051", new SubagentExecutionResult(SubagentTaskState.Completed, "all good"));
+
+        Assert.True(cancelledApplied);
+        Assert.False(completedApplied);
+        var reloaded = _store.GetById("sa-051");
+        Assert.NotNull(reloaded);
+        Assert.Equal(SubagentTaskState.Cancelled, reloaded.State);
+        Assert.Equal("[stopped]", reloaded.Result);
+    }
+
+    [Fact]
+    public void TrySetTerminalResult_CreatesPendingNotification()
+    {
+        _store.Create(CreateTask("sa-052", "Completes", SubagentTaskState.Running));
+
+        var applied = _store.TrySetTerminalResult(
+            "sa-052", new SubagentExecutionResult(SubagentTaskState.Completed, "done"));
+
+        Assert.True(applied);
+        var reloaded = _store.GetById("sa-052");
+        Assert.NotNull(reloaded);
+        Assert.Equal(SubagentTaskState.Completed, reloaded.State);
+        Assert.Equal("done", reloaded.Result);
+        Assert.NotNull(reloaded.CompletedAt);
+        Assert.Equal(SubagentNotificationState.Pending, reloaded.NotificationState);
+        Assert.NotNull(reloaded.NotificationUpdatedAt);
+    }
+
+    [Fact]
+    public void TrySetTerminalResult_NonTerminalState_Throws()
+    {
+        _store.Create(CreateTask("sa-053", "Guarded", SubagentTaskState.Running));
+
+        Assert.Throws<ArgumentException>(() => _store.TrySetTerminalResult(
+            "sa-053", new SubagentExecutionResult(SubagentTaskState.Running, "nope")));
+    }
+
+    // ── Requeue ──────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Requeue_SetsQueuedClearsCompletedAtAndIncrementsRestartCount()
+    {
+        var task = CreateTask("sa-054", "Requeue me", SubagentTaskState.Running);
+        _store.Create(task);
+
+        _store.Requeue("sa-054");
+
+        var reloaded = _store.GetById("sa-054");
+        Assert.NotNull(reloaded);
+        Assert.Equal(SubagentTaskState.Queued, reloaded.State);
+        Assert.Null(reloaded.CompletedAt);
+        Assert.Equal(1, reloaded.RestartCount);
+    }
+
+    // ── Notification queue ───────────────────────────────────────────────
+
+    [Fact]
+    public void TryClaimOldestPendingNotification_ClaimsOnce()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var first = CreateTask("sa-060", "First done", SubagentTaskState.Running, createdAt: now);
+        var second = CreateTask("sa-061", "Second done", SubagentTaskState.Running, createdAt: now.AddSeconds(1));
+        _store.Create(first);
+        _store.Create(second);
+        _store.TrySetTerminalResult("sa-060", new SubagentExecutionResult(SubagentTaskState.Completed, "a"));
+        _store.TrySetTerminalResult("sa-061", new SubagentExecutionResult(SubagentTaskState.Completed, "b"));
+
+        var claimedFirst = _store.TryClaimOldestPendingNotification();
+        var claimedSecond = _store.TryClaimOldestPendingNotification();
+        var claimedThird = _store.TryClaimOldestPendingNotification();
+
+        Assert.NotNull(claimedFirst);
+        Assert.Equal("sa-060", claimedFirst.TaskId);
+        Assert.Equal(SubagentNotificationState.Enqueued, claimedFirst.NotificationState);
+        Assert.Equal(1, claimedFirst.NotificationAttempts);
+        Assert.NotNull(claimedSecond);
+        Assert.Equal("sa-061", claimedSecond.TaskId);
+        Assert.Null(claimedThird); // both already enqueued — nothing pending
+        Assert.Equal(SubagentNotificationState.Enqueued, _store.GetById("sa-060")!.NotificationState); // persisted
+    }
+
+    [Fact]
+    public void ReleaseNotification_MakesClaimRetryable()
+    {
+        _store.Create(CreateTask("sa-062", "Retryable", SubagentTaskState.Running));
+        _store.TrySetTerminalResult("sa-062", new SubagentExecutionResult(SubagentTaskState.Completed, "done"));
+
+        var claimed = _store.TryClaimOldestPendingNotification();
+        Assert.NotNull(claimed);
+        Assert.Null(_store.TryClaimOldestPendingNotification()); // enqueued → not claimable
+
+        var released = _store.ReleaseNotification("sa-062");
+
+        Assert.True(released);
+        var reclaimed = _store.TryClaimOldestPendingNotification();
+        Assert.NotNull(reclaimed);
+        Assert.Equal("sa-062", reclaimed.TaskId);
+        Assert.Equal(2, reclaimed.NotificationAttempts);
+    }
+
+    [Fact]
+    public void MarkNotificationDelivered_RemovesFromPendingQuery()
+    {
+        _store.Create(CreateTask("sa-063", "Deliverable", SubagentTaskState.Running));
+        _store.TrySetTerminalResult("sa-063", new SubagentExecutionResult(SubagentTaskState.Completed, "done"));
+
+        var delivered = _store.MarkNotificationDelivered("sa-063");
+
+        Assert.True(delivered);
+        Assert.Null(_store.TryClaimOldestPendingNotification());
+        Assert.Equal(SubagentNotificationState.Delivered, _store.GetById("sa-063")!.NotificationState);
+    }
+
+    // ── Progress & transfer queries ──────────────────────────────────────
+
+    [Fact]
+    public void TouchProgress_UpdatesLastProgressAt()
+    {
+        var task = CreateTask("sa-064", "Progressing", SubagentTaskState.Running);
+        task.LastProgressAt = DateTimeOffset.UtcNow.AddHours(-1);
+        _store.Create(task);
+
+        _store.TouchProgress("sa-064");
+
+        var reloaded = _store.GetById("sa-064");
+        Assert.NotNull(reloaded);
+        Assert.True(reloaded.LastProgressAt > DateTimeOffset.UtcNow.AddMinutes(-5));
+    }
+
+    [Fact]
+    public void GetTransferableTasks_IncludesActiveAndUndeliveredTerminal()
+    {
+        _store.Create(CreateTask("sa-070", "Queued", SubagentTaskState.Queued));
+        _store.Create(CreateTask("sa-071", "Running", SubagentTaskState.Running));
+        _store.Create(CreateTask("sa-072", "Undelivered", SubagentTaskState.Running));
+        _store.TrySetTerminalResult("sa-072", new SubagentExecutionResult(SubagentTaskState.Completed, "done"));
+        var delivered = CreateTask("sa-073", "Delivered", SubagentTaskState.Completed);
+        delivered.CompletedAt = DateTimeOffset.UtcNow;
+        delivered.NotificationState = SubagentNotificationState.Delivered;
+        _store.Create(delivered);
+
+        var transferable = _store.GetTransferableTasks();
+
+        Assert.Equal(3, transferable.Count);
+        Assert.Contains(transferable, t => t.TaskId == "sa-070");
+        Assert.Contains(transferable, t => t.TaskId == "sa-071");
+        Assert.Contains(transferable, t => t.TaskId == "sa-072"); // terminal but result not yet delivered
+        Assert.DoesNotContain(transferable, t => t.TaskId == "sa-073");
     }
 
     // ── Cleanup ──────────────────────────────────────────────────────────
@@ -299,6 +576,27 @@ public class SubagentSessionStoreTests : IDisposable
         var result = _store.GetById("sa-recent");
         Assert.NotNull(result);
         Assert.Single(result.Messages);
+    }
+
+    [Fact]
+    public void Cleanup_PreservesUndeliveredTerminalTask()
+    {
+        _store.Create(CreateTask("sa-undelivered", "Terminal, not delivered", SubagentTaskState.Running));
+        _store.TrySetTerminalResult(
+            "sa-undelivered", new SubagentExecutionResult(SubagentTaskState.Completed, "important result"));
+        SetCompletedAt("sa-undelivered", DateTimeOffset.UtcNow - TimeSpan.FromDays(8));
+
+        _store.Cleanup();
+
+        // Notification still pending — the record must survive even past record retention.
+        var survivor = _store.GetById("sa-undelivered");
+        Assert.NotNull(survivor);
+        Assert.Equal("important result", survivor.Result);
+
+        // Once delivered, the same record becomes eligible for cleanup.
+        Assert.True(_store.MarkNotificationDelivered("sa-undelivered"));
+        _store.Cleanup();
+        Assert.Null(_store.GetById("sa-undelivered"));
     }
 
     // ── RepointParent ────────────────────────────────────────────────────
@@ -377,7 +675,8 @@ public class SubagentSessionStoreTests : IDisposable
         string description,
         SubagentTaskState state = SubagentTaskState.Running,
         string parentConversation = "conv-1",
-        string parentChannel = "webchat-default")
+        string parentChannel = "webchat-default",
+        DateTimeOffset? createdAt = null)
     {
         return new SubagentTask
         {
@@ -387,7 +686,7 @@ public class SubagentSessionStoreTests : IDisposable
             Description = description,
             Prompt = "Find all TODOs",
             State = state,
-            CreatedAt = DateTimeOffset.UtcNow,
+            CreatedAt = createdAt ?? DateTimeOffset.UtcNow,
         };
     }
 
