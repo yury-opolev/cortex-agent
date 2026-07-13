@@ -85,6 +85,10 @@ public sealed partial class Worker : BackgroundService
         // 7b. Push the effective voice-id flag so enrollment tools hide when disabled
         await this.credentialsPusher.PushSpeakerIdConfigAsync(stoppingToken).ConfigureAwait(false);
 
+        // 7c. Push the Bridge-authoritative subagent concurrency cap — the Agent's own
+        // YAML-mounted config can be stale/mismatched, so the Bridge value always wins.
+        await this.credentialsPusher.PushAgentConfigAsync(stoppingToken).ConfigureAwait(false);
+
         // 8. Connect all channels
         await this.channelManager.ConnectAllAsync(stoppingToken).ConfigureAwait(false);
 
@@ -136,6 +140,7 @@ public sealed partial class Worker : BackgroundService
                             await this.credentialsPusher.PushActiveChannelsAsync(
                                 this.channelLifecycle.BuildActiveChannelIds(), stoppingToken).ConfigureAwait(false);
                             await this.credentialsPusher.PushMemorySettingsAsync(stoppingToken).ConfigureAwait(false);
+                            await this.credentialsPusher.PushAgentConfigAsync(stoppingToken).ConfigureAwait(false);
 
                             consecutiveDisconnectedTicks = 0;
                             this.LogConnectionRebuilt();

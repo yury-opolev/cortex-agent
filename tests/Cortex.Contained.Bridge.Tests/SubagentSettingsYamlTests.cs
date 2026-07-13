@@ -22,4 +22,22 @@ public sealed class SubagentSettingsYamlTests
             if (File.Exists(path)) { File.Delete(path); }
         }
     }
+
+    [Fact]
+    public void PersistSettingsToYaml_WritesMaxConcurrentSubagentsAtNewMaximum()
+    {
+        var config = new BridgeConfig { MaxConcurrentSubagents = 50 };
+        var path = Path.Combine(Path.GetTempPath(), "cortex-" + Guid.NewGuid().ToString("N") + ".yml");
+
+        try
+        {
+            BridgeSettingsWriter.PersistSettingsToYaml(config, path);
+            var yaml = File.ReadAllText(path);
+            Assert.Contains("maxConcurrentSubagents: 50", yaml, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (File.Exists(path)) { File.Delete(path); }
+        }
+    }
 }

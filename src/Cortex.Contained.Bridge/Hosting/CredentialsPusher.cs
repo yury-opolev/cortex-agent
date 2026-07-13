@@ -386,6 +386,68 @@ public sealed partial class CredentialsPusher : ICredentialReplisher
     }
 
     /// <summary>
+    /// Builds the runtime <see cref="AgentConfigUpdate"/> carrying the Bridge-persisted
+    /// <see cref="BridgeConfig.MaxConcurrentSubagents"/> value and pushes it to every connected
+    /// tenant's agent. The Bridge value is authoritative — the agent's own YAML-mounted config
+    /// can be stale/mismatched — so this is what keeps the live <c>SubagentRunnerRegistry</c> cap
+    /// in sync without a container restart. Called after initial connection, after watchdog
+    /// reconstruction, and after reconnect. Mirrors <see cref="PushMemorySettingsAsync"/>:
+    /// per-tenant failures are isolated so one tenant's error doesn't block the others.
+    /// </summary>
+    public async Task PushAgentConfigAsync(CancellationToken cancellationToken)
+    {
+        var update = this.BuildAgentConfigUpdate();
+        this.LogPushingAgentConfig(update.MaxConcurrentSubagents ?? SubagentConcurrencyLimits.Default);
+
+        var targets = this.tenantRouter.GetConnectedTenantIds()
+            .Select(tenantId => (tenantId, client: this.tenantRouter.GetClient(tenantId)))
+            .Where(t => t.client?.IsConnected == true)
+            .Select(t => new AgentConfigPushTarget(t.tenantId, t.client!))
+            .ToList();
+
+        await this.PushAgentConfigToTargetsAsync(update, targets, cancellationToken).ConfigureAwait(false);
+
+        this.LogAgentConfigPushed();
+    }
+
+    /// <summary>
+    /// Pushes <paramref name="update"/> to each target, isolating per-tenant failures.
+    /// Extracted as the testable seam for the multi-tenant push loop (the router/clients
+    /// themselves are sealed and not mockable).
+    /// </summary>
+    internal async Task PushAgentConfigToTargetsAsync(
+        AgentConfigUpdate update,
+        IReadOnlyList<IAgentConfigPushTarget> targets,
+        CancellationToken cancellationToken)
+    {
+        foreach (var target in targets)
+        {
+            try
+            {
+                await target.UpdateConfigAsync(update, cancellationToken).ConfigureAwait(false);
+            }
+#pragma warning disable CA1031 // Individual tenant failures should not block others
+            catch (Exception ex)
+            {
+                this.LogAgentConfigPushToTenantFailed(target.TenantId, ex.Message);
+            }
+#pragma warning restore CA1031
+        }
+    }
+
+    /// <summary>
+    /// Builds the <see cref="AgentConfigUpdate"/> payload carrying the Bridge-persisted
+    /// concurrency cap. Extracted for testability — does not perform any I/O or SignalR calls.
+    /// </summary>
+    internal AgentConfigUpdate BuildAgentConfigUpdate()
+    {
+        return new AgentConfigUpdate
+        {
+            MaxConcurrentSubagents = this.config.MaxConcurrentSubagents,
+        };
+    }
+
+    /// <summary>
     /// Handles a token-refresh request from the agent.
     /// Refreshes the Anthropic OAuth token, persists the new tokens to DPAPI,
     /// updates the in-memory config, and returns the fresh tokens directly
@@ -495,6 +557,15 @@ public sealed partial class CredentialsPusher : ICredentialReplisher
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to push voice-id config to tenant '{TenantId}': {Error}")]
     private partial void LogSpeakerIdPushToTenantFailed(string tenantId, string error);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Pushing agent config to agent: maxConcurrentSubagents={MaxConcurrentSubagents}")]
+    private partial void LogPushingAgentConfig(int maxConcurrentSubagents);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Agent config pushed")]
+    private partial void LogAgentConfigPushed();
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to push agent config to tenant '{TenantId}': {Error}")]
+    private partial void LogAgentConfigPushToTenantFailed(string tenantId, string error);
 }
 
 /// <summary>
@@ -525,4 +596,35 @@ internal sealed class MemoryConfigPushTarget : IMemoryConfigPushTarget
 
     public Task UpdateMemoryConfigAsync(MemoryConfig config, CancellationToken cancellationToken)
         => this.client.UpdateMemoryConfigAsync(config, cancellationToken);
+}
+
+/// <summary>
+/// One connected tenant the runtime agent config (currently just the Bridge-authoritative
+/// concurrency cap) is pushed to. Abstracted so the multi-tenant push loop can be
+/// unit-tested without the sealed <c>TenantRouter</c>/<c>HubClient</c>.
+/// </summary>
+internal interface IAgentConfigPushTarget
+{
+    /// <summary>The tenant ID, used for per-tenant failure logging.</summary>
+    string TenantId { get; }
+
+    /// <summary>Pushes the config update to this tenant's agent.</summary>
+    Task UpdateConfigAsync(AgentConfigUpdate config, CancellationToken cancellationToken);
+}
+
+/// <summary>Adapts a connected <see cref="Hub.HubClient"/> to <see cref="IAgentConfigPushTarget"/>.</summary>
+internal sealed class AgentConfigPushTarget : IAgentConfigPushTarget
+{
+    private readonly Hub.HubClient client;
+
+    public AgentConfigPushTarget(string tenantId, Hub.HubClient client)
+    {
+        this.TenantId = tenantId;
+        this.client = client;
+    }
+
+    public string TenantId { get; }
+
+    public Task UpdateConfigAsync(AgentConfigUpdate config, CancellationToken cancellationToken)
+        => this.client.UpdateConfigAsync(config, cancellationToken);
 }

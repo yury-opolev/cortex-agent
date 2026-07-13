@@ -473,8 +473,10 @@ public sealed record AgentConfigUpdate
     public int? MaxSubagentRounds { get; init; }
 
     /// <summary>
-    /// Maximum number of subagents that may run concurrently (1–20). Applied live
-    /// to the SubagentRunnerRegistry without a container restart.
+    /// Maximum number of subagents that may run concurrently (1–50). Applied live
+    /// to the SubagentRunnerRegistry without a container restart. The Bridge value is
+    /// authoritative (pushed on connect/reconnect/watchdog reconstruction) — do not rely
+    /// on the Agent's own YAML-mounted config, which can be stale/mismatched.
     /// </summary>
     public int? MaxConcurrentSubagents { get; init; }
 }

@@ -154,6 +154,21 @@ public class SubagentRunnerRegistryTests
             new SubagentRunnerRegistry(0, NullLogger<SubagentRunnerRegistry>.Instance));
     }
 
+    [Fact]
+    public void Constructor_Maximum50_Succeeds()
+    {
+        var registry = new SubagentRunnerRegistry(50, NullLogger<SubagentRunnerRegistry>.Instance);
+
+        Assert.Equal(50, registry.MaxConcurrent);
+    }
+
+    [Fact]
+    public void Constructor_AboveMaximum_Throws()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new SubagentRunnerRegistry(51, NullLogger<SubagentRunnerRegistry>.Instance));
+    }
+
     // ── Live cap ─────────────────────────────────────────────────────────
 
     [Fact]
@@ -186,14 +201,28 @@ public class SubagentRunnerRegistryTests
         Assert.Equal(0, callbackCount);
     }
 
-    [Theory]
-    [InlineData(0, 1)]
-    [InlineData(25, 20)]
-    [InlineData(7, 7)]
-    public void SetMaxConcurrent_Clamps_To_1_20(int input, int expected)
+    [Fact]
+    public void SetMaxConcurrent_AtMaximum_Accepts50()
     {
-        _registry.SetMaxConcurrent(input);
-        Assert.Equal(expected, _registry.MaxConcurrent);
+        _registry.SetMaxConcurrent(50);
+
+        Assert.Equal(50, _registry.MaxConcurrent);
+    }
+
+    [Fact]
+    public void SetMaxConcurrent_BelowMinimum_ThrowsWithoutChangingValue()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => _registry.SetMaxConcurrent(0));
+
+        Assert.Equal(2, _registry.MaxConcurrent); // unchanged from fixture's cap of 2
+    }
+
+    [Fact]
+    public void SetMaxConcurrent_AboveMaximum_ThrowsWithoutChangingValue()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => _registry.SetMaxConcurrent(51));
+
+        Assert.Equal(2, _registry.MaxConcurrent); // unchanged from fixture's cap of 2
     }
 
     [Fact]
@@ -275,6 +304,41 @@ public class SubagentRunnerRegistryTests
     {
         const int cap = 4;
         const int contenders = 64;
+        var registry = new SubagentRunnerRegistry(cap, NullLogger<SubagentRunnerRegistry>.Instance);
+
+        var admitted = 0;
+        var start = new ManualResetEventSlim(false);
+        var threads = new List<Thread>();
+        for (var i = 0; i < contenders; i++)
+        {
+            var id = $"task-{i}";
+            var t = new Thread(() =>
+            {
+                start.Wait();
+                if (registry.TryRegister(id, CreateRunner(), out _))
+                {
+                    Interlocked.Increment(ref admitted);
+                }
+            });
+            threads.Add(t);
+            t.Start();
+        }
+
+        start.Set();
+        foreach (var t in threads)
+        {
+            t.Join();
+        }
+
+        Assert.Equal(cap, admitted);
+        Assert.Equal(cap, registry.ActiveCount);
+    }
+
+    [Fact]
+    public void TryRegister_ConcurrentAdmissions_AdmitsExactlyMaximum()
+    {
+        const int cap = 50; // the new configurable maximum
+        const int contenders = 200;
         var registry = new SubagentRunnerRegistry(cap, NullLogger<SubagentRunnerRegistry>.Instance);
 
         var admitted = 0;

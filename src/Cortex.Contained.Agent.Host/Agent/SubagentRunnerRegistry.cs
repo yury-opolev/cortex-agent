@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Cortex.Contained.Contracts.Config;
 
 namespace Cortex.Contained.Agent.Host.Agent;
 
@@ -10,9 +11,6 @@ namespace Cortex.Contained.Agent.Host.Agent;
 /// </summary>
 public sealed partial class SubagentRunnerRegistry
 {
-    private const int MinConcurrent = 1;
-    private const int MaxConcurrentLimit = 20;
-
     private readonly ConcurrentDictionary<string, RunnerEntry> runners = new(StringComparer.Ordinal);
     private readonly ILogger<SubagentRunnerRegistry> logger;
 
@@ -25,7 +23,7 @@ public sealed partial class SubagentRunnerRegistry
 
     public SubagentRunnerRegistry(int maxConcurrent, ILogger<SubagentRunnerRegistry> logger)
     {
-        ArgumentOutOfRangeException.ThrowIfLessThan(maxConcurrent, 1);
+        SubagentConcurrencyLimits.ThrowIfInvalid(maxConcurrent, nameof(maxConcurrent));
         this.maxConcurrent = maxConcurrent;
         this.logger = logger;
     }
@@ -163,28 +161,31 @@ public sealed partial class SubagentRunnerRegistry
     }
 
     /// <summary>
-    /// Set the live concurrency cap (clamped to [1,20]). Raising it invokes the
-    /// slots-opened callback so waiting subagents start without a restart. Lowering
-    /// it only caps NEW registrations — running subagents are never force-stopped.
+    /// Set the live concurrency cap. Values outside [<see cref="SubagentConcurrencyLimits.Minimum"/>,
+    /// <see cref="SubagentConcurrencyLimits.Maximum"/>] are REJECTED — this throws
+    /// <see cref="ArgumentOutOfRangeException"/> and leaves the current cap unchanged (never clamped).
+    /// Raising the cap invokes the slots-opened callback so waiting subagents start without a
+    /// restart. Lowering it only caps NEW registrations — running subagents are never force-stopped.
     /// </summary>
     public void SetMaxConcurrent(int value)
     {
-        var clamped = Math.Clamp(value, MinConcurrent, MaxConcurrentLimit);
+        SubagentConcurrencyLimits.ThrowIfInvalid(value, nameof(value));
+
         int previous;
         Action? callback;
         lock (this.capLock)
         {
             previous = this.maxConcurrent;
-            this.maxConcurrent = clamped;
+            this.maxConcurrent = value;
             callback = this.slotsOpenedCallback;
         }
 
-        if (clamped != previous)
+        if (value != previous)
         {
-            this.LogMaxConcurrentChanged(previous, clamped);
+            this.LogMaxConcurrentChanged(previous, value);
         }
 
-        if (clamped > previous)
+        if (value > previous)
         {
             callback?.Invoke();
         }
