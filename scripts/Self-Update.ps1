@@ -24,6 +24,13 @@
 
 .PARAMETER SkipTests
     Skip the test-gate. NOT recommended — a red build is exactly what rollback exists to avoid.
+
+.PARAMETER RollbackDrill
+    Safely exercise the auto-rollback path. Implies -Apply. Deploys the (verified, known-good) target
+    normally, then FORCES the health gate to fail so the rollback code runs for real — restoring the
+    last-known-good MSIX/image and re-verifying /health. Run with -SkipBuild -TargetVersion equal to the
+    CURRENTLY INSTALLED version so target == last-known-good: the install is bounced but never leaves its
+    current version, and nothing broken is ever shipped. A drill that rolls back healthy exits 0.
 #>
 [CmdletBinding()]
 param(
@@ -33,6 +40,7 @@ param(
     [switch]$SkipBuild,
     [switch]$SkipTests,
     [switch]$SkipPull,
+    [switch]$RollbackDrill,
     [int]$DelaySeconds = 45,
     [string]$TaskName = 'CortexSelfUpdate',
     [string]$TargetVersion = '',
@@ -44,6 +52,10 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# A rollback drill is a deploy that deliberately fails its own health gate — it needs the full -Apply path.
+# It must run inline (the detached scheduled task would not carry the drill flag), so forbid -Schedule.
+if ($RollbackDrill -and $Schedule) { throw "-RollbackDrill is inline-only; do not combine it with -Schedule." }
+if ($RollbackDrill) { $Apply = $true }
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $artifacts = Join-Path $repoRoot 'artifacts'
 $manifestPath = Join-Path $artifacts 'update-manifest.json'
@@ -61,6 +73,18 @@ function Say([string]$msg, [string]$color = 'Cyan') {
 
 function Get-InstalledVersion {
     (Get-AppxPackage -Name '*Cortex*' -ErrorAction SilentlyContinue | Select-Object -First 1).Version
+}
+
+function Resolve-LkgMsix([string]$version) {
+    # Locate the last-known-good MSIX for $version in artifacts. Get-InstalledVersion returns a 4-part
+    # Appx version (e.g. 0.2.313.0) but Build-All emits a 3-part artifact name (CortexLauncher-0.2.313.msix),
+    # so try the version as-is AND with a trailing '.0' stripped. Returns the first existing path, else $null.
+    foreach ($v in @($version, ($version -replace '\.0$', ''))) {
+        if (-not $v) { continue }
+        $candidate = Join-Path $artifacts "CortexLauncher-$v.msix"
+        if (Test-Path $candidate) { return $candidate }
+    }
+    return $null
 }
 
 function Test-HealthAt([string]$expectVersion) {
@@ -181,6 +205,14 @@ try {
     }
     $resolvedVersion = if ($TargetVersion) { $TargetVersion } else { $m.version }
 
+    # A drill must target the CURRENTLY INSTALLED version so target == last-known-good: it deploys, forces a
+    # rollback, and lands back where it started. Guard against a bare `-RollbackDrill` (no -SkipBuild
+    # -TargetVersion) that would build+deploy a genuinely new version, force it to fail, and silently
+    # discard a real release. Normalize the 4-part installed version (0.2.313.0) to the 3-part release form.
+    if ($RollbackDrill -and ($resolvedVersion -ne ($fromVersion -replace '\.0$', ''))) {
+        throw "RollbackDrill requires target == currently installed version (target=$resolvedVersion, installed=$fromVersion). Re-run with: -SkipBuild -TargetVersion $($fromVersion -replace '\.0$', '')."
+    }
+
     $msixFile = if ($MsixPath) {
         if ([System.IO.Path]::IsPathRooted($MsixPath)) { $MsixPath } else { Join-Path $repoRoot ($MsixPath -replace '/', '\') }
     } else {
@@ -212,8 +244,8 @@ try {
 
     # --- 6. Snapshot last-known-good (for rollback) --------------------------
     $lkgSaved = $false
-    $prevMsix = Join-Path $artifacts "CortexLauncher-$fromVersion.msix"
-    if (Test-Path $prevMsix) { Copy-Item $prevMsix $lkgMsix -Force; $lkgSaved = $true; Say "last-known-good MSIX saved ($fromVersion)" }
+    $prevMsix = Resolve-LkgMsix $fromVersion
+    if ($prevMsix) { Copy-Item $prevMsix $lkgMsix -Force; $lkgSaved = $true; Say "last-known-good MSIX saved ($fromVersion): $(Split-Path -Leaf $prevMsix)" }
     else { Say "no MSIX for current version $fromVersion in artifacts — MSIX rollback unavailable" 'Yellow' }
     try { & docker tag cortex-agent:latest $rollbackImageTag 2>$null; Say "tagged current agent image as $rollbackImageTag" } catch { Say "could not snapshot agent image for rollback" 'Yellow' }
 
@@ -228,14 +260,17 @@ try {
 
     # --- 8. Runtime verify ---------------------------------------------------
     Say "verifying /health reports $resolvedVersion..."
-    if (Test-HealthAt $resolvedVersion) {
+    # A rollback drill deploys the (known-good) target, then forces this gate to fail so the rollback
+    # path below runs for real. Everything else is a genuine /health check.
+    $healthy = if ($RollbackDrill) { Say "DRILL: forcing health-gate failure to exercise the rollback path" 'Yellow'; $false } else { Test-HealthAt $resolvedVersion }
+    if ($healthy) {
         Say "HEALTHY on $resolvedVersion — update complete" 'Green'
         Write-Status -ok $true -from $fromVersion -to $resolvedVersion -rolledBack $false -reason 'deployed'
         return
     }
 
     # --- 9. Rollback ---------------------------------------------------------
-    Say "target did NOT come healthy within ${HealthTimeoutSeconds}s — ROLLING BACK" 'Red'
+    Say ($(if ($RollbackDrill) { "DRILL — exercising rollback" } else { "target did NOT come healthy within ${HealthTimeoutSeconds}s" }) + " — ROLLING BACK") 'Red'
     $rolledBack = $false
     if ($lkgSaved) {
         try {
@@ -249,6 +284,15 @@ try {
     } else {
         Say "no last-known-good MSIX — cannot roll back automatically. MANUAL INTERVENTION NEEDED." 'Red'
     }
+
+    if ($RollbackDrill) {
+        # A drill's whole point is the rollback: healthy-after-rollback is SUCCESS, not failure.
+        Say ("ROLLBACK DRILL COMPLETE — rollback " + $(if ($rolledBack) { "succeeded (healthy on $fromVersion)" } else { 'FAILED — investigate the rollback path' })) $(if ($rolledBack) { 'Green' } else { 'Red' })
+        Write-Status -ok $rolledBack -from $fromVersion -to $resolvedVersion -rolledBack $rolledBack -reason 'rollback-drill'
+        if ($rolledBack) { return }
+        throw "Rollback drill FAILED: rollback did not come healthy."
+    }
+
     Write-Status -ok $false -from $fromVersion -to $resolvedVersion -rolledBack $rolledBack -reason 'health-gate-failed'
     throw "Self-update failed its health gate (rolledBack=$rolledBack)."
 }
