@@ -491,24 +491,57 @@ builder.Services.AddSingleton(sp =>
         sp.GetRequiredService<ILogger<SubagentRunnerRegistry>>());
 });
 
-builder.Services.AddSingleton<IAgentTool>(sp =>
-    new SubAgentStartTool(
+// The executor builds worker context and drives the registered runner; the coordinator owns
+// claiming, atomic concurrency admission, terminal persistence, requeue-on-shutdown, and readiness.
+builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Agent.ISubagentExecutor>(sp =>
+    new Cortex.Contained.Agent.Host.Agent.SubagentExecutor(
+        sp.GetRequiredService<SubagentRunnerRegistry>(),
         sp.GetRequiredService<ILlmClient>(),
         () => sp.GetRequiredService<ToolRegistry>(),
         sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.IModelProvider>(),
         sp.GetRequiredService<IOptionsMonitor<AgentConfig>>(),
         sp.GetRequiredService<SubagentSessionStore>(),
-        sp.GetRequiredService<SubagentRunnerRegistry>(),
-        (taskId, result) => sp.GetRequiredService<AgentRuntime>()
-            .ProcessSubagentCompletionAsync(taskId, result),
-        sp.GetRequiredService<ILogger<SubAgentStartTool>>(),
         stateRoot,
+        sp.GetRequiredService<ILogger<Cortex.Contained.Agent.Host.Agent.SubagentExecutor>>(),
         sp.GetRequiredService<IMemoryService>(),
         sp.GetRequiredService<InMemoryTodoStore>(),
         sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.SkillRegistry>(),
-        imageAgingOptions: null,
-        imageDescriber: null,
-        systemPromptStore: sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.SystemPromptStore>()));
+        sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.SystemPromptStore>()));
+
+builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Agent.SubagentExecutionCoordinator>(sp =>
+{
+    var llmClient = sp.GetRequiredService<ILlmClient>();
+    var modelProvider = sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.IModelProvider>();
+    var agentConfig = sp.GetRequiredService<IOptionsMonitor<AgentConfig>>();
+    var subagentStore = sp.GetRequiredService<SubagentSessionStore>();
+    var todoStore = sp.GetRequiredService<InMemoryTodoStore>();
+    var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
+    var runnerLogger = loggerFactory.CreateLogger<SubagentRunner>();
+    var toolRegistry = sp.GetRequiredService<ToolRegistry>();
+
+    // The coordinator creates and registers the runner (holding the slot + owning the cancellation
+    // token); the executor drives that same registered instance so sub_agent_send injection lands.
+    Func<SubagentTask, SubagentRunner> runnerFactory = task => new SubagentRunner(
+        llmClient, toolRegistry, agentConfig.CurrentValue.MaxSubagentRounds, runnerLogger,
+        subagentStore, task.TaskId, modelProvider, todoStore);
+
+    return new Cortex.Contained.Agent.Host.Agent.SubagentExecutionCoordinator(
+        subagentStore,
+        sp.GetRequiredService<SubagentRunnerRegistry>(),
+        sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.ISubagentExecutor>(),
+        runnerFactory,
+        (taskId, result) => sp.GetRequiredService<AgentRuntime>()
+            .ProcessSubagentCompletionAsync(taskId, result),
+        loggerFactory.CreateLogger<Cortex.Contained.Agent.Host.Agent.SubagentExecutionCoordinator>());
+});
+builder.Services.AddHostedService(sp =>
+    sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.SubagentExecutionCoordinator>());
+
+builder.Services.AddSingleton<IAgentTool>(sp =>
+    new SubAgentStartTool(
+        sp.GetRequiredService<SubagentSessionStore>(),
+        sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.SubagentExecutionCoordinator>(),
+        sp.GetRequiredService<ILogger<SubAgentStartTool>>()));
 builder.Services.AddSingleton<IAgentTool>(sp =>
     new SubAgentReadTool(
         sp.GetRequiredService<SubagentSessionStore>(),
@@ -518,14 +551,8 @@ builder.Services.AddSingleton<IAgentTool>(sp =>
     new SubAgentSendTool(
         sp.GetRequiredService<SubagentSessionStore>(),
         sp.GetRequiredService<SubagentRunnerRegistry>(),
-        sp.GetRequiredService<ILlmClient>(),
-        () => sp.GetRequiredService<ToolRegistry>(),
-        sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.IModelProvider>(),
-        sp.GetRequiredService<IOptionsMonitor<AgentConfig>>(),
-        (taskId, result) => sp.GetRequiredService<AgentRuntime>()
-            .ProcessSubagentCompletionAsync(taskId, result),
-        sp.GetRequiredService<ILogger<SubAgentSendTool>>(),
-        sp.GetRequiredService<InMemoryTodoStore>()));
+        sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.SubagentExecutionCoordinator>(),
+        sp.GetRequiredService<ILogger<SubAgentSendTool>>()));
 builder.Services.AddSingleton<IAgentTool>(sp =>
     new SubAgentStopTool(
         sp.GetRequiredService<SubagentSessionStore>(),
@@ -659,11 +686,8 @@ using (var scope = app.Services.CreateScope())
     await memoryStore.InitializeAsync().ConfigureAwait(false);
 }
 
-// --- Start any queued subagent tasks from previous container ---
-{
-    var startTool = app.Services.GetServices<IAgentTool>().OfType<SubAgentStartTool>().FirstOrDefault();
-    startTool?.StartQueuedTasks();
-}
+// Queued/recovered subagent tasks are now dispatched by SubagentExecutionCoordinator (a hosted
+// service) once Bridge + credentials + MCP-catalog readiness are all signaled — no startup call here.
 
 // Ollama model check/pull runs in the background so it doesn't block startup.
 // Memory tools will gracefully fail until the model is available.

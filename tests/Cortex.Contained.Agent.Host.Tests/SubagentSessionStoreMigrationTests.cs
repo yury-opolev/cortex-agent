@@ -117,6 +117,34 @@ public class SubagentSessionStoreMigrationTests : IDisposable
     // ── Fresh database ───────────────────────────────────────────────────
 
     [Fact]
+    public void Constructor_InterruptedFreshBootstrap_RecoversWithoutCrashing()
+    {
+        // Simulate a crash on a FRESH database after the v2 tables were created but
+        // before user_version was stamped: the next startup sees version 0 with the
+        // tables already present. The v0 bootstrap must be idempotent (no
+        // "table already exists" crash-loop) and must stamp the version.
+        using (var first = CreateStore())
+        {
+            first.Create(new SubagentTask
+            {
+                TaskId = "sa-pre-crash",
+                ParentConversation = "conv-1",
+                ParentChannel = "webchat-default",
+                Description = "Survives interrupted bootstrap",
+                Prompt = "do things",
+                State = SubagentTaskState.Queued,
+            });
+        }
+
+        ResetUserVersionToZero();
+
+        using var reopened = CreateStore();
+
+        Assert.NotNull(reopened.GetById("sa-pre-crash"));
+        Assert.Equal(2, ReadUserVersion());
+    }
+
+    [Fact]
     public void Constructor_NewDatabase_CreatesVersion2Schema()
     {
         using (var store = CreateStore())
@@ -233,5 +261,15 @@ public class SubagentSessionStoreMigrationTests : IDisposable
         using var cmd = conn.CreateCommand();
         cmd.CommandText = "PRAGMA user_version";
         return Convert.ToInt32(cmd.ExecuteScalar(), CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>Simulates a crash before the v0 bootstrap stamped the schema version.</summary>
+    private void ResetUserVersionToZero()
+    {
+        using var conn = new SqliteConnection($"Data Source={DatabasePath};Pooling=False");
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "PRAGMA user_version = 0";
+        cmd.ExecuteNonQuery();
     }
 }

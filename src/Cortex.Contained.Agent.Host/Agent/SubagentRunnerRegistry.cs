@@ -37,37 +37,63 @@ public sealed partial class SubagentRunnerRegistry
     public int MaxConcurrent => this.maxConcurrent;
 
     /// <summary>
-    /// Try to register a runner if a concurrency slot is available.
-    /// Returns true if registered, false if all slots are in use.
+    /// Atomically admit a runner under the concurrency cap. Returns true and hands back the
+    /// registry-owned <paramref name="cancellationToken"/> (the ONLY token the caller may use to
+    /// run/cancel this task) when a slot was available; false (with <see cref="CancellationToken.None"/>)
+    /// when the cap is reached or the task id is already registered. The count check, the
+    /// <see cref="ConcurrentDictionary{TKey,TValue}.TryAdd"/>, and the CTS creation all happen under
+    /// <see cref="capLock"/>, so concurrent admissions can never exceed the cap and the indexer is
+    /// never used to overwrite an existing runner.
     /// </summary>
-    public bool TryRegister(string taskId, SubagentRunner runner)
+    public bool TryRegister(string taskId, SubagentRunner runner, out CancellationToken cancellationToken)
     {
-        // Check count first — not perfectly atomic with the add, but
-        // ConcurrentDictionary ensures no corruption. Worst case: one
-        // extra runner sneaks in under high concurrency, which is acceptable.
-        if (this.runners.Count >= this.maxConcurrent)
+        lock (this.capLock)
         {
-            this.LogSlotUnavailable(taskId, this.runners.Count, this.maxConcurrent);
-            return false;
-        }
+            if (this.runners.Count >= this.maxConcurrent)
+            {
+                this.LogSlotUnavailable(taskId, this.runners.Count, this.maxConcurrent);
+                cancellationToken = CancellationToken.None;
+                return false;
+            }
 
-        this.runners[taskId] = new RunnerEntry(runner, new CancellationTokenSource());
-        this.LogRunnerRegistered(taskId, this.runners.Count);
-        return true;
+            // Create the CTS only for a successful add so no source leaks on a rejected admission.
+            var cts = new CancellationTokenSource();
+            if (!this.runners.TryAdd(taskId, new RunnerEntry(runner, cts)))
+            {
+                // Duplicate task id — never overwrite the existing runner via the indexer.
+                cts.Dispose();
+                cancellationToken = CancellationToken.None;
+                return false;
+            }
+
+            cancellationToken = cts.Token;
+            this.LogRunnerRegistered(taskId, this.runners.Count);
+            return true;
+        }
     }
 
     /// <summary>
-    /// Remove a runner when it completes or fails. Implicitly frees the concurrency slot.
+    /// Remove a runner when it completes or fails. Implicitly frees the concurrency slot and
+    /// invokes the slots-opened callback (outside the lock) so a waiting dispatcher wakes.
     /// </summary>
     public bool Remove(string taskId)
     {
-        var removed = this.runners.TryRemove(taskId, out var entry);
+        bool removed;
+        RunnerEntry? entry;
+        Action? callback;
+        lock (this.capLock)
+        {
+            removed = this.runners.TryRemove(taskId, out entry);
+            callback = removed ? this.slotsOpenedCallback : null;
+        }
+
         if (removed)
         {
             entry!.Cts.Dispose();
             this.LogRunnerRemoved(taskId, this.runners.Count);
         }
 
+        callback?.Invoke();
         return removed;
     }
 

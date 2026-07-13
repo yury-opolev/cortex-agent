@@ -21,48 +21,48 @@ public class SubagentRunnerRegistryTests
     [Fact]
     public void TryRegister_WithinLimit_ReturnsTrue()
     {
-        Assert.True(_registry.TryRegister("task-1", CreateRunner()));
-        Assert.True(_registry.TryRegister("task-2", CreateRunner()));
+        Assert.True(_registry.TryRegister("task-1", CreateRunner(), out _));
+        Assert.True(_registry.TryRegister("task-2", CreateRunner(), out _));
     }
 
     [Fact]
     public void TryRegister_AtLimit_ReturnsFalse()
     {
-        _registry.TryRegister("task-1", CreateRunner());
-        _registry.TryRegister("task-2", CreateRunner());
+        _registry.TryRegister("task-1", CreateRunner(), out _);
+        _registry.TryRegister("task-2", CreateRunner(), out _);
 
-        Assert.False(_registry.TryRegister("task-3", CreateRunner()));
+        Assert.False(_registry.TryRegister("task-3", CreateRunner(), out _));
     }
 
     [Fact]
     public void Remove_FreesSlot()
     {
-        _registry.TryRegister("task-1", CreateRunner());
-        _registry.TryRegister("task-2", CreateRunner());
-        Assert.False(_registry.TryRegister("task-3", CreateRunner()));
+        _registry.TryRegister("task-1", CreateRunner(), out _);
+        _registry.TryRegister("task-2", CreateRunner(), out _);
+        Assert.False(_registry.TryRegister("task-3", CreateRunner(), out _));
 
         _registry.Remove("task-1");
 
-        Assert.True(_registry.TryRegister("task-3", CreateRunner()));
+        Assert.True(_registry.TryRegister("task-3", CreateRunner(), out _));
     }
 
     [Fact]
     public void Remove_AllTasks_AllSlotsFree()
     {
-        _registry.TryRegister("task-1", CreateRunner());
-        _registry.TryRegister("task-2", CreateRunner());
+        _registry.TryRegister("task-1", CreateRunner(), out _);
+        _registry.TryRegister("task-2", CreateRunner(), out _);
 
         _registry.Remove("task-1");
         _registry.Remove("task-2");
 
-        Assert.True(_registry.TryRegister("task-3", CreateRunner()));
-        Assert.True(_registry.TryRegister("task-4", CreateRunner()));
+        Assert.True(_registry.TryRegister("task-3", CreateRunner(), out _));
+        Assert.True(_registry.TryRegister("task-4", CreateRunner(), out _));
     }
 
     [Fact]
     public void Remove_SameTaskTwice_SafeNoOp()
     {
-        _registry.TryRegister("task-1", CreateRunner());
+        _registry.TryRegister("task-1", CreateRunner(), out _);
 
         Assert.True(_registry.Remove("task-1"));
         Assert.False(_registry.Remove("task-1")); // already removed
@@ -76,7 +76,7 @@ public class SubagentRunnerRegistryTests
     public void TryGet_Registered_ReturnsRunner()
     {
         var runner = CreateRunner();
-        _registry.TryRegister("task-1", runner);
+        _registry.TryRegister("task-1", runner, out _);
 
         Assert.Same(runner, _registry.TryGet("task-1"));
     }
@@ -90,8 +90,8 @@ public class SubagentRunnerRegistryTests
     [Fact]
     public void GetActiveTaskIds_ReturnsAllRegistered()
     {
-        _registry.TryRegister("task-1", CreateRunner());
-        _registry.TryRegister("task-2", CreateRunner());
+        _registry.TryRegister("task-1", CreateRunner(), out _);
+        _registry.TryRegister("task-2", CreateRunner(), out _);
 
         var ids = _registry.GetActiveTaskIds();
 
@@ -111,8 +111,8 @@ public class SubagentRunnerRegistryTests
     [Fact]
     public void HasAvailableSlot_Full_False()
     {
-        _registry.TryRegister("task-1", CreateRunner());
-        _registry.TryRegister("task-2", CreateRunner());
+        _registry.TryRegister("task-1", CreateRunner(), out _);
+        _registry.TryRegister("task-2", CreateRunner(), out _);
 
         Assert.False(_registry.HasAvailableSlot);
     }
@@ -120,8 +120,8 @@ public class SubagentRunnerRegistryTests
     [Fact]
     public void HasAvailableSlot_AfterRemove_True()
     {
-        _registry.TryRegister("task-1", CreateRunner());
-        _registry.TryRegister("task-2", CreateRunner());
+        _registry.TryRegister("task-1", CreateRunner(), out _);
+        _registry.TryRegister("task-2", CreateRunner(), out _);
 
         _registry.Remove("task-1");
 
@@ -135,10 +135,10 @@ public class SubagentRunnerRegistryTests
     {
         Assert.Equal(0, _registry.ActiveCount);
 
-        _registry.TryRegister("task-1", CreateRunner());
+        _registry.TryRegister("task-1", CreateRunner(), out _);
         Assert.Equal(1, _registry.ActiveCount);
 
-        _registry.TryRegister("task-2", CreateRunner());
+        _registry.TryRegister("task-2", CreateRunner(), out _);
         Assert.Equal(2, _registry.ActiveCount);
 
         _registry.Remove("task-1");
@@ -160,8 +160,8 @@ public class SubagentRunnerRegistryTests
     public void SetMaxConcurrent_Raise_OpensSlotsAndInvokesCallback()
     {
         // fill the cap of 2
-        _registry.TryRegister("task-1", CreateRunner());
-        _registry.TryRegister("task-2", CreateRunner());
+        _registry.TryRegister("task-1", CreateRunner(), out _);
+        _registry.TryRegister("task-2", CreateRunner(), out _);
         Assert.False(_registry.HasAvailableSlot);
 
         var callbackCount = 0;
@@ -213,7 +213,7 @@ public class SubagentRunnerRegistryTests
     [Fact]
     public void GetCancellationToken_Registered_ReturnsLiveToken()
     {
-        _registry.TryRegister("task-1", CreateRunner());
+        _registry.TryRegister("task-1", CreateRunner(), out _);
         var token = _registry.GetCancellationToken("task-1");
         Assert.False(token.IsCancellationRequested);
         Assert.True(token.CanBeCanceled);
@@ -222,7 +222,7 @@ public class SubagentRunnerRegistryTests
     [Fact]
     public void TryCancel_Running_CancelsToken()
     {
-        _registry.TryRegister("task-1", CreateRunner());
+        _registry.TryRegister("task-1", CreateRunner(), out _);
         var token = _registry.GetCancellationToken("task-1");
 
         Assert.True(_registry.TryCancel("task-1"));
@@ -239,6 +239,92 @@ public class SubagentRunnerRegistryTests
     public void GetCancellationToken_Unknown_ReturnsNone()
     {
         Assert.Equal(CancellationToken.None, _registry.GetCancellationToken("nope"));
+    }
+
+    // ── Atomic admission (out-token contract) ────────────────────────────
+
+    [Fact]
+    public void TryRegister_ReturnsRegistryOwnedToken()
+    {
+        var registered = _registry.TryRegister("task-1", CreateRunner(), out var token);
+
+        Assert.True(registered);
+        Assert.True(token.CanBeCanceled);
+        Assert.False(token.IsCancellationRequested);
+        // The handed-back token is the SAME registry-owned token exposed by GetCancellationToken.
+        Assert.Equal(_registry.GetCancellationToken("task-1"), token);
+    }
+
+    [Fact]
+    public void TryRegister_DuplicateTaskId_DoesNotReplaceRunner()
+    {
+        var first = CreateRunner();
+        var second = CreateRunner();
+
+        Assert.True(_registry.TryRegister("task-1", first, out _));
+        Assert.False(_registry.TryRegister("task-1", second, out var secondToken));
+
+        // The original runner is untouched; the rejected admission yields no token.
+        Assert.Same(first, _registry.TryGet("task-1"));
+        Assert.Equal(CancellationToken.None, secondToken);
+        Assert.Equal(1, _registry.ActiveCount);
+    }
+
+    [Fact]
+    public void TryRegister_ConcurrentCalls_NeverExceedsMaximum()
+    {
+        const int cap = 4;
+        const int contenders = 64;
+        var registry = new SubagentRunnerRegistry(cap, NullLogger<SubagentRunnerRegistry>.Instance);
+
+        var admitted = 0;
+        var start = new ManualResetEventSlim(false);
+        var threads = new List<Thread>();
+        for (var i = 0; i < contenders; i++)
+        {
+            var id = $"task-{i}";
+            var t = new Thread(() =>
+            {
+                start.Wait();
+                if (registry.TryRegister(id, CreateRunner(), out _))
+                {
+                    Interlocked.Increment(ref admitted);
+                }
+            });
+            threads.Add(t);
+            t.Start();
+        }
+
+        start.Set();
+        foreach (var t in threads)
+        {
+            t.Join();
+        }
+
+        Assert.Equal(cap, admitted);
+        Assert.Equal(cap, registry.ActiveCount);
+    }
+
+    [Fact]
+    public void Remove_Success_InvokesSlotsOpenedCallback()
+    {
+        var callbackCount = 0;
+        _registry.SetSlotsOpenedCallback(() => callbackCount++);
+        _registry.TryRegister("task-1", CreateRunner(), out _);
+
+        var removed = _registry.Remove("task-1");
+
+        Assert.True(removed);
+        Assert.Equal(1, callbackCount);
+    }
+
+    [Fact]
+    public void TryCancel_CancelsReturnedToken()
+    {
+        _registry.TryRegister("task-1", CreateRunner(), out var token);
+
+        Assert.True(_registry.TryCancel("task-1"));
+        Assert.True(token.IsCancellationRequested);
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────

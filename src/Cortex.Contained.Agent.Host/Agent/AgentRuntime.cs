@@ -2059,8 +2059,9 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
             return Task.CompletedTask;
         }
 
-        // Store the result
-        this.subagentStore.UpdateState(taskId, SubagentTaskState.Completed, result: result);
+        // Terminal state is already durable: the SubagentExecutionCoordinator recorded it (exactly
+        // once, guarded) via TrySetTerminalResult BEFORE invoking this notification. Do NOT write the
+        // state here — an unguarded UpdateState(Completed) could overwrite a Failed/Cancelled result.
 
         // Enqueue a completion notification into the parent conversation.
         // The main agent processes it through the full tool loop and decides

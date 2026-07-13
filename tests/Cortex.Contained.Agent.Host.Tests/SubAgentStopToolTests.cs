@@ -52,13 +52,25 @@ public sealed class SubAgentStopToolTests : IDisposable
     public async Task Stop_RunningRegistered_CancelsToken_ReturnsOk()
     {
         Seed("sa-1", SubagentTaskState.Running);
-        _registry.TryRegister("sa-1", Runner());
-        var token = _registry.GetCancellationToken("sa-1");
+        _registry.TryRegister("sa-1", Runner(), out var token);
 
         var result = await _tool.ExecuteAsync("""{"task_id":"sa-1"}""", Ctx(), CancellationToken.None);
 
         Assert.True(result.Success);
         Assert.True(token.IsCancellationRequested);
+    }
+
+    [Fact]
+    public async Task Stop_Running_CancelsRegistryToken()
+    {
+        Seed("sa-run", SubagentTaskState.Running);
+        _registry.TryRegister("sa-run", Runner(), out var registryToken);
+
+        var result = await _tool.ExecuteAsync("""{"task_id":"sa-run"}""", Ctx(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        // The tool cancels ONLY the registry-owned token; the coordinator then records Cancelled.
+        Assert.True(registryToken.IsCancellationRequested);
     }
 
     [Fact]
@@ -70,6 +82,22 @@ public sealed class SubAgentStopToolTests : IDisposable
 
         Assert.True(result.Success);
         Assert.Equal(SubagentTaskState.Cancelled, _store.GetById("sa-2")!.State);
+    }
+
+    [Fact]
+    public async Task Stop_Queued_CreatesCancelledTerminalResult()
+    {
+        Seed("sa-q", SubagentTaskState.Queued);
+
+        var result = await _tool.ExecuteAsync("""{"task_id":"sa-q"}""", Ctx(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        var task = _store.GetById("sa-q")!;
+        // Guarded terminal transition: Cancelled (never Completed) with a pending notification.
+        Assert.Equal(SubagentTaskState.Cancelled, task.State);
+        Assert.NotNull(task.CompletedAt);
+        Assert.Equal(SubagentNotificationState.Pending, task.NotificationState);
+        Assert.Null(_store.GetOldestQueued()); // no longer queued
     }
 
     [Fact]

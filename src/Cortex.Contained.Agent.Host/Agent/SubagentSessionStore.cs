@@ -59,7 +59,6 @@ public sealed partial class SubagentSessionStore : SqliteStoreBase
         if (version == 0)
         {
             this.CreateVersion2Schema();
-            this.SetSchemaVersion(CurrentSchemaVersion);
             return;
         }
 
@@ -76,11 +75,19 @@ public sealed partial class SubagentSessionStore : SqliteStoreBase
         }
     }
 
-    /// <summary>Creates the complete v2 schema on a fresh (version 0) database.</summary>
+    /// <summary>
+    /// Creates the complete v2 schema on a fresh (version 0) database. Crash-idempotent:
+    /// every CREATE uses IF NOT EXISTS and the create + <c>user_version</c> stamp run in one
+    /// transaction, so a crash mid-bootstrap on a fresh DB re-runs cleanly instead of
+    /// crash-looping on "table already exists".
+    /// </summary>
     private void CreateVersion2Schema()
     {
-        ExecuteNonQuery("""
-            CREATE TABLE subagent_tasks (
+        using var transaction = this.Connection.BeginTransaction();
+        using var cmd = this.Connection.CreateCommand();
+        cmd.Transaction = transaction;
+        cmd.CommandText = """
+            CREATE TABLE IF NOT EXISTS subagent_tasks (
                 task_id                 TEXT PRIMARY KEY,
                 parent_conversation     TEXT NOT NULL,
                 parent_channel          TEXT NOT NULL,
@@ -109,8 +116,19 @@ public sealed partial class SubagentSessionStore : SqliteStoreBase
 
             CREATE INDEX IF NOT EXISTS idx_subagent_parent
                 ON subagent_tasks (parent_conversation);
-            """);
-        this.CreateVersion2Indexes();
+
+            CREATE INDEX IF NOT EXISTS idx_subagent_queue
+                ON subagent_tasks(state, created_at)
+                WHERE state = 'queued';
+
+            CREATE INDEX IF NOT EXISTS idx_subagent_notifications
+                ON subagent_tasks(notification_state, completed_at)
+                WHERE notification_state IN ('pending', 'enqueued');
+
+            PRAGMA user_version = 2;
+            """;
+        cmd.ExecuteNonQuery();
+        transaction.Commit();
     }
 
     /// <summary>
@@ -166,20 +184,6 @@ public sealed partial class SubagentSessionStore : SqliteStoreBase
         transaction.Commit();
 
         this.LogSchemaMigrated(1, CurrentSchemaVersion);
-    }
-
-    /// <summary>Creates the v2 partial indexes for the dispatch queue and notification pump.</summary>
-    private void CreateVersion2Indexes()
-    {
-        ExecuteNonQuery("""
-            CREATE INDEX IF NOT EXISTS idx_subagent_queue
-                ON subagent_tasks(state, created_at)
-                WHERE state = 'queued';
-
-            CREATE INDEX IF NOT EXISTS idx_subagent_notifications
-                ON subagent_tasks(notification_state, completed_at)
-                WHERE notification_state IN ('pending', 'enqueued');
-            """);
     }
 
     // ── CRUD ─────────────────────────────────────────────────────────────

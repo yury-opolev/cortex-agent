@@ -22,7 +22,6 @@ public sealed class SubagentRunner : IDisposable
     private readonly InMemoryTodoStore? todoStore;
     private readonly SubagentSessionStore? store;
     private readonly string? taskId;
-    private readonly Func<string, string, Task>? onCompletion;
     private readonly ILlmClient llmClient;
     private readonly ILogger logger;
     private readonly IOptionsMonitor<ImageAgingConfig>? imageAgingOptions;
@@ -62,7 +61,9 @@ public sealed class SubagentRunner : IDisposable
     }
 
     /// <summary>
-    /// Persistent constructor for async subagent execution.
+    /// Persistent constructor for async subagent execution. Terminal state ownership belongs
+    /// solely to <see cref="SubagentExecutionCoordinator"/> — the runner never records a terminal
+    /// state itself (it returns a <see cref="SubagentExecutionResult"/> the coordinator persists once).
     /// </summary>
     public SubagentRunner(
         ILlmClient llmClient,
@@ -71,7 +72,6 @@ public sealed class SubagentRunner : IDisposable
         ILogger logger,
         SubagentSessionStore store,
         string taskId,
-        Func<string, string, Task> onCompletion,
         IModelProvider modelProvider,
         InMemoryTodoStore? todoStore = null,
         IOptionsMonitor<ImageAgingConfig>? imageAgingOptions = null,
@@ -80,7 +80,6 @@ public sealed class SubagentRunner : IDisposable
     {
         this.store = store;
         this.taskId = taskId;
-        this.onCompletion = onCompletion;
         this.modelProvider = modelProvider;
         this.todoStore = todoStore;
         this.imageAgingOptions = imageAgingOptions;
@@ -95,7 +94,6 @@ public sealed class SubagentRunner : IDisposable
         ILogger logger,
         SubagentSessionStore store,
         string taskId,
-        Func<string, string, Task> onCompletion,
         IModelProvider modelProvider,
         InMemoryTodoStore? todoStore = null,
         IOptionsMonitor<ImageAgingConfig>? imageAgingOptions = null,
@@ -107,7 +105,6 @@ public sealed class SubagentRunner : IDisposable
         this.logger = logger;
         this.store = store;
         this.taskId = taskId;
-        this.onCompletion = onCompletion;
         this.modelProvider = modelProvider;
         this.todoStore = todoStore;
         this.imageAgingOptions = imageAgingOptions;
@@ -131,9 +128,10 @@ public sealed class SubagentRunner : IDisposable
     }
 
     /// <summary>
-    /// Run the subagent from scratch with the given prompts.
+    /// Run the subagent from scratch with the given prompts. Returns the terminal outcome
+    /// (state + result text) for the coordinator to persist exactly once.
     /// </summary>
-    public async Task<string> RunAsync(
+    public async Task<SubagentExecutionResult> RunAsync(
         string model,
         string systemPrompt,
         string userPrompt,
@@ -150,9 +148,10 @@ public sealed class SubagentRunner : IDisposable
     }
 
     /// <summary>
-    /// Resume from previously stored messages.
+    /// Resume from previously stored messages. Returns the terminal outcome
+    /// (state + result text) for the coordinator to persist exactly once.
     /// </summary>
-    public async Task<string> ResumeAsync(
+    public async Task<SubagentExecutionResult> ResumeAsync(
         string model,
         List<LlmMessage> existingMessages,
         string conversationId,
@@ -161,7 +160,20 @@ public sealed class SubagentRunner : IDisposable
         return await ExecuteAsync(model, existingMessages, conversationId, cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task<string> ExecuteAsync(
+    /// <summary>
+    /// Maps an <see cref="AgentLoopOutcome"/> to its terminal <see cref="SubagentTaskState"/> exactly
+    /// once. Only <see cref="AgentLoopOutcome.Completed"/> is a success; everything else is a failure.
+    /// </summary>
+    private static SubagentTaskState ToTerminalState(AgentLoopOutcome outcome) => outcome switch
+    {
+        AgentLoopOutcome.Completed => SubagentTaskState.Completed,
+        AgentLoopOutcome.Error => SubagentTaskState.Failed,
+        AgentLoopOutcome.DoomLoop => SubagentTaskState.Failed,
+        AgentLoopOutcome.MaxRoundsExceeded => SubagentTaskState.Failed,
+        _ => SubagentTaskState.Failed,
+    };
+
+    private async Task<SubagentExecutionResult> ExecuteAsync(
         string model,
         List<LlmMessage> messages,
         string conversationId,
@@ -216,18 +228,26 @@ public sealed class SubagentRunner : IDisposable
             responseText = lastWithContent?.Content ?? "[Subagent completed but produced no text response]";
         }
 
-        // Invoke completion callback for persistent mode
-        if (this.onCompletion is not null && this.taskId is not null)
+        // Persist the final assistant response so a later sub_agent_send can resume from it.
+        // The agent loop returns the final text WITHOUT appending it to the message history
+        // (the no-tool-call terminal path just returns), so we append it here for durability.
+        if (this.store is not null && this.taskId is not null
+            && result.Outcome == AgentLoopOutcome.Completed
+            && !string.IsNullOrWhiteSpace(responseText))
         {
-            if (result.Outcome != AgentLoopOutcome.Completed)
+            var last = messages.Count > 0 ? messages[^1] : null;
+            var alreadyPersisted = last is { Role: "assistant" }
+                && string.Equals(last.Content, responseText, StringComparison.Ordinal);
+            if (!alreadyPersisted)
             {
-                this.store?.UpdateState(this.taskId, SubagentTaskState.Failed, result: responseText);
+                messages.Add(new LlmMessage { Role = "assistant", Content = responseText });
+                this.store.UpdateMessages(this.taskId, messages, result.RoundsExecuted);
             }
-
-            await this.onCompletion(this.taskId, responseText).ConfigureAwait(false);
         }
 
-        return responseText;
+        // Terminal state ownership belongs to the coordinator: the runner only reports the
+        // outcome. It never writes a terminal state through the unguarded UpdateState path.
+        return new SubagentExecutionResult(ToTerminalState(result.Outcome), responseText);
     }
 
     public void Dispose()

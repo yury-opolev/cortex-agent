@@ -79,20 +79,26 @@ public sealed partial class SubAgentStopTool : IAgentTool
             case SubagentTaskState.Running or SubagentTaskState.Revising:
                 if (this.registry.TryCancel(taskId))
                 {
-                    // The runner's own catch/finally transitions state to Cancelled,
-                    // notifies the main agent, and dequeues the next task.
+                    // Cancelling the registry-owned token unwinds the loop; the coordinator's
+                    // per-task-cancel path records the terminal Cancelled state exactly once.
                     this.LogStopRequested(taskId);
                     return Task.FromResult(AgentToolResult.Ok(
                         $"Stopping subagent {taskId}. It will report as stopped shortly."));
                 }
 
-                // Store says running but no live runner (e.g. mid-transition) — mark stopped defensively.
-                this.store.UpdateState(taskId, SubagentTaskState.Cancelled, result: "[Subagent stopped]");
+                // Store says running but no live runner (e.g. mid-transition) — record stopped
+                // defensively through the guarded terminal write (never overwrites a real terminal).
+                this.store.TrySetTerminalResult(
+                    taskId, new SubagentExecutionResult(SubagentTaskState.Cancelled, "[Subagent stopped]"));
                 this.LogStopRequested(taskId);
                 return Task.FromResult(AgentToolResult.Ok($"Subagent {taskId} marked stopped."));
 
             case SubagentTaskState.Queued:
-                this.store.UpdateState(taskId, SubagentTaskState.Cancelled, result: "[Subagent stopped before starting]");
+                // Conditional terminal transition that creates a pending notification. Guarded, so it
+                // never writes Completed and never overwrites an already-terminal task.
+                this.store.TrySetTerminalResult(
+                    taskId,
+                    new SubagentExecutionResult(SubagentTaskState.Cancelled, "[Subagent stopped before starting]"));
                 this.LogQueuedCancelled(taskId);
                 return Task.FromResult(AgentToolResult.Ok($"Queued subagent {taskId} cancelled."));
 
