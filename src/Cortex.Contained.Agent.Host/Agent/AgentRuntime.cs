@@ -80,6 +80,13 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
     private readonly AgentMetrics? metrics;
     private readonly SubagentRunnerRegistry? subagentRegistry;
 
+    /// <summary>
+    /// Wakes the subagent execution coordinator's dispatch loop. Invoked after a completion
+    /// notification is released back to Pending so the coordinator re-scans and redelivers
+    /// immediately instead of waiting for an unrelated wake or a restart. Must never throw.
+    /// </summary>
+    private readonly Action? wakeSubagentCoordinator;
+
     // ── Extracted collaborators (constructed in the ctor from existing deps) ──
     private readonly PromptAssembler promptAssembler;
     private readonly CompactionOrchestrator compaction;
@@ -168,7 +175,8 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
         AgentMetrics? metrics = null,
         ILoggerFactory? loggerFactory = null,
         Memory.MemorySettingsStore? memorySettingsStore = null,
-        SubagentRunnerRegistry? subagentRegistry = null)
+        SubagentRunnerRegistry? subagentRegistry = null,
+        Action? wakeSubagentCoordinator = null)
     {
         this.subagentStore = subagentStore;
         this.todoResolver = todoResolver;
@@ -197,6 +205,7 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
         this.compactionOptions = compactionOptions;
         this.metrics = metrics;
         this.subagentRegistry = subagentRegistry;
+        this.wakeSubagentCoordinator = wakeSubagentCoordinator;
 
         // Construct the extracted collaborators from already-injected dependencies.
         // Done here (rather than via DI) so the many test construction sites that use
@@ -468,6 +477,34 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
             consumedSubagentTaskIds.Add(message.SubagentTaskId);
         }
 
+        // At-least-once guard: the release must cover EVERY exit path from the moment the
+        // claim set above exists — session resolution, slash commands, empty-message
+        // rejection, history persistence, and generation can all throw or return early.
+        // Anything the turn did not explicitly confirm Delivered is released back to
+        // Pending here so the coordinator redelivers it (instead of parking the claim
+        // Enqueued until restart).
+        try
+        {
+            await this.ProcessClaimedMessageAsync(message, behavior, consumedSubagentTaskIds, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            this.ReleaseSubagentNotifications(consumedSubagentTaskIds);
+        }
+    }
+
+    /// <summary>
+    /// The body of a turn, guarded by the caller's claim-release try/finally: resolves the
+    /// session, adds the message to history, runs the LLM generation loop, and streams the
+    /// response back through the Bridge. Any throw or early return here flows through the
+    /// caller's finally, which releases unconfirmed subagent completion notifications.
+    /// </summary>
+    private async Task ProcessClaimedMessageAsync(
+        AgentMessage message,
+        MessageSourceBehavior behavior,
+        HashSet<string> consumedSubagentTaskIds,
+        CancellationToken cancellationToken)
+    {
         // Scheduled tasks run in isolated ephemeral sessions (D12):
         // fresh empty session, no history, discard after execution.
         // Subagent completions are NOT ephemeral — they run on the parent conversation.
@@ -527,11 +564,11 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
         // Sanitize the input
         var sanitizedText = ContentSanitizer.Sanitize(messageText);
 
-        // Reject empty messages (e.g. voice attachments without transcription)
+        // Reject empty messages (e.g. voice attachments without transcription).
+        // Consumed notifications are released by the caller's claim-guard finally.
         if (string.IsNullOrWhiteSpace(sanitizedText) && message.Attachments is null or { Count: 0 })
         {
             this.LogEmptyMessageRejected(session.ConversationId, message.ChannelId);
-            this.ReleaseSubagentNotifications(consumedSubagentTaskIds);
             return;
         }
 
@@ -655,8 +692,8 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
 
             // At-least-once: any completion notification consumed by this turn but NOT
             // confirmed delivered (LLM error, delivery failure, cancellation, shutdown)
-            // is released back to Pending so the coordinator redelivers it.
-            this.ReleaseSubagentNotifications(consumedSubagentTaskIds);
+            // is released back to Pending by the caller's claim-guard finally, which
+            // also covers every failure BEFORE generation began (e.g. history persistence).
         }
     }
 
@@ -2115,12 +2152,14 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
             return;
         }
 
+        var releasedAny = false;
         foreach (var taskId in consumedSubagentTaskIds)
         {
             try
             {
                 if (this.subagentStore.ReleaseNotification(taskId))
                 {
+                    releasedAny = true;
                     this.LogSubagentNotificationReleased(taskId);
                 }
             }
@@ -2133,6 +2172,23 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
         }
 
         consumedSubagentTaskIds.Clear();
+
+        // Liveness: a release only writes Pending — the coordinator's dispatch loop is
+        // wake-driven, so without this signal nothing re-scans and the completion would
+        // sit Pending until an unrelated wake or a restart.
+        if (releasedAny && this.wakeSubagentCoordinator is not null)
+        {
+            try
+            {
+                this.wakeSubagentCoordinator();
+            }
+#pragma warning disable CA1031 // Runs in the turn's finally block — must never throw.
+            catch (Exception ex)
+#pragma warning restore CA1031
+            {
+                this.LogSubagentWakeCallbackFailed(ex.Message);
+            }
+        }
     }
 
     [LoggerMessage(Level = LogLevel.Information, Message = "[subagent-completion] Notification for {TaskId} confirmed delivered with the parent turn's response")]
@@ -2143,6 +2199,9 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "[subagent-completion] Notification state update failed for {TaskId}: {ErrorMessage}")]
     private partial void LogSubagentNotificationUpdateFailed(string taskId, string errorMessage);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "[subagent-completion] Coordinator wake callback failed after release: {ErrorMessage}")]
+    private partial void LogSubagentWakeCallbackFailed(string errorMessage);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Idle compaction performed for {ConversationId}: conversation summarized instead of wiped")]
     private partial void LogIdleCompactionPerformed(string conversationId);

@@ -646,7 +646,10 @@ builder.Services.AddSingleton(sp =>
         metrics: sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.AgentMetrics>(),
         loggerFactory: sp.GetRequiredService<ILoggerFactory>(),
         memorySettingsStore: sp.GetRequiredService<Cortex.Contained.Agent.Host.Memory.MemorySettingsStore>(),
-        subagentRegistry: sp.GetRequiredService<SubagentRunnerRegistry>()));
+        subagentRegistry: sp.GetRequiredService<SubagentRunnerRegistry>(),
+        // Loop-back edge of the at-least-once protocol: releasing a completion notification
+        // must wake the coordinator's dispatch loop so it re-scans and redelivers.
+        wakeSubagentCoordinator: sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.SubagentExecutionCoordinator>().SignalWorkAvailable));
 builder.Services.AddSingleton<IAgentRuntime>(sp => sp.GetRequiredService<AgentRuntime>());
 
 // Bootstrap context store removed — replaced by self-notes

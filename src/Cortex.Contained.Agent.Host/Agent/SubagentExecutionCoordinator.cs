@@ -369,12 +369,27 @@ public sealed partial class SubagentExecutionCoordinator : IHostedService, IDisp
                 this.store.ReleaseNotification(task.TaskId);
                 throw;
             }
+            catch (ChannelClosedException ex)
+            {
+                // The inbound message channel is completed (host shutting down): release so
+                // the next start's recovery redelivers, but do NOT re-signal — the channel
+                // never reopens in this process, so an immediate re-scan would spin until
+                // StopAsync cancels the loop.
+                this.store.ReleaseNotification(task.TaskId);
+                this.LogCompletionEnqueueFailed(task.TaskId, ex.Message);
+                return;
+            }
 #pragma warning disable CA1031 // A failed enqueue must release the claim, never lose it.
             catch (Exception ex)
 #pragma warning restore CA1031
             {
                 this.store.ReleaseNotification(task.TaskId);
                 this.LogCompletionEnqueueFailed(task.TaskId, ex.Message);
+
+                // Liveness: this pass ends on a transient failure. Without a self-signal the
+                // released claim would wait for an unrelated wake — re-signal so the dispatch
+                // loop always runs another pass and retries.
+                this.SignalWorkAvailable();
                 return;
             }
         }

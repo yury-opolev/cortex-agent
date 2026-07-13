@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using Cortex.Contained.Agent.Host.Agent;
 using Cortex.Contained.Agent.Host.Hubs;
 using Cortex.Contained.Agent.Host.Memory;
+using Cortex.Contained.Agent.Host.Storage;
 using Cortex.Contained.Agent.Host.Tools;
 using Cortex.Contained.Contracts.Config;
 using Cortex.Contained.Contracts.Hub;
@@ -1269,6 +1270,69 @@ public sealed class AgentRuntimeSubagentCompletionTests : IAsyncDisposable
 
         await WaitUntilAsync(() => NotificationState("sa-cxl") == SubagentNotificationState.Pending);
         entered.Dispose();
+    }
+
+    [Fact]
+    public async Task SubagentCompletion_SaveMessageFailure_ReleasesForRetry()
+    {
+        // The inbound-message persistence (messageStore.SaveMessageAsync) throws BEFORE the
+        // turn's generation begins. The claim guard must cover this window too: the consumed
+        // notification is released back to Pending, never parked Enqueued until restart.
+        var failingStore = Substitute.For<IMessageStore>();
+        failingStore.SaveMessageAsync(
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Any<DateTimeOffset>(), Arg.Any<string?>(), Arg.Any<MessageCategory>(),
+                Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<long>(new InvalidOperationException("message store unavailable")));
+
+        var sessionConfig = new SessionConfig();
+        var sessions = new AgentSessionStore(sessionConfig, new MemorySettingsStore(), NullLogger<AgentSessionStore>.Instance);
+        var activeChannelStore = new ActiveChannelStore();
+        var toolRegistry = new ToolRegistry([], activeChannelStore, NullLogger<ToolRegistry>.Instance);
+        var channel = new AgentMessageChannel();
+
+        var hubContext = Substitute.For<IHubContext<AgentHub, IAgentHubClient>>();
+        var hubClients = Substitute.For<IHubClients<IAgentHubClient>>();
+        hubContext.Clients.Returns(hubClients);
+        var bridgeAccessor = new BridgeClientAccessor(hubContext);
+        hubClients.Client(Arg.Any<string>()).Returns(_mockCaller);
+        bridgeAccessor.SetConnectionId("test-conn");
+
+        var imageAgingMonitor = Substitute.For<IOptionsMonitor<ImageAgingConfig>>();
+        imageAgingMonitor.CurrentValue.Returns(new ImageAgingConfig());
+
+        var runtime = new AgentRuntime(
+            sessions,
+            _mockLlmClient,
+            toolRegistry,
+            sessionConfig,
+            channel,
+            bridgeAccessor,
+            activeChannelStore,
+            Substitute.For<IHttpClientFactory>(),
+            Path.GetTempPath(),
+            _tempDir,
+            NullLogger<AgentRuntime>.Instance,
+            new ModelProvider(),
+            imageAgingMonitor,
+            messageStore: failingStore,
+            subagentStore: _subagentStore);
+
+        try
+        {
+            await runtime.StartProcessingAsync(CancellationToken.None);
+            SeedEnqueuedCompletion("sa-save", "conv-save");
+            _mockLlmClient.StreamCompleteAsync(Arg.Any<LlmCompletionRequest>(), Arg.Any<CancellationToken>())
+                .Returns(SingleChunkStream("never reached"));
+
+            await channel.EnqueueAsync(CompletionMessage("sa-save", "conv-save"));
+
+            await WaitUntilAsync(() => NotificationState("sa-save") == SubagentNotificationState.Pending);
+        }
+        finally
+        {
+            await runtime.StopProcessingAsync(CancellationToken.None);
+        }
     }
 
     [Fact]
