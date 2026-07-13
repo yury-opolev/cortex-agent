@@ -497,14 +497,10 @@ builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Agent.ISubagentExecuto
     new Cortex.Contained.Agent.Host.Agent.SubagentExecutor(
         sp.GetRequiredService<SubagentRunnerRegistry>(),
         sp.GetRequiredService<ILlmClient>(),
-        () => sp.GetRequiredService<ToolRegistry>(),
         sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.IModelProvider>(),
-        sp.GetRequiredService<IOptionsMonitor<AgentConfig>>(),
-        sp.GetRequiredService<SubagentSessionStore>(),
         stateRoot,
         sp.GetRequiredService<ILogger<Cortex.Contained.Agent.Host.Agent.SubagentExecutor>>(),
         sp.GetRequiredService<IMemoryService>(),
-        sp.GetRequiredService<InMemoryTodoStore>(),
         sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.SkillRegistry>(),
         sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.SystemPromptStore>()));
 

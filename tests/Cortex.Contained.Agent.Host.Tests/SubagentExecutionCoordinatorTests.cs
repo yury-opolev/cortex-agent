@@ -172,6 +172,31 @@ public sealed class SubagentExecutionCoordinatorTests : IDisposable
         Assert.Equal(0, harness.Registry.ActiveCount);
     }
 
+    // ── Readiness gating ─────────────────────────────────────────────────
+
+    [Fact]
+    public async Task NotReady_QueuedTask_IsNotDispatched()
+    {
+        SeedQueued("sa-gated", SubagentRunMode.New);
+        var executor = new RecordingExecutor();
+        await using var harness = this.StartHarness(executor, maxConcurrent: 2);
+
+        // Only two of the three readiness signals — the MCP catalog is still missing.
+        harness.Coordinator.OnBridgeConnected();
+        harness.Coordinator.MarkCredentialsReady(true);
+        harness.Coordinator.SignalWorkAvailable();
+
+        // The queued task must stay unclaimed for the whole observation window.
+        await AssertNeverAsync(() =>
+            executor.CallCount > 0 || _store.GetById("sa-gated")!.State != SubagentTaskState.Queued);
+
+        // The last readiness signal opens the gate and the queued task dispatches.
+        harness.Coordinator.MarkMcpCatalogReady();
+
+        await WaitUntilAsync(() => executor.CallCount > 0);
+        await WaitUntilAsync(() => _store.GetById("sa-gated")!.State == SubagentTaskState.Completed);
+    }
+
     // ── Host shutdown ────────────────────────────────────────────────────
 
     [Fact]
@@ -253,6 +278,17 @@ public sealed class SubagentExecutionCoordinatorTests : IDisposable
 
         coordinator.StartAsync(CancellationToken.None).GetAwaiter().GetResult();
         return new Harness(coordinator, registry);
+    }
+
+    /// <summary>Polls for the whole window and fails as soon as the condition becomes true.</summary>
+    private static async Task AssertNeverAsync(Func<bool> condition, int windowMs = 300)
+    {
+        var sw = Stopwatch.StartNew();
+        while (sw.ElapsedMilliseconds < windowMs)
+        {
+            Assert.False(condition());
+            await Task.Delay(15).ConfigureAwait(false);
+        }
     }
 
     private static async Task WaitUntilAsync(Func<bool> condition, int timeoutMs = 5000)

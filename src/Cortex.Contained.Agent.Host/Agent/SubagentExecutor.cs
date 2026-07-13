@@ -1,11 +1,8 @@
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
-using Cortex.Contained.Agent.Host.Tools;
-using Cortex.Contained.Contracts.Config;
 using Cortex.Contained.Contracts.Llm;
 using MemoryMcp.Core.Services;
-using Microsoft.Extensions.Options;
 
 namespace Cortex.Contained.Agent.Host.Agent;
 
@@ -20,17 +17,11 @@ internal sealed partial class SubagentExecutor : ISubagentExecutor
 {
     private readonly SubagentRunnerRegistry registry;
     private readonly ILlmClient llmClient;
-    private readonly Func<ToolRegistry> toolRegistryFactory;
     private readonly IModelProvider modelProvider;
-    private readonly IOptionsMonitor<AgentConfig> agentConfig;
-    private readonly SubagentSessionStore store;
     private readonly string bootstrapContextPath;
     private readonly IMemoryService? memoryService;
-    private readonly InMemoryTodoStore? todoStore;
     private readonly SkillRegistry? skillRegistry;
     private readonly SystemPromptStore? systemPromptStore;
-    private readonly IOptionsMonitor<ImageAgingConfig>? imageAgingOptions;
-    private readonly IImageDescriber? imageDescriber;
     private readonly ILogger<SubagentExecutor> logger;
 
     /// <summary>Maximum memories to inject into subagent context.</summary>
@@ -42,33 +33,21 @@ internal sealed partial class SubagentExecutor : ISubagentExecutor
     public SubagentExecutor(
         SubagentRunnerRegistry registry,
         ILlmClient llmClient,
-        Func<ToolRegistry> toolRegistryFactory,
         IModelProvider modelProvider,
-        IOptionsMonitor<AgentConfig> agentConfig,
-        SubagentSessionStore store,
         string stateRoot,
         ILogger<SubagentExecutor> logger,
         IMemoryService? memoryService = null,
-        InMemoryTodoStore? todoStore = null,
         SkillRegistry? skillRegistry = null,
-        SystemPromptStore? systemPromptStore = null,
-        IOptionsMonitor<ImageAgingConfig>? imageAgingOptions = null,
-        IImageDescriber? imageDescriber = null)
+        SystemPromptStore? systemPromptStore = null)
     {
         this.registry = registry;
         this.llmClient = llmClient;
-        this.toolRegistryFactory = toolRegistryFactory;
         this.modelProvider = modelProvider;
-        this.agentConfig = agentConfig;
-        this.store = store;
         this.bootstrapContextPath = Path.Combine(stateRoot, "context-bootstrap.md");
         this.logger = logger;
         this.memoryService = memoryService;
-        this.todoStore = todoStore;
         this.skillRegistry = skillRegistry;
         this.systemPromptStore = systemPromptStore;
-        this.imageAgingOptions = imageAgingOptions;
-        this.imageDescriber = imageDescriber;
     }
 
     /// <inheritdoc />
@@ -77,7 +56,11 @@ internal sealed partial class SubagentExecutor : ISubagentExecutor
     {
         // Use ONLY the runner the coordinator registered for this task, so a concurrent
         // sub_agent_send injecting into registry.TryGet(taskId) reaches the executing loop.
-        var runner = this.registry.TryGet(task.TaskId) ?? this.CreateRunner(task.TaskId);
+        // The coordinator always registers a runner before dispatching; a missing runner is
+        // a programming error, surfaced as a Failed task by the coordinator's crash handler.
+        var runner = this.registry.TryGet(task.TaskId)
+            ?? throw new InvalidOperationException(
+                $"No runner registered for task '{task.TaskId}' — register one before dispatching.");
         var model = this.modelProvider.DefaultModel;
 
         switch (task.RunMode)
@@ -112,19 +95,6 @@ internal sealed partial class SubagentExecutor : ISubagentExecutor
             default:
                 throw new InvalidOperationException($"Unknown run mode {task.RunMode}.");
         }
-    }
-
-    /// <summary>
-    /// Defensive fallback runner used only when no runner is registered for the task (e.g. a direct
-    /// executor invocation). The coordinator normally registers the runner before dispatching.
-    /// </summary>
-    private SubagentRunner CreateRunner(string taskId)
-    {
-        var maxRounds = this.agentConfig.CurrentValue.MaxSubagentRounds;
-        return new SubagentRunner(
-            this.llmClient, this.toolRegistryFactory(), maxRounds, this.logger,
-            this.store, taskId, this.modelProvider, this.todoStore,
-            this.imageAgingOptions, this.imageDescriber);
     }
 
     private const string ContextQueryPrompt = """

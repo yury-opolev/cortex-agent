@@ -276,8 +276,12 @@ public sealed partial class SubagentExecutionCoordinator : IHostedService, IDisp
         catch (OperationCanceledException) when (stopping.IsCancellationRequested)
         {
             // Host shutdown: REQUEUE in-flight work instead of recording a terminal failure.
-            this.store.Requeue(taskId);
-            this.LogRequeuedOnShutdown(taskId);
+            // A task that already went terminal (e.g. user-cancelled just before shutdown)
+            // is left as-is — the store refuses to resurrect it.
+            if (this.store.Requeue(taskId))
+            {
+                this.LogRequeuedOnShutdown(taskId);
+            }
         }
         catch (OperationCanceledException)
         {

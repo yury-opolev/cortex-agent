@@ -553,12 +553,17 @@ public sealed partial class SubagentSessionStore : SqliteStoreBase
 
     /// <summary>
     /// Put a task back into the dispatch queue (e.g. when a claimed task could not
-    /// actually start). Clears completed_at and counts the restart.
+    /// actually start). Clears completed_at and counts the restart. A task that already
+    /// reached a terminal state (completed/failed/cancelled) is never resurrected —
+    /// same guard as <see cref="TrySetTerminalResult"/>, so a user-cancelled task whose
+    /// runner unwinds during host shutdown stays cancelled. Returns false when the task
+    /// is unknown or already terminal.
     /// </summary>
-    public void Requeue(string taskId)
+    public bool Requeue(string taskId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(taskId);
 
+        int affected;
         lock (this.syncLock)
         {
             using var cmd = this.Connection.CreateCommand();
@@ -569,13 +574,19 @@ public sealed partial class SubagentSessionStore : SqliteStoreBase
                     restart_count = restart_count + 1,
                     last_progress_at = $now
                 WHERE task_id = $taskId
+                  AND state NOT IN ('completed', 'failed', 'cancelled')
                 """;
             cmd.Parameters.AddWithValue("$taskId", taskId);
             cmd.Parameters.AddWithValue("$now", FormatDto(DateTimeOffset.UtcNow));
-            cmd.ExecuteNonQuery();
+            affected = cmd.ExecuteNonQuery();
         }
 
-        this.LogTaskStateChanged(taskId, "queued");
+        if (affected > 0)
+        {
+            this.LogTaskStateChanged(taskId, "queued");
+        }
+
+        return affected > 0;
     }
 
     // ── Notification delivery ────────────────────────────────────────────

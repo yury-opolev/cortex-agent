@@ -422,13 +422,32 @@ public class SubagentSessionStoreTests : IDisposable
         var task = CreateTask("sa-054", "Requeue me", SubagentTaskState.Running);
         _store.Create(task);
 
-        _store.Requeue("sa-054");
+        var requeued = _store.Requeue("sa-054");
 
+        Assert.True(requeued);
         var reloaded = _store.GetById("sa-054");
         Assert.NotNull(reloaded);
         Assert.Equal(SubagentTaskState.Queued, reloaded.State);
         Assert.Null(reloaded.CompletedAt);
         Assert.Equal(1, reloaded.RestartCount);
+    }
+
+    [Fact]
+    public void Requeue_TerminalCancelledTask_IsNotResurrected()
+    {
+        _store.Create(CreateTask("sa-055", "Cancelled stays cancelled", SubagentTaskState.Running));
+        _store.TrySetTerminalResult(
+            "sa-055", new SubagentExecutionResult(SubagentTaskState.Cancelled, "[stopped]"));
+
+        var requeued = _store.Requeue("sa-055");
+
+        Assert.False(requeued);
+        var reloaded = _store.GetById("sa-055");
+        Assert.NotNull(reloaded);
+        Assert.Equal(SubagentTaskState.Cancelled, reloaded.State); // NOT resurrected to queued
+        Assert.Equal("[stopped]", reloaded.Result);
+        Assert.NotNull(reloaded.CompletedAt);
+        Assert.Equal(0, reloaded.RestartCount);
     }
 
     // ── Notification queue ───────────────────────────────────────────────
