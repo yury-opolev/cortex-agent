@@ -213,13 +213,42 @@ public sealed partial class SubagentExecutionCoordinator : IHostedService, IDisp
                 {
                 }
 
-                this.DispatchReadyWork(stopping);
-                await this.EnqueuePendingNotificationsAsync(stopping).ConfigureAwait(false);
+                try
+                {
+                    this.DispatchReadyWork(stopping);
+                    await this.EnqueuePendingNotificationsAsync(stopping).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (stopping.IsCancellationRequested)
+                {
+                    // Host shutdown — propagate to exit the loop cleanly.
+                    throw;
+                }
+                catch (ChannelClosedException)
+                {
+                    // The inbound message channel is completed (host shutting down); it never
+                    // reopens in this process, so propagate to exit the loop cleanly instead of
+                    // spinning on a channel that can no longer accept work.
+                    throw;
+                }
+#pragma warning disable CA1031 // One iteration's failure must not permanently kill the subsystem.
+                catch (Exception ex)
+#pragma warning restore CA1031
+                {
+                    // An unexpected store/enqueue error (e.g. a transient SqliteException from a
+                    // claim/requeue) must NOT exit the loop — that would silently freeze the whole
+                    // subagent subsystem until a restart. Log it and CONTINUE to the next wake so a
+                    // later signal still dispatches queued work and delivers completions.
+                    this.LogDispatchLoopIterationFailed(ex.Message);
+                }
             }
         }
         catch (OperationCanceledException)
         {
             // Normal shutdown.
+        }
+        catch (ChannelClosedException)
+        {
+            // Normal shutdown (inbound message channel completed).
         }
 #pragma warning disable CA1031 // The dispatch loop must never crash the host.
         catch (Exception ex)
@@ -457,6 +486,9 @@ public sealed partial class SubagentExecutionCoordinator : IHostedService, IDisp
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "[subagent-coordinator] Dispatch loop failed: {ErrorMessage}")]
     private partial void LogDispatchLoopFailed(string errorMessage);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "[subagent-coordinator] Dispatch loop iteration failed; continuing to next wake: {ErrorMessage}")]
+    private partial void LogDispatchLoopIterationFailed(string errorMessage);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "[subagent-coordinator] Shutdown wait interrupted: {ErrorMessage}")]
     private partial void LogShutdownWaitInterrupted(string errorMessage);

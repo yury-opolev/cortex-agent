@@ -1,5 +1,6 @@
 using Cortex.Contained.Bridge.Channels;
 using Cortex.Contained.Bridge.Hosting;
+using Cortex.Contained.Bridge.Mcp;
 using Cortex.Contained.Contracts.Config;
 using Cortex.Contained.Contracts.Hub;
 
@@ -28,6 +29,7 @@ public sealed partial class Worker : BackgroundService
     private readonly ChannelLifecycleManager channelLifecycle;
     private readonly TenantConnectionBootstrapper connectionBootstrapper;
     private readonly CredentialsPusher credentialsPusher;
+    private readonly McpCatalogPusher? mcpCatalogPusher;
     private readonly ILogger<Worker> logger;
 
     public Worker(
@@ -39,7 +41,8 @@ public sealed partial class Worker : BackgroundService
         TenantConnectionBootstrapper connectionBootstrapper,
         CredentialsPusher credentialsPusher,
         ILogger<Worker> logger,
-        Tenants.IContainerManager? containerManager = null)
+        Tenants.IContainerManager? containerManager = null,
+        McpCatalogPusher? mcpCatalogPusher = null)
     {
         this.tenantRouter = tenantRouter;
         this.channelManager = channelManager;
@@ -49,6 +52,7 @@ public sealed partial class Worker : BackgroundService
         this.connectionBootstrapper = connectionBootstrapper;
         this.credentialsPusher = credentialsPusher;
         this.containerManager = containerManager;
+        this.mcpCatalogPusher = mcpCatalogPusher;
         this.logger = logger;
     }
 
@@ -142,6 +146,13 @@ public sealed partial class Worker : BackgroundService
                             await this.credentialsPusher.PushMemorySettingsAsync(stoppingToken).ConfigureAwait(false);
                             await this.credentialsPusher.PushAgentConfigAsync(stoppingToken).ConfigureAwait(false);
 
+                            // The agent resets its MCP-catalog readiness on (re)connect, and this
+                            // watchdog rebuild fires neither OnClientConnected (WireMcp's initial push)
+                            // nor HubConnection.Reconnected (the only other re-push trigger). Without
+                            // this push the agent's mcpCatalogReady stays false forever and the whole
+                            // subagent subsystem silently freezes until a Bridge restart.
+                            await this.PushMcpCatalogSafelyAsync(stoppingToken).ConfigureAwait(false);
+
                             consecutiveDisconnectedTicks = 0;
                             this.LogConnectionRebuilt();
                         }
@@ -193,6 +204,34 @@ public sealed partial class Worker : BackgroundService
                 await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
                 delay = TimeSpan.FromSeconds(Math.Min(delay.TotalSeconds * 2, 60));
             }
+        }
+    }
+
+    /// <summary>
+    /// Pushes the current MCP tool catalog to the reconnected agent, isolating any push failure so
+    /// it never aborts the watchdog rebuild. Mirrors
+    /// <see cref="TenantConnectionBootstrapper.PushMcpCatalogSafelyAsync"/>: on the normal connect
+    /// path the bootstrapper's <c>WireMcp</c> (initial push) and <c>HubConnection.Reconnected</c>
+    /// re-push keep the agent's catalog fresh, but the watchdog rebuild reuses the existing
+    /// <see cref="Hub.HubClient"/> and fires neither, so the Worker must re-push the catalog itself.
+    /// An empty catalog is a valid push — the agent treats empty as ready.
+    /// </summary>
+    internal async Task PushMcpCatalogSafelyAsync(CancellationToken cancellationToken)
+    {
+        if (this.mcpCatalogPusher is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await this.mcpCatalogPusher.PushCurrentCatalogAsync(cancellationToken).ConfigureAwait(false);
+        }
+#pragma warning disable CA1031 // A catalog-push failure must not abort the watchdog rebuild.
+        catch (Exception ex) when (ex is not OperationCanceledException)
+#pragma warning restore CA1031
+        {
+            this.LogMcpCatalogRepushFailed(ex.Message);
         }
     }
 
@@ -284,6 +323,9 @@ public sealed partial class Worker : BackgroundService
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Agent Hub connection rebuild failed: {ErrorMessage}")]
     private partial void LogConnectionRebuildFailed(string errorMessage);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "MCP catalog re-push after connection rebuild failed: {ErrorMessage}")]
+    private partial void LogMcpCatalogRepushFailed(string errorMessage);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Stopping {Count} agent container(s)...")]
     private partial void LogStoppingContainers(int count);

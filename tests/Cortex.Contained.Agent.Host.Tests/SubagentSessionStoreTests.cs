@@ -168,49 +168,6 @@ public class SubagentSessionStoreTests : IDisposable
         Assert.Null(_store.TryClaimOldestQueued()); // nothing left queued
     }
 
-    // ── Update state ─────────────────────────────────────────────────────
-
-    [Fact]
-    public void UpdateState_ChangesStateAndResult()
-    {
-        _store.Create(CreateTask("sa-010", "Update test"));
-
-        _store.UpdateState("sa-010", SubagentTaskState.Completed, result: "Done!", evalResponse: "Task completed.");
-
-        var task = _store.GetById("sa-010");
-        Assert.NotNull(task);
-        Assert.Equal(SubagentTaskState.Completed, task.State);
-        Assert.Equal("Done!", task.Result);
-        Assert.Equal("Task completed.", task.EvalResponse);
-        Assert.NotNull(task.CompletedAt);
-    }
-
-    [Fact]
-    public void UpdateState_ToFailed_SetsCompletedAt()
-    {
-        _store.Create(CreateTask("sa-011", "Fail test"));
-
-        _store.UpdateState("sa-011", SubagentTaskState.Failed, result: "Error occurred");
-
-        var task = _store.GetById("sa-011");
-        Assert.NotNull(task);
-        Assert.Equal(SubagentTaskState.Failed, task.State);
-        Assert.NotNull(task.CompletedAt);
-    }
-
-    [Fact]
-    public void UpdateState_ToRevising_DoesNotSetCompletedAt()
-    {
-        _store.Create(CreateTask("sa-012", "Revise test"));
-
-        _store.UpdateState("sa-012", SubagentTaskState.Revising);
-
-        var task = _store.GetById("sa-012");
-        Assert.NotNull(task);
-        Assert.Equal(SubagentTaskState.Revising, task.State);
-        Assert.Null(task.CompletedAt);
-    }
-
     // ── Update messages ──────────────────────────────────────────────────
 
     [Fact]
@@ -585,10 +542,10 @@ public class SubagentSessionStoreTests : IDisposable
     [Fact]
     public void Cleanup_PreservesRecentTasks()
     {
-        var task = CreateTask("sa-recent", "Recent task", SubagentTaskState.Completed);
+        var task = CreateTask("sa-recent", "Recent task", SubagentTaskState.Running);
         task.Messages = [new LlmMessage { Role = "user", Content = "test" }];
         _store.Create(task);
-        _store.UpdateState("sa-recent", SubagentTaskState.Completed, result: "Done");
+        _store.TrySetTerminalResult("sa-recent", new SubagentExecutionResult(SubagentTaskState.Completed, "Done"));
 
         _store.Cleanup();
 
@@ -665,7 +622,7 @@ public class SubagentSessionStoreTests : IDisposable
     }
 
     [Fact]
-    public void UpdateState_Cancelled_SetsCompletedAt_AndExcludesFromQueue()
+    public void TrySetTerminalResult_Cancelled_SetsCompletedAt_AndExcludesFromQueue()
     {
         var task = new SubagentTask
         {
@@ -678,13 +635,56 @@ public class SubagentSessionStoreTests : IDisposable
         };
         _store.Create(task);
 
-        _store.UpdateState("sa-cancel-1", SubagentTaskState.Cancelled, result: "[Subagent stopped]");
+        // The guarded terminal write is the queued-cancel path used by sub_agent_stop.
+        _store.TrySetTerminalResult(
+            "sa-cancel-1", new SubagentExecutionResult(SubagentTaskState.Cancelled, "[Subagent stopped]"));
 
         var reloaded = _store.GetById("sa-cancel-1");
         Assert.NotNull(reloaded);
         Assert.Equal(SubagentTaskState.Cancelled, reloaded!.State);
         Assert.NotNull(reloaded.CompletedAt);            // terminal → completed_at stamped
         Assert.Null(_store.GetOldestQueued());            // cancelled is not queued
+    }
+
+    // ── Notification redelivery backoff (I2) ─────────────────────────────
+
+    [Fact]
+    public void TryClaimOldestPendingNotification_FirstRetryIsImmediate()
+    {
+        _store.Create(CreateTask("sa-imm", "Transient failure", SubagentTaskState.Running));
+        _store.TrySetTerminalResult("sa-imm", new SubagentExecutionResult(SubagentTaskState.Completed, "done"));
+
+        // First claim (attempts 0→1), then release → pending with a fresh notification_updated_at.
+        Assert.NotNull(_store.TryClaimOldestPendingNotification());
+        Assert.True(_store.ReleaseNotification("sa-imm"));
+
+        // attempts == 1: a single transient failure must redeliver IMMEDIATELY (no backoff),
+        // even though notification_updated_at was just stamped.
+        var retried = _store.TryClaimOldestPendingNotification();
+        Assert.NotNull(retried);
+        Assert.Equal("sa-imm", retried!.TaskId);
+        Assert.Equal(2, retried.NotificationAttempts);
+    }
+
+    [Fact]
+    public void TryClaimOldestPendingNotification_ThrottlesPersistentFailureThenClaimsAfterDelay()
+    {
+        _store.Create(CreateTask("sa-backoff", "Persistent failure", SubagentTaskState.Running));
+        _store.TrySetTerminalResult("sa-backoff", new SubagentExecutionResult(SubagentTaskState.Completed, "done"));
+
+        // Simulate a notification that has already failed several times and was JUST released:
+        // attempts high, notification_updated_at = now → still inside the exponential backoff window.
+        SetNotification("sa-backoff", attempts: 4, updatedAt: DateTimeOffset.UtcNow);
+
+        // Immediately-following pass: throttled — NOT re-enqueued (backoff observed).
+        Assert.Null(_store.TryClaimOldestPendingNotification());
+
+        // Once the backoff window has elapsed, the SAME notification IS claimable again.
+        SetNotification("sa-backoff", attempts: 4, updatedAt: DateTimeOffset.UtcNow - TimeSpan.FromMinutes(10));
+        var reclaimed = _store.TryClaimOldestPendingNotification();
+        Assert.NotNull(reclaimed);
+        Assert.Equal("sa-backoff", reclaimed!.TaskId);
+        Assert.Equal(5, reclaimed.NotificationAttempts); // incremented on claim
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────
@@ -720,6 +720,29 @@ public class SubagentSessionStoreTests : IDisposable
         cmd.CommandText = "UPDATE subagent_tasks SET completed_at = $completedAt WHERE task_id = $taskId";
         cmd.Parameters.AddWithValue("$taskId", taskId);
         cmd.Parameters.AddWithValue("$completedAt", completedAt.UtcDateTime.ToString("O", CultureInfo.InvariantCulture));
+        cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>
+    /// Directly set a pending notification's attempt count and last-attempt timestamp, so the
+    /// deterministic exponential-backoff window can be exercised without a fake clock.
+    /// </summary>
+    private void SetNotification(string taskId, int attempts, DateTimeOffset updatedAt)
+    {
+        var dbPath = Path.Combine(_tempDir, "subagents", "subagents.db");
+        using var conn = new SqliteConnection($"Data Source={dbPath}");
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            UPDATE subagent_tasks
+            SET notification_state = 'pending',
+                notification_attempts = $attempts,
+                notification_updated_at = $updatedAt
+            WHERE task_id = $taskId
+            """;
+        cmd.Parameters.AddWithValue("$taskId", taskId);
+        cmd.Parameters.AddWithValue("$attempts", attempts);
+        cmd.Parameters.AddWithValue("$updatedAt", updatedAt.UtcDateTime.ToString("O", CultureInfo.InvariantCulture));
         cmd.ExecuteNonQuery();
     }
 }

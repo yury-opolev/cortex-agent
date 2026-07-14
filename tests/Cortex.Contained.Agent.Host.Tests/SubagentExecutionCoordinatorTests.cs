@@ -233,6 +233,45 @@ public sealed class SubagentExecutionCoordinatorTests : IDisposable
         }
     }
 
+    // ── Dispatch-loop resilience (I1) ────────────────────────────────────
+
+    [Fact]
+    public async Task DispatchIteration_ThrowsOnce_LoopSurvivesAndNextTaskDispatches()
+    {
+        // sa-boom is claimed first; the runner factory throws on that first dispatch, simulating an
+        // unexpected error inside a dispatch iteration (e.g. a transient store/Sqlite exception).
+        // The per-iteration guard must log and CONTINUE — not exit the loop — so a subsequently
+        // enqueued task still dispatches. (The store is sealed/concrete, so the throw is injected
+        // through the coordinator's runner factory, which runs inside the same guarded iteration.)
+        SeedQueued("sa-boom", SubagentRunMode.New, createdAt: DateTimeOffset.UtcNow);
+        var executor = new RecordingExecutor();
+        var throwNext = true;
+
+        SubagentRunner FaultyFactory(SubagentTask _)
+        {
+            if (Volatile.Read(ref throwNext))
+            {
+                Volatile.Write(ref throwNext, false);
+                throw new InvalidOperationException("simulated transient store failure");
+            }
+
+            return NewRunner();
+        }
+
+        await using var harness = this.StartHarness(executor, maxConcurrent: 2, runnerFactory: FaultyFactory);
+        harness.MarkAllReady();
+
+        // Wait until the faulty first dispatch has been consumed (throwNext flipped to false).
+        await WaitUntilAsync(() => !Volatile.Read(ref throwNext));
+
+        // The loop survived: a newly enqueued task still dispatches and completes.
+        SeedQueued("sa-ok", SubagentRunMode.New, createdAt: DateTimeOffset.UtcNow.AddSeconds(1));
+        harness.Coordinator.SignalWorkAvailable();
+
+        await WaitUntilAsync(() => _store.GetById("sa-ok")!.State == SubagentTaskState.Completed);
+        Assert.Equal(SubagentTaskState.Completed, _store.GetById("sa-ok")!.State);
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────
 
     private void SeedQueued(
@@ -258,11 +297,14 @@ public sealed class SubagentExecutionCoordinatorTests : IDisposable
         _store.Create(task);
     }
 
-    private Harness StartHarness(ISubagentExecutor executor, int maxConcurrent)
+    private Harness StartHarness(
+        ISubagentExecutor executor,
+        int maxConcurrent,
+        Func<SubagentTask, SubagentRunner>? runnerFactory = null)
     {
         var registry = new SubagentRunnerRegistry(maxConcurrent, NullLogger<SubagentRunnerRegistry>.Instance);
 
-        SubagentRunner RunnerFactory(SubagentTask _) => new(
+        SubagentRunner DefaultRunnerFactory(SubagentTask _) => new(
             Substitute.For<ILlmClient>(),
             new ToolRegistry([], new ActiveChannelStore(), NullLogger<ToolRegistry>.Instance),
             10,
@@ -272,13 +314,19 @@ public sealed class SubagentExecutionCoordinatorTests : IDisposable
             _store,
             registry,
             executor,
-            RunnerFactory,
+            runnerFactory ?? DefaultRunnerFactory,
             new AgentMessageChannel(),
             NullLogger<SubagentExecutionCoordinator>.Instance);
 
         coordinator.StartAsync(CancellationToken.None).GetAwaiter().GetResult();
         return new Harness(coordinator, registry);
     }
+
+    private static SubagentRunner NewRunner() => new(
+        Substitute.For<ILlmClient>(),
+        new ToolRegistry([], new ActiveChannelStore(), NullLogger<ToolRegistry>.Instance),
+        10,
+        NullLogger<SubagentRunner>.Instance);
 
     /// <summary>Polls for the whole window and fails as soon as the condition becomes true.</summary>
     private static async Task AssertNeverAsync(Func<bool> condition, int windowMs = 300)

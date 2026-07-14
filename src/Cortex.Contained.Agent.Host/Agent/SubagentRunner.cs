@@ -7,8 +7,9 @@ namespace Cortex.Contained.Agent.Host.Agent;
 
 /// <summary>
 /// Thin wrapper around <see cref="AgentLoop"/> for subagent execution.
-/// Provides the public API consumed by <see cref="Tools.BuiltIn.SubAgentStartTool"/>,
-/// <see cref="Tools.BuiltIn.SubAgentSendTool"/>, and <see cref="SubagentRunnerRegistry"/>.
+/// Created and run by <see cref="SubagentExecutionCoordinator"/> (via its runner factory and
+/// <see cref="ISubagentExecutor"/>), tracked/cancelled through <see cref="SubagentRunnerRegistry"/>,
+/// and fed additional input by <see cref="Tools.BuiltIn.SubAgentSendTool"/> (<see cref="InjectMessage"/>).
 /// All loop logic is delegated to <see cref="AgentLoop"/> with <see cref="SubagentCallbacks"/>.
 /// </summary>
 public sealed class SubagentRunner : IDisposable

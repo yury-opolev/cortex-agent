@@ -552,6 +552,7 @@ builder.Services.AddSingleton<IAgentTool>(sp =>
     new SubAgentStopTool(
         sp.GetRequiredService<SubagentSessionStore>(),
         sp.GetRequiredService<SubagentRunnerRegistry>(),
+        sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.SubagentExecutionCoordinator>(),
         sp.GetRequiredService<ILogger<SubAgentStopTool>>()));
 
 // --- Todo List Infrastructure ---

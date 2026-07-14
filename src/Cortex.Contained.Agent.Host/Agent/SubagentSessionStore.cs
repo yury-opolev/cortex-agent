@@ -319,32 +319,6 @@ public sealed partial class SubagentSessionStore : SqliteStoreBase
         }
     }
 
-    /// <summary>Update a task's state and optional result fields.</summary>
-    public void UpdateState(string taskId, SubagentTaskState state, string? result = null, string? evalResponse = null)
-    {
-        lock (this.syncLock)
-        {
-            using var cmd = this.Connection.CreateCommand();
-            cmd.CommandText = """
-                UPDATE subagent_tasks
-                SET state = $state,
-                    result = COALESCE($result, result),
-                    eval_response = COALESCE($evalResponse, eval_response),
-                    completed_at = CASE WHEN $state IN ('completed', 'failed', 'cancelled') THEN $now ELSE completed_at END
-                WHERE task_id = $taskId
-                """;
-            cmd.Parameters.AddWithValue("$taskId", taskId);
-            cmd.Parameters.AddWithValue("$state", state.ToStorageValue());
-            cmd.Parameters.AddWithValue("$result", (object?)result ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("$evalResponse", (object?)evalResponse ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("$now", FormatDto(DateTimeOffset.UtcNow));
-            cmd.ExecuteNonQuery();
-        }
-
-        var stateValue = state.ToStorageValue();
-        this.LogTaskStateChanged(taskId, stateValue);
-    }
-
     /// <summary>Persist the subagent's current message history and round count.</summary>
     public void UpdateMessages(string taskId, IReadOnlyList<LlmMessage> messages, int rounds)
     {
@@ -591,11 +565,23 @@ public sealed partial class SubagentSessionStore : SqliteStoreBase
 
     // ── Notification delivery ────────────────────────────────────────────
 
+    /// <summary>Base delay before the second (and later) redelivery retry of a failing notification.</summary>
+    private static readonly TimeSpan NotificationRetryBaseDelay = TimeSpan.FromSeconds(5);
+
+    /// <summary>Upper bound on the exponential redelivery backoff.</summary>
+    private static readonly TimeSpan NotificationRetryMaxDelay = TimeSpan.FromMinutes(5);
+
     /// <summary>
-    /// Atomically claim the oldest pending terminal-result notification: transition it
-    /// to enqueued, increment the attempt counter, and return the task — or null when
-    /// nothing is pending. SELECT and UPDATE run in one transaction under the lock so
-    /// two delivery workers can never claim the same notification.
+    /// Atomically claim the oldest ELIGIBLE pending terminal-result notification: transition it
+    /// to enqueued, increment the attempt counter, and return the task — or null when nothing is
+    /// pending or every pending notification is still inside its redelivery backoff window.
+    /// SELECT and UPDATE run in one transaction under the lock so two delivery workers can never
+    /// claim the same notification.
+    ///
+    /// Bounded backoff (I2): the first delivery and the first retry are immediate, but each further
+    /// attempt of a persistently-failing notification is skipped until an exponentially growing,
+    /// capped delay has elapsed since its last attempt — so a parent turn that keeps failing (LLM
+    /// rate-limit/quota) can never hot-loop paid redeliveries. See <see cref="IsNotificationRetryDue"/>.
     /// </summary>
     public SubagentTask? TryClaimOldestPendingNotification()
     {
@@ -609,16 +595,14 @@ public sealed partial class SubagentSessionStore : SqliteStoreBase
                 SELECT * FROM subagent_tasks
                 WHERE notification_state = 'pending'
                 ORDER BY completed_at, created_at
-                LIMIT 1
                 """;
-            var tasks = ReadTasks(selectCmd);
-            if (tasks.Count == 0)
+            var now = DateTimeOffset.UtcNow;
+            var pending = ReadTasks(selectCmd);
+            var task = pending.FirstOrDefault(t => IsNotificationRetryDue(t, now));
+            if (task is null)
             {
                 return null;
             }
-
-            var task = tasks[0];
-            var now = DateTimeOffset.UtcNow;
 
             using var updateCmd = this.Connection.CreateCommand();
             updateCmd.Transaction = transaction;
@@ -640,6 +624,29 @@ public sealed partial class SubagentSessionStore : SqliteStoreBase
             task.NotificationUpdatedAt = now;
             return task;
         }
+    }
+
+    /// <summary>
+    /// Whether enough time has elapsed since a pending notification's last attempt for it to be
+    /// (re)claimed. The first delivery (<c>attempts == 0</c>) and the first retry
+    /// (<c>attempts == 1</c>) are always due — a single transient failure redelivers immediately.
+    /// From the second retry on (<c>attempts &gt;= 2</c>) the notification is throttled by an
+    /// exponential, capped backoff — <c>min(base·2^(attempts-2), max)</c> since
+    /// <c>notification_updated_at</c> — so a persistently-failing parent turn is spread out instead
+    /// of hot-looped. A missing timestamp is treated as immediately due.
+    /// </summary>
+    private static bool IsNotificationRetryDue(SubagentTask task, DateTimeOffset now)
+    {
+        if (task.NotificationAttempts <= 1 || task.NotificationUpdatedAt is null)
+        {
+            return true;
+        }
+
+        // attempts == 2 → base, == 3 → base·2, == 4 → base·4, … capped at max.
+        var exponent = Math.Min(task.NotificationAttempts - 2, 20);
+        var scaledTicks = NotificationRetryBaseDelay.Ticks * (1L << exponent);
+        var delay = TimeSpan.FromTicks(Math.Min(scaledTicks, NotificationRetryMaxDelay.Ticks));
+        return now - task.NotificationUpdatedAt.Value >= delay;
     }
 
     /// <summary>

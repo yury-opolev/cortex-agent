@@ -239,10 +239,10 @@ public class SubAgentToolTests : IDisposable
             Description = "Completed task",
             Prompt = "Original prompt",
             State = SubagentTaskState.Completed,
+            Result = "Initial result.",
             Messages = messages,
         });
         _store.UpdateMessages("sa-send-completed", messages, 1);
-        _store.UpdateState("sa-send-completed", SubagentTaskState.Completed, result: "Initial result.");
 
         var coordinator = BuildCoordinator(new NoopExecutor(), started: false);
         var tool = CreateSendTool(coordinator);
@@ -279,10 +279,10 @@ public class SubAgentToolTests : IDisposable
             Description = "Failed task",
             Prompt = "Original prompt",
             State = SubagentTaskState.Failed,
+            Result = "boom",
             Messages = messages,
         });
         _store.UpdateMessages("sa-send-token", messages, 1);
-        _store.UpdateState("sa-send-token", SubagentTaskState.Failed, result: "boom");
 
         var coordinator = BuildCoordinator(new NoopExecutor(), started: false);
         var tool = CreateSendTool(coordinator);

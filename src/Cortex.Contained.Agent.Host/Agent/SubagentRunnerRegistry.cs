@@ -149,8 +149,9 @@ public sealed partial class SubagentRunnerRegistry
         => [.. this.runners.Keys];
 
     /// <summary>
-    /// Register a callback invoked when concurrency slots open (cap raised). The
-    /// consumer (SubAgentStartTool) uses it to start queued subagents immediately.
+    /// Register a callback invoked when concurrency slots open (a runner removed or the cap raised).
+    /// The consumer (<see cref="SubagentExecutionCoordinator"/>) uses it to wake its dispatch loop so
+    /// queued subagents start immediately without waiting for the next unrelated signal.
     /// </summary>
     public void SetSlotsOpenedCallback(Action callback)
     {

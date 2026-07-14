@@ -12,15 +12,18 @@ public sealed partial class SubAgentStopTool : IAgentTool
 {
     private readonly SubagentSessionStore store;
     private readonly SubagentRunnerRegistry registry;
+    private readonly SubagentExecutionCoordinator coordinator;
     private readonly ILogger<SubAgentStopTool> logger;
 
     public SubAgentStopTool(
         SubagentSessionStore store,
         SubagentRunnerRegistry registry,
+        SubagentExecutionCoordinator coordinator,
         ILogger<SubAgentStopTool> logger)
     {
         this.store = store;
         this.registry = registry;
+        this.coordinator = coordinator;
         this.logger = logger;
     }
 
@@ -90,6 +93,9 @@ public sealed partial class SubAgentStopTool : IAgentTool
                 // defensively through the guarded terminal write (never overwrites a real terminal).
                 this.store.TrySetTerminalResult(
                     taskId, new SubagentExecutionResult(SubagentTaskState.Cancelled, "[Subagent stopped]"));
+                // Wake the coordinator so the cancellation completion notification is delivered
+                // promptly (this path did not go through the coordinator's slot-release signal).
+                this.coordinator.SignalWorkAvailable();
                 this.LogStopRequested(taskId);
                 return Task.FromResult(AgentToolResult.Ok($"Subagent {taskId} marked stopped."));
 
@@ -99,6 +105,12 @@ public sealed partial class SubAgentStopTool : IAgentTool
                 this.store.TrySetTerminalResult(
                     taskId,
                     new SubagentExecutionResult(SubagentTaskState.Cancelled, "[Subagent stopped before starting]"));
+                // Close the narrow queued-cancel-vs-claim race: if the coordinator just registered a
+                // runner for this task between our state read and the terminal write, cancel it so it
+                // does not execute in a wasted slot. Harmless no-op when nothing is registered.
+                this.registry.TryCancel(taskId);
+                // Wake the coordinator so the cancellation completion notification is delivered promptly.
+                this.coordinator.SignalWorkAvailable();
                 this.LogQueuedCancelled(taskId);
                 return Task.FromResult(AgentToolResult.Ok($"Queued subagent {taskId} cancelled."));
 
