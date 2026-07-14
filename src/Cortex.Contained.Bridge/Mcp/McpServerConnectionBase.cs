@@ -137,8 +137,12 @@ public abstract partial class McpServerConnectionBase : IMcpServerConnection
 #pragma warning disable CA1031 // Connection failures must surface via status, never crash the host.
         catch (Exception ex)
         {
-            this.SetStatus(McpServerStatus.Error, ex.Message);
-            this.LogConnectFailed(this.ServerKey, ex.Message);
+            // SECURITY: a connect failure (e.g. a misconfigured HTTP/stdio endpoint) can embed a
+            // connection-string secret in ex.Message. LastError is admin-facing
+            // (McpServerView.LastError) and the log is host-side — both carry only the exception
+            // TYPE via McpErrorSanitizer.ConnectFailure, never the raw message.
+            this.SetStatus(McpServerStatus.Error, McpErrorSanitizer.ConnectFailure(this.ServerKey, ex));
+            this.LogConnectFailed(this.ServerKey, ex.GetType().Name);
         }
 #pragma warning restore CA1031
     }
@@ -332,7 +336,9 @@ public abstract partial class McpServerConnectionBase : IMcpServerConnection
 #pragma warning disable CA1031 // Best-effort disposal of an already-dead client.
         catch (Exception ex)
         {
-            this.LogDisposeFailed(this.ServerKey, ex.Message);
+            // SECURITY: content-free — only the exception TYPE (a dispose failure's message could
+            // echo a fragment of the underlying transport, e.g. a broken pipe path).
+            this.LogDisposeFailed(this.ServerKey, ex.GetType().Name);
         }
 #pragma warning restore CA1031
     }
@@ -357,7 +363,8 @@ public abstract partial class McpServerConnectionBase : IMcpServerConnection
 #pragma warning disable CA1031 // Best-effort disposal.
             catch (Exception ex)
             {
-                this.LogDisposeFailed(this.ServerKey, ex.Message);
+                // SECURITY: content-free — only the exception TYPE (see DisposeClientQuietlyAsync).
+                this.LogDisposeFailed(this.ServerKey, ex.GetType().Name);
             }
 #pragma warning restore CA1031
         }

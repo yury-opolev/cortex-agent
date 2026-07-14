@@ -3,6 +3,7 @@ using System.Text;
 using System.Web;
 using Cortex.Contained.Bridge.Mcp.Auth;
 using Cortex.Contained.Contracts.Config;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 
@@ -21,10 +22,18 @@ public sealed class McpOAuthManagerTests
 
         public string RefreshToken { get; set; } = "refresh-token-1";
 
+        /// <summary>When set, the <c>/token</c> request throws this instead of returning a response.</summary>
+        public Exception? ThrowOnTokenRequest { get; set; }
+
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             var path = request.RequestUri!.AbsolutePath;
             var method = request.Method;
+
+            if (method == HttpMethod.Post && path == "/token" && this.ThrowOnTokenRequest is not null)
+            {
+                throw this.ThrowOnTokenRequest;
+            }
 
             if (method == HttpMethod.Get && request.RequestUri.AbsoluteUri == ServerUrl)
             {
@@ -101,10 +110,30 @@ public sealed class McpOAuthManagerTests
         public HttpClient CreateClient(string name) => new(this.handler, disposeHandler: false);
     }
 
+    /// <summary>Captures fully-formatted log messages so redaction assertions can inspect them.</summary>
+    private sealed class CapturingLogger<T> : ILogger<T>
+    {
+        public List<string> Messages { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+            => this.Messages.Add(formatter(state, exception));
+    }
+
     private static McpServerConfig HttpOAuthServer()
         => new() { Key = "github", Transport = McpTransport.Http, Url = ServerUrl, Auth = McpAuthMode.OAuth };
 
-    private static (McpOAuthManager manager, McpTokenStore tokens, FakeSecretStore secrets, FakeTimeProvider time, StubHandler handler) Build()
+    private static (McpOAuthManager manager, McpTokenStore tokens, FakeSecretStore secrets, FakeTimeProvider time, StubHandler handler) Build(
+        ILogger<McpOAuthManager>? logger = null)
     {
         var handler = new StubHandler();
         var secrets = new FakeSecretStore();
@@ -115,7 +144,7 @@ public sealed class McpOAuthManagerTests
             tokens,
             new McpOAuthOptions(),
             time,
-            NullLogger<McpOAuthManager>.Instance);
+            logger ?? NullLogger<McpOAuthManager>.Instance);
         return (manager, tokens, secrets, time, handler);
     }
 
@@ -266,5 +295,57 @@ public sealed class McpOAuthManagerTests
         Assert.False(manager.HasTokens(HttpOAuthServer()));
         Assert.Null(tokens.Get("github"));
         Assert.False(secrets.Entries.ContainsKey(McpTokenStore.SecretId("github")));
+    }
+
+    [Fact]
+    public async Task CompleteAsync_TokenExchangeThrows_LogDoesNotContainTheRawExceptionMessage()
+    {
+        // SECURITY: an HttpRequestException from the token endpoint can embed the endpoint URL
+        // (possibly with inline credentials); the exchange-failure log must carry only the
+        // exception TYPE, consistent with the Bridge-side MCP redaction guarantee (docs/security.md).
+        var capturingLogger = new CapturingLogger<McpOAuthManager>();
+        var (manager, _, _, _, handler) = Build(capturingLogger);
+        var start = await manager.BuildAuthorizationUrlAsync(HttpOAuthServer(), CancellationToken.None);
+        var secretLookingMessage = "connection refused at https://user:s3cr3t@auth.example.com/token";
+        handler.ThrowOnTokenRequest = new HttpRequestException(secretLookingMessage);
+
+        var completion = await manager.CompleteAsync(start.State, "auth-code-123", CancellationToken.None);
+
+        Assert.False(completion.Success);
+        var failureLogs = capturingLogger.Messages
+            .Where(m => m.Contains("exchange failed", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        var failureLog = Assert.Single(failureLogs);
+        Assert.Contains(nameof(HttpRequestException), failureLog, StringComparison.Ordinal);
+        Assert.DoesNotContain(secretLookingMessage, failureLog, StringComparison.Ordinal);
+        Assert.DoesNotContain("s3cr3t", failureLog, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RefreshAccessTokenAsync_HttpFailure_LogDoesNotContainTheRawExceptionMessage()
+    {
+        var capturingLogger = new CapturingLogger<McpOAuthManager>();
+        var (manager, tokens, _, time, handler) = Build(capturingLogger);
+        tokens.Save("github", new McpOAuthTokens
+        {
+            AccessToken = "stale",
+            RefreshToken = "refresh-token-1",
+            ClientId = "c",
+            TokenEndpoint = "https://auth.example.com/token",
+            ExpiresAtMs = time.GetUtcNow().ToUnixTimeMilliseconds() - 1000,
+        });
+        var secretLookingMessage = "connection refused at https://user:s3cr3t@auth.example.com/token";
+        handler.ThrowOnTokenRequest = new HttpRequestException(secretLookingMessage);
+
+        var token = await manager.RefreshAccessTokenAsync("github", CancellationToken.None);
+
+        Assert.Null(token);
+        var failureLogs = capturingLogger.Messages
+            .Where(m => m.Contains("refresh failed", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        var failureLog = Assert.Single(failureLogs);
+        Assert.Contains(nameof(HttpRequestException), failureLog, StringComparison.Ordinal);
+        Assert.DoesNotContain(secretLookingMessage, failureLog, StringComparison.Ordinal);
+        Assert.DoesNotContain("s3cr3t", failureLog, StringComparison.Ordinal);
     }
 }

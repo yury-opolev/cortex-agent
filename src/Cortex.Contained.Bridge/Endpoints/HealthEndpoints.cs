@@ -103,7 +103,10 @@ internal static partial class HealthEndpoints
         catch (Exception ex)
 #pragma warning restore CA1031
         {
-            LogMcpActionAggregateFailed(logger, ex.Message);
+            // SECURITY: content-free — only the exception TYPE, consistent with the rest of the
+            // Bridge-side MCP redaction guarantee (docs/security.md). A store fault message could
+            // otherwise echo a fragment of a query parameter or connection detail.
+            LogMcpActionAggregateFailed(logger, ex.GetType().Name);
             return null;
         }
     }

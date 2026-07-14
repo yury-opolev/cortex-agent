@@ -59,7 +59,9 @@ public sealed partial class McpCatalogPusher
 #pragma warning disable CA1031 // Individual tenant failures should not block others
             catch (Exception ex)
             {
-                this.LogPushToTenantFailed(target.TenantId, ex.Message);
+                // SECURITY: content-free — only the exception TYPE, consistent with the
+                // Bridge-side MCP redaction guarantee (docs/security.md).
+                this.LogPushToTenantFailed(target.TenantId, ex.GetType().Name);
             }
 #pragma warning restore CA1031
         }

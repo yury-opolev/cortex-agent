@@ -48,4 +48,27 @@ public sealed class McpErrorSanitizerTests
         Assert.DoesNotContain(secretLookingMessage, message, StringComparison.Ordinal);
         Assert.DoesNotContain("s3cr3t", message, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void ConnectFailure_NamesServerAndExceptionType()
+    {
+        var message = McpErrorSanitizer.ConnectFailure("github", new InvalidOperationException("boom"));
+
+        Assert.Contains("github", message, StringComparison.Ordinal);
+        Assert.Contains(nameof(InvalidOperationException), message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ConnectFailure_NeverContainsTheRawExceptionMessage()
+    {
+        // SECURITY: this text lands in the admin-facing LastError field (McpServerView.LastError)
+        // AND the Bridge log. A connect failure's ex.Message can embed a connection-string secret
+        // (e.g. an HTTP endpoint URL with inline credentials) — it must never appear here.
+        var secretLookingMessage = "connection refused at https://user:s3cr3t@internal.example/mcp";
+
+        var message = McpErrorSanitizer.ConnectFailure("srv", new IOException(secretLookingMessage));
+
+        Assert.DoesNotContain(secretLookingMessage, message, StringComparison.Ordinal);
+        Assert.DoesNotContain("s3cr3t", message, StringComparison.Ordinal);
+    }
 }

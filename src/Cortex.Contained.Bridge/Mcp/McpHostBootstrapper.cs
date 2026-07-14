@@ -70,7 +70,10 @@ public sealed partial class McpHostBootstrapper : BackgroundService
 #pragma warning disable CA1031 // Reconcile failures must not crash the Bridge.
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            this.LogReconcileFailed(ex.Message);
+            // SECURITY: content-free — only the exception TYPE (a reconcile fault message could
+            // echo a connection detail from a misconfigured server), consistent with the
+            // Bridge-side MCP redaction guarantee (docs/security.md).
+            this.LogReconcileFailed(ex.GetType().Name);
         }
 #pragma warning restore CA1031
     }
