@@ -272,6 +272,51 @@ public sealed class SubagentExecutionCoordinatorTests : IDisposable
         Assert.Equal(SubagentTaskState.Completed, _store.GetById("sa-ok")!.State);
     }
 
+    // ── Periodic backstop tick (idle redelivery) ─────────────────────────
+
+    [Fact]
+    public async Task BackingOffNotification_IsRedeliveredByPeriodicTick_WithoutExternalWake()
+    {
+        // A completed run whose durable completion notification is Pending but currently BACKING
+        // OFF: attempts == 2 means the store throttles the next retry by its 5s base backoff since
+        // notification_updated_at. Backdating that timestamp to 4.5s ago makes the notification
+        // become due ~0.5s from now — comfortably after the only external wakes this harness ever
+        // raises (StartAsync's initial signal + the readiness signal, both at t≈0).
+        var now = DateTimeOffset.UtcNow;
+        _store.Create(new SubagentTask
+        {
+            TaskId = "sa-backstop",
+            ParentConversation = "conv-1",
+            ParentChannel = "webchat-default",
+            Description = "d",
+            Prompt = "p",
+            State = SubagentTaskState.Completed,
+            Result = "the result",
+            CompletedAt = now,
+            NotificationState = SubagentNotificationState.Pending,
+            NotificationAttempts = 2,
+            NotificationUpdatedAt = now - TimeSpan.FromSeconds(4.5),
+        });
+
+        var executor = new RecordingExecutor();
+        // Fast backstop so the test does not wait the 15s production interval.
+        await using var harness = this.StartHarness(
+            executor, maxConcurrent: 2, backstopTickInterval: TimeSpan.FromMilliseconds(100));
+
+        // The ONLY external wake the coordinator receives — it fires while the notification is
+        // still inside its backoff window, so this pass must NOT claim/enqueue it.
+        harness.MarkAllReady();
+
+        // While still backing off, no wake (initial or readiness) may deliver it.
+        await AssertNeverAsync(() =>
+            _store.GetById("sa-backstop")!.NotificationState != SubagentNotificationState.Pending);
+
+        // After the backoff elapses there are NO further external wakes — only the periodic backstop
+        // tick can re-scan the queue, and it must eventually claim + enqueue the notification.
+        await WaitUntilAsync(() =>
+            _store.GetById("sa-backstop")!.NotificationState == SubagentNotificationState.Enqueued);
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────
 
     private void SeedQueued(
@@ -300,7 +345,8 @@ public sealed class SubagentExecutionCoordinatorTests : IDisposable
     private Harness StartHarness(
         ISubagentExecutor executor,
         int maxConcurrent,
-        Func<SubagentTask, SubagentRunner>? runnerFactory = null)
+        Func<SubagentTask, SubagentRunner>? runnerFactory = null,
+        TimeSpan? backstopTickInterval = null)
     {
         var registry = new SubagentRunnerRegistry(maxConcurrent, NullLogger<SubagentRunnerRegistry>.Instance);
 
@@ -316,7 +362,8 @@ public sealed class SubagentExecutionCoordinatorTests : IDisposable
             executor,
             runnerFactory ?? DefaultRunnerFactory,
             new AgentMessageChannel(),
-            NullLogger<SubagentExecutionCoordinator>.Instance);
+            NullLogger<SubagentExecutionCoordinator>.Instance,
+            backstopTickInterval);
 
         coordinator.StartAsync(CancellationToken.None).GetAwaiter().GetResult();
         return new Harness(coordinator, registry);

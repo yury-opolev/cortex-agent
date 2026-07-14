@@ -170,4 +170,56 @@ public sealed class McpResultMapperTests
         Assert.Equal("inv-2", mapped.InvocationId);
         Assert.NotEqual(McpToolOutcome.Failed, mapped.Outcome);
     }
+
+    [Theory]
+    [InlineData(McpErrorCode.ParseError)]
+    [InlineData(McpErrorCode.InvalidRequest)]
+    [InlineData(McpErrorCode.MethodNotFound)]
+    [InlineData(McpErrorCode.InvalidParams)]
+    public void FromCallException_PreExecutionProtocolErrorCode_ReturnsDefinitiveToolFailure(McpErrorCode errorCode)
+    {
+        // SAFETY: these four standard JSON-RPC codes mean the request was rejected BEFORE the tool
+        // ran (malformed request/params or unknown method) — the side effect definitively did not
+        // occur, so this stays a definitive Failed/Tool the agent may deliberately retry.
+        var exception = new McpProtocolException("rejected before dispatch", errorCode);
+
+        var mapped = McpResultMapper.FromCallException("inv-pre", "github", "create_issue", exception);
+
+        Assert.Equal(McpToolOutcome.Failed, mapped.Outcome);
+        Assert.Equal(McpFailureKind.Tool, mapped.FailureKind);
+        Assert.Equal("inv-pre", mapped.InvocationId);
+    }
+
+    [Fact]
+    public void FromCallException_InternalErrorProtocolException_ReturnsOutcomeUnknown()
+    {
+        // SAFETY: -32603 (Internal error) can be reported by a misbehaving server AFTER it already
+        // started executing the tool (a mid-execution failure), so it must NOT be treated as a
+        // definitive Failed for a mutating call — it maps to OutcomeUnknown so it is never
+        // auto-retried (a retry could double-execute the side effect).
+        var exception = new McpProtocolException("internal error", McpErrorCode.InternalError);
+
+        var mapped = McpResultMapper.FromCallException("inv-3", "github", "create_issue", exception);
+
+        Assert.Equal(McpToolOutcome.OutcomeUnknown, mapped.Outcome);
+        Assert.Equal(McpFailureKind.Tool, mapped.FailureKind);
+        Assert.Equal("inv-3", mapped.InvocationId);
+        Assert.NotEqual(McpToolOutcome.Failed, mapped.Outcome);
+    }
+
+    [Fact]
+    public void FromCallException_ServerDefinedProtocolErrorCode_ReturnsOutcomeUnknown()
+    {
+        // A server-defined/unknown JSON-RPC error code (outside the standard pre-execution set) is
+        // ambiguous by default — we cannot prove the request was rejected before the tool ran, so
+        // this defaults to the safe direction: OutcomeUnknown, never auto-retried.
+        var exception = new McpProtocolException("server-defined error", (McpErrorCode)(-32000));
+
+        var mapped = McpResultMapper.FromCallException("inv-4", "github", "create_issue", exception);
+
+        Assert.Equal(McpToolOutcome.OutcomeUnknown, mapped.Outcome);
+        Assert.Equal(McpFailureKind.Tool, mapped.FailureKind);
+        Assert.Equal("inv-4", mapped.InvocationId);
+        Assert.NotEqual(McpToolOutcome.Failed, mapped.Outcome);
+    }
 }

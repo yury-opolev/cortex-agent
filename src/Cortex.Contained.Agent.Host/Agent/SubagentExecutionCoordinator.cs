@@ -44,9 +44,25 @@ public sealed partial class SubagentExecutionCoordinator : IHostedService, IDisp
 
     private CancellationTokenSource? stoppingCts;
     private Task? dispatchLoop;
+    private PeriodicTimer? backstopTimer;
+    private Task? backstopLoop;
 
     /// <summary>Max length of a sanitized crash message persisted as a task result.</summary>
     private const int MaxSanitizedMessageLength = 300;
+
+    /// <summary>
+    /// Production interval for the periodic backstop tick. Each tick raises the SAME capacity-1
+    /// wake as any other signal, forcing the dispatch loop to re-scan even when no external event
+    /// (completion, freed slot, send, stop, release) has fired. This closes a residual liveness gap:
+    /// a completion notification that is BACKING OFF (per the store's bounded redelivery backoff —
+    /// 5s base, 5min cap) is otherwise only retried on the NEXT external wake, so in a fully idle
+    /// system a single stuck completion's retry is not time-guaranteed. The tick does NOT hot-spin:
+    /// the store's backoff still gates WHICH notifications actually re-enqueue, and 15s is small
+    /// relative to that backoff so a due retry is never meaningfully delayed.
+    /// </summary>
+    private static readonly TimeSpan DefaultBackstopTickInterval = TimeSpan.FromSeconds(15);
+
+    private readonly TimeSpan backstopTickInterval;
 
     public SubagentExecutionCoordinator(
         SubagentSessionStore store,
@@ -54,7 +70,8 @@ public sealed partial class SubagentExecutionCoordinator : IHostedService, IDisp
         ISubagentExecutor executor,
         Func<SubagentTask, SubagentRunner> runnerFactory,
         AgentMessageChannel messageChannel,
-        ILogger<SubagentExecutionCoordinator> logger)
+        ILogger<SubagentExecutionCoordinator> logger,
+        TimeSpan? backstopTickInterval = null)
     {
         this.store = store;
         this.registry = registry;
@@ -62,6 +79,12 @@ public sealed partial class SubagentExecutionCoordinator : IHostedService, IDisp
         this.runnerFactory = runnerFactory;
         this.messageChannel = messageChannel;
         this.logger = logger;
+
+        // Injectable so tests can drive the backstop fast; production uses the real constant.
+        // A non-positive value is rejected by PeriodicTimer, so fall back to the default.
+        this.backstopTickInterval = backstopTickInterval is { } interval && interval > TimeSpan.Zero
+            ? interval
+            : DefaultBackstopTickInterval;
 
         // A freed slot (Remove) or a raised cap (SetMaxConcurrent) wakes the dispatch loop.
         this.registry.SetSlotsOpenedCallback(this.SignalWorkAvailable);
@@ -154,6 +177,11 @@ public sealed partial class SubagentExecutionCoordinator : IHostedService, IDisp
         this.stoppingCts = new CancellationTokenSource();
         this.dispatchLoop = Task.Run(() => this.RunDispatchLoopAsync(this.stoppingCts.Token), CancellationToken.None);
 
+        // Bounded periodic backstop: re-scan the queue on a schedule even absent external wakes, so a
+        // backing-off completion notification is eventually redelivered in an otherwise idle system.
+        this.backstopTimer = new PeriodicTimer(this.backstopTickInterval);
+        this.backstopLoop = Task.Run(() => this.RunBackstopTickLoopAsync(this.stoppingCts.Token), CancellationToken.None);
+
         // In case work is already queued (e.g. crash recovery) and readiness is already set.
         this.SignalWorkAvailable();
         return Task.CompletedTask;
@@ -162,6 +190,10 @@ public sealed partial class SubagentExecutionCoordinator : IHostedService, IDisp
     public async Task StopAsync(CancellationToken cancellationToken)
     {
         this.stoppingCts?.Cancel();
+
+        // Stop the backstop tick: disposing the timer makes an in-flight WaitForNextTickAsync return
+        // false (and the cancelled token throws OCE), so the loop unwinds cleanly either way.
+        this.backstopTimer?.Dispose();
 
         // Cancel every in-flight runner so its loop unwinds; each execution then REQUEUES
         // (not fails) because the host-stopping token is set.
@@ -192,6 +224,20 @@ public sealed partial class SubagentExecutionCoordinator : IHostedService, IDisp
                 await this.dispatchLoop.ConfigureAwait(false);
             }
 #pragma warning disable CA1031 // The loop unwinds on cancellation; nothing to recover here.
+            catch (Exception ex)
+#pragma warning restore CA1031
+            {
+                this.LogShutdownWaitInterrupted(ex.Message);
+            }
+        }
+
+        if (this.backstopLoop is not null)
+        {
+            try
+            {
+                await this.backstopLoop.ConfigureAwait(false);
+            }
+#pragma warning disable CA1031 // The tick loop unwinds on cancellation/disposal; nothing to recover.
             catch (Exception ex)
 #pragma warning restore CA1031
             {
@@ -255,6 +301,46 @@ public sealed partial class SubagentExecutionCoordinator : IHostedService, IDisp
 #pragma warning restore CA1031
         {
             this.LogDispatchLoopFailed(ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Bounded periodic backstop. Each tick raises the same capacity-1 wake as any other signal so
+    /// the dispatch loop re-scans even when no external event has fired — guaranteeing a backing-off
+    /// completion notification is eventually redelivered in an idle system. It cannot hot-spin: the
+    /// store's bounded backoff still decides WHICH notifications actually re-enqueue on each pass. A
+    /// tick must never throw out of this loop, and the loop exits cleanly on shutdown (cancellation
+    /// or timer disposal).
+    /// </summary>
+    private async Task RunBackstopTickLoopAsync(CancellationToken stopping)
+    {
+        var timer = this.backstopTimer;
+        if (timer is null)
+        {
+            return;
+        }
+
+        try
+        {
+            // Returns false once the timer is disposed (shutdown); throws OCE if the token is cancelled.
+            while (await timer.WaitForNextTickAsync(stopping).ConfigureAwait(false))
+            {
+                this.SignalWorkAvailable();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Normal shutdown.
+        }
+        catch (ObjectDisposedException)
+        {
+            // Timer disposed during shutdown — treat as a clean stop.
+        }
+#pragma warning disable CA1031 // The backstop tick must never crash the host.
+        catch (Exception ex)
+#pragma warning restore CA1031
+        {
+            this.LogBackstopTickLoopFailed(ex.Message);
         }
     }
 
@@ -461,6 +547,7 @@ public sealed partial class SubagentExecutionCoordinator : IHostedService, IDisp
     public void Dispose()
     {
         this.wakeChannel.Writer.TryComplete();
+        this.backstopTimer?.Dispose();
         this.stoppingCts?.Dispose();
     }
 
@@ -489,6 +576,9 @@ public sealed partial class SubagentExecutionCoordinator : IHostedService, IDisp
 
     [LoggerMessage(Level = LogLevel.Error, Message = "[subagent-coordinator] Dispatch loop iteration failed; continuing to next wake: {ErrorMessage}")]
     private partial void LogDispatchLoopIterationFailed(string errorMessage);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "[subagent-coordinator] Backstop tick loop failed: {ErrorMessage}")]
+    private partial void LogBackstopTickLoopFailed(string errorMessage);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "[subagent-coordinator] Shutdown wait interrupted: {ErrorMessage}")]
     private partial void LogShutdownWaitInterrupted(string errorMessage);

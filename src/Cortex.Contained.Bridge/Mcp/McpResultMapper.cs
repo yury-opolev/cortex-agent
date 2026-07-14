@@ -126,17 +126,23 @@ public static class McpResultMapper
     /// agent-facing <see cref="McpToolResult"/> answering <paramref name="invocationId"/>.
     /// <para>
     /// SAFETY: a <see cref="McpProtocolException"/> is the SDK's carrier for a JSON-RPC error
-    /// <em>response</em> from the server — the request reached the server and was rejected at the
-    /// protocol layer (unknown tool, invalid params, method not found, internal error) BEFORE the
-    /// tool executed, so the side effect definitively did NOT occur. That is a definitive
-    /// <see cref="McpFailureKind.Tool"/> failure the agent may deliberately retry.
+    /// <em>response</em> from the server, and its <see cref="McpProtocolException.ErrorCode"/>
+    /// decides whether that rejection happened BEFORE the tool ran. The four standard
+    /// PRE-EXECUTION codes (<see cref="McpErrorCode.ParseError"/>, <see cref="McpErrorCode.InvalidRequest"/>,
+    /// <see cref="McpErrorCode.MethodNotFound"/>, <see cref="McpErrorCode.InvalidParams"/>) mean the
+    /// request was rejected at the protocol layer before dispatch, so the side effect definitively
+    /// did NOT occur — a definitive <see cref="McpFailureKind.Tool"/> failure the agent may
+    /// deliberately retry. <see cref="McpErrorCode.InternalError"/> (-32603) and any other
+    /// server-defined or unknown code can be reported by a misbehaving server for a MID-EXECUTION
+    /// failure, so those are AMBIGUOUS and map to <see cref="McpToolOutcome.OutcomeUnknown"/>
+    /// instead (the safe default for any code not in the known pre-execution set).
     /// </para>
     /// <para>
     /// EVERY OTHER <see cref="McpException"/> (an HTTP session terminated / expired, a POST that
     /// completed without a reply, an invalid response type, or any other transport/protocol-level
-    /// fault) is AMBIGUOUS: the request already left the Bridge and MAY have executed. It maps to
-    /// <see cref="McpToolOutcome.OutcomeUnknown"/> so it is never auto-retried — re-issuing a
-    /// mutating call could double-execute its side effect.
+    /// fault) is likewise AMBIGUOUS: the request already left the Bridge and MAY have executed. It
+    /// maps to <see cref="McpToolOutcome.OutcomeUnknown"/> so it is never auto-retried — re-issuing
+    /// a mutating call could double-execute its side effect.
     /// </para>
     /// </summary>
     public static McpToolResult FromCallException(
@@ -144,10 +150,19 @@ public static class McpResultMapper
     {
         ArgumentNullException.ThrowIfNull(exception);
 
-        if (exception is McpProtocolException)
+        if (exception is McpProtocolException protocolException)
         {
-            return McpToolResult.Fail(
-                invocationId, McpFailureKind.Tool, McpErrorSanitizer.ToolFailure(serverKey, toolName));
+            if (IsPreExecutionRejection(protocolException.ErrorCode))
+            {
+                return McpToolResult.Fail(
+                    invocationId, McpFailureKind.Tool, McpErrorSanitizer.ToolFailure(serverKey, toolName));
+            }
+
+            return McpToolResult.Unknown(
+                invocationId,
+                McpFailureKind.Tool,
+                $"MCP tool '{toolName}' on server '{serverKey}' reported an internal error " +
+                $"(code {(int)protocolException.ErrorCode}); the invocation may still have executed.");
         }
 
         return McpToolResult.Unknown(
@@ -155,4 +170,20 @@ public static class McpResultMapper
             McpFailureKind.Transport,
             $"MCP server '{serverKey}' fault mid-call for '{toolName}'; the invocation may still have executed.");
     }
+
+    /// <summary>
+    /// True for the standard JSON-RPC codes that mean the request was rejected BEFORE the tool ran
+    /// (malformed request/params, unknown method). <see cref="McpErrorCode.InternalError"/> and any
+    /// server-defined or unknown code are NOT pre-execution rejections — a misbehaving server can
+    /// report either for a failure that happened mid-execution, so those default to the safe
+    /// (ambiguous) classification instead.
+    /// </summary>
+    private static bool IsPreExecutionRejection(McpErrorCode errorCode) => errorCode switch
+    {
+        McpErrorCode.ParseError => true,
+        McpErrorCode.InvalidRequest => true,
+        McpErrorCode.MethodNotFound => true,
+        McpErrorCode.InvalidParams => true,
+        _ => false,
+    };
 }
