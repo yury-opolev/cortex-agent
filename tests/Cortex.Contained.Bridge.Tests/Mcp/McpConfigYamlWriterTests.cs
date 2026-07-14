@@ -80,6 +80,18 @@ public sealed class McpConfigYamlWriterTests
     }
 
     [Fact]
+    public void AppendMcpSection_WritesCallTimeoutSecondsAndMaxResultBytes()
+    {
+        var yaml = Write(new McpSettingsConfig
+        {
+            Servers = [new McpServerConfig { Key = "github", Transport = McpTransport.Http, Url = "https://api.example.com/mcp/", CallTimeoutSeconds = 20, MaxResultBytes = 4096 }],
+        });
+
+        Assert.Contains("callTimeoutSeconds: 20", yaml, StringComparison.Ordinal);
+        Assert.Contains("maxResultBytes: 4096", yaml, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void AppendMcpSection_RoundTripsThroughConfigBinder()
     {
         var mcp = new McpSettingsConfig
@@ -106,6 +118,8 @@ public sealed class McpConfigYamlWriterTests
                     SecretRef = "mcp/github/apikey",
                     ToolAllowList = ["create_issue", "list_prs"],
                     MutationToolAllowList = ["create_issue"],
+                    CallTimeoutSeconds = 20,
+                    MaxResultBytes = 4096,
                 },
             ],
         };
@@ -134,6 +148,12 @@ public sealed class McpConfigYamlWriterTests
             Assert.Equal("mcp/github/apikey", gh.SecretRef);
             Assert.Equal(["create_issue", "list_prs"], gh.ToolAllowList);
             Assert.Equal(["create_issue"], gh.MutationToolAllowList);
+            Assert.Equal(20, gh.CallTimeoutSeconds);
+            Assert.Equal(4096, gh.MaxResultBytes);
+
+            // A server that didn't set them round-trips the generic bounds' defaults.
+            Assert.Equal(45, fs.CallTimeoutSeconds);
+            Assert.Equal(50 * 1024, fs.MaxResultBytes);
 
             Assert.Empty(fs.MutationToolAllowList);
         }

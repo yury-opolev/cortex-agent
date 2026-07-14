@@ -1,4 +1,5 @@
 using Cortex.Contained.Bridge.Mcp.Auth;
+using Cortex.Contained.Contracts.Config;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Client;
 
@@ -22,8 +23,10 @@ public sealed class HttpMcpServerConnection : McpServerConnectionBase
         IReadOnlyDictionary<string, string> headers,
         IReadOnlyCollection<string> toolAllowList,
         ILogger<HttpMcpServerConnection> logger,
-        IReadOnlyCollection<string>? mutationToolAllowList = null)
-        : base(serverKey, toolAllowList, mutationToolAllowList ?? [], logger)
+        IReadOnlyCollection<string>? mutationToolAllowList = null,
+        int callTimeoutSeconds = McpServerConfig.DefaultCallTimeoutSeconds,
+        int maxResultBytes = McpResultMapper.DefaultMaxResultBytes)
+        : base(serverKey, toolAllowList, mutationToolAllowList ?? [], logger, callTimeoutSeconds, maxResultBytes)
     {
         ArgumentNullException.ThrowIfNull(endpoint);
         this.endpoint = endpoint;
@@ -37,8 +40,10 @@ public sealed class HttpMcpServerConnection : McpServerConnectionBase
         IMcpBearerSource bearerSource,
         IReadOnlyCollection<string> toolAllowList,
         ILogger<HttpMcpServerConnection> logger,
-        IReadOnlyCollection<string>? mutationToolAllowList = null)
-        : base(serverKey, toolAllowList, mutationToolAllowList ?? [], logger)
+        IReadOnlyCollection<string>? mutationToolAllowList = null,
+        int callTimeoutSeconds = McpServerConfig.DefaultCallTimeoutSeconds,
+        int maxResultBytes = McpResultMapper.DefaultMaxResultBytes)
+        : base(serverKey, toolAllowList, mutationToolAllowList ?? [], logger, callTimeoutSeconds, maxResultBytes)
     {
         ArgumentNullException.ThrowIfNull(endpoint);
         ArgumentNullException.ThrowIfNull(bearerSource);

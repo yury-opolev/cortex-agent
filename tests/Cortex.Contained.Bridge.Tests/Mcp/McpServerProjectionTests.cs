@@ -130,6 +130,19 @@ public sealed class McpServerProjectionTests
     }
 
     [Fact]
+    public void Project_CarriesCallTimeoutSecondsAndMaxResultBytes()
+    {
+        var config = Server();
+        config.CallTimeoutSeconds = 20;
+        config.MaxResultBytes = 4096;
+
+        var view = McpServerProjection.Project(config, masterEnabled: true, runtime: null, needsLogin: false);
+
+        Assert.Equal(20, view.CallTimeoutSeconds);
+        Assert.Equal(4096, view.MaxResultBytes);
+    }
+
+    [Fact]
     public void Project_RedactsPlaintextSecretEnv_KeepsRefAndPlainLiteral()
     {
         var config = new McpServerConfig

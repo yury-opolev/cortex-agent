@@ -5,6 +5,7 @@ using System.IO;
 using System.Text;
 using System.Threading.Channels;
 using Cortex.Contained.Agent.Host.Hubs;
+using Cortex.Contained.Agent.Host.Mcp;
 using Cortex.Contained.Agent.Host.Pipeline;
 using Cortex.Contained.Agent.Host.Tools;
 using Cortex.Contained.Contracts;
@@ -998,17 +999,25 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
         // Execute each tool call and add results to history
         foreach (var toolCall in toolCalls)
         {
-            // Notify Bridge: tool started
-            await delivery.NotifyToolStartedAsync(toolCall.Name, toolCall.Arguments).ConfigureAwait(false);
+            // TELEMETRY-ONLY redaction: an mcp__* tool's args/output are sensitive by default
+            // (incident content, PII, telemetry). Sanitized values are used ONLY for the
+            // Bridge-facing ToolExecutionMessage, the log line below, and the persisted tool-call
+            // summary. The REAL arguments still dispatch to the tool registry (→ Bridge) below,
+            // and the REAL result still lands in the LLM tool-result message — redaction never
+            // changes tool behavior.
+            var sanitizedArguments = McpTelemetrySanitizer.Input(toolCall.Name, toolCall.Arguments);
 
-            this.LogToolExecuting(session.ConversationId, toolCall.Name, toolCall.Arguments);
+            // Notify Bridge: tool started
+            await delivery.NotifyToolStartedAsync(toolCall.Name, sanitizedArguments).ConfigureAwait(false);
+
+            this.LogToolExecuting(session.ConversationId, toolCall.Name, sanitizedArguments);
             var stopwatch = Stopwatch.StartNew();
             var result = await this.toolRegistry.ExecuteAsync(toolCall, turnContext, cancellationToken).ConfigureAwait(false);
             stopwatch.Stop();
             latency.AddToolMs(stopwatch.ElapsedMilliseconds);
             this.LogToolExecuted(session.ConversationId, toolCall.Name, result.Success, stopwatch.ElapsedMilliseconds);
 
-            // Build the tool result content
+            // Build the tool result content — REAL, UNREDACTED. This is what the LLM sees.
             var toolContent = result.Success
                 ? result.Content
                 : string.Create(CultureInfo.InvariantCulture, $"Error: {result.Error}");
@@ -1021,17 +1030,19 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
                 ToolCallId = toolCall.Id,
             });
 
-            // Capture a compact summary entry for this round's tool block.
+            // Capture a compact summary entry for this round's tool block (redacted for MCP tools).
             roundToolEntries.Add(new Storage.ToolCallSummaryEntry(
                 Name: toolCall.Name,
-                Args: Storage.ToolCallSummary.TruncateArgs(toolCall.Arguments),
+                Args: Storage.ToolCallSummary.TruncateArgs(toolCall.Name, toolCall.Arguments),
                 Ok: result.Success,
                 Pos: "after"));
 
-            // Notify Bridge: tool completed/failed
+            // Notify Bridge: tool completed/failed (redacted for MCP tools — args AND output).
+            var sanitizedOutput = McpTelemetrySanitizer.Output(
+                toolCall.Name, result.Success ? result.Content : result.Error);
             await delivery.NotifyToolCompletedAsync(
-                toolCall.Name, toolCall.Arguments,
-                result.Success ? result.Content : result.Error,
+                toolCall.Name, sanitizedArguments,
+                sanitizedOutput,
                 result.Success, stopwatch.Elapsed).ConfigureAwait(false);
         }
 

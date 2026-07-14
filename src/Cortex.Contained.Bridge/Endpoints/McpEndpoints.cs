@@ -51,6 +51,12 @@ internal static class McpEndpoints
                 return Results.Json(new { error = keyError }, statusCode: 400);
             }
 
+            var boundsError = McpServerRequestMapper.ValidateBounds(request);
+            if (boundsError is not null)
+            {
+                return Results.Json(new { error = boundsError }, statusCode: 400);
+            }
+
             var config = McpServerRequestMapper.ToConfig(request);
             var mutationError = McpServerRequestMapper.ValidateMutationAllowList(
                 config.ToolAllowList, config.MutationToolAllowList);
@@ -84,11 +90,17 @@ internal static class McpEndpoints
             }
 
             // Validate BEFORE ApplyTo: GetSettings() hands out the live config object, so an
-            // invalid mutation policy must be rejected without mutating it.
+            // invalid mutation policy or out-of-range bound must be rejected without mutating it.
             var mutationError = McpServerRequestMapper.ValidateMutationPolicy(config, request);
             if (mutationError is not null)
             {
                 return Results.Json(new { error = mutationError }, statusCode: 400);
+            }
+
+            var boundsError = McpServerRequestMapper.ValidateBounds(request);
+            if (boundsError is not null)
+            {
+                return Results.Json(new { error = boundsError }, statusCode: 400);
             }
 
             McpServerRequestMapper.ApplyTo(config, request);

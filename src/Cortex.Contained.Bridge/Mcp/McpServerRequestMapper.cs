@@ -144,6 +144,40 @@ public static class McpServerRequestMapper
             // Mutation names are normalized exactly like the exposure allow-list.
             target.MutationToolAllowList = NormalizeAllowList(request.MutationToolAllowList);
         }
+
+        if (request.CallTimeoutSeconds is not null)
+        {
+            target.CallTimeoutSeconds = request.CallTimeoutSeconds.Value;
+        }
+
+        if (request.MaxResultBytes is not null)
+        {
+            target.MaxResultBytes = request.MaxResultBytes.Value;
+        }
+    }
+
+    /// <summary>
+    /// Validates the generic per-call bounds (<see cref="McpServerConfig.CallTimeoutSeconds"/>,
+    /// <see cref="McpServerConfig.MaxResultBytes"/>) a request would apply, WITHOUT mutating
+    /// anything. Out-of-range values are REJECTED — never silently clamped. A field the request
+    /// leaves <c>null</c> is not validated (it will not change on <see cref="ApplyTo"/>). Returns
+    /// an error message, or <c>null</c> when valid.
+    /// </summary>
+    public static string? ValidateBounds(McpServerRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        if (request.CallTimeoutSeconds is < McpServerConfig.MinCallTimeoutSeconds or > McpServerConfig.MaxCallTimeoutSeconds)
+        {
+            return $"callTimeoutSeconds must be between {McpServerConfig.MinCallTimeoutSeconds} and {McpServerConfig.MaxCallTimeoutSeconds}.";
+        }
+
+        if (request.MaxResultBytes is < McpServerConfig.MinMaxResultBytes)
+        {
+            return $"maxResultBytes must be at least {McpServerConfig.MinMaxResultBytes}.";
+        }
+
+        return null;
     }
 
     /// <summary>

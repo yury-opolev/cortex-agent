@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Cortex.Contained.Agent.Host.Mcp;
 
 namespace Cortex.Contained.Agent.Host.Storage;
 
@@ -41,6 +42,17 @@ internal static class ToolCallSummary
         }
 
         return string.Concat(rawArgs.AsSpan(0, MaxArgsChars), TruncationSuffix);
+    }
+
+    /// <summary>
+    /// Redacts (for any <c>mcp__*</c> tool, via <see cref="McpTelemetrySanitizer"/>) then truncates
+    /// the raw arguments string. Centralizes MCP telemetry redaction so every caller building a
+    /// persisted tool-call summary entry applies the same rule.
+    /// </summary>
+    public static string TruncateArgs(string toolName, string? rawArgs)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(toolName);
+        return TruncateArgs(McpTelemetrySanitizer.Input(toolName, rawArgs ?? string.Empty));
     }
 
     /// <summary>

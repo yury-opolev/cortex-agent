@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using Cortex.Contained.Agent.Host.Agent;
 using Cortex.Contained.Agent.Host.Hubs;
+using Cortex.Contained.Agent.Host.Mcp;
 using Cortex.Contained.Agent.Host.Memory;
 using Cortex.Contained.Agent.Host.Storage;
 using Cortex.Contained.Agent.Host.Tools;
@@ -1768,5 +1769,255 @@ public class AgentRuntimeSlashCommandTests : IAsyncLifetime
                 TotalTokens = 15,
             },
         };
+    }
+}
+
+/// <summary>
+/// Proves the MCP telemetry-redaction invariant end to end through <see cref="AgentRuntime"/>:
+/// for an <c>mcp__*</c> tool, the Bridge-facing <see cref="ToolExecutionMessage"/> and the
+/// AgentRuntime log lines never carry the real argument/result payload — while the REAL arguments
+/// still dispatch to the tool (the Bridge-call boundary) and the REAL result still reaches the LLM
+/// tool-result message. Redaction is telemetry-only, never functional.
+/// </summary>
+public class AgentRuntimeMcpTelemetryTests : IAsyncLifetime
+{
+    private const string SentinelArgsValue = "SENTINEL-ARGS-7f3a9c";
+    private const string SentinelResultValue = "SENTINEL-RESULT-9c1eab";
+    private const string SentinelErrorValue = "SENTINEL-ERROR-BODY-4d2b71";
+
+    private readonly IAgentHubClient _mockCaller;
+    private readonly ILlmClient _mockLlmClient;
+    private readonly IAgentTool _mcpSuccessTool;
+    private readonly IAgentTool _mcpFailingTool;
+    private readonly AgentSessionStore _sessions;
+    private readonly CapturingLogger<AgentRuntime> _capturingLogger;
+    private readonly AgentRuntime _runtime;
+
+    public AgentRuntimeMcpTelemetryTests()
+    {
+        var sessionConfig = new SessionConfig();
+        _sessions = new AgentSessionStore(sessionConfig, new MemorySettingsStore(), NullLogger<AgentSessionStore>.Instance);
+        _mockLlmClient = Substitute.For<ILlmClient>();
+
+        _mcpSuccessTool = Substitute.For<IAgentTool>();
+        _mcpSuccessTool.Name.Returns("mcp__testsrv__lookup");
+        _mcpSuccessTool.Description.Returns("Looks something up via a fake MCP server.");
+        _mcpSuccessTool.ParametersSchema.Returns("""{"type":"object","properties":{"query":{"type":"string"}}}""");
+        _mcpSuccessTool.ExecuteAsync(Arg.Any<string>(), Arg.Any<ToolExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(new AgentToolResult { Success = true, Content = $"lookup result: {SentinelResultValue}" });
+
+        _mcpFailingTool = Substitute.For<IAgentTool>();
+        _mcpFailingTool.Name.Returns("mcp__testsrv__fail");
+        _mcpFailingTool.Description.Returns("Always fails, via a fake MCP server.");
+        _mcpFailingTool.ParametersSchema.Returns("""{"type":"object","properties":{}}""");
+        _mcpFailingTool.ExecuteAsync(Arg.Any<string>(), Arg.Any<ToolExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(new AgentToolResult { Success = false, Content = string.Empty, Error = SentinelErrorValue });
+
+        var activeChannelStore = new ActiveChannelStore();
+        var toolRegistry = new ToolRegistry([_mcpSuccessTool, _mcpFailingTool], activeChannelStore, NullLogger<ToolRegistry>.Instance);
+        var messageChannel = new AgentMessageChannel();
+
+        var hubContext = Substitute.For<IHubContext<AgentHub, IAgentHubClient>>();
+        var hubClients = Substitute.For<IHubClients<IAgentHubClient>>();
+        hubContext.Clients.Returns(hubClients);
+        var bridgeAccessor = new BridgeClientAccessor(hubContext);
+
+        _mockCaller = Substitute.For<IAgentHubClient>();
+        hubClients.Client(Arg.Any<string>()).Returns(_mockCaller);
+        bridgeAccessor.SetConnectionId("test-conn");
+
+        _mockCaller.OnStatusChanged(Arg.Any<AgentStatusInfo>()).Returns(Task.CompletedTask);
+        _mockCaller.OnResponseChunk(Arg.Any<ResponseChunkMessage>()).Returns(Task.CompletedTask);
+        _mockCaller.OnResponseComplete(Arg.Any<ResponseCompleteMessage>()).Returns(Task.CompletedTask);
+        _mockCaller.OnToolExecution(Arg.Any<ToolExecutionMessage>()).Returns(Task.CompletedTask);
+
+        var httpClientFactory = Substitute.For<IHttpClientFactory>();
+        var imageAgingMonitor = Substitute.For<IOptionsMonitor<ImageAgingConfig>>();
+        imageAgingMonitor.CurrentValue.Returns(new ImageAgingConfig());
+        _capturingLogger = new CapturingLogger<AgentRuntime>();
+        _runtime = new AgentRuntime(
+            _sessions, _mockLlmClient, toolRegistry, sessionConfig, messageChannel, bridgeAccessor, activeChannelStore,
+            httpClientFactory, Path.GetTempPath(), Path.GetTempPath(), _capturingLogger, new ModelProvider(), imageAgingMonitor);
+    }
+
+    public async Task InitializeAsync() => await _runtime.StartProcessingAsync(CancellationToken.None);
+
+    public async Task DisposeAsync() => await _runtime.StopProcessingAsync(CancellationToken.None);
+
+    [Fact]
+    public async Task AgentRuntime_McpTelemetry_DoesNotContainSentinel()
+    {
+        var callCount = 0;
+        _mockLlmClient.StreamCompleteAsync(Arg.Any<LlmCompletionRequest>(), Arg.Any<CancellationToken>())
+            .Returns(callInfo =>
+            {
+                callCount++;
+                if (callCount == 1)
+                {
+                    return ToolCallStream(
+                        new LlmStreamChunk
+                        {
+                            ToolCallDeltas =
+                            [
+                                new LlmToolCallDelta
+                                {
+                                    Index = 0,
+                                    Id = "call_mcp_1",
+                                    Name = "mcp__testsrv__lookup",
+                                    ArgumentsDelta = $$"""{"query":"{{SentinelArgsValue}}"}""",
+                                },
+                            ],
+                        },
+                        new LlmStreamChunk { IsComplete = true, FinishReason = "tool_calls" });
+                }
+
+                return SingleChunkStream("Done.");
+            });
+
+        var message = new HubInboundMessage
+        {
+            ConversationId = "conv-mcp-telemetry",
+            ChannelId = "webchat-default",
+            SenderIdHash = "hash",
+            Text = "Look something up",
+            Timestamp = DateTimeOffset.UtcNow,
+        };
+
+        await _runtime.HandleMessageAsync(message, CancellationToken.None);
+        await WaitForResponseComplete(_mockCaller);
+
+        var toolExecCalls = _mockCaller.ReceivedCalls()
+            .Where(c => c.GetMethodInfo().Name == nameof(IAgentHubClient.OnToolExecution))
+            .Select(c => (ToolExecutionMessage)c.GetArguments()[0]!)
+            .ToList();
+
+        Assert.NotEmpty(toolExecCalls);
+        Assert.All(toolExecCalls, m =>
+        {
+            Assert.DoesNotContain(SentinelArgsValue, m.Input ?? string.Empty, StringComparison.Ordinal);
+            Assert.DoesNotContain(SentinelResultValue, m.Output ?? string.Empty, StringComparison.Ordinal);
+            Assert.Equal(McpTelemetrySanitizer.RedactedPayload, m.Input);
+        });
+
+        var completed = toolExecCalls.First(m => m.Status == ToolExecutionStatus.Completed);
+        Assert.Equal(McpTelemetrySanitizer.RedactedPayload, completed.Output);
+
+        // Logs must not carry the sentinel either.
+        Assert.DoesNotContain(_capturingLogger.Messages, msg => msg.Contains(SentinelArgsValue, StringComparison.Ordinal));
+        Assert.DoesNotContain(_capturingLogger.Messages, msg => msg.Contains(SentinelResultValue, StringComparison.Ordinal));
+
+        // The REAL argument still reached tool dispatch (the Bridge-call boundary).
+        await _mcpSuccessTool.Received(1).ExecuteAsync(
+            Arg.Is<string>(s => s.Contains(SentinelArgsValue, StringComparison.Ordinal)),
+            Arg.Any<ToolExecutionContext>(),
+            Arg.Any<CancellationToken>());
+
+        // The REAL result still reached the LLM tool-result message in session history.
+        var history = _sessions.GetOrCreate("conv-mcp-telemetry").GetHistory();
+        Assert.Contains(history, m => m.Role == "tool" && (m.Content ?? string.Empty).Contains(SentinelResultValue, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task BridgeFailureLog_DoesNotContainMcpErrorBody()
+    {
+        _mockLlmClient.StreamCompleteAsync(Arg.Any<LlmCompletionRequest>(), Arg.Any<CancellationToken>())
+            .Returns(callInfo =>
+            {
+                var request = callInfo.Arg<LlmCompletionRequest>();
+                var alreadyRanTool = request.Messages.Any(m => m.Role == "tool");
+                if (!alreadyRanTool)
+                {
+                    return ToolCallStream(
+                        new LlmStreamChunk
+                        {
+                            ToolCallDeltas =
+                            [
+                                new LlmToolCallDelta { Index = 0, Id = "call_mcp_fail", Name = "mcp__testsrv__fail", ArgumentsDelta = "{}" },
+                            ],
+                        },
+                        new LlmStreamChunk { IsComplete = true, FinishReason = "tool_calls" });
+                }
+
+                return SingleChunkStream("Sorry, that failed.");
+            });
+
+        var message = new HubInboundMessage
+        {
+            ConversationId = "conv-mcp-fail-log",
+            ChannelId = "webchat-default",
+            SenderIdHash = "hash",
+            Text = "Try the flaky lookup",
+            Timestamp = DateTimeOffset.UtcNow,
+        };
+
+        await _runtime.HandleMessageAsync(message, CancellationToken.None);
+        await WaitForResponseComplete(_mockCaller);
+
+        Assert.DoesNotContain(_capturingLogger.Messages, msg => msg.Contains(SentinelErrorValue, StringComparison.Ordinal));
+    }
+
+    private static async IAsyncEnumerable<LlmStreamChunk> ToolCallStream(params LlmStreamChunk[] chunks)
+    {
+        await Task.CompletedTask;
+        foreach (var chunk in chunks)
+        {
+            yield return chunk;
+        }
+    }
+
+    private static async IAsyncEnumerable<LlmStreamChunk> SingleChunkStream(string content)
+    {
+        await Task.CompletedTask;
+        yield return new LlmStreamChunk
+        {
+            ContentDelta = content,
+            IsComplete = true,
+            FinishReason = "stop",
+            Usage = new LlmTokenUsage
+            {
+                PromptTokens = 10,
+                CompletionTokens = 5,
+                TotalTokens = 15,
+            },
+        };
+    }
+
+    /// <summary>Waits until <see cref="IAgentHubClient.OnResponseComplete"/> has been called at least once.</summary>
+    private static async Task WaitForResponseComplete(IAgentHubClient client, int timeoutMs = 5000)
+    {
+        var deadline = Environment.TickCount64 + timeoutMs;
+        while (Environment.TickCount64 < deadline)
+        {
+            var calls = client.ReceivedCalls()
+                .Where(c => c.GetMethodInfo().Name == nameof(IAgentHubClient.OnResponseComplete))
+                .ToList();
+            if (calls.Count > 0)
+            {
+                return;
+            }
+
+            await Task.Delay(25);
+        }
+
+        Assert.Fail("Timed out waiting for OnResponseComplete callback");
+    }
+
+    /// <summary>Test double that records every formatted log message, so a test can assert what did (or did not) get logged.</summary>
+    private sealed class CapturingLogger<T> : ILogger<T>
+    {
+        public List<string> Messages { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+            => this.Messages.Add(formatter(state, exception));
     }
 }

@@ -128,6 +128,8 @@ function mcpServersPage() {
                 hasSecret: !!s.hasSecret,
                 toolAllowList: [...(s.toolAllowList || [])],
                 mutationToolAllowList: [...(s.mutationToolAllowList || [])],
+                callTimeoutSeconds: s.callTimeoutSeconds || 45,
+                maxResultBytes: s.maxResultBytes || 51200,
                 tools: [...(s.tools || [])],
             };
             this.showModal = true;
@@ -187,6 +189,10 @@ function mcpServersPage() {
                     apiKeyHeader: this.form.apiKeyHeader.trim() || null,
                     toolAllowList: this.form.toolAllowList,
                     mutationToolAllowList: this.form.mutationToolAllowList,
+                    callTimeoutSeconds: Number.isFinite(Number(this.form.callTimeoutSeconds)) && this.form.callTimeoutSeconds !== ""
+                        ? Number(this.form.callTimeoutSeconds) : null,
+                    maxResultBytes: Number.isFinite(Number(this.form.maxResultBytes)) && this.form.maxResultBytes !== ""
+                        ? Number(this.form.maxResultBytes) : null,
                 };
                 // Secret is sent ONLY when the user typed one (write-only). Blank = leave unchanged.
                 if (this.form.secret && this.form.secret.length > 0) {
@@ -313,6 +319,8 @@ function emptyMcpForm() {
         hasSecret: false,
         toolAllowList: [],
         mutationToolAllowList: [],
+        callTimeoutSeconds: 45,
+        maxResultBytes: 51200,
         tools: [],
     };
 }

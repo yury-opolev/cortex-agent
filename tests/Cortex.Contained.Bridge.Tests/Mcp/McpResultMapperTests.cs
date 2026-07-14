@@ -76,6 +76,65 @@ public sealed class McpResultMapperTests
     }
 
     [Fact]
+    public void ResultMapper_OverLimit_TruncatesBeforeSignalR()
+    {
+        // A result far larger than the configured byte limit must be cut off BEFORE it ever
+        // crosses the Bridge->Agent SignalR hub, with a deterministic truncation marker appended.
+        var content = new ContentBlock[]
+        {
+            new TextContentBlock { Text = new string('a', 200) },
+        };
+
+        var flattened = McpResultMapper.FlattenContent(content, maxResultBytes: 10);
+
+        Assert.EndsWith(McpResultMapper.TruncationMarker, flattened, StringComparison.Ordinal);
+        // The non-marker prefix must fit within the configured byte budget.
+        var prefix = flattened[..^McpResultMapper.TruncationMarker.Length];
+        Assert.True(System.Text.Encoding.UTF8.GetByteCount(prefix) <= 10);
+        Assert.DoesNotContain(new string('a', 200), flattened, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FlattenContent_UnderLimit_IsNotTruncated()
+    {
+        var content = new ContentBlock[] { new TextContentBlock { Text = "short" } };
+
+        var flattened = McpResultMapper.FlattenContent(content, maxResultBytes: 1024);
+
+        Assert.Equal("short", flattened);
+        Assert.DoesNotContain(McpResultMapper.TruncationMarker, flattened, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FlattenContent_MultiByteCharactersNearLimit_NeverSplitsAMultiByteSequence()
+    {
+        // Each '€' is 3 UTF-8 bytes. A limit that lands mid-character must round DOWN to the last
+        // whole character, never emit a truncated/invalid byte sequence.
+        var content = new ContentBlock[] { new TextContentBlock { Text = "€€€€€" } }; // 15 bytes total
+
+        var flattened = McpResultMapper.FlattenContent(content, maxResultBytes: 7); // fits 2 whole '€' (6 bytes)
+
+        var prefix = flattened[..^McpResultMapper.TruncationMarker.Length];
+        Assert.Equal("€€", prefix);
+    }
+
+    [Fact]
+    public void ToToolResult_OverLimit_TruncatesFlattenedContent()
+    {
+        var result = new CallToolResult
+        {
+            IsError = false,
+            Content = [new TextContentBlock { Text = new string('x', 500) }],
+        };
+
+        var mapped = McpResultMapper.ToToolResult("inv-trunc", result, maxResultBytes: 20);
+
+        Assert.Equal(McpToolOutcome.Succeeded, mapped.Outcome);
+        Assert.EndsWith(McpResultMapper.TruncationMarker, mapped.Content, StringComparison.Ordinal);
+        Assert.True(mapped.Content.Length < 500);
+    }
+
+    [Fact]
     public void FromCallException_ProtocolException_ReturnsDefinitiveToolFailure()
     {
         // SAFETY: an McpProtocolException is the SDK's carrier for a JSON-RPC error RESPONSE from

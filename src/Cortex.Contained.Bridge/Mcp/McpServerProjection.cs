@@ -30,6 +30,8 @@ public static class McpServerProjection
             SecretRef = config.SecretRef,
             ToolAllowList = config.ToolAllowList,
             MutationToolAllowList = config.MutationToolAllowList,
+            CallTimeoutSeconds = config.CallTimeoutSeconds,
+            MaxResultBytes = config.MaxResultBytes,
             Status = StatusLabel(config, masterEnabled, runtime, needsLogin),
             ToolCount = runtime?.Tools.Count ?? 0,
             LastError = runtime?.LastError,

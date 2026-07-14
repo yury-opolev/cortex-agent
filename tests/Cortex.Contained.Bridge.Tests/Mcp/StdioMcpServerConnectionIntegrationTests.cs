@@ -218,6 +218,45 @@ public sealed class StdioMcpServerConnectionIntegrationTests
     }
 
     [Fact]
+    public async Task Call_ExceedsConfiguredTimeout_ReturnsOutcomeUnknown()
+    {
+        var node = FindNode();
+        if (node is null)
+        {
+            return;
+        }
+
+        // A very short configured CallTimeoutSeconds must bound the call even with NO external
+        // caller cancellation at all — the Bridge's own per-server bound is what fires here.
+        await using var connection = new StdioMcpServerConnection(
+            serverKey: "fake",
+            command: node,
+            arguments: [ScriptPath()],
+            environment: new Dictionary<string, string>(),
+            toolAllowList: [],
+            logger: NullLogger<StdioMcpServerConnection>.Instance,
+            callTimeoutSeconds: 1);
+
+        using var connectCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await connection.ConnectAsync(connectCts.Token);
+        Assert.Equal(McpServerStatus.Connected, connection.Status);
+
+        // 'hang' never replies. No external cancellation is supplied — only the connection's own
+        // configured 1s timeout can end this call.
+        var result = await connection.CallToolAsync(Invocation("hang"), CancellationToken.None);
+
+        Assert.Equal(McpToolOutcome.OutcomeUnknown, result.Outcome);
+        Assert.Equal(McpFailureKind.Timeout, result.FailureKind);
+
+        // The server process is still alive (only this invocation was bounded away); the
+        // connection survives and later calls succeed.
+        Assert.Equal(McpServerStatus.Connected, connection.Status);
+        var echo = await connection.CallToolAsync(Invocation("echo", """{"text":"still alive"}"""), connectCts.Token);
+        Assert.Equal(McpToolOutcome.Succeeded, echo.Outcome);
+        Assert.Equal("still alive", echo.Content);
+    }
+
+    [Fact]
     public async Task CallTool_CancelledMidCall_ReturnsOutcomeUnknown_WithoutKillingConnection()
     {
         var node = FindNode();

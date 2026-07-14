@@ -270,4 +270,65 @@ public sealed class McpServerRequestMapperTests
     {
         Assert.Equal("mcp/github/apikey", McpServerRequestMapper.ApiKeySecretId("GitHub"));
     }
+
+    [Fact]
+    public void ValidateBounds_NullFields_ReturnsNull()
+    {
+        // A partial edit that doesn't touch either bound must not be rejected.
+        Assert.Null(McpServerRequestMapper.ValidateBounds(new McpServerRequest()));
+    }
+
+    [Fact]
+    public void ValidateBounds_ValidValues_ReturnsNull()
+    {
+        var error = McpServerRequestMapper.ValidateBounds(
+            new McpServerRequest { CallTimeoutSeconds = 30, MaxResultBytes = 4096 });
+
+        Assert.Null(error);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(60)] // must stay strictly BELOW the Agent gateway's 60s ceiling
+    [InlineData(1000)]
+    public void ValidateBounds_InvalidCallTimeoutSeconds_Rejected(int value)
+    {
+        // Out-of-range values are REJECTED, never silently clamped.
+        var error = McpServerRequestMapper.ValidateBounds(new McpServerRequest { CallTimeoutSeconds = value });
+
+        Assert.NotNull(error);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void ValidateBounds_InvalidMaxResultBytes_Rejected(int value)
+    {
+        var error = McpServerRequestMapper.ValidateBounds(new McpServerRequest { MaxResultBytes = value });
+
+        Assert.NotNull(error);
+    }
+
+    [Fact]
+    public void ApplyTo_CallTimeoutSecondsAndMaxResultBytes_UpdatesTargetWhenProvided()
+    {
+        var existing = new McpServerConfig { Key = "github", CallTimeoutSeconds = 45, MaxResultBytes = 50 * 1024 };
+
+        McpServerRequestMapper.ApplyTo(existing, new McpServerRequest { CallTimeoutSeconds = 20, MaxResultBytes = 2048 });
+
+        Assert.Equal(20, existing.CallTimeoutSeconds);
+        Assert.Equal(2048, existing.MaxResultBytes);
+    }
+
+    [Fact]
+    public void ApplyTo_NullBoundsFields_LeavesExistingBoundsUnchanged()
+    {
+        var existing = new McpServerConfig { Key = "github", CallTimeoutSeconds = 30, MaxResultBytes = 4096 };
+
+        McpServerRequestMapper.ApplyTo(existing, new McpServerRequest { Enabled = false });
+
+        Assert.Equal(30, existing.CallTimeoutSeconds);
+        Assert.Equal(4096, existing.MaxResultBytes);
+    }
 }

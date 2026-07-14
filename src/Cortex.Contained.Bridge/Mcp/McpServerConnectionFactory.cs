@@ -76,7 +76,9 @@ public sealed partial class McpServerConnectionFactory : IMcpServerConnectionFac
             server.ToolAllowList,
             this.loggerFactory.CreateLogger<StdioMcpServerConnection>(),
             workingDirectory: null,
-            mutationToolAllowList: server.MutationToolAllowList);
+            mutationToolAllowList: server.MutationToolAllowList,
+            callTimeoutSeconds: server.CallTimeoutSeconds,
+            maxResultBytes: server.MaxResultBytes);
     }
 
     private HttpMcpServerConnection? CreateHttp(McpServerConfig server)
@@ -116,7 +118,9 @@ public sealed partial class McpServerConnectionFactory : IMcpServerConnectionFac
                 bearerSource,
                 server.ToolAllowList,
                 this.loggerFactory.CreateLogger<HttpMcpServerConnection>(),
-                mutationToolAllowList: server.MutationToolAllowList);
+                mutationToolAllowList: server.MutationToolAllowList,
+                callTimeoutSeconds: server.CallTimeoutSeconds,
+                maxResultBytes: server.MaxResultBytes);
         }
 
         // Static path: none / apiKey / auto-public.
@@ -133,7 +137,9 @@ public sealed partial class McpServerConnectionFactory : IMcpServerConnectionFac
             auth.Headers,
             server.ToolAllowList,
             this.loggerFactory.CreateLogger<HttpMcpServerConnection>(),
-            mutationToolAllowList: server.MutationToolAllowList);
+            mutationToolAllowList: server.MutationToolAllowList,
+            callTimeoutSeconds: server.CallTimeoutSeconds,
+            maxResultBytes: server.MaxResultBytes);
     }
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "MCP server '{ServerKey}' has an invalid key — skipping")]

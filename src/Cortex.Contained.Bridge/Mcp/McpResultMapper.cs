@@ -12,31 +12,87 @@ namespace Cortex.Contained.Bridge.Mcp;
 /// </summary>
 public static class McpResultMapper
 {
-    /// <summary>Flattens a sequence of content blocks to a single string for the agent tool result.</summary>
-    public static string FlattenContent(IEnumerable<ContentBlock>? content)
+    /// <summary>
+    /// Default UTF-8 byte cap applied when a caller does not supply one — mirrors
+    /// <see cref="Cortex.Contained.Contracts.Config.McpServerConfig.MaxResultBytes"/>'s default.
+    /// </summary>
+    public const int DefaultMaxResultBytes = 50 * 1024;
+
+    /// <summary>Deterministic marker appended when a result was cut off at the byte limit.</summary>
+    public const string TruncationMarker = "\n[MCP result truncated: exceeded the configured size limit]";
+
+    /// <summary>
+    /// Flattens a sequence of content blocks to a single string for the agent tool result.
+    /// Builds INCREMENTALLY and STOPS as soon as the next block would push the UTF-8 byte count
+    /// past <paramref name="maxResultBytes"/>, appending <see cref="TruncationMarker"/> — so an
+    /// oversized MCP result is bounded before it ever crosses the Bridge→Agent SignalR hub.
+    /// </summary>
+    public static string FlattenContent(IEnumerable<ContentBlock>? content, int maxResultBytes = DefaultMaxResultBytes)
     {
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(maxResultBytes, 0);
+
         if (content is null)
         {
             return string.Empty;
         }
 
         var builder = new StringBuilder();
+        var usedBytes = 0;
+        var truncated = false;
+
         foreach (var block in content)
         {
-            if (builder.Length > 0)
+            var separator = builder.Length > 0 ? "\n" : string.Empty;
+            var text = block switch
             {
-                builder.Append('\n');
+                TextContentBlock textBlock => textBlock.Text,
+                _ => $"[{block.Type} content]",
+            };
+            var piece = separator + text;
+            var pieceBytes = Encoding.UTF8.GetByteCount(piece);
+
+            if (usedBytes + pieceBytes > maxResultBytes)
+            {
+                var remaining = maxResultBytes - usedBytes;
+                if (remaining > 0)
+                {
+                    builder.Append(TruncateToUtf8ByteLimit(piece, remaining));
+                }
+
+                truncated = true;
+                break;
             }
 
-            switch (block)
+            builder.Append(piece);
+            usedBytes += pieceBytes;
+        }
+
+        if (truncated)
+        {
+            builder.Append(TruncationMarker);
+        }
+
+        return builder.ToString();
+    }
+
+    /// <summary>
+    /// Cuts <paramref name="text"/> to fit within <paramref name="maxBytes"/> UTF-8 bytes without
+    /// ever splitting a multi-byte character or surrogate pair mid-sequence.
+    /// </summary>
+    private static string TruncateToUtf8ByteLimit(string text, int maxBytes)
+    {
+        var builder = new StringBuilder();
+        var used = 0;
+        foreach (var rune in text.EnumerateRunes())
+        {
+            var runeBytes = rune.Utf8SequenceLength;
+            if (used + runeBytes > maxBytes)
             {
-                case TextContentBlock text:
-                    builder.Append(text.Text);
-                    break;
-                default:
-                    builder.Append('[').Append(block.Type).Append(" content]");
-                    break;
+                break;
             }
+
+            builder.Append(rune);
+            used += runeBytes;
         }
 
         return builder.ToString();
@@ -49,11 +105,11 @@ public static class McpResultMapper
     /// becomes a structured <see cref="McpFailureKind.Tool"/> failure carrying the flattened
     /// content as the error text; a success carries the flattened content.
     /// </summary>
-    public static McpToolResult ToToolResult(string invocationId, CallToolResult result)
+    public static McpToolResult ToToolResult(string invocationId, CallToolResult result, int maxResultBytes = DefaultMaxResultBytes)
     {
         ArgumentNullException.ThrowIfNull(result);
 
-        var flattened = FlattenContent(result.Content);
+        var flattened = FlattenContent(result.Content, maxResultBytes);
         if (result.IsError == true)
         {
             return McpToolResult.Fail(
