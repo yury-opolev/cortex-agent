@@ -38,8 +38,14 @@ public sealed class BridgeConfig
     /// </summary>
     public int MaxSubagentRounds { get; set; }
 
-    /// <summary>Maximum number of subagents that may run concurrently (1–20). Default 5.</summary>
-    public int MaxConcurrentSubagents { get; set; } = 5;
+    /// <summary>
+    /// Maximum number of subagents that may run concurrently (1-50). Default 5.
+    /// Out-of-range values are rejected, never clamped — see <see cref="SubagentConcurrencyLimits"/>.
+    /// This is the Bridge-authoritative value pushed to the Agent on connect/reconnect/watchdog
+    /// reconstruction (see <c>CredentialsPusher.PushAgentConfigAsync</c>).
+    /// </summary>
+    [Range(SubagentConcurrencyLimits.Minimum, SubagentConcurrencyLimits.Maximum)]
+    public int MaxConcurrentSubagents { get; set; } = SubagentConcurrencyLimits.Default;
 
     /// <summary>Multi-tenant configuration. Maps tenant ID → tenant config.</summary>
     public Dictionary<string, TenantConfig> Tenants { get; set; } = new(StringComparer.OrdinalIgnoreCase);

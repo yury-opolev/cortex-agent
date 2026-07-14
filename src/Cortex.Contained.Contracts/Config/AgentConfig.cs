@@ -45,11 +45,12 @@ public sealed class AgentConfig
     public int MaxSubagentRounds { get; set; }
 
     /// <summary>
-    /// Maximum number of subagent tasks that can run concurrently.
+    /// Maximum number of subagent tasks that can run concurrently (1-50).
     /// Additional tasks are queued and start automatically when a slot opens.
+    /// Out-of-range values are rejected, never clamped — see <see cref="SubagentConcurrencyLimits"/>.
     /// </summary>
-    [Range(1, 20)]
-    public int MaxConcurrentSubagents { get; set; } = 5;
+    [Range(SubagentConcurrencyLimits.Minimum, SubagentConcurrencyLimits.Maximum)]
+    public int MaxConcurrentSubagents { get; set; } = SubagentConcurrencyLimits.Default;
 
     /// <summary>Settings that control how images are aged out of the context window.</summary>
     public ImageAgingConfig ImageAging { get; set; } = new();

@@ -1,10 +1,9 @@
+using System.Diagnostics;
 using Cortex.Contained.Agent.Host.Agent;
 using Cortex.Contained.Agent.Host.Tools;
 using Cortex.Contained.Agent.Host.Tools.BuiltIn;
-using Cortex.Contained.Contracts.Config;
 using Cortex.Contained.Contracts.Llm;
 using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Options;
 
 namespace Cortex.Contained.Agent.Host.Tests;
 
@@ -14,12 +13,8 @@ public class SubAgentToolTests : IDisposable
     private readonly SubagentSessionStore _store;
     private readonly SubagentRunnerRegistry _registry;
     private readonly ILlmClient _mockLlmClient = Substitute.For<ILlmClient>();
-    private readonly IModelProvider _mockModelProvider = Substitute.For<IModelProvider>();
-    private readonly IOptionsMonitor<AgentConfig> _mockConfig;
     private readonly ToolExecutionContext _context;
-
-    private string? _completionTaskId;
-    private string? _completionResult;
+    private readonly List<SubagentExecutionCoordinator> _coordinators = [];
 
     public SubAgentToolTests()
     {
@@ -27,11 +22,6 @@ public class SubAgentToolTests : IDisposable
         Directory.CreateDirectory(_tempDir);
         _store = new SubagentSessionStore(_tempDir, NullLogger<SubagentSessionStore>.Instance);
         _registry = new SubagentRunnerRegistry(2, NullLogger<SubagentRunnerRegistry>.Instance);
-        _mockModelProvider.DefaultModel.Returns("gpt-4o");
-
-        var config = new AgentConfig { MaxSubagentRounds = 10 };
-        _mockConfig = Substitute.For<IOptionsMonitor<AgentConfig>>();
-        _mockConfig.CurrentValue.Returns(config);
 
         _context = new ToolExecutionContext
         {
@@ -42,50 +32,104 @@ public class SubAgentToolTests : IDisposable
 
     public void Dispose()
     {
+        foreach (var coord in _coordinators)
+        {
+            try { coord.StopAsync(CancellationToken.None).GetAwaiter().GetResult(); } catch { /* teardown */ }
+            coord.Dispose();
+        }
+
         _store.Dispose();
-        // registry has no IDisposable
         try { Directory.Delete(_tempDir, recursive: true); } catch { /* best-effort */ }
         GC.SuppressFinalize(this);
-    }
-
-    private Task OnCompletionAsync(string taskId, string result)
-    {
-        _completionTaskId = taskId;
-        _completionResult = result;
-        return Task.CompletedTask;
     }
 
     private static ToolRegistry CreateToolRegistry(params IAgentTool[] tools)
         => new(tools, new ActiveChannelStore(), NullLogger<ToolRegistry>.Instance);
 
+    /// <summary>
+    /// Builds a coordinator wired to <paramref name="executor"/>. When <paramref name="started"/> is
+    /// true the dispatch loop runs and readiness is satisfied so signalled work is actually dispatched;
+    /// otherwise the coordinator is inert and queued tasks stay put for store inspection.
+    /// </summary>
+    private SubagentExecutionCoordinator BuildCoordinator(ISubagentExecutor executor, bool started)
+    {
+        SubagentRunner RunnerFactory(SubagentTask _) => new(
+            _mockLlmClient,
+            CreateToolRegistry(),
+            10,
+            NullLogger<SubagentRunner>.Instance);
+
+        var coordinator = new SubagentExecutionCoordinator(
+            _store,
+            _registry,
+            executor,
+            RunnerFactory,
+            new AgentMessageChannel(),
+            NullLogger<SubagentExecutionCoordinator>.Instance);
+
+        _coordinators.Add(coordinator);
+
+        if (started)
+        {
+            coordinator.StartAsync(CancellationToken.None).GetAwaiter().GetResult();
+            coordinator.OnBridgeConnected();
+            coordinator.MarkCredentialsReady(true);
+            coordinator.MarkMcpCatalogReady();
+        }
+
+        return coordinator;
+    }
+
     // ── SubAgentStartTool ────────────────────────────────────────────────
 
     [Fact]
-    public async Task Start_ValidArgs_CreatesTaskAndReturnsId()
+    public async Task Start_ValidArgs_PersistsNewModeAndSkill()
     {
-        // Make LLM return immediately so the background task completes
-        _mockLlmClient.StreamCompleteAsync(Arg.Any<LlmCompletionRequest>(), Arg.Any<CancellationToken>())
-            .Returns(SingleChunkStream("Done."));
+        var coordinator = BuildCoordinator(new NoopExecutor(), started: false);
+        var tool = new SubAgentStartTool(_store, coordinator, NullLogger<SubAgentStartTool>.Instance);
 
-        var tool = CreateStartTool();
+        var result = await tool.ExecuteAsync(
+            """{"description":"Research topic","prompt":"Do the research","skill":"deep-research"}""",
+            _context, CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Contains("sa-", result.Content);
+
+        var active = _store.GetActive();
+        var task = Assert.Single(active);
+        Assert.Equal(SubagentTaskState.Queued, task.State);
+        Assert.Equal(SubagentRunMode.New, task.RunMode);
+        Assert.Equal("deep-research", task.SkillName);
+        Assert.Equal("Do the research", task.Prompt);
+    }
+
+    [Fact]
+    public async Task Start_ValidArgs_SignalsCoordinator()
+    {
+        var executor = new NoopExecutor();
+        var coordinator = BuildCoordinator(executor, started: true);
+        var tool = new SubAgentStartTool(_store, coordinator, NullLogger<SubAgentStartTool>.Instance);
+
+        // Let the readiness pass drain against the (currently empty) queue so only the tool's own
+        // SignalWorkAvailable can wake the loop for the task created below.
+        await Task.Delay(150);
 
         var result = await tool.ExecuteAsync(
             """{"description":"Find TODOs","prompt":"Search for all TODO comments"}""",
             _context, CancellationToken.None);
 
         Assert.True(result.Success);
-        Assert.Contains("running", result.Content);
-        Assert.Contains("sa-", result.Content);
 
-        // Verify task was created in store
-        var active = _store.GetActive();
-        Assert.True(active.Count >= 1);
+        // The coordinator dispatched the task — proof the tool signalled it.
+        await WaitUntilAsync(() => executor.CallCount > 0);
+        Assert.Equal(1, executor.CallCount);
     }
 
     [Fact]
     public async Task Start_EmptyPrompt_ReturnsError()
     {
-        var tool = CreateStartTool();
+        var coordinator = BuildCoordinator(new NoopExecutor(), started: false);
+        var tool = new SubAgentStartTool(_store, coordinator, NullLogger<SubAgentStartTool>.Instance);
 
         var result = await tool.ExecuteAsync(
             """{"description":"Test","prompt":""}""",
@@ -93,79 +137,6 @@ public class SubAgentToolTests : IDisposable
 
         Assert.False(result.Success);
         Assert.Contains("prompt", result.Error!);
-    }
-
-    [Fact]
-    public async Task Start_ThrottledWhenAllSlotsUsed_ReturnsQueued()
-    {
-        _mockLlmClient.StreamCompleteAsync(Arg.Any<LlmCompletionRequest>(), Arg.Any<CancellationToken>())
-            .Returns(NeverCompletingStream());
-
-        var tool = CreateStartTool();
-
-        // Fill both slots (registry has max 2)
-        await tool.ExecuteAsync(
-            """{"description":"Task 1","prompt":"Do task 1"}""",
-            _context, CancellationToken.None);
-        await tool.ExecuteAsync(
-            """{"description":"Task 2","prompt":"Do task 2"}""",
-            _context, CancellationToken.None);
-
-        // Third should be queued
-        var result = await tool.ExecuteAsync(
-            """{"description":"Task 3","prompt":"Do task 3"}""",
-            _context, CancellationToken.None);
-
-        Assert.True(result.Success);
-        Assert.Contains("queued", result.Content);
-    }
-
-    [Fact]
-    public void StartQueuedTasks_FiresQueuedTasksOnStartup()
-    {
-        // Simulate a queued task from a previous container
-        _store.Create(new SubagentTask
-        {
-            TaskId = "sa-queued-startup",
-            ParentConversation = "conv-1",
-            ParentChannel = "webchat-default",
-            Description = "Queued from before",
-            Prompt = "Do the research",
-            State = SubagentTaskState.Queued,
-        });
-
-        _mockLlmClient.StreamCompleteAsync(Arg.Any<LlmCompletionRequest>(), Arg.Any<CancellationToken>())
-            .Returns(SingleChunkStream("Done."));
-
-        var tool = CreateStartTool();
-        tool.StartQueuedTasks();
-
-        // Give background task a moment
-        Thread.Sleep(500);
-
-        // Task should no longer be queued
-        var task = _store.GetById("sa-queued-startup");
-        Assert.NotNull(task);
-        Assert.NotEqual(SubagentTaskState.Queued, task.State);
-    }
-
-    [Fact]
-    public void StartQueuedTasks_NoQueuedTasks_DoesNothing()
-    {
-        _store.Create(new SubagentTask
-        {
-            TaskId = "sa-completed",
-            ParentConversation = "conv-1",
-            ParentChannel = "webchat-default",
-            Description = "Already done",
-            Prompt = "Nothing",
-            State = SubagentTaskState.Completed,
-        });
-
-        var tool = CreateStartTool();
-        tool.StartQueuedTasks(); // should not throw, should not start anything
-
-        Assert.Equal(0, _registry.ActiveCount);
     }
 
     // ── SubAgentReadTool ─────────────────────────────────────────────────
@@ -235,12 +206,12 @@ public class SubAgentToolTests : IDisposable
             State = SubagentTaskState.Running,
         });
 
-        // Register a mock runner
         var mockRunner = new SubagentRunner(
             _mockLlmClient, CreateToolRegistry(), 10, NullLogger<SubagentRunner>.Instance);
-        _registry.TryRegister("sa-send-running", mockRunner);
+        _registry.TryRegister("sa-send-running", mockRunner, out _);
 
-        var tool = CreateSendTool();
+        var coordinator = BuildCoordinator(new NoopExecutor(), started: false);
+        var tool = CreateSendTool(coordinator);
 
         var result = await tool.ExecuteAsync(
             """{"task_id":"sa-send-running","message":"Also check tests/"}""",
@@ -251,11 +222,8 @@ public class SubAgentToolTests : IDisposable
     }
 
     [Fact]
-    public async Task Send_ToCompletedTask_ResumesSubagent()
+    public async Task Send_TerminalTask_QueuesResume()
     {
-        _mockLlmClient.StreamCompleteAsync(Arg.Any<LlmCompletionRequest>(), Arg.Any<CancellationToken>())
-            .Returns(SingleChunkStream("Resumed result."));
-
         var messages = new List<LlmMessage>
         {
             new() { Role = "system", Content = "You are a subagent." },
@@ -263,7 +231,7 @@ public class SubAgentToolTests : IDisposable
             new() { Role = "assistant", Content = "Initial result." },
         };
 
-        var task = new SubagentTask
+        _store.Create(new SubagentTask
         {
             TaskId = "sa-send-completed",
             ParentConversation = "conv-1",
@@ -271,13 +239,13 @@ public class SubAgentToolTests : IDisposable
             Description = "Completed task",
             Prompt = "Original prompt",
             State = SubagentTaskState.Completed,
+            Result = "Initial result.",
             Messages = messages,
-        };
-        _store.Create(task);
-        // Manually update messages since Create serializes the initial value
+        });
         _store.UpdateMessages("sa-send-completed", messages, 1);
 
-        var tool = CreateSendTool();
+        var coordinator = BuildCoordinator(new NoopExecutor(), started: false);
+        var tool = CreateSendTool(coordinator);
 
         var result = await tool.ExecuteAsync(
             """{"task_id":"sa-send-completed","message":"Also check tests/"}""",
@@ -285,6 +253,54 @@ public class SubAgentToolTests : IDisposable
 
         Assert.True(result.Success);
         Assert.Contains("resumed", result.Content);
+
+        // The resume must be a durable, guarded transition: queued, RunMode.Resume, message appended.
+        var task = _store.GetById("sa-send-completed");
+        Assert.NotNull(task);
+        Assert.Equal(SubagentTaskState.Queued, task.State);
+        Assert.Equal(SubagentRunMode.Resume, task.RunMode);
+        Assert.Equal("Also check tests/", task.Messages[^1].Content);
+        Assert.Null(task.CompletedAt);
+    }
+
+    [Fact]
+    public async Task Send_TerminalTask_DoesNotUseParentCancellationToken()
+    {
+        var messages = new List<LlmMessage>
+        {
+            new() { Role = "user", Content = "Original task" },
+            new() { Role = "assistant", Content = "Initial result." },
+        };
+        _store.Create(new SubagentTask
+        {
+            TaskId = "sa-send-token",
+            ParentConversation = "conv-1",
+            ParentChannel = "webchat-default",
+            Description = "Failed task",
+            Prompt = "Original prompt",
+            State = SubagentTaskState.Failed,
+            Result = "boom",
+            Messages = messages,
+        });
+        _store.UpdateMessages("sa-send-token", messages, 1);
+
+        var coordinator = BuildCoordinator(new NoopExecutor(), started: false);
+        var tool = CreateSendTool(coordinator);
+
+        // A cancelled parent token must NOT abort the durable resume — the tool ties the resume to
+        // the store + coordinator, never to the caller's token.
+        using var alreadyCancelled = new CancellationTokenSource();
+        alreadyCancelled.Cancel();
+
+        var result = await tool.ExecuteAsync(
+            """{"task_id":"sa-send-token","message":"keep going"}""",
+            _context, alreadyCancelled.Token);
+
+        Assert.True(result.Success);
+        var task = _store.GetById("sa-send-token");
+        Assert.NotNull(task);
+        Assert.Equal(SubagentTaskState.Queued, task.State);
+        Assert.Equal(SubagentRunMode.Resume, task.RunMode);
     }
 
     [Fact]
@@ -300,7 +316,8 @@ public class SubAgentToolTests : IDisposable
             State = SubagentTaskState.Queued,
         });
 
-        var tool = CreateSendTool();
+        var coordinator = BuildCoordinator(new NoopExecutor(), started: false);
+        var tool = CreateSendTool(coordinator);
 
         var result = await tool.ExecuteAsync(
             """{"task_id":"sa-send-queued","message":"Hello"}""",
@@ -313,7 +330,8 @@ public class SubAgentToolTests : IDisposable
     [Fact]
     public async Task Send_NonexistentTask_ReturnsError()
     {
-        var tool = CreateSendTool();
+        var coordinator = BuildCoordinator(new NoopExecutor(), started: false);
+        var tool = CreateSendTool(coordinator);
 
         var result = await tool.ExecuteAsync(
             """{"task_id":"nonexistent","message":"Hello"}""",
@@ -325,120 +343,37 @@ public class SubAgentToolTests : IDisposable
 
     // ── Helpers ──────────────────────────────────────────────────────────
 
-    private SubAgentStartTool CreateStartTool() => new(
-        _mockLlmClient,
-        () => CreateToolRegistry(),
-        _mockModelProvider,
-        _mockConfig,
+    private SubAgentSendTool CreateSendTool(SubagentExecutionCoordinator coordinator) => new(
         _store,
         _registry,
-        OnCompletionAsync,
-        NullLogger<SubAgentStartTool>.Instance,
-        _tempDir);
-
-    private SubAgentSendTool CreateSendTool() => new(
-        _store,
-        _registry,
-        _mockLlmClient,
-        () => CreateToolRegistry(),
-        _mockModelProvider,
-        _mockConfig,
-        OnCompletionAsync,
+        coordinator,
         NullLogger<SubAgentSendTool>.Instance);
 
-    private static async IAsyncEnumerable<LlmStreamChunk> SingleChunkStream(string content)
+    private static async Task WaitUntilAsync(Func<bool> condition, int timeoutMs = 5000)
     {
-        await Task.CompletedTask;
-        yield return new LlmStreamChunk
+        var sw = Stopwatch.StartNew();
+        while (!condition())
         {
-            ContentDelta = content,
-            IsComplete = true,
-            FinishReason = "stop",
-            Usage = new LlmTokenUsage { PromptTokens = 10, CompletionTokens = 5, TotalTokens = 15 },
-        };
+            if (sw.ElapsedMilliseconds > timeoutMs)
+            {
+                throw new TimeoutException("Condition was not satisfied within the timeout.");
+            }
+
+            await Task.Delay(15).ConfigureAwait(false);
+        }
     }
 
-    // ── Crash / slot cleanup ───────────────────────────────────────────
-
-    [Fact]
-    public async Task Start_SubagentCrash_ReleasesSlot()
+    /// <summary>A minimal executor substitute that records invocations and completes immediately.</summary>
+    private sealed class NoopExecutor : ISubagentExecutor
     {
-        // LLM throws to simulate a crash
-        _mockLlmClient.StreamCompleteAsync(Arg.Any<LlmCompletionRequest>(), Arg.Any<CancellationToken>())
-            .Returns<IAsyncEnumerable<LlmStreamChunk>>(_ => throw new HttpRequestException("Timeout"));
+        private int callCount;
 
-        var tool = CreateStartTool();
+        public int CallCount => Volatile.Read(ref this.callCount);
 
-        var result = await tool.ExecuteAsync(
-            """{"description":"Crash test","prompt":"Do something"}""",
-            _context, CancellationToken.None);
-
-        Assert.True(result.Success); // Tool returns immediately, crash happens in background
-
-        // Wait for background task to crash and clean up
-        await Task.Delay(500);
-
-        // Slot should be released — can acquire again
-        Assert.True(_registry.HasAvailableSlot);
-
-        // Task should be marked as failed
-        var tasks = _store.GetActive();
-        Assert.DoesNotContain(tasks, t => t.Description == "Crash test");
-    }
-
-    [Fact]
-    public async Task Start_SubagentCrash_SlotsEventuallyFree()
-    {
-        // All subagents will crash immediately
-        _mockLlmClient.StreamCompleteAsync(Arg.Any<LlmCompletionRequest>(), Arg.Any<CancellationToken>())
-            .Returns<IAsyncEnumerable<LlmStreamChunk>>(_ => throw new HttpRequestException("Timeout"));
-
-        var tool = CreateStartTool();
-
-        // Start 3 subagents (max slots is 2)
-        await tool.ExecuteAsync(
-            """{"description":"Crash 1","prompt":"Do something"}""",
-            _context, CancellationToken.None);
-        await tool.ExecuteAsync(
-            """{"description":"Crash 2","prompt":"Do something"}""",
-            _context, CancellationToken.None);
-        await tool.ExecuteAsync(
-            """{"description":"Crash 3","prompt":"Do something"}""",
-            _context, CancellationToken.None);
-
-        // Wait for all crashes and cleanup
-        await Task.Delay(1000);
-
-        // All slots should be free after crashes (0 active out of max 2)
-        Assert.Equal(0, _registry.ActiveCount);
-    }
-
-    [Fact]
-    public async Task Start_SubagentCrash_NotifiesMainAgent()
-    {
-        _mockLlmClient.StreamCompleteAsync(Arg.Any<LlmCompletionRequest>(), Arg.Any<CancellationToken>())
-            .Returns<IAsyncEnumerable<LlmStreamChunk>>(_ => throw new InvalidOperationException("LLM error"));
-
-        var tool = CreateStartTool();
-
-        await tool.ExecuteAsync(
-            """{"description":"Notify test","prompt":"Do something"}""",
-            _context, CancellationToken.None);
-
-        // Wait for crash + notification
-        await Task.Delay(500);
-
-        // Completion callback should have been called with crash message
-        Assert.NotNull(_completionTaskId);
-        Assert.Contains("crashed", _completionResult!);
-    }
-
-    // ── Helpers ──────────────────────────────────────────────────────────
-
-    /// <summary>Stream that never completes — used to test throttling.</summary>
-    private static async IAsyncEnumerable<LlmStreamChunk> NeverCompletingStream()
-    {
-        await Task.Delay(TimeSpan.FromHours(1));
-        yield return new LlmStreamChunk { IsComplete = true };
+        public Task<SubagentExecutionResult> ExecuteAsync(SubagentTask task, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref this.callCount);
+            return Task.FromResult(new SubagentExecutionResult(SubagentTaskState.Completed, "done"));
+        }
     }
 }

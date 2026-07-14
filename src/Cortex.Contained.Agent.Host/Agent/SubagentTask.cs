@@ -27,6 +27,44 @@ public enum SubagentTaskState
 }
 
 /// <summary>
+/// How the subagent runner should start executing a task.
+/// </summary>
+public enum SubagentRunMode
+{
+    /// <summary>Start a fresh run from the prompt.</summary>
+    New,
+
+    /// <summary>Resume from the persisted message history.</summary>
+    Resume,
+}
+
+/// <summary>
+/// Delivery state of a task's terminal result notification to the parent conversation.
+/// </summary>
+public enum SubagentNotificationState
+{
+    /// <summary>No notification owed (task not terminal yet, or superseded by a resume).</summary>
+    None,
+
+    /// <summary>Terminal result recorded; delivery not yet attempted or released for retry.</summary>
+    Pending,
+
+    /// <summary>Claimed by a delivery worker; in-flight.</summary>
+    Enqueued,
+
+    /// <summary>Result was delivered to the parent conversation.</summary>
+    Delivered,
+}
+
+/// <summary>
+/// Terminal outcome of a subagent execution, applied via
+/// <see cref="SubagentSessionStore.TrySetTerminalResult"/>.
+/// </summary>
+public sealed record SubagentExecutionResult(
+    SubagentTaskState TerminalState,
+    string Result);
+
+/// <summary>
 /// A background subagent task. Persisted in SQLite for durability across restarts.
 /// </summary>
 public sealed class SubagentTask
@@ -70,6 +108,30 @@ public sealed class SubagentTask
 
     /// <summary>Number of LLM rounds executed by the subagent runner.</summary>
     public int Rounds { get; set; }
+
+    /// <summary>Whether the next execution starts fresh or resumes from persisted history.</summary>
+    public SubagentRunMode RunMode { get; set; } = SubagentRunMode.New;
+
+    /// <summary>Optional skill the subagent was launched with.</summary>
+    public string? SkillName { get; init; }
+
+    /// <summary>Delivery state of the terminal result notification.</summary>
+    public SubagentNotificationState NotificationState { get; set; }
+
+    /// <summary>Number of times delivery of the terminal result has been attempted.</summary>
+    public int NotificationAttempts { get; set; }
+
+    /// <summary>When the notification state last changed.</summary>
+    public DateTimeOffset? NotificationUpdatedAt { get; set; }
+
+    /// <summary>When execution first started (survives restarts).</summary>
+    public DateTimeOffset? StartedAt { get; set; }
+
+    /// <summary>Last time the task made observable progress.</summary>
+    public DateTimeOffset LastProgressAt { get; set; } = DateTimeOffset.UtcNow;
+
+    /// <summary>Number of times execution was restarted (crash recovery or requeue).</summary>
+    public int RestartCount { get; set; }
 }
 
 /// <summary>
@@ -85,7 +147,7 @@ public static class SubagentTaskStateExtensions
         SubagentTaskState.Completed => "completed",
         SubagentTaskState.Failed => "failed",
         SubagentTaskState.Cancelled => "cancelled",
-        _ => "queued",
+        _ => throw new ArgumentOutOfRangeException(nameof(state), state, "Unknown subagent task state."),
     };
 
     public static SubagentTaskState Parse(string value) => value switch
@@ -96,6 +158,50 @@ public static class SubagentTaskStateExtensions
         "completed" => SubagentTaskState.Completed,
         "failed" => SubagentTaskState.Failed,
         "cancelled" => SubagentTaskState.Cancelled,
-        _ => SubagentTaskState.Queued,
+        _ => throw new InvalidDataException($"Unknown persisted subagent task state '{value}'."),
+    };
+}
+
+/// <summary>
+/// Extension methods for <see cref="SubagentRunMode"/> serialization to/from SQLite.
+/// </summary>
+public static class SubagentRunModeExtensions
+{
+    public static string ToStorageValue(this SubagentRunMode runMode) => runMode switch
+    {
+        SubagentRunMode.New => "new",
+        SubagentRunMode.Resume => "resume",
+        _ => throw new ArgumentOutOfRangeException(nameof(runMode), runMode, "Unknown subagent run mode."),
+    };
+
+    public static SubagentRunMode Parse(string value) => value switch
+    {
+        "new" => SubagentRunMode.New,
+        "resume" => SubagentRunMode.Resume,
+        _ => throw new InvalidDataException($"Unknown persisted subagent run mode '{value}'."),
+    };
+}
+
+/// <summary>
+/// Extension methods for <see cref="SubagentNotificationState"/> serialization to/from SQLite.
+/// </summary>
+public static class SubagentNotificationStateExtensions
+{
+    public static string ToStorageValue(this SubagentNotificationState state) => state switch
+    {
+        SubagentNotificationState.None => "none",
+        SubagentNotificationState.Pending => "pending",
+        SubagentNotificationState.Enqueued => "enqueued",
+        SubagentNotificationState.Delivered => "delivered",
+        _ => throw new ArgumentOutOfRangeException(nameof(state), state, "Unknown subagent notification state."),
+    };
+
+    public static SubagentNotificationState Parse(string value) => value switch
+    {
+        "none" => SubagentNotificationState.None,
+        "pending" => SubagentNotificationState.Pending,
+        "enqueued" => SubagentNotificationState.Enqueued,
+        "delivered" => SubagentNotificationState.Delivered,
+        _ => throw new InvalidDataException($"Unknown persisted subagent notification state '{value}'."),
     };
 }

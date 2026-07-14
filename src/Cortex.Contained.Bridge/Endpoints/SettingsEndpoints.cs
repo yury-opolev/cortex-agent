@@ -1,9 +1,9 @@
 using System.Globalization;
+using Cortex.Contained.Bridge.Hosting;
 using Cortex.Contained.Bridge.Logging;
 using Cortex.Contained.Bridge.Setup;
 using Cortex.Contained.Bridge.Tenants;
 using Cortex.Contained.Contracts.Config;
-using Cortex.Contained.Contracts.Hub;
 
 namespace Cortex.Contained.Bridge.Endpoints;
 
@@ -58,6 +58,12 @@ internal static class SettingsEndpoints
                 memory = new { enabled = config.Memory.Enabled },
                 maxSubagentRounds = config.MaxSubagentRounds,
                 maxConcurrentSubagents = config.MaxConcurrentSubagents,
+                maxConcurrentSubagentsLimits = new
+                {
+                    minimum = SubagentConcurrencyLimits.Minimum,
+                    maximum = SubagentConcurrencyLimits.Maximum,
+                    defaultValue = SubagentConcurrencyLimits.Default,
+                },
             });
         }).RequireAuthorization();
 
@@ -66,11 +72,12 @@ internal static class SettingsEndpoints
             BridgeConfig config,
             ModelCatalog modelCatalog,
             Worker worker,
-            TenantRouter tenantRouter,
+            CredentialsPusher credentialsPusher,
             IHostEnvironment env,
             ILoggerFactory loggerFactory) =>
         {
             var changed = false;
+            var concurrencyChanged = false;
 
             // Update fallback order
             if (request.FallbackOrder is not null)
@@ -204,19 +211,17 @@ internal static class SettingsEndpoints
             }
 
             // Update max concurrent subagents — persist (restart durability) AND push live.
+            // Out-of-range values are REJECTED (HTTP 400) — never clamped, never mutated/persisted/pushed.
+            if (request.MaxConcurrentSubagents.HasValue
+                && !TryApplyMaxConcurrentSubagents(config, request.MaxConcurrentSubagents.Value, out var concurrencyError))
+            {
+                return Results.Json(new { error = concurrencyError }, statusCode: 400);
+            }
+
             if (request.MaxConcurrentSubagents.HasValue)
             {
-                var clamped = Math.Clamp(request.MaxConcurrentSubagents.Value, 1, 20);
-                config.MaxConcurrentSubagents = clamped;
                 changed = true;
-
-                var agent = tenantRouter.GetDefaultClient();
-                if (agent is not null && agent.IsConnected)
-                {
-                    await agent.UpdateConfigAsync(
-                        new AgentConfigUpdate { MaxConcurrentSubagents = clamped },
-                        CancellationToken.None).ConfigureAwait(false);
-                }
+                concurrencyChanged = true;
             }
 
             // Persist to cortex.yml if anything changed
@@ -228,6 +233,12 @@ internal static class SettingsEndpoints
                 // fallback order immediately. The agent derives its default
                 // model from the first provider in the ordered list.
                 await worker.PushCredentialsAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+
+            // Push the Bridge-authoritative concurrency cap live — no restart required.
+            if (concurrencyChanged)
+            {
+                await credentialsPusher.PushAgentConfigAsync(CancellationToken.None).ConfigureAwait(false);
             }
 
             return Results.Ok(new { success = true });
@@ -322,5 +333,26 @@ internal static class SettingsEndpoints
                 return Results.Json(new { error = $"Failed to fetch models: {ex.Message}" }, statusCode: 500);
             }
         }).RequireAuthorization();
+    }
+
+    /// <summary>
+    /// Validates <paramref name="requestedValue"/> against <see cref="SubagentConcurrencyLimits"/> and,
+    /// if valid, applies it to <paramref name="config"/>. Out-of-range values are REJECTED — the config
+    /// is left untouched and <paramref name="error"/> carries a message for the HTTP 400 body. Extracted
+    /// as the testable seam for the reject-not-clamp boundary in <c>POST /api/settings</c>.
+    /// </summary>
+    internal static bool TryApplyMaxConcurrentSubagents(BridgeConfig config, int requestedValue, out string? error)
+    {
+        if (!SubagentConcurrencyLimits.IsValid(requestedValue))
+        {
+            error = string.Create(
+                CultureInfo.InvariantCulture,
+                $"maxConcurrentSubagents must be between {SubagentConcurrencyLimits.Minimum} and {SubagentConcurrencyLimits.Maximum}.");
+            return false;
+        }
+
+        config.MaxConcurrentSubagents = requestedValue;
+        error = null;
+        return true;
     }
 }

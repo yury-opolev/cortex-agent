@@ -81,6 +81,9 @@ function globalSettingsPage() {
         memoryModels: {},
         maxSubagentRounds: 0,
         maxConcurrentSubagents: 5,
+        // Bound to the server's GET /api/settings response (maxConcurrentSubagentsLimits) —
+        // this fallback only applies before the first load completes.
+        maxConcurrentSubagentsLimits: { minimum: 1, maximum: 50, defaultValue: 5 },
         webUiInfo: "",
         agentConnected: false,
         dirty: false,
@@ -173,6 +176,8 @@ function globalSettingsPage() {
                 this.fallbackOrder = [...(data.fallbackOrder || [])];
                 this.maxSubagentRounds = data.maxSubagentRounds ?? 0;
                 this.maxConcurrentSubagents = data.maxConcurrentSubagents ?? 5;
+                this.maxConcurrentSubagentsLimits = data.maxConcurrentSubagentsLimits
+                    ?? { minimum: 1, maximum: 50, defaultValue: 5 };
 
                 this.defaultModels = {};
                 this.memoryModels = {};
@@ -251,7 +256,12 @@ function globalSettingsPage() {
         },
 
         onMaxConcurrentSubagentsInput(value) {
-            this.maxConcurrentSubagents = Math.min(20, Math.max(1, parseInt(value, 10) || 5));
+            // No client-side clamp: out-of-range input is preserved verbatim so it round-trips
+            // to POST /api/settings, which rejects it with HTTP 400 and surfaces the server's
+            // error message via the toast in saveGeneralSettings(). Only a genuinely non-numeric
+            // input (blank field) falls back to the server-supplied default.
+            const parsed = parseInt(value, 10);
+            this.maxConcurrentSubagents = Number.isNaN(parsed) ? this.maxConcurrentSubagentsLimits.defaultValue : parsed;
             this.checkDirty();
         },
 

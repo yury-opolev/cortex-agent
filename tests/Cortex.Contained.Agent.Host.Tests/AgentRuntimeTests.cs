@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using Cortex.Contained.Agent.Host.Agent;
 using Cortex.Contained.Agent.Host.Hubs;
 using Cortex.Contained.Agent.Host.Memory;
+using Cortex.Contained.Agent.Host.Storage;
 using Cortex.Contained.Agent.Host.Tools;
 using Cortex.Contained.Contracts.Config;
 using Cortex.Contained.Contracts.Hub;
@@ -115,6 +116,71 @@ public class AgentRuntimeTests : IAsyncLifetime
         await runtime.UpdateConfigAsync(new AgentConfigUpdate { MaxConcurrentSubagents = 9 }, CancellationToken.None);
 
         Assert.Equal(9, registry.MaxConcurrent);
+
+        await runtime.StopProcessingAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task UpdateConfigAsync_MaxConcurrentSubagentsAt50_Applies()
+    {
+        var registry = new SubagentRunnerRegistry(2, NullLogger<SubagentRunnerRegistry>.Instance);
+        var sessionConfig = new SessionConfig();
+        var sessions = new AgentSessionStore(sessionConfig, new MemorySettingsStore(), NullLogger<AgentSessionStore>.Instance);
+        var mockLlmClient = Substitute.For<ILlmClient>();
+        var activeChannelStore = new ActiveChannelStore();
+        var toolRegistry = new ToolRegistry([], activeChannelStore, NullLogger<ToolRegistry>.Instance);
+        var messageChannel = new AgentMessageChannel();
+
+        var hubContext = Substitute.For<IHubContext<AgentHub, IAgentHubClient>>();
+        var hubClients = Substitute.For<IHubClients<IAgentHubClient>>();
+        hubContext.Clients.Returns(hubClients);
+        var bridgeAccessor = new BridgeClientAccessor(hubContext);
+
+        var mockCaller = Substitute.For<IAgentHubClient>();
+        hubClients.Client(Arg.Any<string>()).Returns(mockCaller);
+        bridgeAccessor.SetConnectionId("test-conn");
+
+        var httpClientFactory = Substitute.For<IHttpClientFactory>();
+        var imageAgingMonitor = Substitute.For<IOptionsMonitor<ImageAgingConfig>>();
+        imageAgingMonitor.CurrentValue.Returns(new ImageAgingConfig());
+        var runtime = new AgentRuntime(sessions, mockLlmClient, toolRegistry, sessionConfig, messageChannel, bridgeAccessor, activeChannelStore, httpClientFactory, Path.GetTempPath(), Path.GetTempPath(), NullLogger<AgentRuntime>.Instance, new ModelProvider(), imageAgingMonitor, subagentRegistry: registry);
+
+        await runtime.UpdateConfigAsync(new AgentConfigUpdate { MaxConcurrentSubagents = 50 }, CancellationToken.None);
+
+        Assert.Equal(50, registry.MaxConcurrent);
+
+        await runtime.StopProcessingAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task UpdateConfigAsync_MaxConcurrentSubagentsAboveMaximum_ThrowsWithoutChangingValue()
+    {
+        var registry = new SubagentRunnerRegistry(2, NullLogger<SubagentRunnerRegistry>.Instance);
+        var sessionConfig = new SessionConfig();
+        var sessions = new AgentSessionStore(sessionConfig, new MemorySettingsStore(), NullLogger<AgentSessionStore>.Instance);
+        var mockLlmClient = Substitute.For<ILlmClient>();
+        var activeChannelStore = new ActiveChannelStore();
+        var toolRegistry = new ToolRegistry([], activeChannelStore, NullLogger<ToolRegistry>.Instance);
+        var messageChannel = new AgentMessageChannel();
+
+        var hubContext = Substitute.For<IHubContext<AgentHub, IAgentHubClient>>();
+        var hubClients = Substitute.For<IHubClients<IAgentHubClient>>();
+        hubContext.Clients.Returns(hubClients);
+        var bridgeAccessor = new BridgeClientAccessor(hubContext);
+
+        var mockCaller = Substitute.For<IAgentHubClient>();
+        hubClients.Client(Arg.Any<string>()).Returns(mockCaller);
+        bridgeAccessor.SetConnectionId("test-conn");
+
+        var httpClientFactory = Substitute.For<IHttpClientFactory>();
+        var imageAgingMonitor = Substitute.For<IOptionsMonitor<ImageAgingConfig>>();
+        imageAgingMonitor.CurrentValue.Returns(new ImageAgingConfig());
+        var runtime = new AgentRuntime(sessions, mockLlmClient, toolRegistry, sessionConfig, messageChannel, bridgeAccessor, activeChannelStore, httpClientFactory, Path.GetTempPath(), Path.GetTempPath(), NullLogger<AgentRuntime>.Instance, new ModelProvider(), imageAgingMonitor, subagentRegistry: registry);
+
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
+            runtime.UpdateConfigAsync(new AgentConfigUpdate { MaxConcurrentSubagents = 51 }, CancellationToken.None));
+
+        Assert.Equal(2, registry.MaxConcurrent); // unchanged — rejected, not clamped
 
         await runtime.StopProcessingAsync(CancellationToken.None);
     }
@@ -1118,6 +1184,360 @@ public class AgentRuntimeParallelDispatchTests : IAsyncLifetime
         }
 
         Assert.Fail($"Timed out waiting for {expectedCount} response completion callbacks");
+    }
+}
+
+/// <summary>
+/// Proves the durable at-least-once delivery contract for subagent completion
+/// notifications: a consumed <c>SubagentTaskId</c> is marked Delivered only after
+/// the parent turn's final response lands, and is released back to Pending on any
+/// failure (LLM error, response-delivery failure, cancellation). Ordinary messages
+/// never touch the notification store.
+/// </summary>
+public sealed class AgentRuntimeSubagentCompletionTests : IAsyncDisposable
+{
+    private readonly string _tempDir;
+    private readonly SubagentSessionStore _subagentStore;
+    private readonly AgentMessageChannel _messageChannel;
+    private readonly IAgentHubClient _mockCaller;
+    private readonly ILlmClient _mockLlmClient;
+    private readonly AgentRuntime _runtime;
+    private readonly ManualResetEventSlim _toolEntered = new(false);
+    private readonly TaskCompletionSource _toolRelease = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public AgentRuntimeSubagentCompletionTests()
+    {
+        _tempDir = Path.Combine(Path.GetTempPath(), "sub-completion-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(_tempDir);
+        _subagentStore = new SubagentSessionStore(_tempDir, NullLogger<SubagentSessionStore>.Instance);
+
+        var sessionConfig = new SessionConfig();
+        var sessions = new AgentSessionStore(sessionConfig, new MemorySettingsStore(), NullLogger<AgentSessionStore>.Instance);
+        _mockLlmClient = Substitute.For<ILlmClient>();
+        var activeChannelStore = new ActiveChannelStore();
+
+        // Gate tool: blocks mid-round until the test releases it, so a completion
+        // notification can be injected between tool rounds deterministically.
+        var gateTool = Substitute.For<IAgentTool>();
+        gateTool.Name.Returns("wait_gate");
+        gateTool.Description.Returns("Blocks until the test releases it");
+        gateTool.ParametersSchema.Returns("""{"type":"object","properties":{}}""");
+        gateTool.ExecuteAsync(Arg.Any<string>(), Arg.Any<ToolExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(async _ =>
+            {
+                _toolEntered.Set();
+                await _toolRelease.Task.ConfigureAwait(false);
+                return new AgentToolResult { Success = true, Content = "released" };
+            });
+
+        var toolRegistry = new ToolRegistry([gateTool], activeChannelStore, NullLogger<ToolRegistry>.Instance);
+        _messageChannel = new AgentMessageChannel();
+
+        var hubContext = Substitute.For<IHubContext<AgentHub, IAgentHubClient>>();
+        var hubClients = Substitute.For<IHubClients<IAgentHubClient>>();
+        hubContext.Clients.Returns(hubClients);
+        var bridgeAccessor = new BridgeClientAccessor(hubContext);
+
+        _mockCaller = Substitute.For<IAgentHubClient>();
+        hubClients.Client(Arg.Any<string>()).Returns(_mockCaller);
+        bridgeAccessor.SetConnectionId("test-conn");
+
+        _mockCaller.OnStatusChanged(Arg.Any<AgentStatusInfo>()).Returns(Task.CompletedTask);
+        _mockCaller.OnResponseChunk(Arg.Any<ResponseChunkMessage>()).Returns(Task.CompletedTask);
+        _mockCaller.OnResponseComplete(Arg.Any<ResponseCompleteMessage>()).Returns(Task.CompletedTask);
+        _mockCaller.OnToolExecution(Arg.Any<ToolExecutionMessage>()).Returns(Task.CompletedTask);
+        _mockCaller.OnError(Arg.Any<AgentErrorMessage>()).Returns(Task.CompletedTask);
+
+        var httpClientFactory = Substitute.For<IHttpClientFactory>();
+        var imageAgingMonitor = Substitute.For<IOptionsMonitor<ImageAgingConfig>>();
+        imageAgingMonitor.CurrentValue.Returns(new ImageAgingConfig());
+
+        _runtime = new AgentRuntime(
+            sessions,
+            _mockLlmClient,
+            toolRegistry,
+            sessionConfig,
+            _messageChannel,
+            bridgeAccessor,
+            activeChannelStore,
+            httpClientFactory,
+            Path.GetTempPath(),
+            _tempDir,
+            NullLogger<AgentRuntime>.Instance,
+            new ModelProvider(),
+            imageAgingMonitor,
+            subagentStore: _subagentStore);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _toolRelease.TrySetResult();
+        await _runtime.StopProcessingAsync(CancellationToken.None);
+        _subagentStore.Dispose();
+        _toolEntered.Dispose();
+        try { Directory.Delete(_tempDir, recursive: true); } catch { /* best-effort */ }
+    }
+
+    [Fact]
+    public async Task SubagentCompletion_SuccessfulResponse_MarksDelivered()
+    {
+        await _runtime.StartProcessingAsync(CancellationToken.None);
+        SeedEnqueuedCompletion("sa-ok", "conv-ok");
+        _mockLlmClient.StreamCompleteAsync(Arg.Any<LlmCompletionRequest>(), Arg.Any<CancellationToken>())
+            .Returns(SingleChunkStream("Task finished — result relayed."));
+
+        await _messageChannel.EnqueueAsync(CompletionMessage("sa-ok", "conv-ok"));
+
+        await WaitUntilAsync(() => NotificationState("sa-ok") == SubagentNotificationState.Delivered);
+    }
+
+    [Fact]
+    public async Task SubagentCompletion_LlmError_ReleasesForRetry()
+    {
+        await _runtime.StartProcessingAsync(CancellationToken.None);
+        SeedEnqueuedCompletion("sa-err", "conv-err");
+        _mockLlmClient.StreamCompleteAsync(Arg.Any<LlmCompletionRequest>(), Arg.Any<CancellationToken>())
+            .Returns(ErrorStream("provider exploded"));
+
+        await _messageChannel.EnqueueAsync(CompletionMessage("sa-err", "conv-err"));
+
+        await WaitUntilAsync(() => NotificationState("sa-err") == SubagentNotificationState.Pending);
+    }
+
+    [Fact]
+    public async Task SubagentCompletion_ResponseDeliveryFailure_ReleasesForRetry()
+    {
+        await _runtime.StartProcessingAsync(CancellationToken.None);
+        SeedEnqueuedCompletion("sa-deliv", "conv-deliv");
+        _mockLlmClient.StreamCompleteAsync(Arg.Any<LlmCompletionRequest>(), Arg.Any<CancellationToken>())
+            .Returns(SingleChunkStream("hello"));
+        _mockCaller.OnResponseComplete(Arg.Any<ResponseCompleteMessage>())
+            .Returns(Task.FromException(new InvalidOperationException("bridge send failed")));
+
+        await _messageChannel.EnqueueAsync(CompletionMessage("sa-deliv", "conv-deliv"));
+
+        await WaitUntilAsync(() => NotificationState("sa-deliv") == SubagentNotificationState.Pending);
+    }
+
+    [Fact]
+    public async Task SubagentCompletion_Cancellation_ReleasesForRetry()
+    {
+        await _runtime.StartProcessingAsync(CancellationToken.None);
+        SeedEnqueuedCompletion("sa-cxl", "conv-cxl");
+        var entered = new ManualResetEventSlim(false);
+        _mockLlmClient.StreamCompleteAsync(Arg.Any<LlmCompletionRequest>(), Arg.Any<CancellationToken>())
+            .Returns(callInfo => BlockingStream(entered, callInfo.Arg<CancellationToken>()));
+
+        await _messageChannel.EnqueueAsync(CompletionMessage("sa-cxl", "conv-cxl"));
+        Assert.True(entered.Wait(TimeSpan.FromSeconds(5)), "LLM stream never started");
+
+        await _runtime.AbortGenerationAsync("conv-cxl");
+
+        await WaitUntilAsync(() => NotificationState("sa-cxl") == SubagentNotificationState.Pending);
+        entered.Dispose();
+    }
+
+    [Fact]
+    public async Task SubagentCompletion_SaveMessageFailure_ReleasesForRetry()
+    {
+        // The inbound-message persistence (messageStore.SaveMessageAsync) throws BEFORE the
+        // turn's generation begins. The claim guard must cover this window too: the consumed
+        // notification is released back to Pending, never parked Enqueued until restart.
+        var failingStore = Substitute.For<IMessageStore>();
+        failingStore.SaveMessageAsync(
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Any<DateTimeOffset>(), Arg.Any<string?>(), Arg.Any<MessageCategory>(),
+                Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<long>(new InvalidOperationException("message store unavailable")));
+
+        var sessionConfig = new SessionConfig();
+        var sessions = new AgentSessionStore(sessionConfig, new MemorySettingsStore(), NullLogger<AgentSessionStore>.Instance);
+        var activeChannelStore = new ActiveChannelStore();
+        var toolRegistry = new ToolRegistry([], activeChannelStore, NullLogger<ToolRegistry>.Instance);
+        var channel = new AgentMessageChannel();
+
+        var hubContext = Substitute.For<IHubContext<AgentHub, IAgentHubClient>>();
+        var hubClients = Substitute.For<IHubClients<IAgentHubClient>>();
+        hubContext.Clients.Returns(hubClients);
+        var bridgeAccessor = new BridgeClientAccessor(hubContext);
+        hubClients.Client(Arg.Any<string>()).Returns(_mockCaller);
+        bridgeAccessor.SetConnectionId("test-conn");
+
+        var imageAgingMonitor = Substitute.For<IOptionsMonitor<ImageAgingConfig>>();
+        imageAgingMonitor.CurrentValue.Returns(new ImageAgingConfig());
+
+        var runtime = new AgentRuntime(
+            sessions,
+            _mockLlmClient,
+            toolRegistry,
+            sessionConfig,
+            channel,
+            bridgeAccessor,
+            activeChannelStore,
+            Substitute.For<IHttpClientFactory>(),
+            Path.GetTempPath(),
+            _tempDir,
+            NullLogger<AgentRuntime>.Instance,
+            new ModelProvider(),
+            imageAgingMonitor,
+            messageStore: failingStore,
+            subagentStore: _subagentStore);
+
+        try
+        {
+            await runtime.StartProcessingAsync(CancellationToken.None);
+            SeedEnqueuedCompletion("sa-save", "conv-save");
+            _mockLlmClient.StreamCompleteAsync(Arg.Any<LlmCompletionRequest>(), Arg.Any<CancellationToken>())
+                .Returns(SingleChunkStream("never reached"));
+
+            await channel.EnqueueAsync(CompletionMessage("sa-save", "conv-save"));
+
+            await WaitUntilAsync(() => NotificationState("sa-save") == SubagentNotificationState.Pending);
+        }
+        finally
+        {
+            await runtime.StopProcessingAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task SubagentCompletion_InjectedMidTurn_IsAcknowledgedByOwningTurn()
+    {
+        await _runtime.StartProcessingAsync(CancellationToken.None);
+        SeedEnqueuedCompletion("sa-mid", "conv-mid");
+        var llmCall = 0;
+        _mockLlmClient.StreamCompleteAsync(Arg.Any<LlmCompletionRequest>(), Arg.Any<CancellationToken>())
+            .Returns(_ => Interlocked.Increment(ref llmCall) == 1
+                ? ToolCallStream("wait_gate")
+                : SingleChunkStream("All done."));
+
+        // A user message owns the turn; the completion is injected mid-round.
+        await _messageChannel.EnqueueAsync(new AgentMessage
+        {
+            ConversationId = "conv-mid",
+            ChannelId = "conv-mid",
+            Text = "kick off a turn",
+            Source = AgentMessageSource.User,
+        });
+        Assert.True(_toolEntered.Wait(TimeSpan.FromSeconds(5)), "gate tool never started");
+
+        // Inject the completion while the tool round is executing, and wait for it to
+        // reach the session's pending queue so the between-rounds drain consumes it.
+        await _messageChannel.EnqueueAsync(CompletionMessage("sa-mid", "conv-mid"));
+        var session = _runtime.GetOrCreateSessionForTest("conv-mid");
+        await WaitUntilAsync(() => session.PendingMessageCount > 0);
+
+        _toolRelease.SetResult();
+
+        await WaitUntilAsync(() => NotificationState("sa-mid") == SubagentNotificationState.Delivered);
+    }
+
+    [Fact]
+    public async Task OrdinaryMessage_DoesNotTouchNotificationStore()
+    {
+        await _runtime.StartProcessingAsync(CancellationToken.None);
+        SeedEnqueuedCompletion("sa-idle", "conv-else");
+        _mockLlmClient.StreamCompleteAsync(Arg.Any<LlmCompletionRequest>(), Arg.Any<CancellationToken>())
+            .Returns(SingleChunkStream("plain response"));
+
+        await _messageChannel.EnqueueAsync(new AgentMessage
+        {
+            ConversationId = "conv-else",
+            ChannelId = "conv-else",
+            Text = "hello",
+            Source = AgentMessageSource.User,
+        });
+
+        await WaitUntilAsync(() => _mockCaller.ReceivedCalls()
+            .Any(c => c.GetMethodInfo().Name == nameof(IAgentHubClient.OnResponseComplete)));
+
+        // Settle window: no late notification-store writes may land either.
+        await Task.Delay(150);
+        Assert.Equal(SubagentNotificationState.Enqueued, NotificationState("sa-idle"));
+    }
+
+    // ── Helpers ──────────────────────────────────────────────────────────
+
+    private void SeedEnqueuedCompletion(string taskId, string conversationId)
+    {
+        _subagentStore.Create(new SubagentTask
+        {
+            TaskId = taskId,
+            ParentConversation = conversationId,
+            ParentChannel = conversationId,
+            Description = "background job",
+            Prompt = "do it",
+            State = SubagentTaskState.Completed,
+            Result = "the result",
+            CompletedAt = DateTimeOffset.UtcNow,
+            NotificationState = SubagentNotificationState.Enqueued,
+        });
+    }
+
+    private static AgentMessage CompletionMessage(string taskId, string conversationId) => new()
+    {
+        ConversationId = conversationId,
+        ChannelId = conversationId,
+        Text = $"[Background task completed] {taskId}",
+        Source = AgentMessageSource.SubagentCompletion,
+        SubagentTaskId = taskId,
+    };
+
+    private SubagentNotificationState NotificationState(string taskId)
+        => _subagentStore.GetById(taskId)!.NotificationState;
+
+    private static async Task WaitUntilAsync(Func<bool> condition, int timeoutMs = 5000)
+    {
+        var deadline = Environment.TickCount64 + timeoutMs;
+        while (!condition())
+        {
+            if (Environment.TickCount64 > deadline)
+            {
+                throw new TimeoutException("Condition was not satisfied within the timeout.");
+            }
+
+            await Task.Delay(15);
+        }
+    }
+
+    private static async IAsyncEnumerable<LlmStreamChunk> SingleChunkStream(string content)
+    {
+        await Task.CompletedTask;
+        yield return new LlmStreamChunk
+        {
+            ContentDelta = content,
+            IsComplete = true,
+            FinishReason = "stop",
+            Usage = new LlmTokenUsage { PromptTokens = 10, CompletionTokens = 5, TotalTokens = 15 },
+        };
+    }
+
+    private static async IAsyncEnumerable<LlmStreamChunk> ErrorStream(string errorMessage)
+    {
+        await Task.CompletedTask;
+        yield return new LlmStreamChunk { ErrorMessage = errorMessage };
+    }
+
+    private static async IAsyncEnumerable<LlmStreamChunk> BlockingStream(
+        ManualResetEventSlim entered,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        entered.Set();
+        await Task.Delay(Timeout.Infinite, cancellationToken);
+        yield return new LlmStreamChunk { ContentDelta = "unreachable" };
+    }
+
+    private static async IAsyncEnumerable<LlmStreamChunk> ToolCallStream(string toolName)
+    {
+        await Task.CompletedTask;
+        yield return new LlmStreamChunk
+        {
+            ToolCallDeltas =
+            [
+                new LlmToolCallDelta { Index = 0, Id = "call_gate", Name = toolName, ArgumentsDelta = "{}" },
+            ],
+        };
+        yield return new LlmStreamChunk { IsComplete = true, FinishReason = "tool_calls" };
     }
 }
 

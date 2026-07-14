@@ -24,7 +24,117 @@ public class SubagentRunnerTests
 
         var result = await runner.RunAsync("gpt-4o", "You are helpful.", "What is the answer?", "conv-1", CancellationToken.None);
 
-        Assert.Equal("The answer is 42.", result);
+        Assert.Equal(SubagentTaskState.Completed, result.TerminalState);
+        Assert.Equal("The answer is 42.", result.Result);
+    }
+
+    // ── Outcome → terminal state mapping ────────────────────────────────
+
+    [Fact]
+    public async Task RunAsync_CompletedOutcome_ReturnsCompleted()
+    {
+        _mockLlmClient.StreamCompleteAsync(Arg.Any<LlmCompletionRequest>(), Arg.Any<CancellationToken>())
+            .Returns(SingleChunkStream("All done."));
+
+        var runner = new SubagentRunner(_mockLlmClient, CreateRegistry(), 0, NullLogger<SubagentRunner>.Instance);
+
+        var result = await runner.RunAsync("gpt-4o", "System", "Prompt", "conv-1", CancellationToken.None);
+
+        Assert.Equal(SubagentTaskState.Completed, result.TerminalState);
+        Assert.Equal("All done.", result.Result);
+    }
+
+    [Fact]
+    public async Task RunAsync_ErrorOutcome_ReturnsFailed()
+    {
+        _mockLlmClient.StreamCompleteAsync(Arg.Any<LlmCompletionRequest>(), Arg.Any<CancellationToken>())
+            .Returns(ErrorStream("Rate limit exceeded"));
+
+        var runner = new SubagentRunner(_mockLlmClient, CreateRegistry(), 0, NullLogger<SubagentRunner>.Instance);
+
+        var result = await runner.RunAsync("gpt-4o", "System", "Prompt", "conv-1", CancellationToken.None);
+
+        Assert.Equal(SubagentTaskState.Failed, result.TerminalState);
+        Assert.Contains("Rate limit exceeded", result.Result);
+    }
+
+    [Fact]
+    public async Task RunAsync_DoomLoop_ReturnsFailed()
+    {
+        var tool = new FakeTool("date_time", "Gets date", "2026-03-25");
+
+        // Same tool call with identical arguments 3+ times consecutively triggers doom-loop detection.
+        _mockLlmClient.StreamCompleteAsync(Arg.Any<LlmCompletionRequest>(), Arg.Any<CancellationToken>())
+            .Returns(_ => ToolCallStream("call_1", "date_time", "{}"));
+
+        var runner = new SubagentRunner(_mockLlmClient, CreateRegistry(tool), 0, NullLogger<SubagentRunner>.Instance);
+
+        var result = await runner.RunAsync("gpt-4o", "System", "Prompt", "conv-1", CancellationToken.None);
+
+        Assert.Equal(SubagentTaskState.Failed, result.TerminalState);
+    }
+
+    [Fact]
+    public async Task RunAsync_MaxRoundsExceeded_ReturnsFailed()
+    {
+        var tool = new FakeTool("counter", "Counts", "ok");
+
+        // Distinct arguments each round avoid doom-loop detection so the loop instead hits maxRounds.
+        var call = 0;
+        _mockLlmClient.StreamCompleteAsync(Arg.Any<LlmCompletionRequest>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                call++;
+                return ToolCallStream($"call_{call}", "counter", $$"""{"n":{{call}}}""");
+            });
+
+        var runner = new SubagentRunner(_mockLlmClient, CreateRegistry(tool), 2, NullLogger<SubagentRunner>.Instance);
+
+        var result = await runner.RunAsync("gpt-4o", "System", "Prompt", "conv-1", CancellationToken.None);
+
+        Assert.Equal(SubagentTaskState.Failed, result.TerminalState);
+    }
+
+    [Fact]
+    public async Task RunAsync_PersistsFinalAssistantMessageForResume()
+    {
+        _mockLlmClient.StreamCompleteAsync(Arg.Any<LlmCompletionRequest>(), Arg.Any<CancellationToken>())
+            .Returns(SingleChunkStream("Final answer for resume."));
+
+        var tempDir = Path.Combine(Path.GetTempPath(), "subagent-runner-test-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            using var store = new SubagentSessionStore(tempDir, NullLogger<SubagentSessionStore>.Instance);
+            store.Create(new SubagentTask
+            {
+                TaskId = "sa-final-msg",
+                ParentConversation = "conv-1",
+                ParentChannel = "webchat",
+                Description = "Test",
+                Prompt = "Do something",
+                State = SubagentTaskState.Running,
+            });
+
+            var runner = new SubagentRunner(
+                _mockLlmClient, CreateRegistry(), 0, NullLogger<SubagentRunner>.Instance,
+                store, "sa-final-msg", Substitute.For<IModelProvider>());
+
+            var result = await runner.RunAsync("gpt-4o", "System", "Prompt", "sa-final-msg", CancellationToken.None);
+
+            Assert.Equal(SubagentTaskState.Completed, result.TerminalState);
+
+            // The final assistant response must be persisted so a later sub_agent_send can resume it.
+            var task = store.GetById("sa-final-msg");
+            Assert.NotNull(task);
+            var last = task.Messages[^1];
+            Assert.Equal("assistant", last.Role);
+            Assert.Equal("Final answer for resume.", last.Content);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); } catch { /* best-effort */ }
+        }
     }
 
     [Fact]
@@ -48,7 +158,7 @@ public class SubagentRunnerTests
 
         var result = await runner.RunAsync("gpt-4o", "You are helpful.", "What date is it?", "conv-1", CancellationToken.None);
 
-        Assert.Equal("The current date is March 10, 2026.", result);
+        Assert.Equal("The current date is March 10, 2026.", result.Result);
     }
 
     [Fact]
@@ -92,7 +202,7 @@ public class SubagentRunnerTests
 
         var result = await runner.RunAsync("gpt-4o", "System", "Prompt", "conv-1", CancellationToken.None);
 
-        Assert.Contains("Rate limit exceeded", result);
+        Assert.Contains("Rate limit exceeded", result.Result);
     }
 
     [Fact]
@@ -139,7 +249,7 @@ public class SubagentRunnerTests
 
         var result = await runner.RunAsync("gpt-4o", "System", "Prompt", "conv-1", CancellationToken.None);
 
-        Assert.Equal("Both tools executed.", result);
+        Assert.Equal("Both tools executed.", result.Result);
 
         // Verify second call has both tool results
         var secondCall = _mockLlmClient.ReceivedCalls()
@@ -184,8 +294,10 @@ public class SubagentRunnerTests
     // ── Persistent mode ────────────────────────────────────────────────
 
     [Fact]
-    public async Task RunAsync_PersistentMode_InvokesCompletionCallback()
+    public async Task RunAsync_PersistentMode_ReturnsCompletedResult()
     {
+        // The runner no longer takes an onCompletion callback — terminal ownership belongs to the
+        // coordinator. The runner just returns the terminal outcome (state + result text).
         _mockLlmClient.StreamCompleteAsync(Arg.Any<LlmCompletionRequest>(), Arg.Any<CancellationToken>())
             .Returns(SingleChunkStream("Done."));
 
@@ -204,19 +316,17 @@ public class SubagentRunnerTests
                 State = SubagentTaskState.Running,
             });
 
-            string? callbackTaskId = null;
-            string? callbackResult = null;
-
             var runner = new SubagentRunner(
                 _mockLlmClient, CreateRegistry(), 0, NullLogger<SubagentRunner>.Instance,
-                store, "sa-test-1",
-                (taskId, result) => { callbackTaskId = taskId; callbackResult = result; return Task.CompletedTask; },
-                Substitute.For<IModelProvider>());
+                store, "sa-test-1", Substitute.For<IModelProvider>());
 
-            await runner.RunAsync("gpt-4o", "System", "Prompt", "sa-test-1", CancellationToken.None);
+            var result = await runner.RunAsync("gpt-4o", "System", "Prompt", "sa-test-1", CancellationToken.None);
 
-            Assert.Equal("sa-test-1", callbackTaskId);
-            Assert.Equal("Done.", callbackResult);
+            Assert.Equal(SubagentTaskState.Completed, result.TerminalState);
+            Assert.Equal("Done.", result.Result);
+
+            // The runner must NOT itself transition the store to a terminal state.
+            Assert.Equal(SubagentTaskState.Running, store.GetById("sa-test-1")!.State);
         }
         finally
         {
@@ -256,9 +366,7 @@ public class SubagentRunnerTests
 
             var runner = new SubagentRunner(
                 _mockLlmClient, CreateRegistry(tool), 0, NullLogger<SubagentRunner>.Instance,
-                store, "sa-persist",
-                (_, _) => Task.CompletedTask,
-                Substitute.For<IModelProvider>());
+                store, "sa-persist", Substitute.For<IModelProvider>());
 
             await runner.RunAsync("gpt-4o", "System", "Check the date", "sa-persist", CancellationToken.None);
 
@@ -298,7 +406,7 @@ public class SubagentRunnerTests
 
         var result = await runner.RunAsync("gpt-4o", "System", "Prompt", "conv-1", CancellationToken.None);
 
-        Assert.Equal("Found injected message.", result);
+        Assert.Equal("Found injected message.", result.Result);
     }
 
     [Fact]
@@ -318,7 +426,7 @@ public class SubagentRunnerTests
         var runner = new SubagentRunner(_mockLlmClient, CreateRegistry(), 0, NullLogger<SubagentRunner>.Instance);
         var result = await runner.ResumeAsync("gpt-4o", existingMessages, "conv-1", CancellationToken.None);
 
-        Assert.Equal("Resumed successfully.", result);
+        Assert.Equal("Resumed successfully.", result.Result);
 
         // Verify the LLM received all existing messages
         var llmCall = _mockLlmClient.ReceivedCalls()

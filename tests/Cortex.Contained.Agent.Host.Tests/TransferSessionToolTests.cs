@@ -1092,7 +1092,7 @@ public class TransferSessionToolTests : IAsyncDisposable
             CreatedAt = boundaryTimestamp.AddSeconds(-1),
         };
 
-        // (c) Completed subagent within the topic window — already delivered. Leave alone.
+        // (c) Completed subagent within the topic window — result already delivered. Leave alone.
         var inTopicCompleted = new SubagentTask
         {
             TaskId = "sa-in-topic-done",
@@ -1103,6 +1103,7 @@ public class TransferSessionToolTests : IAsyncDisposable
             State = SubagentTaskState.Completed,
             CreatedAt = boundaryTimestamp.AddSeconds(2),
             CompletedAt = DateTimeOffset.UtcNow,
+            NotificationState = SubagentNotificationState.Delivered,
         };
 
         // (d) Unrelated active subagent owned by a different conversation. Leave alone.
@@ -1117,10 +1118,27 @@ public class TransferSessionToolTests : IAsyncDisposable
             CreatedAt = boundaryTimestamp.AddSeconds(1),
         };
 
+        // (e) Terminal subagent within the topic window whose completion notification is
+        // still owed (pending) — the undelivered result must follow the user. Repoint.
+        var inTopicUndelivered = new SubagentTask
+        {
+            TaskId = "sa-in-topic-undelivered",
+            ParentConversation = srcConvId,
+            ParentChannel = Context.ChannelId,
+            Description = "current topic undelivered",
+            Prompt = "investigate Y3",
+            State = SubagentTaskState.Completed,
+            Result = "found it",
+            CreatedAt = boundaryTimestamp.AddSeconds(3),
+            CompletedAt = DateTimeOffset.UtcNow,
+            NotificationState = SubagentNotificationState.Pending,
+        };
+
         this.subagentStore.Create(inTopicActive);
         this.subagentStore.Create(preTopicActive);
         this.subagentStore.Create(inTopicCompleted);
         this.subagentStore.Create(unrelated);
+        this.subagentStore.Create(inTopicUndelivered);
 
         SetSlicerResponse($$"""
             {
@@ -1150,7 +1168,8 @@ public class TransferSessionToolTests : IAsyncDisposable
         Assert.Equal(srcConvId, bAfter.ParentConversation);
         Assert.Equal(Context.ChannelId, bAfter.ParentChannel);
 
-        // (c) Completed in-topic subagent: NOT repointed — already done.
+        // (c) Completed in-topic subagent with a DELIVERED notification: NOT repointed —
+        // delivered terminal history stays with the source conversation.
         var cAfter = this.subagentStore.GetById("sa-in-topic-done");
         Assert.NotNull(cAfter);
         Assert.Equal(srcConvId, cAfter.ParentConversation);
@@ -1160,6 +1179,13 @@ public class TransferSessionToolTests : IAsyncDisposable
         Assert.NotNull(dAfter);
         Assert.Equal("some-other-conv", dAfter.ParentConversation);
         Assert.Equal("webchat-default", dAfter.ParentChannel);
+
+        // (e) Terminal in-topic subagent with an UNDELIVERED (pending) notification:
+        // repointed so its completion lands where the conversation continues.
+        var eAfter = this.subagentStore.GetById("sa-in-topic-undelivered");
+        Assert.NotNull(eAfter);
+        Assert.Equal(expectedTargetConv, eAfter.ParentConversation);
+        Assert.Equal("discord-voice", eAfter.ParentChannel);
     }
 
     [Fact]

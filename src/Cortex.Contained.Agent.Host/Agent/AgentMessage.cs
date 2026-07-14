@@ -51,6 +51,16 @@ public sealed record AgentMessage
     /// When true, the agent adjusts its response style for spoken output.
     /// </summary>
     public bool IsVoice { get; init; }
+
+    /// <summary>
+    /// The subagent task whose durable completion notification this message carries.
+    /// Set ONLY by <see cref="SubagentExecutionCoordinator"/> when it enqueues a
+    /// <see cref="AgentMessageSource.SubagentCompletion"/> message. The runtime confirms
+    /// delivery (<c>MarkNotificationDelivered</c>) after the parent turn's final response
+    /// lands, or releases the claim (<c>ReleaseNotification</c>) on failure so the
+    /// notification is redelivered — at-least-once, never silently dropped.
+    /// </summary>
+    public string? SubagentTaskId { get; init; }
 }
 
 /// <summary>

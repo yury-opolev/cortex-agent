@@ -1201,7 +1201,7 @@ public sealed class SettingsUpdateRequest
     [JsonPropertyName("maxSubagentRounds")]
     public int? MaxSubagentRounds { get; set; }
 
-    /// <summary>Maximum number of subagents that may run concurrently (1–20). Null = no change.</summary>
+    /// <summary>Maximum number of subagents that may run concurrently (1–50). Null = no change.</summary>
     [JsonPropertyName("maxConcurrentSubagents")]
     public int? MaxConcurrentSubagents { get; set; }
 }
