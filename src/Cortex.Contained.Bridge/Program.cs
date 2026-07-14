@@ -943,6 +943,16 @@ builder.Services.AddSingleton<Cortex.Contained.Bridge.Mcp.McpCatalogPusher>(sp =
         sp.GetRequiredService<ILogger<Cortex.Contained.Bridge.Mcp.McpCatalogPusher>>()));
 builder.Services.AddHostedService<Cortex.Contained.Bridge.Mcp.McpHostBootstrapper>();
 
+// --- MCP action store (durable, encrypted store of record for approval-gated MCP mutations) ---
+builder.Services.AddSingleton<Cortex.Contained.Bridge.Mcp.Actions.IMcpActionStore>(sp =>
+    new Cortex.Contained.Bridge.Mcp.Actions.SqliteMcpActionStore(
+        Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Cortex", "mcp", "actions.db"),
+        sp.GetRequiredService<SecretManager>().GetOrCreateDatabaseKey(),
+        sp.GetRequiredService<TimeProvider>(),
+        sp.GetRequiredService<ILogger<Cortex.Contained.Bridge.Mcp.Actions.SqliteMcpActionStore>>()));
+
 // --- Worker ---
 builder.Services.AddSingleton<Worker>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<Worker>());
