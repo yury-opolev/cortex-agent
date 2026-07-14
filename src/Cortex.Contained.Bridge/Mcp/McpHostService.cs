@@ -366,7 +366,11 @@ public sealed partial class McpHostService : IAsyncDisposable, IMcpInvocationTar
         // The mutation list is part of the signature so editing it live rebuilds the connection —
         // re-classifying the catalog AND refreshing the dispatch-time policy immediately.
         var mutation = string.Join(',', server.MutationToolAllowList);
-        return $"{server.Transport}|{server.Url}|{server.Command}|{args}|{env}|{server.Auth}|{server.ApiKeyHeader}|{server.SecretRef}|{allow}|{mutation}";
+        // The per-call bounds are captured by the connection at construction, so they too must be
+        // part of the signature: a bounds-only live edit otherwise stays inert until the next
+        // full restart. Including them makes StopUndesiredAsync rebuild the connection with the
+        // new value the moment either bound changes.
+        return $"{server.Transport}|{server.Url}|{server.Command}|{args}|{env}|{server.Auth}|{server.ApiKeyHeader}|{server.SecretRef}|{allow}|{mutation}|{server.CallTimeoutSeconds}|{server.MaxResultBytes}";
     }
 
     public async ValueTask DisposeAsync()

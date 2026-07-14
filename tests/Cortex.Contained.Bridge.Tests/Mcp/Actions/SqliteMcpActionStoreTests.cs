@@ -8,6 +8,7 @@ using Microsoft.Extensions.Time.Testing;
 
 namespace Cortex.Contained.Bridge.Tests.Mcp.Actions;
 
+[Collection(McpActionStoreCollectionDefinition.Name)]
 public sealed class SqliteMcpActionStoreTests : IAsyncLifetime
 {
     private static readonly DateTimeOffset StartTime = new(2026, 7, 14, 12, 0, 0, TimeSpan.Zero);

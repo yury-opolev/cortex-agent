@@ -14,6 +14,7 @@ using Microsoft.Extensions.Time.Testing;
 
 namespace Cortex.Contained.Bridge.Tests.Mcp.Actions;
 
+[Collection(McpActionStoreCollectionDefinition.Name)]
 public sealed class McpActionEndpointsTests : IAsyncLifetime
 {
     private const string Tenant = "tenant-1";

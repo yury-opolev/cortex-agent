@@ -61,7 +61,8 @@ public sealed class StdioMcpServerConnectionIntegrationTests
             arguments: [ScriptPath()],
             environment: new Dictionary<string, string> { ["MCP_TEST_SECRET"] = "s3cr3t-value" },
             toolAllowList: ["echo", "reveal_env"], // hidden_tool/die/hang excluded
-            logger: NullLogger<StdioMcpServerConnection>.Instance);
+            logger: NullLogger<StdioMcpServerConnection>.Instance,
+            mutationToolAllowList: []);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
 
@@ -102,7 +103,8 @@ public sealed class StdioMcpServerConnectionIntegrationTests
             arguments: [ScriptPath()],
             environment: new Dictionary<string, string>(),
             toolAllowList: [],
-            logger: NullLogger<StdioMcpServerConnection>.Instance);
+            logger: NullLogger<StdioMcpServerConnection>.Instance,
+            mutationToolAllowList: []);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         await connection.ConnectAsync(cts.Token);
@@ -130,7 +132,8 @@ public sealed class StdioMcpServerConnectionIntegrationTests
             arguments: ["does-not-matter.mjs"],
             environment: new Dictionary<string, string>(),
             toolAllowList: [],
-            logger: NullLogger<StdioMcpServerConnection>.Instance);
+            logger: NullLogger<StdioMcpServerConnection>.Instance,
+            mutationToolAllowList: []);
 
         var result = await connection.CallToolAsync(Invocation("echo"), CancellationToken.None);
 
@@ -154,7 +157,8 @@ public sealed class StdioMcpServerConnectionIntegrationTests
             arguments: [ScriptPath()],
             environment: new Dictionary<string, string>(),
             toolAllowList: [],
-            logger: NullLogger<StdioMcpServerConnection>.Instance);
+            logger: NullLogger<StdioMcpServerConnection>.Instance,
+            mutationToolAllowList: []);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         await connection.ConnectAsync(cts.Token);
@@ -193,7 +197,8 @@ public sealed class StdioMcpServerConnectionIntegrationTests
             arguments: [ScriptPath()],
             environment: new Dictionary<string, string>(),
             toolAllowList: [],
-            logger: NullLogger<StdioMcpServerConnection>.Instance);
+            logger: NullLogger<StdioMcpServerConnection>.Instance,
+            mutationToolAllowList: []);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         await connection.ConnectAsync(cts.Token);
@@ -235,6 +240,7 @@ public sealed class StdioMcpServerConnectionIntegrationTests
             environment: new Dictionary<string, string>(),
             toolAllowList: [],
             logger: NullLogger<StdioMcpServerConnection>.Instance,
+            mutationToolAllowList: [],
             callTimeoutSeconds: 1);
 
         using var connectCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
@@ -271,7 +277,8 @@ public sealed class StdioMcpServerConnectionIntegrationTests
             arguments: [ScriptPath()],
             environment: new Dictionary<string, string>(),
             toolAllowList: [],
-            logger: NullLogger<StdioMcpServerConnection>.Instance);
+            logger: NullLogger<StdioMcpServerConnection>.Instance,
+            mutationToolAllowList: []);
 
         using var connectCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         await connection.ConnectAsync(connectCts.Token);

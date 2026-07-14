@@ -76,8 +76,12 @@ public sealed partial class McpActionService
         }
         catch (Exception ex) when (ex is ArgumentException or JsonException)
         {
-            // Nothing was persisted or dispatched — a definitive validation failure.
-            this.LogCanonicalizationFailed(invocation.ServerKey, invocation.ToolName, invocation.InvocationId, ex.Message);
+            // Nothing was persisted or dispatched — a definitive validation failure. The host log
+            // carries ONLY the exception TYPE: a JsonException message can embed a fragment of the
+            // (possibly secret-bearing) mutation arguments, and a duplicate-key ArgumentException
+            // echoes a property name. The agent still receives the raw reason in the return content
+            // below (it needs to know WHY its arguments were rejected).
+            this.LogCanonicalizationFailed(invocation.ServerKey, invocation.ToolName, invocation.InvocationId, ex.GetType().Name);
             return McpToolResult.Fail(
                 invocation.InvocationId,
                 McpFailureKind.Validation,
@@ -109,7 +113,9 @@ public sealed partial class McpActionService
         catch (InvalidOperationException ex)
         {
             // Same invocation id re-proposed with DIFFERENT arguments — definitive, nothing dispatched.
-            this.LogProposeConflict(invocation.ServerKey, invocation.ToolName, invocation.InvocationId, ex.Message);
+            // Host log carries only the exception TYPE (the structured fields already identify the
+            // invocation); the store message is lower-risk but kept content-free for consistency.
+            this.LogProposeConflict(invocation.ServerKey, invocation.ToolName, invocation.InvocationId, ex.GetType().Name);
             return McpToolResult.Fail(invocation.InvocationId, McpFailureKind.Validation, ex.Message);
         }
 
@@ -216,11 +222,11 @@ public sealed partial class McpActionService
     [LoggerMessage(Level = LogLevel.Information, Message = "MCP mutation proposed as action {ActionId} for {ServerKey}/{ToolName} (hash {ArgumentsHash}); awaiting exact-argument approval")]
     private partial void LogMutationProposed(string actionId, string serverKey, string toolName, string argumentsHash);
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "MCP mutation canonicalization failed for {ServerKey}/{ToolName} (invocation {InvocationId}): {ErrorMessage}")]
-    private partial void LogCanonicalizationFailed(string serverKey, string toolName, string invocationId, string errorMessage);
+    [LoggerMessage(Level = LogLevel.Warning, Message = "MCP mutation canonicalization failed for {ServerKey}/{ToolName} (invocation {InvocationId}): {ExceptionType}")]
+    private partial void LogCanonicalizationFailed(string serverKey, string toolName, string invocationId, string exceptionType);
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "MCP mutation proposal conflict for {ServerKey}/{ToolName} (invocation {InvocationId}): {ErrorMessage}")]
-    private partial void LogProposeConflict(string serverKey, string toolName, string invocationId, string errorMessage);
+    [LoggerMessage(Level = LogLevel.Warning, Message = "MCP mutation proposal conflict for {ServerKey}/{ToolName} (invocation {InvocationId}): {ExceptionType}")]
+    private partial void LogProposeConflict(string serverKey, string toolName, string invocationId, string exceptionType);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Cancel requested for dispatching MCP action {ActionId}; active invocation signalled: {Signalled}")]
     private partial void LogDispatchCancelRequested(string actionId, bool signalled);

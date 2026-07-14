@@ -385,4 +385,50 @@ public sealed class McpHostServiceTests
         await first.Received(1).DisposeAsync();
         Assert.Equal(["mcp__a__new"], host.CurrentCatalog.Tools.Select(t => t.FullName).ToList());
     }
+
+    [Fact]
+    public async Task ReconcileAsync_CallTimeoutSecondsChangedOnly_RebuildsConnection()
+    {
+        // I1 REGRESSION: the connection captures CallTimeoutSeconds at construction, so a live
+        // bounds-only edit is inert unless the config signature changes. A CallTimeoutSeconds
+        // change alone must dispose the old connection and rebuild with the new bound.
+        var first = FakeConnection("a", Def("a", "x"));
+        var second = FakeConnection("a", Def("a", "x"));
+        var factory = Substitute.For<IMcpServerConnectionFactory>();
+        factory.TryCreate(Arg.Any<McpServerConfig>()).Returns(first, second);
+        await using var host = new McpHostService(factory, NullLogger<McpHostService>.Instance);
+
+        var original = StdioServer("a");
+        original.CallTimeoutSeconds = 45;
+        await host.ReconcileAsync(new McpSettingsConfig { Servers = [original] }, CancellationToken.None);
+
+        var edited = StdioServer("a");
+        edited.CallTimeoutSeconds = 10; // ONLY the bound changed
+        await host.ReconcileAsync(new McpSettingsConfig { Servers = [edited] }, CancellationToken.None);
+
+        await first.Received(1).DisposeAsync();
+        factory.Received(2).TryCreate(Arg.Any<McpServerConfig>());
+    }
+
+    [Fact]
+    public async Task ReconcileAsync_MaxResultBytesChangedOnly_RebuildsConnection()
+    {
+        // I1 REGRESSION (sibling bound): a MaxResultBytes-only edit must likewise rebuild.
+        var first = FakeConnection("a", Def("a", "x"));
+        var second = FakeConnection("a", Def("a", "x"));
+        var factory = Substitute.For<IMcpServerConnectionFactory>();
+        factory.TryCreate(Arg.Any<McpServerConfig>()).Returns(first, second);
+        await using var host = new McpHostService(factory, NullLogger<McpHostService>.Instance);
+
+        var original = StdioServer("a");
+        original.MaxResultBytes = 50 * 1024;
+        await host.ReconcileAsync(new McpSettingsConfig { Servers = [original] }, CancellationToken.None);
+
+        var edited = StdioServer("a");
+        edited.MaxResultBytes = 4096; // ONLY the bound changed
+        await host.ReconcileAsync(new McpSettingsConfig { Servers = [edited] }, CancellationToken.None);
+
+        await first.Received(1).DisposeAsync();
+        factory.Received(2).TryCreate(Arg.Any<McpServerConfig>());
+    }
 }

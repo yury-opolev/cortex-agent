@@ -23,11 +23,11 @@ public sealed class StdioMcpServerConnection : McpServerConnectionBase
         IReadOnlyDictionary<string, string> environment,
         IReadOnlyCollection<string> toolAllowList,
         ILogger<StdioMcpServerConnection> logger,
+        IReadOnlyCollection<string> mutationToolAllowList,
         string? workingDirectory = null,
-        IReadOnlyCollection<string>? mutationToolAllowList = null,
         int callTimeoutSeconds = McpServerConfig.DefaultCallTimeoutSeconds,
         int maxResultBytes = McpResultMapper.DefaultMaxResultBytes)
-        : base(serverKey, toolAllowList, mutationToolAllowList ?? [], logger, callTimeoutSeconds, maxResultBytes)
+        : base(serverKey, toolAllowList, mutationToolAllowList, logger, callTimeoutSeconds, maxResultBytes)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(command);
         this.command = command;

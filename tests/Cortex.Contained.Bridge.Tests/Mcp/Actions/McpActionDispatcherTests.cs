@@ -4,11 +4,14 @@ using Cortex.Contained.Bridge.Mcp.Actions;
 using Cortex.Contained.Contracts.Config;
 using Cortex.Contained.Contracts.Hub;
 using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
+using NSubstitute.ExceptionExtensions;
 
 namespace Cortex.Contained.Bridge.Tests.Mcp.Actions;
 
+[Collection(McpActionStoreCollectionDefinition.Name)]
 public sealed class McpActionDispatcherTests : IAsyncLifetime
 {
     private const string Tenant = "tenant-1";
@@ -324,5 +327,76 @@ public sealed class McpActionDispatcherTests : IAsyncLifetime
 
         var action = await _store.GetAsync(Tenant, proposal.ActionId!, CancellationToken.None);
         Assert.Equal(McpActionState.Expired, action!.State);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_StartupRecoveryThrows_LogsAndKeepsRunning_WithoutCrashingHost()
+    {
+        // I2 REGRESSION: a startup store fault (locked/contended/corrupt actions.db) must NOT
+        // propagate out of ExecuteAsync. Under the default BackgroundServiceExceptionBehavior
+        // (StopHost) that would take down the whole Bridge (WebChat/Discord/Voice/UI) and can
+        // trigger a self-update auto-rollback. It must degrade MCP dispatch only: log and enter
+        // the (independently resilient) outbox loop.
+        var faultingStore = Substitute.For<IMcpActionStore>();
+        faultingStore.RecoverInterruptedDispatchesAsync(Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>())
+            .ThrowsAsync(new InvalidOperationException("actions.db is locked"));
+        faultingStore.TryClaimNextApprovedAsync(Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>())
+            .Returns((McpActionDispatchLease?)null);
+        var capturingLogger = new CapturingLogger<McpActionDispatcher>();
+        using var dispatcher = new McpActionDispatcher(
+            faultingStore, _target, _configStore, _registry, _timeProvider, capturingLogger);
+
+        await dispatcher.StartAsync(CancellationToken.None);
+
+        // Poll (real time) until the startup fault has been handled and logged — the loop runs on
+        // its own execution flow, so we wait for the observable outcome rather than assuming
+        // synchronous start. The FakeTimeProvider parks the idle delay, so the loop settles quickly.
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (DateTime.UtcNow < deadline
+            && !capturingLogger.Messages.Any(m => m.Contains("startup recovery/expire failed", StringComparison.Ordinal)))
+        {
+            if (dispatcher.ExecuteTask is { IsFaulted: true })
+            {
+                break;
+            }
+
+            await Task.Delay(25);
+        }
+
+        // The service is alive, NOT faulted (the fault degraded MCP dispatch only)…
+        Assert.NotNull(dispatcher.ExecuteTask);
+        Assert.False(dispatcher.ExecuteTask!.IsFaulted);
+
+        // …recovery was attempted (and threw) yet the loop still reached its first poll…
+        await faultingStore.Received().RecoverInterruptedDispatchesAsync(
+            Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>());
+        await faultingStore.Received().TryClaimNextApprovedAsync(
+            Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>());
+
+        // …and the degradation was logged content-free.
+        Assert.Contains(
+            capturingLogger.Messages,
+            m => m.Contains("startup recovery/expire failed", StringComparison.Ordinal));
+
+        await dispatcher.StopAsync(CancellationToken.None);
+    }
+
+    /// <summary>Captures fully-formatted log messages so resilience/redaction assertions can inspect them.</summary>
+    private sealed class CapturingLogger<T> : ILogger<T>
+    {
+        public List<string> Messages { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+            => this.Messages.Add(formatter(state, exception));
     }
 }

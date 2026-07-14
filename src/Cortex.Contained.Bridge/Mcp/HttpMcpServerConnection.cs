@@ -23,10 +23,10 @@ public sealed class HttpMcpServerConnection : McpServerConnectionBase
         IReadOnlyDictionary<string, string> headers,
         IReadOnlyCollection<string> toolAllowList,
         ILogger<HttpMcpServerConnection> logger,
-        IReadOnlyCollection<string>? mutationToolAllowList = null,
+        IReadOnlyCollection<string> mutationToolAllowList,
         int callTimeoutSeconds = McpServerConfig.DefaultCallTimeoutSeconds,
         int maxResultBytes = McpResultMapper.DefaultMaxResultBytes)
-        : base(serverKey, toolAllowList, mutationToolAllowList ?? [], logger, callTimeoutSeconds, maxResultBytes)
+        : base(serverKey, toolAllowList, mutationToolAllowList, logger, callTimeoutSeconds, maxResultBytes)
     {
         ArgumentNullException.ThrowIfNull(endpoint);
         this.endpoint = endpoint;
@@ -40,10 +40,10 @@ public sealed class HttpMcpServerConnection : McpServerConnectionBase
         IMcpBearerSource bearerSource,
         IReadOnlyCollection<string> toolAllowList,
         ILogger<HttpMcpServerConnection> logger,
-        IReadOnlyCollection<string>? mutationToolAllowList = null,
+        IReadOnlyCollection<string> mutationToolAllowList,
         int callTimeoutSeconds = McpServerConfig.DefaultCallTimeoutSeconds,
         int maxResultBytes = McpResultMapper.DefaultMaxResultBytes)
-        : base(serverKey, toolAllowList, mutationToolAllowList ?? [], logger, callTimeoutSeconds, maxResultBytes)
+        : base(serverKey, toolAllowList, mutationToolAllowList, logger, callTimeoutSeconds, maxResultBytes)
     {
         ArgumentNullException.ThrowIfNull(endpoint);
         ArgumentNullException.ThrowIfNull(bearerSource);

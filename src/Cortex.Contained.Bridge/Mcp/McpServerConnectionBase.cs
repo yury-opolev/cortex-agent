@@ -37,11 +37,20 @@ public abstract partial class McpServerConnectionBase : IMcpServerConnection
         int maxResultBytes = McpResultMapper.DefaultMaxResultBytes)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(serverKey);
+        // SECURITY: mutationToolAllowList is a safety-critical policy input — a null would fail
+        // OPEN (classify nothing as a mutation, letting a state-changing tool through the direct
+        // path). It is a REQUIRED, non-null parameter; the factory always supplies it.
+        ArgumentNullException.ThrowIfNull(mutationToolAllowList);
         this.ServerKey = serverKey;
         this.toolAllowList = toolAllowList ?? [];
-        this.mutationToolAllowList = mutationToolAllowList ?? [];
+        this.mutationToolAllowList = mutationToolAllowList;
         this.logger = logger;
-        this.callTimeoutSeconds = callTimeoutSeconds;
+        // Guard the configured bound before it can reach CancelAfter: a hand-edited YAML value that
+        // bypasses the admin-API validation (e.g. a negative or absurd timeout) would otherwise
+        // throw ArgumentOutOfRangeException from CancelAfter mid-call. Clamp to the same sane range
+        // the config boundary enforces so an out-of-range value degrades to a bounded call, not a crash.
+        this.callTimeoutSeconds = Math.Clamp(
+            callTimeoutSeconds, McpServerConfig.MinCallTimeoutSeconds, McpServerConfig.MaxCallTimeoutSeconds);
         this.maxResultBytes = maxResultBytes;
     }
 

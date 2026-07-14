@@ -56,6 +56,17 @@ public sealed partial class McpActionDispatcher : BackgroundService
         {
             return;
         }
+#pragma warning disable CA1031 // A startup store fault must degrade MCP dispatch only, never the host.
+        catch (Exception ex)
+#pragma warning restore CA1031
+        {
+            // A locked/contended/corrupt actions.db here would otherwise propagate out of
+            // ExecuteAsync and, under the default StopHost behavior, take down the whole Bridge
+            // (WebChat/Discord/Voice/UI) and can trigger a self-update auto-rollback. Log and
+            // continue: the outbox loop below is independently resilient per iteration, so MCP
+            // dispatch degrades in isolation while the rest of the host stays up.
+            this.LogStartupRecoveryFailed(ex.GetType().Name);
+        }
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -72,7 +83,9 @@ public sealed partial class McpActionDispatcher : BackgroundService
             catch (Exception ex)
 #pragma warning restore CA1031
             {
-                this.LogLoopIterationFailed(ex.Message);
+                // Content-free: only the exception TYPE (a store fault message could echo argument
+                // fragments or ids). Structured fields elsewhere carry the safe identifiers.
+                this.LogLoopIterationFailed(ex.GetType().Name);
             }
 
             if (!dispatched)
@@ -272,8 +285,10 @@ public sealed partial class McpActionDispatcher : BackgroundService
         {
             // BENIGN: the attempt was already completed (e.g. a concurrent recovery pass or a
             // duplicate completion). The store's state machine already holds the truth — never
-            // overwrite it, never re-dispatch.
-            this.LogDuplicateCompletionIgnored(completion.ActionId, completion.AttemptNumber, ex.Message);
+            // overwrite it, never re-dispatch. Content-free: only the exception TYPE is logged (a
+            // local keeps CA1873 happy on this Information-level path).
+            var exceptionType = ex.GetType().Name;
+            this.LogDuplicateCompletionIgnored(completion.ActionId, completion.AttemptNumber, exceptionType);
         }
     }
 
@@ -319,9 +334,12 @@ public sealed partial class McpActionDispatcher : BackgroundService
     [LoggerMessage(Level = LogLevel.Warning, Message = "Recovered {Count} interrupted MCP action dispatch(es) to outcome_unknown at startup")]
     private partial void LogRecoveredInterrupted(int count);
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "Duplicate/late completion for MCP action {ActionId} attempt {AttemptNumber} ignored: {Detail}")]
-    private partial void LogDuplicateCompletionIgnored(string actionId, int attemptNumber, string detail);
+    [LoggerMessage(Level = LogLevel.Information, Message = "Duplicate/late completion for MCP action {ActionId} attempt {AttemptNumber} ignored: {ExceptionType}")]
+    private partial void LogDuplicateCompletionIgnored(string actionId, int attemptNumber, string exceptionType);
 
-    [LoggerMessage(Level = LogLevel.Error, Message = "MCP action outbox iteration failed: {ErrorMessage}")]
-    private partial void LogLoopIterationFailed(string errorMessage);
+    [LoggerMessage(Level = LogLevel.Error, Message = "MCP action outbox iteration failed: {ExceptionType}")]
+    private partial void LogLoopIterationFailed(string exceptionType);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "MCP action startup recovery/expire failed: {ExceptionType}; MCP dispatch degraded, host continues")]
+    private partial void LogStartupRecoveryFailed(string exceptionType);
 }

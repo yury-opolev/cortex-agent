@@ -5,11 +5,13 @@ using Cortex.Contained.Bridge.Mcp.Actions;
 using Cortex.Contained.Contracts.Config;
 using Cortex.Contained.Contracts.Hub;
 using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 
 namespace Cortex.Contained.Bridge.Tests.Mcp.Actions;
 
+[Collection(McpActionStoreCollectionDefinition.Name)]
 public sealed class McpActionServiceTests : IAsyncLifetime
 {
     private const string Tenant = "tenant-1";
@@ -198,6 +200,40 @@ public sealed class McpActionServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task InvokeAsync_CanonicalizationFailure_HostLogDoesNotEchoArgumentFragment()
+    {
+        // M1 REDACTION: a duplicate-key rejection's exception message echoes the offending
+        // PROPERTY NAME, which can be a secret-bearing argument key. The host log must carry only
+        // the exception TYPE — never that fragment. (The agent-facing return content still explains
+        // the reason, by design, so it is deliberately NOT asserted here.)
+        var capturingLogger = new CapturingLogger<McpActionService>();
+        var service = new McpActionService(
+            _store, _target, _configStore, _registry, _timeProvider, capturingLogger);
+
+        const string secretFragment = "x_secret_api_key";
+        var invocation = Invocation(
+            "create_issue",
+            $$"""{"{{secretFragment}}":"v1","{{secretFragment}}":"v2"}""");
+
+        var result = await service.InvokeAsync(Tenant, invocation, CancellationToken.None);
+
+        // Definitive validation failure — nothing persisted or dispatched.
+        Assert.Equal(McpToolOutcome.Failed, result.Outcome);
+        Assert.Equal(McpFailureKind.Validation, result.FailureKind);
+        await _target.DidNotReceiveWithAnyArgs().InvokeAsync(default!, default);
+
+        // The canonicalization-failure log names only the exception TYPE, and NO log line echoes
+        // the argument fragment.
+        var failureLogs = capturingLogger.Messages
+            .Where(m => m.Contains("canonicalization failed", StringComparison.Ordinal))
+            .ToList();
+        var failureLog = Assert.Single(failureLogs);
+        Assert.Contains(nameof(ArgumentException), failureLog, StringComparison.Ordinal);
+        Assert.DoesNotContain(secretFragment, failureLog, StringComparison.Ordinal);
+        Assert.DoesNotContain(capturingLogger.Messages, m => m.Contains(secretFragment, StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task GetStatusAsync_UnknownAction_ReturnsNotFound()
     {
         var response = await _service.GetStatusAsync(Tenant, "missing", CancellationToken.None);
@@ -275,5 +311,24 @@ public sealed class McpActionServiceTests : IAsyncLifetime
         Assert.True(dispatchCts.IsCancellationRequested);
         var action = await _store.GetAsync(Tenant, result.ActionId!, CancellationToken.None);
         Assert.Equal(McpActionState.Dispatching, action!.State);
+    }
+
+    /// <summary>Captures fully-formatted log messages so redaction assertions can inspect them.</summary>
+    private sealed class CapturingLogger<T> : ILogger<T>
+    {
+        public List<string> Messages { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+            => this.Messages.Add(formatter(state, exception));
     }
 }
