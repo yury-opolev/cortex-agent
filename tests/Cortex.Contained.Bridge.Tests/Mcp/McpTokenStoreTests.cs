@@ -1,4 +1,5 @@
 using Cortex.Contained.Bridge.Mcp.Auth;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Cortex.Contained.Bridge.Tests.Mcp;
@@ -17,8 +18,27 @@ public sealed class McpTokenStoreTests
         public void RemoveSecret(string secretId) => this.Entries.Remove(secretId);
     }
 
-    private static McpTokenStore Build(IMcpTokenSecretStore store)
-        => new(store, NullLogger<McpTokenStore>.Instance);
+    /// <summary>Captures fully-formatted log messages so redaction assertions can inspect them.</summary>
+    private sealed class CapturingLogger<T> : ILogger<T>
+    {
+        public List<string> Messages { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+            => this.Messages.Add(formatter(state, exception));
+    }
+
+    private static McpTokenStore Build(IMcpTokenSecretStore store, ILogger<McpTokenStore>? logger = null)
+        => new(store, logger ?? NullLogger<McpTokenStore>.Instance);
 
     [Fact]
     public void SaveThenGet_RoundTripsAllFields()
@@ -106,5 +126,26 @@ public sealed class McpTokenStoreTests
         var tokens = new McpOAuthTokens { AccessToken = "a", ClientId = "c", TokenEndpoint = "t", ExpiresAtMs = 0 };
 
         Assert.True(tokens.IsExpired(nowUnixMs: 1000, skewMs: 0));
+    }
+
+    [Fact]
+    public void Get_MalformedBlob_LogDoesNotContainTheRawExceptionMessage()
+    {
+        // SECURITY: a JsonException's message can echo a fragment of the (decrypted) stored blob,
+        // i.e. token material. The parse-failure log must carry only the exception TYPE.
+        var capturingLogger = new CapturingLogger<McpTokenStore>();
+        var fake = new FakeSecretStore();
+        var secretLookingBlob = """{"accessToken":"s3cr3t-access-token", this is not valid json""";
+        fake.Entries["mcp/github/oauth"] = secretLookingBlob;
+
+        var loaded = Build(fake, capturingLogger).Get("github");
+
+        Assert.Null(loaded);
+        var failureLogs = capturingLogger.Messages
+            .Where(m => m.Contains("could not be parsed", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        var failureLog = Assert.Single(failureLogs);
+        Assert.Contains(nameof(System.Text.Json.JsonException), failureLog, StringComparison.Ordinal);
+        Assert.DoesNotContain("s3cr3t", failureLog, StringComparison.Ordinal);
     }
 }

@@ -21,6 +21,11 @@ namespace Cortex.Contained.Contracts.Hub;
 /// <param name="E2eAvgMs">Average end-to-end turn latency over the window (ms).</param>
 /// <param name="E2eP50Ms">Median end-to-end turn latency over the window (ms).</param>
 /// <param name="E2eP95Ms">95th-percentile end-to-end turn latency over the window (ms).</param>
+/// <param name="Subagents">
+/// Optional point-in-time aggregate of the subagent worker pool (queue depth, active count,
+/// staleness, restarts — no prompt/message/result content). Null when the agent did not
+/// populate it (e.g. an older agent build, or the subagent subsystem is unavailable).
+/// </param>
 public sealed record AgentMetricsSnapshot(
     long TotalMessagesProcessed,
     int ActiveConversations,
@@ -36,4 +41,5 @@ public sealed record AgentMetricsSnapshot(
     long TtftP95Ms = 0,
     double E2eAvgMs = 0,
     long E2eP50Ms = 0,
-    long E2eP95Ms = 0);
+    long E2eP95Ms = 0,
+    SubagentAggregateSnapshot? Subagents = null);

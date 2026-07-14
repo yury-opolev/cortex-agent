@@ -30,6 +30,7 @@ public sealed class AgentMetrics
     private readonly LatencyStats e2eStats = new();
 
     private volatile Func<int>? activeConversationsProvider;
+    private volatile Func<SubagentAggregateSnapshot>? subagentAggregateProvider;
 
     /// <summary>
     /// Registers a callback that reports the number of currently-active conversations.
@@ -40,6 +41,19 @@ public sealed class AgentMetrics
     public void SetActiveConversationsProvider(Func<int>? provider)
     {
         this.activeConversationsProvider = provider;
+    }
+
+    /// <summary>
+    /// Registers a callback that reports the current, content-free subagent worker-pool
+    /// aggregate. Self-wired once by <c>SubagentObservabilityService</c>'s constructor; the
+    /// value is read lazily on each <see cref="Snapshot"/> so <c>/health</c> always reflects
+    /// live pool state. A faulty or throwing provider degrades the snapshot's
+    /// <see cref="AgentMetricsSnapshot.Subagents"/> to null — it never fails the snapshot itself.
+    /// </summary>
+    /// <param name="provider">Returns the current aggregate, or <see langword="null"/> to clear.</param>
+    public void SetSubagentAggregateProvider(Func<SubagentAggregateSnapshot>? provider)
+    {
+        this.subagentAggregateProvider = provider;
     }
 
     /// <summary>Increments the count of fully-processed inbound messages.</summary>
@@ -121,6 +135,22 @@ public sealed class AgentMetrics
         var ttft = this.ttftStats.Snapshot();
         var e2e = this.e2eStats.Snapshot();
 
+        SubagentAggregateSnapshot? subagents = null;
+        var subagentProvider = this.subagentAggregateProvider;
+        if (subagentProvider is not null)
+        {
+            try
+            {
+                subagents = subagentProvider();
+            }
+#pragma warning disable CA1031 // A faulty provider must never break the health snapshot.
+            catch
+            {
+                subagents = null;
+            }
+#pragma warning restore CA1031
+        }
+
         return new AgentMetricsSnapshot(
             TotalMessagesProcessed: Interlocked.Read(ref this.totalMessagesProcessed),
             ActiveConversations: activeConversations,
@@ -136,7 +166,8 @@ public sealed class AgentMetrics
             TtftP95Ms: ttft.P95Ms,
             E2eAvgMs: e2e.AvgMs,
             E2eP50Ms: e2e.P50Ms,
-            E2eP95Ms: e2e.P95Ms);
+            E2eP95Ms: e2e.P95Ms,
+            Subagents: subagents);
     }
 
     /// <summary>

@@ -1,6 +1,7 @@
 using Cortex.Contained.Agent.Host.Hubs;
 using Cortex.Contained.Agent.Host.Mcp;
 using Cortex.Contained.Contracts.Hub;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Cortex.Contained.Agent.Host.Tests.Mcp;
@@ -12,11 +13,31 @@ public class SignalRMcpGatewayTests
         public IAgentHubClient? Client { get; set; }
     }
 
-    private static SignalRMcpGateway BuildGateway(IAgentHubClient? client, int timeoutSeconds = 60)
+    /// <summary>Captures fully-formatted log messages so redaction assertions can inspect them.</summary>
+    private sealed class CapturingLogger<T> : ILogger<T>
+    {
+        public List<string> Messages { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+            => this.Messages.Add(formatter(state, exception));
+    }
+
+    private static SignalRMcpGateway BuildGateway(
+        IAgentHubClient? client, int timeoutSeconds = 60, ILogger<SignalRMcpGateway>? logger = null)
     {
         var provider = new FakeBridgeClientProvider { Client = client };
         var options = new McpGatewayOptions { BridgeInvokeTimeoutSeconds = timeoutSeconds };
-        return new SignalRMcpGateway(provider, options, NullLogger<SignalRMcpGateway>.Instance);
+        return new SignalRMcpGateway(provider, options, logger ?? NullLogger<SignalRMcpGateway>.Instance);
     }
 
     [Fact]
@@ -213,5 +234,107 @@ public class SignalRMcpGatewayTests
         Assert.Equal(McpToolOutcome.Cancelled, result.Outcome);
         Assert.Equal(McpFailureKind.Cancellation, result.FailureKind);
         await client.DidNotReceive().InvokeMcpTool(Arg.Any<McpToolInvocation>());
+    }
+
+    // ── SECURITY: log lines carry only the exception TYPE, never a raw ex.Message ──────────
+    // (docs/security.md). The Bridge connection itself is untrusted-adjacent — a SignalR
+    // transport fault message could echo a fragment of the connection endpoint. The public
+    // response Error fields (asserted separately below) are a DIFFERENT, intentional sink: they
+    // are returned to the LLM as tool-result content via mcp_action_status/mcp_action_cancel.
+
+    [Fact]
+    public async Task InvokeAsync_TransportFaultAfterDispatch_LogDoesNotContainTheRawExceptionMessage()
+    {
+        var capturingLogger = new CapturingLogger<SignalRMcpGateway>();
+        var client = Substitute.For<IAgentHubClient>();
+        var secretLookingMessage = "connection dropped at https://user:s3cr3t@internal.example/hub";
+        client.InvokeMcpTool(Arg.Any<McpToolInvocation>())
+            .Returns<Task<McpToolResult>>(_ => throw new InvalidOperationException(secretLookingMessage));
+        var gateway = BuildGateway(client, logger: capturingLogger);
+
+        var result = await gateway.InvokeAsync("github", "create_issue", "{}", null, null, null, CancellationToken.None);
+
+        Assert.Equal(McpToolOutcome.OutcomeUnknown, result.Outcome);
+        var failureLogs = capturingLogger.Messages
+            .Where(m => m.Contains("MCP invoke failed", StringComparison.Ordinal))
+            .ToList();
+        var failureLog = Assert.Single(failureLogs);
+        Assert.Contains(nameof(InvalidOperationException), failureLog, StringComparison.Ordinal);
+        Assert.DoesNotContain(secretLookingMessage, failureLog, StringComparison.Ordinal);
+        Assert.DoesNotContain("s3cr3t", failureLog, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task GetActionStatusAsync_TransportFault_LogIsSanitized_ButResponseErrorStillExplainsWhy()
+    {
+        var capturingLogger = new CapturingLogger<SignalRMcpGateway>();
+        var client = Substitute.For<IAgentHubClient>();
+        var secretLookingMessage = "connection dropped at https://user:s3cr3t@internal.example/hub";
+        client.GetMcpActionStatus(Arg.Any<McpActionStatusRequest>())
+            .Returns<Task<McpActionStatusResponse>>(_ => throw new InvalidOperationException(secretLookingMessage));
+        var gateway = BuildGateway(client, logger: capturingLogger);
+
+        var response = await gateway.GetActionStatusAsync("act-1", CancellationToken.None);
+
+        Assert.False(response.Found);
+        var failureLogs = capturingLogger.Messages
+            .Where(m => m.Contains("MCP action status call failed", StringComparison.Ordinal))
+            .ToList();
+        var failureLog = Assert.Single(failureLogs);
+        Assert.Contains(nameof(InvalidOperationException), failureLog, StringComparison.Ordinal);
+        Assert.DoesNotContain(secretLookingMessage, failureLog, StringComparison.Ordinal);
+
+        // The DIFFERENT, intentional sink: the response Error IS returned to the LLM as
+        // mcp_action_status tool-result content, so it deliberately still carries ex.Message.
+        Assert.Contains(secretLookingMessage, response.Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CancelActionAsync_TransportFault_LogIsSanitized_ButResponseErrorStillExplainsWhy()
+    {
+        var capturingLogger = new CapturingLogger<SignalRMcpGateway>();
+        var client = Substitute.For<IAgentHubClient>();
+        var secretLookingMessage = "connection dropped at https://user:s3cr3t@internal.example/hub";
+        client.CancelMcpAction(Arg.Any<McpActionCancelRequest>())
+            .Returns<Task<McpActionCancelResponse>>(_ => throw new InvalidOperationException(secretLookingMessage));
+        var gateway = BuildGateway(client, logger: capturingLogger);
+
+        var response = await gateway.CancelActionAsync("act-1", "sha256:abc", CancellationToken.None);
+
+        Assert.False(response.Accepted);
+        var failureLogs = capturingLogger.Messages
+            .Where(m => m.Contains("MCP action cancel call failed", StringComparison.Ordinal))
+            .ToList();
+        var failureLog = Assert.Single(failureLogs);
+        Assert.Contains(nameof(InvalidOperationException), failureLog, StringComparison.Ordinal);
+        Assert.DoesNotContain(secretLookingMessage, failureLog, StringComparison.Ordinal);
+
+        // The DIFFERENT, intentional sink: the response Error IS returned to the LLM as
+        // mcp_action_cancel tool-result content, so it deliberately still carries ex.Message.
+        Assert.Contains(secretLookingMessage, response.Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task InvokeAsync_CallerCancellation_CancelSendFails_LogDoesNotContainTheRawExceptionMessage()
+    {
+        var capturingLogger = new CapturingLogger<SignalRMcpGateway>();
+        var client = Substitute.For<IAgentHubClient>();
+        var secretLookingMessage = "connection dropped at https://user:s3cr3t@internal.example/hub";
+        client.InvokeMcpTool(Arg.Any<McpToolInvocation>())
+            .Returns(new TaskCompletionSource<McpToolResult>().Task); // never completes
+        client.CancelMcpTool(Arg.Any<McpToolCancellation>())
+            .Returns<Task>(_ => throw new InvalidOperationException(secretLookingMessage));
+        var gateway = BuildGateway(client, logger: capturingLogger);
+        using var callerCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
+
+        var result = await gateway.InvokeAsync("github", "create_issue", "{}", null, null, null, callerCts.Token);
+
+        Assert.Equal(McpToolOutcome.OutcomeUnknown, result.Outcome);
+        var failureLogs = capturingLogger.Messages
+            .Where(m => m.Contains("MCP cancellation send failed", StringComparison.Ordinal))
+            .ToList();
+        var failureLog = Assert.Single(failureLogs);
+        Assert.Contains(nameof(InvalidOperationException), failureLog, StringComparison.Ordinal);
+        Assert.DoesNotContain(secretLookingMessage, failureLog, StringComparison.Ordinal);
     }
 }

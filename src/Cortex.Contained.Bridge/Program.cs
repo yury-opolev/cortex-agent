@@ -1126,6 +1126,10 @@ app.MapMemoryEndpoints(cortexConfigPath);
 app.MapMcpEndpoints();
 // --- MCP action approval API (list/approve/reject/cancel/reconcile gated mutations) ---
 app.MapMcpActionEndpoints();
+// --- Generic operational observability (subagent worker pool + MCP action history, no
+//     prompt/message/result/args/eval content) — powers a future IcM dashboard / the agent's
+//     own workspace files. ---
+app.MapOperationsEndpoints();
 // --- MCP OAuth loopback callback (unauthenticated; state-protected) ---
 app.MapMcpOAuthCallbackEndpoint();
 // --- Message History API ---

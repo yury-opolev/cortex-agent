@@ -43,7 +43,9 @@ public sealed partial class McpTokenStore
         }
         catch (JsonException ex)
         {
-            this.LogParseFailed(serverKey, ex.Message);
+            // SECURITY: content-free — only the exception TYPE. A malformed blob's JsonException
+            // message can include a snippet of the (decrypted) stored payload, i.e. token material.
+            this.LogParseFailed(serverKey, ex.GetType().Name);
             return null;
         }
     }

@@ -491,6 +491,16 @@ builder.Services.AddSingleton(sp =>
         sp.GetRequiredService<ILogger<SubagentRunnerRegistry>>());
 });
 
+// Generic, content-free subagent worker-pool observability (no prompt/message/result/eval
+// content). Self-wires an AgentMetrics provider on construction so /health picks up live
+// subagent-pool counts.
+builder.Services.AddSingleton(sp =>
+    new Cortex.Contained.Agent.Host.Agent.SubagentObservabilityService(
+        sp.GetRequiredService<SubagentSessionStore>(),
+        sp.GetRequiredService<SubagentRunnerRegistry>(),
+        sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.AgentMetrics>(),
+        sp.GetRequiredService<TimeProvider>()));
+
 // The executor builds worker context and drives the registered runner; the coordinator owns
 // claiming, atomic concurrency admission, terminal persistence, requeue-on-shutdown, and readiness.
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Agent.ISubagentExecutor>(sp =>

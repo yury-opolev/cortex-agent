@@ -168,6 +168,52 @@ public class SubagentSessionStoreTests : IDisposable
         Assert.Null(_store.TryClaimOldestQueued()); // nothing left queued
     }
 
+    // ── Recent (observability paging) ────────────────────────────────────
+
+    [Fact]
+    public void GetRecent_IncludeTerminalTrue_ReturnsAllStatesNewestFirst()
+    {
+        var now = DateTimeOffset.UtcNow;
+        _store.Create(CreateTask("sa-r1", "First", SubagentTaskState.Queued, createdAt: now));
+        _store.Create(CreateTask("sa-r2", "Second", SubagentTaskState.Completed, createdAt: now.AddSeconds(1)));
+        _store.Create(CreateTask("sa-r3", "Third", SubagentTaskState.Running, createdAt: now.AddSeconds(2)));
+
+        var recent = _store.GetRecent(limit: 100, includeTerminal: true);
+
+        Assert.Equal(3, recent.Count);
+        Assert.Equal("sa-r3", recent[0].TaskId); // newest first
+        Assert.Equal("sa-r2", recent[1].TaskId);
+        Assert.Equal("sa-r1", recent[2].TaskId);
+    }
+
+    [Fact]
+    public void GetRecent_IncludeTerminalFalse_ExcludesTerminalStates()
+    {
+        _store.Create(CreateTask("sa-active", "Active", SubagentTaskState.Running));
+        _store.Create(CreateTask("sa-done", "Done", SubagentTaskState.Completed));
+
+        var recent = _store.GetRecent(limit: 100, includeTerminal: false);
+
+        Assert.Single(recent);
+        Assert.Equal("sa-active", recent[0].TaskId);
+    }
+
+    [Fact]
+    public void GetRecent_RespectsLimit()
+    {
+        var now = DateTimeOffset.UtcNow;
+        for (var i = 0; i < 5; i++)
+        {
+            _store.Create(CreateTask($"sa-lim-{i}", $"Task {i}", SubagentTaskState.Queued, createdAt: now.AddSeconds(i)));
+        }
+
+        var recent = _store.GetRecent(limit: 2, includeTerminal: true);
+
+        Assert.Equal(2, recent.Count);
+        Assert.Equal("sa-lim-4", recent[0].TaskId);
+        Assert.Equal("sa-lim-3", recent[1].TaskId);
+    }
+
     // ── Update messages ──────────────────────────────────────────────────
 
     [Fact]

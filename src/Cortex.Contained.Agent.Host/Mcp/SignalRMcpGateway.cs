@@ -108,7 +108,9 @@ public sealed partial class SignalRMcpGateway : IMcpGateway
 #pragma warning restore CA1031
         {
             // The request may have reached the Bridge before the fault — ambiguous, not definitive.
-            this.LogBridgeInvokeFailed(serverKey, toolName, invocationId, ex.Message);
+            // SECURITY: content-free — only the exception TYPE, never ex.Message (the SignalR
+            // transport fault could echo a fragment of the connection endpoint or hub protocol).
+            this.LogBridgeInvokeFailed(serverKey, toolName, invocationId, ex.GetType().Name);
             return McpToolResult.Unknown(
                 invocationId,
                 McpFailureKind.Transport,
@@ -140,7 +142,10 @@ public sealed partial class SignalRMcpGateway : IMcpGateway
         catch (Exception ex)
 #pragma warning restore CA1031
         {
-            this.LogActionCallFailed("status", actionId, ex.Message);
+            // SECURITY: the LOG carries only the exception TYPE. The Error field below is
+            // returned to the LLM as mcp_action_status tool-result content — that raw ex.Message
+            // is intentional there (the agent needs to know why the lookup failed).
+            this.LogActionCallFailed("status", actionId, ex.GetType().Name);
             return new McpActionStatusResponse
             {
                 Found = false,
@@ -173,7 +178,10 @@ public sealed partial class SignalRMcpGateway : IMcpGateway
         catch (Exception ex)
 #pragma warning restore CA1031
         {
-            this.LogActionCallFailed("cancel", actionId, ex.Message);
+            // SECURITY: the LOG carries only the exception TYPE. The Error field below is
+            // returned to the LLM as mcp_action_cancel tool-result content — that raw ex.Message
+            // is intentional there (the agent needs to know why the cancel failed).
+            this.LogActionCallFailed("cancel", actionId, ex.GetType().Name);
             return new McpActionCancelResponse
             {
                 Accepted = false,
@@ -198,7 +206,8 @@ public sealed partial class SignalRMcpGateway : IMcpGateway
         catch (Exception ex)
 #pragma warning restore CA1031
         {
-            this.LogCancellationSendFailed(invocationId, ex.Message);
+            // SECURITY: content-free — only the exception TYPE, never ex.Message.
+            this.LogCancellationSendFailed(invocationId, ex.GetType().Name);
         }
     }
 

@@ -137,8 +137,12 @@ public abstract partial class McpServerConnectionBase : IMcpServerConnection
 #pragma warning disable CA1031 // Connection failures must surface via status, never crash the host.
         catch (Exception ex)
         {
-            this.SetStatus(McpServerStatus.Error, ex.Message);
-            this.LogConnectFailed(this.ServerKey, ex.Message);
+            // SECURITY: a connect failure (e.g. a misconfigured HTTP/stdio endpoint) can embed a
+            // connection-string secret in ex.Message. LastError is admin-facing
+            // (McpServerView.LastError) and the log is host-side — both carry only the exception
+            // TYPE via McpErrorSanitizer.ConnectFailure, never the raw message.
+            this.SetStatus(McpServerStatus.Error, McpErrorSanitizer.ConnectFailure(this.ServerKey, ex));
+            this.LogConnectFailed(this.ServerKey, ex.GetType().Name);
         }
 #pragma warning restore CA1031
     }
@@ -265,7 +269,10 @@ public abstract partial class McpServerConnectionBase : IMcpServerConnection
             if (mapped.Outcome == McpToolOutcome.OutcomeUnknown)
             {
                 this.LogTransportFailed(this.ServerKey, toolName, invocationId, ex.GetType().Name);
-                this.HandleTransportFailure($"MCP fault during '{toolName}': {ex.Message}");
+                // SECURITY: HandleTransportFailure's reason lands in the admin-facing LastError
+                // field (McpServerView.LastError) — sanitize it the same way the log line above
+                // and the agent-facing error already are: exception TYPE only, never ex.Message.
+                this.HandleTransportFailure(McpErrorSanitizer.TransportFailure(this.ServerKey, toolName, ex));
             }
             else
             {
@@ -281,7 +288,7 @@ public abstract partial class McpServerConnectionBase : IMcpServerConnection
             // loss): the outcome is unknowable, the connection is dead, and the ORIGINAL
             // invocation is never replayed. Clear client/tools so the catalog drops them.
             this.LogTransportFailed(this.ServerKey, toolName, invocationId, ex.GetType().Name);
-            this.HandleTransportFailure($"transport failed during '{toolName}': {ex.Message}");
+            this.HandleTransportFailure(McpErrorSanitizer.TransportFailure(this.ServerKey, toolName, ex));
             return McpToolResult.Unknown(
                 invocationId,
                 McpFailureKind.Transport,
@@ -295,6 +302,11 @@ public abstract partial class McpServerConnectionBase : IMcpServerConnection
     /// tools and moves to <see cref="McpServerStatus.Error"/>. The host service drops the dead
     /// tools from the catalog immediately; the periodic reconciliation recreates the connection.
     /// </summary>
+    /// <param name="reason">
+    /// SECURITY: stored verbatim into <see cref="LastError"/>, which is admin-facing (surfaced via
+    /// <see cref="McpServerView.LastError"/>). Callers MUST pass an already-sanitized, content-free
+    /// reason (see <see cref="McpErrorSanitizer.TransportFailure"/>) — never a raw <c>ex.Message</c>.
+    /// </param>
     private void HandleTransportFailure(string reason)
     {
         McpClient? deadClient;
@@ -324,7 +336,9 @@ public abstract partial class McpServerConnectionBase : IMcpServerConnection
 #pragma warning disable CA1031 // Best-effort disposal of an already-dead client.
         catch (Exception ex)
         {
-            this.LogDisposeFailed(this.ServerKey, ex.Message);
+            // SECURITY: content-free — only the exception TYPE (a dispose failure's message could
+            // echo a fragment of the underlying transport, e.g. a broken pipe path).
+            this.LogDisposeFailed(this.ServerKey, ex.GetType().Name);
         }
 #pragma warning restore CA1031
     }
@@ -349,7 +363,8 @@ public abstract partial class McpServerConnectionBase : IMcpServerConnection
 #pragma warning disable CA1031 // Best-effort disposal.
             catch (Exception ex)
             {
-                this.LogDisposeFailed(this.ServerKey, ex.Message);
+                // SECURITY: content-free — only the exception TYPE (see DisposeClientQuietlyAsync).
+                this.LogDisposeFailed(this.ServerKey, ex.GetType().Name);
             }
 #pragma warning restore CA1031
         }

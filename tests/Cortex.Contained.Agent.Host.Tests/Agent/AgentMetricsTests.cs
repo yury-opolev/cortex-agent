@@ -1,4 +1,5 @@
 using Cortex.Contained.Agent.Host.Agent;
+using Cortex.Contained.Contracts.Hub;
 
 namespace Cortex.Contained.Agent.Host.Tests.Agent;
 
@@ -208,5 +209,65 @@ public sealed class AgentMetricsTests
         metrics.SetActiveConversationsProvider(null);
 
         Assert.Equal(0, metrics.Snapshot().ActiveConversations);
+    }
+
+    // ── Subagent aggregate provider ─────────────────────────────────────────
+
+    [Fact]
+    public void Snapshot_FreshInstance_SubagentsIsNull()
+    {
+        var metrics = new AgentMetrics();
+
+        Assert.Null(metrics.Snapshot().Subagents);
+    }
+
+    [Fact]
+    public void Snapshot_ReadsSubagentAggregateFromProviderLazily()
+    {
+        var metrics = new AgentMetrics();
+        var aggregate = new SubagentAggregateSnapshot
+        {
+            CountsByState = new Dictionary<string, int> { ["running"] = 1 },
+            QueueDepth = 0,
+            ActiveCount = 1,
+            MaxConcurrency = 5,
+            StaleActiveCount = 0,
+            RestartCount = 0,
+        };
+        metrics.SetSubagentAggregateProvider(() => aggregate);
+
+        var snapshot = metrics.Snapshot();
+
+        Assert.NotNull(snapshot.Subagents);
+        Assert.Equal(1, snapshot.Subagents!.ActiveCount);
+    }
+
+    [Fact]
+    public void Snapshot_FaultySubagentAggregateProvider_DoesNotThrow_AndDegradesToNull()
+    {
+        var metrics = new AgentMetrics();
+        metrics.SetSubagentAggregateProvider(() => throw new InvalidOperationException("boom"));
+
+        var snapshot = metrics.Snapshot();
+
+        Assert.Null(snapshot.Subagents);
+    }
+
+    [Fact]
+    public void SetSubagentAggregateProvider_Null_ReportsNull()
+    {
+        var metrics = new AgentMetrics();
+        metrics.SetSubagentAggregateProvider(() => new SubagentAggregateSnapshot
+        {
+            CountsByState = new Dictionary<string, int>(),
+            QueueDepth = 0,
+            ActiveCount = 0,
+            MaxConcurrency = 5,
+            StaleActiveCount = 0,
+            RestartCount = 0,
+        });
+        metrics.SetSubagentAggregateProvider(null);
+
+        Assert.Null(metrics.Snapshot().Subagents);
     }
 }

@@ -235,6 +235,20 @@ public sealed partial class HubClient : IAsyncDisposable
             cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Fetch the current, content-free subagent worker-pool snapshot (no prompt/message/result/
+    /// eval content) for the generic operations observability endpoint.
+    /// </summary>
+    public async Task<SubagentObservabilitySnapshot> GetSubagentSnapshotsAsync(
+        SubagentSnapshotQuery query, CancellationToken cancellationToken)
+    {
+        EnsureConnected();
+        return await this.connection!.InvokeAsync<SubagentObservabilitySnapshot>(
+            nameof(IAgentHub.GetSubagentSnapshots),
+            query,
+            cancellationToken).ConfigureAwait(false);
+    }
+
     /// <summary>Seed the agent's session for a channel with historical messages.</summary>
     public async Task SeedHistoryAsync(string channelId, HubChatMessage[] messages, CancellationToken cancellationToken)
     {

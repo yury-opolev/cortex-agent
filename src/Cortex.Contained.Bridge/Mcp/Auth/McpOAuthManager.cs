@@ -460,10 +460,12 @@ public sealed partial class McpOAuthManager : IMcpOAuthManager
         }
     }
 
-    // A malformed (but 2xx) token-endpoint body would surface a JsonException whose message can
-    // include a snippet of the response (i.e. the token). Never log that — use a fixed string.
-    private static string SafeError(Exception ex)
-        => ex is JsonException ? "malformed token response" : ex.Message;
+    // SECURITY: content-free — only the exception TYPE, consistent with the Bridge-side MCP
+    // redaction guarantee (docs/security.md). A JsonException from a malformed (but 2xx)
+    // token-endpoint body can echo a snippet of the response (i.e. the token); an
+    // HttpRequestException/InvalidOperationException can embed the token endpoint URL. Never log
+    // ex.Message for any of these — the exception type is enough to diagnose.
+    private static string SafeError(Exception ex) => ex.GetType().Name;
 
     private static string? OriginOf(string url)
     {
