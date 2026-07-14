@@ -44,14 +44,15 @@ public sealed class SubagentObservabilityServiceTests : IDisposable
         DateTimeOffset? lastProgressAt = null,
         DateTimeOffset? completedAt = null,
         int restartCount = 0,
-        int rounds = 0)
+        int rounds = 0,
+        string description = "d")
     {
         return new SubagentTask
         {
             TaskId = taskId,
             ParentConversation = "conv-1",
             ParentChannel = "webchat-default",
-            Description = "d",
+            Description = description,
             Prompt = "p",
             State = state,
             CreatedAt = createdAt,
@@ -157,6 +158,37 @@ public sealed class SubagentObservabilityServiceTests : IDisposable
         var snapshot = _service.GetSnapshot(new() { StaleAfterSeconds = 600 });
 
         Assert.False(Assert.Single(snapshot.Workers).IsStale);
+    }
+
+    [Fact]
+    public void GetSnapshot_DescriptionOverTwoHundredChars_IsTruncatedWithEllipsis()
+    {
+        // SECURITY: Description is LLM-supplied with no upstream length cap — only a prompt
+        // convention asks for "3-5 words". The observability mapper must not surface an
+        // oversized (or embedded-content) label through the generic operations endpoint.
+        _store.Create(CreateTask(
+            "sa-1", SubagentTaskState.Running, StartTime, startedAt: StartTime,
+            description: new string('x', 300)));
+
+        var snapshot = _service.GetSnapshot(new() { IncludeTerminal = true });
+
+        var worker = Assert.Single(snapshot.Workers);
+        Assert.Equal(201, worker.Description.Length); // 200 chars + ellipsis
+        Assert.StartsWith(new string('x', 200), worker.Description, StringComparison.Ordinal);
+        Assert.EndsWith("…", worker.Description, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void GetSnapshot_DescriptionAtOrUnderTwoHundredChars_IsNotTruncated()
+    {
+        _store.Create(CreateTask(
+            "sa-1", SubagentTaskState.Running, StartTime, startedAt: StartTime,
+            description: new string('y', 200)));
+
+        var snapshot = _service.GetSnapshot(new() { IncludeTerminal = true });
+
+        var worker = Assert.Single(snapshot.Workers);
+        Assert.Equal(new string('y', 200), worker.Description);
     }
 
     // ── Paging vs. IncludeTerminal ───────────────────────────────────────

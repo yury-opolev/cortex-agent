@@ -27,6 +27,17 @@ public sealed class SubagentObservabilityService
     /// <summary>Upper bound accepted for a caller-supplied paging limit.</summary>
     private const int MaxLimit = 1000;
 
+    /// <summary>
+    /// SECURITY: <see cref="SubagentTask.Description"/> is populated verbatim from an LLM-supplied
+    /// subagent task description with no length cap upstream — only a prompt convention asks for
+    /// "3-5 words". Cap it here, at the observability MAPPER boundary, so a misbehaving or
+    /// prompt-injected task cannot surface an oversized or embedded-content label through the
+    /// generic operations endpoint.
+    /// </summary>
+    private const int MaxDescriptionLength = 200;
+
+    private const string TruncationSuffix = "…";
+
     private readonly SubagentSessionStore store;
     private readonly SubagentRunnerRegistry registry;
     private readonly TimeProvider timeProvider;
@@ -138,7 +149,7 @@ public sealed class SubagentObservabilityService
             TaskId = task.TaskId,
             ParentConversationId = task.ParentConversation,
             ParentChannelId = task.ParentChannel,
-            Description = task.Description,
+            Description = TruncateDescription(task.Description),
             State = task.State.ToStorageValue(),
             CreatedAt = task.CreatedAt,
             StartedAt = task.StartedAt,
@@ -155,4 +166,10 @@ public sealed class SubagentObservabilityService
     /// <summary>Milliseconds between <paramref name="from"/> and <paramref name="to"/>, floored at zero.</summary>
     private static long ElapsedMs(DateTimeOffset from, DateTimeOffset to)
         => Math.Max(0, (long)(to - from).TotalMilliseconds);
+
+    /// <summary>Caps a task description to <see cref="MaxDescriptionLength"/> characters, appending an ellipsis when truncated.</summary>
+    private static string TruncateDescription(string description)
+        => description.Length <= MaxDescriptionLength
+            ? description
+            : string.Concat(description.AsSpan(0, MaxDescriptionLength), TruncationSuffix);
 }

@@ -121,6 +121,11 @@ port: ${WEB_PORT:-5080}             # with default value
 | `speech.sttEngine` | `whisper` | STT engine |
 | `speech.ttsEngine` | `kokoro` | TTS engine |
 | `channels.discord.botToken` | -- | Discord bot token |
+| `maxConcurrentSubagents` | `5` | Concurrent subagent worker cap. Configurable **1-50**, rejected (not clamped) outside that range. 50 is a safety ceiling on admission, not a claim that the configured LLM/MCP providers can sustain 50 simultaneous workers — see [security.md](security.md#subagent-durability-guarantees) |
+| `mcpServers[].toolAllowList` | `[]` (= all) | Explicit per-server tool allow-list, enforced at invoke time |
+| `mcpServers[].mutationToolAllowList` | `[]` | Explicit, administrator-configured list of tools on this server that require human approval before dispatch (never inferred) — see [mcp-plugin-system.md](mcp-plugin-system.md#approval-gated-mutations-invocation-identity-and-reliability-guarantees) |
+| `mcpServers[].callTimeoutSeconds` | `45` | Per-call timeout before the Bridge reports an ambiguous (`OutcomeUnknown`) result. Valid range 1-59 |
+| `mcpServers[].maxResultBytes` | `51200` (50 KiB) | Maximum flattened tool-result size before truncation |
 
 ### Agent Host settings (`appsettings.json` inside container)
 

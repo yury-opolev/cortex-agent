@@ -265,7 +265,10 @@ public abstract partial class McpServerConnectionBase : IMcpServerConnection
             if (mapped.Outcome == McpToolOutcome.OutcomeUnknown)
             {
                 this.LogTransportFailed(this.ServerKey, toolName, invocationId, ex.GetType().Name);
-                this.HandleTransportFailure($"MCP fault during '{toolName}': {ex.Message}");
+                // SECURITY: HandleTransportFailure's reason lands in the admin-facing LastError
+                // field (McpServerView.LastError) — sanitize it the same way the log line above
+                // and the agent-facing error already are: exception TYPE only, never ex.Message.
+                this.HandleTransportFailure(McpErrorSanitizer.TransportFailure(this.ServerKey, toolName, ex));
             }
             else
             {
@@ -281,7 +284,7 @@ public abstract partial class McpServerConnectionBase : IMcpServerConnection
             // loss): the outcome is unknowable, the connection is dead, and the ORIGINAL
             // invocation is never replayed. Clear client/tools so the catalog drops them.
             this.LogTransportFailed(this.ServerKey, toolName, invocationId, ex.GetType().Name);
-            this.HandleTransportFailure($"transport failed during '{toolName}': {ex.Message}");
+            this.HandleTransportFailure(McpErrorSanitizer.TransportFailure(this.ServerKey, toolName, ex));
             return McpToolResult.Unknown(
                 invocationId,
                 McpFailureKind.Transport,
@@ -295,6 +298,11 @@ public abstract partial class McpServerConnectionBase : IMcpServerConnection
     /// tools and moves to <see cref="McpServerStatus.Error"/>. The host service drops the dead
     /// tools from the catalog immediately; the periodic reconciliation recreates the connection.
     /// </summary>
+    /// <param name="reason">
+    /// SECURITY: stored verbatim into <see cref="LastError"/>, which is admin-facing (surfaced via
+    /// <see cref="McpServerView.LastError"/>). Callers MUST pass an already-sanitized, content-free
+    /// reason (see <see cref="McpErrorSanitizer.TransportFailure"/>) — never a raw <c>ex.Message</c>.
+    /// </param>
     private void HandleTransportFailure(string reason)
     {
         McpClient? deadClient;

@@ -182,6 +182,183 @@ per-tool allow-list.
 - **Master `mcp.enabled` + per-server toggles** instantly drop tools live (no restart).
 - Secrets are never logged or returned in API responses (redacted projections + sanitized errors).
 
+## Approval-gated mutations, invocation identity, and reliability guarantees
+
+*Status: implemented (ICM reliability foundation, Tasks 1-11).* Every MCP tool call — read or
+mutation — now carries a stable identity end-to-end and resolves to one of four explicit
+outcomes. Tools an administrator has classified as mutating never dispatch to the remote server
+until a human approves the *exact* arguments the agent proposed.
+
+### Invocation identity and explicit outcomes
+
+Each Agent→Bridge dispatch gets one `InvocationId` (`Guid.CreateVersion7`), threaded through the
+gateway, the tracker, the MCP call, and (for mutations) the action ledger. Every call resolves to:
+
+| Outcome | Meaning |
+|---|---|
+| `Succeeded` | The MCP server returned a non-error result. |
+| `Failed` | Definitive failure that never reached the server (policy/allow-list refusal, argument validation, server unavailable) or a JSON-RPC error response (server rejected the call before the tool ran). |
+| `Cancelled` | Cancelled before dispatch — nothing left the Bridge. |
+| `OutcomeUnknown` | The request left the Bridge and may have executed: a configured call timeout, a caller cancellation *after* dispatch started, or a transport/connection failure mid-call. |
+
+**`OutcomeUnknown` is never automatically retried.** The agent-visible error explicitly says not
+to repeat a potentially mutating call — inspect `mcp_action_status` or read back remote state
+instead. A transport failure also tears the connection down (`McpServerConnectionBase` clears its
+client/tools and moves to `Error`); the host drops the dead tools from the catalog immediately and
+periodic reconciliation reconnects later, but the *original* invocation is never replayed.
+
+True exactly-once remote effects still depend on the target MCP server / API being idempotent —
+Cortex's guarantee is that it never *knowingly* redispatches an ambiguous call, not that the
+provider itself dedupes a retry a human decides to issue by hand.
+
+### Mutation classification is administrator-configured, never inferred
+
+Each server in `mcpServers` carries an explicit `mutationToolAllowList` (alongside the existing
+`toolAllowList`), configured the same way as the allow-list — never inferred from tool names or
+the MCP server's own (untrusted) annotations:
+
+```yaml
+mcpServers:
+  - key: agency-icm
+    transport: stdio
+    command: agency
+    args: [mcp, icm]
+    toolAllowList: [search_incidents, get_incident, post_discussion_entry, mitigate_incident]
+    mutationToolAllowList: [post_discussion_entry, mitigate_incident]
+```
+
+- A tool in `mutationToolAllowList` is classified `RequiresApproval = true` in the catalog the
+  agent sees, and classification is **rechecked immediately before dispatch** — never trusted from
+  what the agent was shown earlier.
+- The direct (unapproved) invocation path refuses a mutation-classified tool outright with a
+  `Policy` failure; the only caller allowed to bypass that refusal is the outbox dispatcher acting
+  on a human-approved action.
+- When `toolAllowList` is non-empty, every mutation tool must also appear there.
+
+### Canonical arguments and exact-hash approval
+
+`McpCanonicalArguments.Canonicalize` turns the agent's arguments JSON into a deterministic form
+before anything is persisted or approved: object keys sorted (`StringComparer.Ordinal`) at every
+depth, duplicate keys rejected, array order preserved, numeric *lexical* form preserved (`1` and
+`1.0` are different approvals), input capped at 256 KiB. The canonical bytes are hashed with
+SHA-256 (`sha256:<lowercase hex>`).
+
+Calling a mutation tool never dispatches it — it canonicalizes the arguments, persists a
+`Proposed` action, and returns `AwaitingApproval` tool content (actionId + argumentsHash +
+instruction not to repeat the call). A human then approves/rejects/cancels through the REST API
+below, **passing the current `argumentsHash`**; a stale hash returns `409` and mutates nothing —
+so an approval can never be silently redirected to different arguments than the ones reviewed.
+
+### The encrypted action ledger (outbox) and its lifecycle
+
+```
+proposed -> approved | rejected | cancelled | expired
+approved -> dispatching | cancelled | expired
+dispatching -> succeeded | failed | outcome_unknown
+dispatching -> approved   (only when dispatch is positively known not to have started)
+outcome_unknown -> reconciled_succeeded | reconciled_failed
+```
+
+All other states are terminal — a terminal action **never dispatches again**. State, decisions,
+attempts, and events are persisted to a Bridge-local, encrypted SQLite database at
+`%LOCALAPPDATA%\Cortex\mcp\actions.db`, keyed the same way as the rest of the Bridge's encrypted
+storage (`SecretManager.GetOrCreateDatabaseKey()`). On Bridge startup, any action still
+`Dispatching` — meaning the previous process died mid-dispatch — is recovered as
+`OutcomeUnknown`, exactly as ambiguous as a live timeout, and is **never blindly redispatched**.
+
+### Mutation action REST API
+
+Authenticated routes (`RequireAuthorization()`), mapped next to the existing MCP config API:
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/mcp/actions` | List actions (filter by `serverKey`, `toolName`, `state`, `workerId`, paged with `before`/`limit`). |
+| GET | `/api/mcp/actions/{actionId}` | One action, including its canonical arguments (for review) and result. |
+| POST | `/api/mcp/actions/{actionId}/approve` | Body `{ argumentsHash, reason?, expiresAtUtc? }` (default TTL 1h). |
+| POST | `/api/mcp/actions/{actionId}/reject` | Body `{ argumentsHash, reason? }`. |
+| POST | `/api/mcp/actions/{actionId}/cancel` | Body `{ argumentsHash }`. Routes through `McpActionService` so cancelling a `Dispatching` action also signals the live invocation. |
+| POST | `/api/mcp/actions/{actionId}/reconcile` | Body `{ argumentsHash, outcome: "succeeded"\|"failed", evidence, remoteReference? }`. Only accepted from `outcome_unknown`. |
+
+HTTP semantics: `400` malformed input, `404` absent action, `409` stale `argumentsHash` or invalid
+state transition, `410` expired.
+
+### Agent-side action tools
+
+Two native tools let the agent (not just an operator) follow up on a proposal:
+
+- `mcp_action_status(action_id)` — look up the current state of an approval-gated action.
+- `mcp_action_cancel(action_id, arguments_hash)` — cancel a proposed/approved action, or request
+  cancellation of a `Dispatching` one. Cancellation after remote dispatch has actually begun
+  resolves to `OutcomeUnknown`, never `Cancelled` — the agent cannot make an ambiguous mutation
+  retroactively safe by asking to cancel it.
+
+### Redaction of MCP payloads
+
+MCP arguments and results never reach normal logs or tool telemetry, on either side of the
+boundary:
+
+- **Agent side**: `McpTelemetrySanitizer` replaces both the input and output of any `mcp__*` tool
+  call with a fixed `[redacted MCP payload]` placeholder before it reaches logs, the
+  `ToolExecutionMessage` streamed to the Bridge, and the persisted tool-call summary. The LLM
+  itself still receives the real result over the normal tool-result message — this redaction is
+  telemetry-only, never functional.
+- **Bridge side**: every MCP-related log line carries only invocation id, server, tool, outcome,
+  failure kind, duration, and exception **type** — never a raw argument, a raw result, or a raw
+  exception message (an MCP process's own stderr/exception text is untrusted and may embed
+  fragments of the payload or connection details). The same rule applies to the admin-facing
+  `LastError` surfaced on the MCP Servers page.
+- The generic operations endpoints (below) omit canonical arguments and result content entirely;
+  exact arguments are visible only from the authenticated `GET /api/mcp/actions/{id}`.
+
+### Per-server bounds
+
+Each server also carries `callTimeoutSeconds` (default 45, valid range 1-59 — deliberately kept
+below the Agent-side gateway ceiling so the Bridge's own timeout fires first) and `maxResultBytes`
+(default 50 KiB). A result is flattened incrementally and truncated with a deterministic marker
+before it crosses SignalR; a call that exceeds its timeout resolves to `OutcomeUnknown`, not a
+silent partial result.
+
+### Generic operational observability
+
+Two read-only, authenticated endpoints expose pool-wide state without any prompt, message, result,
+argument, or eval content — see [`docs/api-reference.md`](api-reference.md) for full shapes:
+
+- `GET /api/tenants/{tenantId}/operations/subagents` — live subagent worker-pool snapshot (returns
+  `503` while the agent is disconnected).
+- `GET /api/operations/mcp-actions` — MCP action history, Bridge-local so it stays available while
+  the agent is disconnected.
+
+`/health` additionally carries an optional aggregate `mcpActions` block and (when the agent is
+reachable) `metrics.subagents` — both degrade to `null` plus a logged warning on any failure; a
+metrics probe failing never makes `/health` itself report unhealthy.
+
+### Concurrency: a safety ceiling, not a capacity guarantee
+
+`MaxConcurrentSubagents` is configurable **1-50** (`SubagentConcurrencyLimits`), rejected (not
+clamped) outside that range by the Agent Host registry, `POST /api/settings`, and both
+`AgentConfig`/`BridgeConfig` validation. Fifty is a **safety ceiling** the admission path will
+never exceed — it is *not* a claim that the configured LLM/MCP providers can actually sustain 50
+simultaneous workers. Provider rate limits, token cost, and MCP server capacity are explicitly
+deferred (see the follow-up list in
+[`documents/cortex-icm-orchestrator-proposal.md`](../documents/cortex-icm-orchestrator-proposal.md)).
+
+### Subagent durability
+
+Subagent task state, run mode (new vs. resume), and completion-notification delivery survive an
+Agent Host restart. Recovered work is requeued but does not execute until the Bridge connection,
+pushed credentials, and the MCP tool catalog are all ready again — so a crash-and-restart never
+races a subagent against a container that has no MCP tools yet. Completion delivery is
+**at-least-once**: a notification is claimed, delivered, and only then marked delivered; if
+delivery is interrupted (crash, disconnect, LLM error) it is released and redelivered later. A
+replayed completion notification is possible and is **idempotently acknowledged** by the owning
+conversation turn, never applied twice.
+
+### No coda changes
+
+None of the above touches the bespoke Coda coding engine — its own MCP lifecycle (used for coding
+sessions) is unaffected. This reliability work is scoped entirely to the native Cortex agent/MCP
+plugin path described in this document.
+
 ## Scope (v1)
 
 Tools only (MCP *resources*/*prompts* deferred). Per-tenant config. The bespoke **Coda** coding

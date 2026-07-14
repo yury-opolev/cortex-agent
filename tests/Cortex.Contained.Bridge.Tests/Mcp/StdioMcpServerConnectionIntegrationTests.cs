@@ -176,6 +176,13 @@ public sealed class StdioMcpServerConnectionIntegrationTests
         Assert.Equal(McpServerStatus.Error, connection.Status);
         Assert.Empty(connection.Tools);
 
+        // SECURITY: the admin-facing LastError must be the sanitized McpErrorSanitizer.TransportFailure
+        // form (server/tool/exception-TYPE only) — never a raw ex.Message that could embed process
+        // stderr, a stack fragment, or other host-side detail from the crashed transport.
+        Assert.NotNull(connection.LastError);
+        Assert.StartsWith("MCP server 'fake' transport failed during 'die' (", connection.LastError, StringComparison.Ordinal);
+        Assert.EndsWith(").", connection.LastError, StringComparison.Ordinal);
+
         // Follow-up calls fail definitively (nothing is dispatched to a dead transport).
         var after = await connection.CallToolAsync(Invocation("echo", """{"text":"x"}"""), cts.Token);
         Assert.Equal(McpToolOutcome.Failed, after.Outcome);

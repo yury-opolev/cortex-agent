@@ -13,4 +13,17 @@ public static class McpErrorSanitizer
     {
         return $"MCP tool '{toolName}' on server '{serverKey}' failed.";
     }
+
+    /// <summary>
+    /// Generic, secret-free transport-failure message for the admin-facing
+    /// <see cref="McpServerConnectionBase.LastError"/> / <see cref="McpServerView.LastError"/>
+    /// field. Carries only the exception TYPE, never <c>ex.Message</c> — a raw message can embed
+    /// endpoint URLs (possibly with inline credentials), stack fragments, or fragments of an
+    /// untrusted MCP process's own output.
+    /// </summary>
+    public static string TransportFailure(string serverKey, string toolName, Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        return $"MCP server '{serverKey}' transport failed during '{toolName}' ({exception.GetType().Name}).";
+    }
 }
