@@ -20,6 +20,22 @@ public sealed class McpConfigDtoTests
         Assert.Null(config.ApiKeyHeader);
         Assert.Null(config.SecretRef);
         Assert.Empty(config.ToolAllowList);
+        Assert.Empty(config.MutationToolAllowList);
+    }
+
+    [Fact]
+    public void McpServerConfig_MutationToolAllowList_IsIndependentOfToolAllowList()
+    {
+        // The mutation classification is a SEPARATE explicit admin policy, not derived from the
+        // exposure allow-list.
+        var config = new McpServerConfig
+        {
+            ToolAllowList = ["create_issue", "list_prs"],
+            MutationToolAllowList = ["create_issue"],
+        };
+
+        Assert.Equal(["create_issue", "list_prs"], config.ToolAllowList);
+        Assert.Equal(["create_issue"], config.MutationToolAllowList);
     }
 
     [Fact]

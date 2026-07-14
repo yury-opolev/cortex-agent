@@ -37,6 +37,9 @@ public sealed record McpServerView
 
     public IReadOnlyList<string> ToolAllowList { get; init; } = [];
 
+    /// <summary>Tools explicitly classified as mutating by the admin (require approval).</summary>
+    public IReadOnlyList<string> MutationToolAllowList { get; init; } = [];
+
     /// <summary><c>"connected"</c> / <c>"error"</c> / <c>"needsLogin"</c> / <c>"connecting"</c> / <c>"disconnected"</c> / <c>"disabled"</c>.</summary>
     public required string Status { get; init; }
 

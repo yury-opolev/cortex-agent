@@ -165,6 +165,107 @@ public sealed class McpServerRequestMapperTests
     }
 
     [Fact]
+    public void ToConfig_MapsMutationToolAllowList_NormalizedLikeToolAllowList()
+    {
+        var request = new McpServerRequest
+        {
+            Key = "github",
+            Transport = "http",
+            Url = "https://api.example.com/mcp",
+            ToolAllowList = ["search", "create_issue"],
+            MutationToolAllowList = [" create_issue ", "create_issue", "", "  "],
+        };
+
+        var config = McpServerRequestMapper.ToConfig(request);
+
+        Assert.Equal(["create_issue"], config.MutationToolAllowList);
+    }
+
+    [Fact]
+    public void ApplyTo_MutationAllowListOnly_UpdatesMutationListAndPreservesRest()
+    {
+        var existing = new McpServerConfig
+        {
+            Key = "github",
+            Url = "https://example.com",
+            Transport = McpTransport.Http,
+            ToolAllowList = ["search", "create_issue"],
+        };
+
+        McpServerRequestMapper.ApplyTo(existing, new McpServerRequest { MutationToolAllowList = ["create_issue"] });
+
+        Assert.Equal(["create_issue"], existing.MutationToolAllowList);
+        Assert.Equal(["search", "create_issue"], existing.ToolAllowList);
+        Assert.Equal("https://example.com", existing.Url);
+    }
+
+    [Fact]
+    public void ApplyTo_NullMutationAllowList_LeavesExistingUnchanged()
+    {
+        var existing = new McpServerConfig { Key = "github", MutationToolAllowList = ["create_issue"] };
+
+        McpServerRequestMapper.ApplyTo(existing, new McpServerRequest { Enabled = false });
+
+        Assert.Equal(["create_issue"], existing.MutationToolAllowList);
+    }
+
+    [Fact]
+    public void ValidateMutationAllowList_EmptyToolAllowList_AllowsAnyMutationList()
+    {
+        // An empty exposure allow-list means "all tools exposed" — every mutation tool is
+        // trivially exposed, so the consistency rule holds.
+        Assert.Null(McpServerRequestMapper.ValidateMutationAllowList([], ["create_issue"]));
+    }
+
+    [Fact]
+    public void ValidateMutationAllowList_MutationSubsetOfAllowList_ReturnsNull()
+    {
+        Assert.Null(McpServerRequestMapper.ValidateMutationAllowList(
+            ["search", "create_issue"], ["create_issue"]));
+    }
+
+    [Fact]
+    public void ValidateMutationAllowList_MutationToolMissingFromRestrictedAllowList_ReturnsError()
+    {
+        var error = McpServerRequestMapper.ValidateMutationAllowList(["search"], ["create_issue"]);
+
+        Assert.NotNull(error);
+        Assert.Contains("create_issue", error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ValidateMutationPolicy_PartialEditRequest_ValidatesEffectiveListsWithoutMutatingTarget()
+    {
+        // A partial PUT that shrinks the exposure allow-list below an existing mutation tool
+        // must be rejected — and the target config must be left untouched by the validation.
+        var existing = new McpServerConfig
+        {
+            Key = "github",
+            ToolAllowList = ["search", "create_issue"],
+            MutationToolAllowList = ["create_issue"],
+        };
+
+        var error = McpServerRequestMapper.ValidateMutationPolicy(
+            existing, new McpServerRequest { ToolAllowList = ["search"] });
+
+        Assert.NotNull(error);
+        Assert.Equal(["search", "create_issue"], existing.ToolAllowList);
+        Assert.Equal(["create_issue"], existing.MutationToolAllowList);
+    }
+
+    [Fact]
+    public void ValidateMutationPolicy_ConsistentEdit_ReturnsNull()
+    {
+        var existing = new McpServerConfig { Key = "github", ToolAllowList = ["search"] };
+
+        var error = McpServerRequestMapper.ValidateMutationPolicy(
+            existing,
+            new McpServerRequest { ToolAllowList = ["search", "create_issue"], MutationToolAllowList = ["create_issue"] });
+
+        Assert.Null(error);
+    }
+
+    [Fact]
     public void ApiKeySecretId_IsDeterministicAndNamespaced()
     {
         Assert.Equal("mcp/github/apikey", McpServerRequestMapper.ApiKeySecretId("GitHub"));

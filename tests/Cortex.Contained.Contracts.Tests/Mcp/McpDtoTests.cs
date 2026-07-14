@@ -94,6 +94,43 @@ public class McpDtoTests
     }
 
     [Fact]
+    public void ToolDefinition_RequiresApproval_DefaultsToFalse()
+    {
+        // Fail-safe default: a tool is read-only unless the admin EXPLICITLY classified it as
+        // a mutation — never the other way around.
+        var definition = new McpToolDefinition
+        {
+            ServerKey = "github",
+            ToolName = "list_prs",
+            FullName = "mcp__github__list_prs",
+            Description = "List PRs",
+            ParametersSchemaJson = "{}",
+        };
+
+        Assert.False(definition.RequiresApproval);
+    }
+
+    [Fact]
+    public void ToolDefinition_RequiresApproval_RoundTripsThroughSystemTextJson()
+    {
+        var definition = new McpToolDefinition
+        {
+            ServerKey = "github",
+            ToolName = "create_issue",
+            FullName = "mcp__github__create_issue",
+            Description = "Create an issue",
+            ParametersSchemaJson = "{}",
+            RequiresApproval = true,
+        };
+
+        var json = JsonSerializer.Serialize(definition);
+        var roundTripped = JsonSerializer.Deserialize<McpToolDefinition>(json);
+
+        Assert.Equal(definition, roundTripped);
+        Assert.True(roundTripped!.RequiresApproval);
+    }
+
+    [Fact]
     public void Invocation_RoundTripsThroughSystemTextJson_WithIdentityFields()
     {
         var invocation = new McpToolInvocation

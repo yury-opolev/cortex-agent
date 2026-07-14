@@ -15,6 +15,7 @@ namespace Cortex.Contained.Bridge.Mcp;
 public abstract partial class McpServerConnectionBase : IMcpServerConnection
 {
     private readonly IReadOnlyCollection<string> toolAllowList;
+    private readonly IReadOnlyCollection<string> mutationToolAllowList;
     private readonly ILogger logger;
     private readonly Lock stateLock = new();
 
@@ -23,11 +24,16 @@ public abstract partial class McpServerConnectionBase : IMcpServerConnection
     private McpServerStatus status = McpServerStatus.Disconnected;
     private string? lastError;
 
-    protected McpServerConnectionBase(string serverKey, IReadOnlyCollection<string> toolAllowList, ILogger logger)
+    protected McpServerConnectionBase(
+        string serverKey,
+        IReadOnlyCollection<string> toolAllowList,
+        IReadOnlyCollection<string> mutationToolAllowList,
+        ILogger logger)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(serverKey);
         this.ServerKey = serverKey;
         this.toolAllowList = toolAllowList ?? [];
+        this.mutationToolAllowList = mutationToolAllowList ?? [];
         this.logger = logger;
     }
 
@@ -96,6 +102,8 @@ public abstract partial class McpServerConnectionBase : IMcpServerConnection
                     FullName = McpToolNamer.Full(this.ServerKey, tool.Name),
                     Description = tool.Description ?? string.Empty,
                     ParametersSchemaJson = tool.JsonSchema.GetRawText(),
+                    // Explicit admin classification only — never the server's own annotations.
+                    RequiresApproval = McpToolFilter.IsMutation(tool.Name, this.mutationToolAllowList),
                 });
             }
 
@@ -131,6 +139,19 @@ public abstract partial class McpServerConnectionBase : IMcpServerConnection
             this.LogToolNotAllowed(this.ServerKey, toolName);
             return McpToolResult.Fail(
                 invocationId, McpFailureKind.Policy, $"MCP tool '{toolName}' is not permitted for server '{this.ServerKey}'.");
+        }
+
+        // SECURITY: mutation classification is RE-CHECKED immediately before dispatch — never
+        // trusted from the catalog the agent saw. A mutation-classified tool must not execute
+        // through this direct path at all: it requires the human-approval flow, which binds the
+        // approval to the exact canonical argument hash.
+        if (McpToolFilter.IsMutation(toolName, this.mutationToolAllowList))
+        {
+            this.LogMutationToolRefused(this.ServerKey, toolName);
+            return McpToolResult.Fail(
+                invocationId,
+                McpFailureKind.Policy,
+                $"MCP tool '{toolName}' on server '{this.ServerKey}' is classified as a mutation and requires human approval; it cannot be invoked via the direct path.");
         }
 
         McpClient? activeClient;
@@ -322,6 +343,9 @@ public abstract partial class McpServerConnectionBase : IMcpServerConnection
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "MCP tool invocation blocked by allow-list: server '{ServerKey}' tool '{ToolName}'")]
     private partial void LogToolNotAllowed(string serverKey, string toolName);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "MCP mutation tool refused on direct path: server '{ServerKey}' tool '{ToolName}' requires approval")]
+    private partial void LogMutationToolRefused(string serverKey, string toolName);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "MCP server '{ServerKey}' dispose failed: {Error}")]
     private partial void LogDisposeFailed(string serverKey, string error);

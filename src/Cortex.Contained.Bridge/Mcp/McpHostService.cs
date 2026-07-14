@@ -339,7 +339,7 @@ public sealed partial class McpHostService : IAsyncDisposable
             '\n',
             catalog.Tools
                 .OrderBy(t => t.FullName, StringComparer.Ordinal)
-                .Select(t => $"{t.FullName}{t.Description}{t.ParametersSchemaJson}"));
+                .Select(t => $"{t.FullName}{t.Description}{t.ParametersSchemaJson}{t.RequiresApproval}"));
     }
 
     private static bool IsHealthy(McpServerStatus status) => status == McpServerStatus.Connected;
@@ -349,7 +349,10 @@ public sealed partial class McpHostService : IAsyncDisposable
         var env = string.Join(',', server.Env.OrderBy(kvp => kvp.Key, StringComparer.Ordinal).Select(kvp => $"{kvp.Key}={kvp.Value}"));
         var args = string.Join(',', server.Args);
         var allow = string.Join(',', server.ToolAllowList);
-        return $"{server.Transport}|{server.Url}|{server.Command}|{args}|{env}|{server.Auth}|{server.ApiKeyHeader}|{server.SecretRef}|{allow}";
+        // The mutation list is part of the signature so editing it live rebuilds the connection —
+        // re-classifying the catalog AND refreshing the dispatch-time policy immediately.
+        var mutation = string.Join(',', server.MutationToolAllowList);
+        return $"{server.Transport}|{server.Url}|{server.Command}|{args}|{env}|{server.Auth}|{server.ApiKeyHeader}|{server.SecretRef}|{allow}|{mutation}";
     }
 
     public async ValueTask DisposeAsync()

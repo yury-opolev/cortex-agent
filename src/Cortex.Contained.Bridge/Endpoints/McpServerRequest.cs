@@ -43,4 +43,12 @@ public sealed class McpServerRequest
 
     [JsonPropertyName("toolAllowList")]
     public List<string>? ToolAllowList { get; set; }
+
+    /// <summary>
+    /// Tools the administrator explicitly classifies as mutating (require approval). Distinct
+    /// from <see cref="ToolAllowList"/>, which controls exposure; when that list is non-empty,
+    /// every mutation tool must also be present there.
+    /// </summary>
+    [JsonPropertyName("mutationToolAllowList")]
+    public List<string>? MutationToolAllowList { get; set; }
 }

@@ -97,6 +97,40 @@ public sealed class McpHostEndToEndIntegrationTests
         Assert.False(secret.IsError);
         Assert.Equal("dpapi-secret", secret.Content);
 
+        // Live mutation reclassification: marking echo as a mutation must (a) surface
+        // RequiresApproval=true in the rebuilt catalog and (b) refuse echo on the direct path,
+        // with no restart — the config signature change forces a reconnect + re-classify.
+        var mutationSettings = new McpSettingsConfig
+        {
+            Enabled = true,
+            Servers =
+            [
+                new McpServerConfig
+                {
+                    Key = "fake",
+                    Enabled = true,
+                    Transport = McpTransport.Stdio,
+                    Command = node,
+                    Args = [ScriptPath()],
+                    Env = new Dictionary<string, string> { ["MCP_TEST_SECRET"] = "${secret:mcp/test/token}" },
+                    ToolAllowList = ["echo", "reveal_env"],
+                    MutationToolAllowList = ["echo"],
+                },
+            ],
+        };
+        await host.ReconcileAsync(mutationSettings, cts.Token);
+
+        Assert.True(host.CurrentCatalog.Tools.Single(t => t.FullName == "mcp__fake__echo").RequiresApproval);
+        Assert.False(host.CurrentCatalog.Tools.Single(t => t.FullName == "mcp__fake__reveal_env").RequiresApproval);
+
+        var refused = await host.InvokeAsync(Invocation("echo", """{"text":"must not run"}"""), cts.Token);
+        Assert.Equal(McpToolOutcome.Failed, refused.Outcome);
+        Assert.Equal(McpFailureKind.Policy, refused.FailureKind);
+
+        // A read tool on the same server still works.
+        var stillReadable = await host.InvokeAsync(Invocation("reveal_env"), cts.Token);
+        Assert.False(stillReadable.IsError);
+
         // Master kill-switch removes everything live.
         await host.ReconcileAsync(new McpSettingsConfig { Enabled = false, Servers = settings.Servers }, cts.Token);
         Assert.Empty(host.CurrentCatalog.Tools);

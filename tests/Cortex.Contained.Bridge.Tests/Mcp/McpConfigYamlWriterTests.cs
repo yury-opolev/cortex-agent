@@ -54,6 +54,32 @@ public sealed class McpConfigYamlWriterTests
     }
 
     [Fact]
+    public void AppendMcpSection_WritesMutationToolAllowList_OnlyWhenNonEmpty()
+    {
+        var withMutations = Write(new McpSettingsConfig
+        {
+            Servers =
+            [
+                new McpServerConfig
+                {
+                    Key = "github",
+                    Transport = McpTransport.Http,
+                    Url = "https://api.example.com/mcp/",
+                    MutationToolAllowList = ["create_issue"],
+                },
+            ],
+        });
+        Assert.Contains("mutationToolAllowList:", withMutations, StringComparison.Ordinal);
+        Assert.Contains("\"create_issue\"", withMutations, StringComparison.Ordinal);
+
+        var withoutMutations = Write(new McpSettingsConfig
+        {
+            Servers = [new McpServerConfig { Key = "github", Transport = McpTransport.Http, Url = "https://api.example.com/mcp/" }],
+        });
+        Assert.DoesNotContain("mutationToolAllowList", withoutMutations, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void AppendMcpSection_RoundTripsThroughConfigBinder()
     {
         var mcp = new McpSettingsConfig
@@ -79,6 +105,7 @@ public sealed class McpConfigYamlWriterTests
                     Auth = McpAuthMode.ApiKey,
                     SecretRef = "mcp/github/apikey",
                     ToolAllowList = ["create_issue", "list_prs"],
+                    MutationToolAllowList = ["create_issue"],
                 },
             ],
         };
@@ -106,6 +133,9 @@ public sealed class McpConfigYamlWriterTests
             Assert.Equal("https://api.example.com/mcp/", gh.Url);
             Assert.Equal("mcp/github/apikey", gh.SecretRef);
             Assert.Equal(["create_issue", "list_prs"], gh.ToolAllowList);
+            Assert.Equal(["create_issue"], gh.MutationToolAllowList);
+
+            Assert.Empty(fs.MutationToolAllowList);
         }
         finally
         {

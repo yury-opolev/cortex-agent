@@ -80,6 +80,15 @@ internal static class McpConfigYamlWriter
                     sb.AppendLine(CultureInfo.InvariantCulture, $"        - {Quote(tool)}");
                 }
             }
+
+            if (server.MutationToolAllowList.Count > 0)
+            {
+                sb.AppendLine("      mutationToolAllowList:");
+                foreach (var tool in server.MutationToolAllowList)
+                {
+                    sb.AppendLine(CultureInfo.InvariantCulture, $"        - {Quote(tool)}");
+                }
+            }
         }
     }
 

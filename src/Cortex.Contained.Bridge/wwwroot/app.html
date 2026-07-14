@@ -2202,8 +2202,31 @@
                                                 </template>
                                             </div>
                                         </div>
+                                        <!-- Mutation tools: EXPLICIT approval policy, visually separated from exposure above -->
+                                        <div class="mb-2 mt-3 p-2 border border-warning rounded" x-show="form.tools.length > 0">
+                                            <label class="form-label d-flex align-items-center gap-2 mb-1">
+                                                <i class="bi bi-shield-exclamation text-warning"></i>
+                                                Mutation tools
+                                                <span class="badge bg-warning text-dark">require approval</span>
+                                            </label>
+                                            <div class="text-secondary small mb-1">
+                                                Explicitly mark tools that <strong>change external state</strong> (create, update, delete, send).
+                                                Marked tools always require human approval bound to the exact call arguments and are refused on the
+                                                direct path. This is never inferred from tool names — unmarked tools are treated as read-only.
+                                            </div>
+                                            <div class="d-flex flex-wrap gap-3">
+                                                <template x-for="t in form.tools" :key="'mut-' + t">
+                                                    <div class="form-check">
+                                                        <input class="form-check-input" type="checkbox"
+                                                               :id="'mutate-' + t" :checked="isMutation(t)" @change="toggleMutationTool(t)">
+                                                        <label class="form-check-label font-monospace small" :for="'mutate-' + t" x-text="t"></label>
+                                                    </div>
+                                                </template>
+                                            </div>
+                                        </div>
+
                                         <div class="text-secondary small mb-2" x-show="form.tools.length === 0">
-                                            Save then <strong>Test connect</strong> to discover tools for the allow-list.
+                                            Save then <strong>Test connect</strong> to discover tools for the allow-list and mutation classification.
                                         </div>
 
                                         <div x-show="modalError" class="alert alert-danger py-2 px-3 small mb-0" x-text="modalError"></div>

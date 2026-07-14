@@ -21,8 +21,9 @@ public sealed class HttpMcpServerConnection : McpServerConnectionBase
         Uri endpoint,
         IReadOnlyDictionary<string, string> headers,
         IReadOnlyCollection<string> toolAllowList,
-        ILogger<HttpMcpServerConnection> logger)
-        : base(serverKey, toolAllowList, logger)
+        ILogger<HttpMcpServerConnection> logger,
+        IReadOnlyCollection<string>? mutationToolAllowList = null)
+        : base(serverKey, toolAllowList, mutationToolAllowList ?? [], logger)
     {
         ArgumentNullException.ThrowIfNull(endpoint);
         this.endpoint = endpoint;
@@ -35,8 +36,9 @@ public sealed class HttpMcpServerConnection : McpServerConnectionBase
         Uri endpoint,
         IMcpBearerSource bearerSource,
         IReadOnlyCollection<string> toolAllowList,
-        ILogger<HttpMcpServerConnection> logger)
-        : base(serverKey, toolAllowList, logger)
+        ILogger<HttpMcpServerConnection> logger,
+        IReadOnlyCollection<string>? mutationToolAllowList = null)
+        : base(serverKey, toolAllowList, mutationToolAllowList ?? [], logger)
     {
         ArgumentNullException.ThrowIfNull(endpoint);
         ArgumentNullException.ThrowIfNull(bearerSource);

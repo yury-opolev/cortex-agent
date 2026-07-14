@@ -22,8 +22,9 @@ public sealed class StdioMcpServerConnection : McpServerConnectionBase
         IReadOnlyDictionary<string, string> environment,
         IReadOnlyCollection<string> toolAllowList,
         ILogger<StdioMcpServerConnection> logger,
-        string? workingDirectory = null)
-        : base(serverKey, toolAllowList, logger)
+        string? workingDirectory = null,
+        IReadOnlyCollection<string>? mutationToolAllowList = null)
+        : base(serverKey, toolAllowList, mutationToolAllowList ?? [], logger)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(command);
         this.command = command;

@@ -21,6 +21,14 @@ public sealed record McpToolDefinition
 
     /// <summary>JSON Schema (string) for the tool's parameters.</summary>
     public required string ParametersSchemaJson { get; init; }
+
+    /// <summary>
+    /// True when the tool is classified as a mutation by explicit admin policy
+    /// (<c>MutationToolAllowList</c>) and therefore requires a human-approved action flow;
+    /// the direct invocation path refuses it. Defaults to false (read-only) — classification
+    /// is never inferred from tool names or untrusted MCP annotations.
+    /// </summary>
+    public bool RequiresApproval { get; init; }
 }
 
 /// <summary>

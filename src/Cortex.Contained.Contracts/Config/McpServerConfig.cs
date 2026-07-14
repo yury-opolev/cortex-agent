@@ -42,4 +42,14 @@ public sealed class McpServerConfig
 
     /// <summary>Allowed tool names; empty = all tools exposed.</summary>
     public List<string> ToolAllowList { get; set; } = [];
+
+    /// <summary>
+    /// Tool names the administrator EXPLICITLY classified as mutating (state-changing). This is
+    /// admin policy only — never inferred from tool names, descriptions, or untrusted MCP
+    /// annotations. A mutation tool surfaces <c>RequiresApproval=true</c> in the agent catalog and
+    /// is refused by the direct invocation path; empty = no tool is classified as a mutation.
+    /// Names are normalized exactly like <see cref="ToolAllowList"/>, and when
+    /// <see cref="ToolAllowList"/> is non-empty every mutation tool must also be present there.
+    /// </summary>
+    public List<string> MutationToolAllowList { get; set; } = [];
 }

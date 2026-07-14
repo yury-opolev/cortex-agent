@@ -138,6 +138,60 @@ public static class McpServerRequestMapper
         {
             target.ToolAllowList = NormalizeAllowList(request.ToolAllowList);
         }
+
+        if (request.MutationToolAllowList is not null)
+        {
+            // Mutation names are normalized exactly like the exposure allow-list.
+            target.MutationToolAllowList = NormalizeAllowList(request.MutationToolAllowList);
+        }
+    }
+
+    /// <summary>
+    /// Enforces the mutation-policy consistency rule: when <paramref name="toolAllowList"/> is
+    /// non-empty (restricted exposure), every mutation-classified tool must also be present there —
+    /// a mutation classification for a tool that is not even exposed is a configuration mistake.
+    /// Returns an error message, or <c>null</c> when consistent.
+    /// </summary>
+    public static string? ValidateMutationAllowList(
+        IReadOnlyCollection<string> toolAllowList, IReadOnlyCollection<string> mutationToolAllowList)
+    {
+        ArgumentNullException.ThrowIfNull(toolAllowList);
+        ArgumentNullException.ThrowIfNull(mutationToolAllowList);
+
+        if (toolAllowList.Count == 0)
+        {
+            return null;
+        }
+
+        foreach (var mutationTool in mutationToolAllowList)
+        {
+            if (!toolAllowList.Contains(mutationTool, StringComparer.Ordinal))
+            {
+                return $"Mutation tool '{mutationTool}' must also be present in the tool allow-list.";
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Validates the mutation-policy consistency of applying <paramref name="request"/> onto
+    /// <paramref name="target"/> WITHOUT mutating it, so an invalid partial edit can be rejected
+    /// before <see cref="ApplyTo"/> touches the live config. Returns an error message or <c>null</c>.
+    /// </summary>
+    public static string? ValidateMutationPolicy(McpServerConfig target, McpServerRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        ArgumentNullException.ThrowIfNull(request);
+
+        var effectiveToolAllowList = request.ToolAllowList is not null
+            ? NormalizeAllowList(request.ToolAllowList)
+            : target.ToolAllowList;
+        var effectiveMutationToolAllowList = request.MutationToolAllowList is not null
+            ? NormalizeAllowList(request.MutationToolAllowList)
+            : target.MutationToolAllowList;
+
+        return ValidateMutationAllowList(effectiveToolAllowList, effectiveMutationToolAllowList);
     }
 
     /// <summary>Trims, drops blanks, and de-duplicates (ordinal) an allow-list.</summary>

@@ -117,6 +117,19 @@ public sealed class McpServerProjectionTests
     }
 
     [Fact]
+    public void Project_CarriesMutationToolAllowList()
+    {
+        var config = Server();
+        config.ToolAllowList = ["search", "create_issue"];
+        config.MutationToolAllowList = ["create_issue"];
+
+        var view = McpServerProjection.Project(config, masterEnabled: true, runtime: null, needsLogin: false);
+
+        Assert.Equal(["search", "create_issue"], view.ToolAllowList);
+        Assert.Equal(["create_issue"], view.MutationToolAllowList);
+    }
+
+    [Fact]
     public void Project_RedactsPlaintextSecretEnv_KeepsRefAndPlainLiteral()
     {
         var config = new McpServerConfig

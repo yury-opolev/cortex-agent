@@ -29,6 +29,7 @@ public static class McpServerProjection
             HasSecret = !string.IsNullOrEmpty(config.SecretRef),
             SecretRef = config.SecretRef,
             ToolAllowList = config.ToolAllowList,
+            MutationToolAllowList = config.MutationToolAllowList,
             Status = StatusLabel(config, masterEnabled, runtime, needsLogin),
             ToolCount = runtime?.Tools.Count ?? 0,
             LastError = runtime?.LastError,
