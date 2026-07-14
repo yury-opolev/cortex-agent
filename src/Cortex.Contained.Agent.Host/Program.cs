@@ -523,13 +523,16 @@ builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Agent.SubagentExecutio
     var todoStore = sp.GetRequiredService<InMemoryTodoStore>();
     var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
     var runnerLogger = loggerFactory.CreateLogger<SubagentRunner>();
-    var toolRegistry = sp.GetRequiredService<ToolRegistry>();
 
-    // The coordinator creates and registers the runner (holding the slot + owning the cancellation
-    // token); the executor drives that same registered instance so sub_agent_send injection lands.
+    // ToolRegistry is resolved LAZILY (on first subagent dispatch), never during coordinator
+    // construction. ToolRegistry aggregates every IAgentTool — including SubAgentStart/Send/StopTool,
+    // which each depend on this coordinator — so resolving it here would form a construction-time
+    // cycle (coordinator -> ToolRegistry -> SubAgent*Tool -> coordinator) that hangs host startup
+    // before Kestrel binds. Deferring it to the runner factory breaks the cycle: by the time a
+    // subagent is dispatched, the coordinator singleton is already fully built and cached.
     Func<SubagentTask, SubagentRunner> runnerFactory = task => new SubagentRunner(
-        llmClient, toolRegistry, agentConfig.CurrentValue.MaxSubagentRounds, runnerLogger,
-        subagentStore, task.TaskId, modelProvider, todoStore);
+        llmClient, sp.GetRequiredService<ToolRegistry>(), agentConfig.CurrentValue.MaxSubagentRounds,
+        runnerLogger, subagentStore, task.TaskId, modelProvider, todoStore);
 
     return new Cortex.Contained.Agent.Host.Agent.SubagentExecutionCoordinator(
         subagentStore,

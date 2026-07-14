@@ -247,7 +247,25 @@ try {
     $prevMsix = Resolve-LkgMsix $fromVersion
     if ($prevMsix) { Copy-Item $prevMsix $lkgMsix -Force; $lkgSaved = $true; Say "last-known-good MSIX saved ($fromVersion): $(Split-Path -Leaf $prevMsix)" }
     else { Say "no MSIX for current version $fromVersion in artifacts — MSIX rollback unavailable" 'Yellow' }
-    try { & docker tag cortex-agent:latest $rollbackImageTag 2>$null; Say "tagged current agent image as $rollbackImageTag" } catch { Say "could not snapshot agent image for rollback" 'Yellow' }
+    # Snapshot the agent image the RUNNING container is currently on — that is the true
+    # last-known-good. Do NOT snapshot cortex-agent:latest: Build-All has already retagged :latest
+    # to the NEW version before this runs, so tagging :latest here would make "rollback" point at the
+    # very image we are about to deploy (a rollback that rolls forward — the 0.2.315 failure mode).
+    $lkgImageSaved = $false
+    try {
+        $runningAgentImage = (& docker inspect cortex-agent --format '{{.Image}}' 2>$null)
+        if ($runningAgentImage) {
+            & docker tag $runningAgentImage $rollbackImageTag 2>$null
+            $lkgImageSaved = $true
+            Say "snapshotted running agent image ($runningAgentImage) as $rollbackImageTag"
+        }
+        else {
+            $normFrom = ($fromVersion -replace '\.0$', '')
+            & docker image inspect "cortex-agent:$normFrom" *> $null
+            if ($LASTEXITCODE -eq 0) { & docker tag "cortex-agent:$normFrom" $rollbackImageTag 2>$null; $lkgImageSaved = $true; Say "snapshotted cortex-agent:$normFrom as $rollbackImageTag (fallback)" }
+            else { Say "could not resolve a known-good agent image for rollback (no running container, no cortex-agent:$normFrom)" 'Yellow' }
+        }
+    } catch { Say "could not snapshot agent image for rollback: $_" 'Yellow' }
 
     # --- 7. Deploy: containers, then MSIX ------------------------------------
     Say "recreating containers ($($m.images.'cortex-agent'), $($m.images.'voice-id'))..."
