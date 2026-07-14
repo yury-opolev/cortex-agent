@@ -1,5 +1,7 @@
+using System.Text.Json;
 using Cortex.Contained.Contracts.Hub;
 using Microsoft.Extensions.Logging;
+using ModelContextProtocol;
 using ModelContextProtocol.Client;
 
 namespace Cortex.Contained.Bridge.Mcp;
@@ -116,14 +118,19 @@ public abstract partial class McpServerConnectionBase : IMcpServerConnection
 #pragma warning restore CA1031
     }
 
-    public async Task<McpToolResult> CallToolAsync(string toolName, string argumentsJson, CancellationToken cancellationToken)
+    public async Task<McpToolResult> CallToolAsync(McpToolInvocation invocation, CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(invocation);
+        var invocationId = invocation.InvocationId;
+        var toolName = invocation.ToolName;
+
         // SECURITY: the allow-list is a policy boundary, not just a catalog filter. Re-check at
         // invoke time so a (prompt-injected) agent cannot call an excluded tool by naming it directly.
         if (!McpToolFilter.IsAllowed(toolName, this.toolAllowList))
         {
             this.LogToolNotAllowed(this.ServerKey, toolName);
-            return McpToolResult.Fail($"MCP tool '{toolName}' is not permitted for server '{this.ServerKey}'.");
+            return McpToolResult.Fail(
+                invocationId, McpFailureKind.Policy, $"MCP tool '{toolName}' is not permitted for server '{this.ServerKey}'.");
         }
 
         McpClient? activeClient;
@@ -134,24 +141,108 @@ public abstract partial class McpServerConnectionBase : IMcpServerConnection
 
         if (activeClient is null)
         {
-            return McpToolResult.Fail($"MCP server '{this.ServerKey}' is not connected.");
+            return McpToolResult.Fail(
+                invocationId, McpFailureKind.Unavailable, $"MCP server '{this.ServerKey}' is not connected.");
+        }
+
+        // Parse the arguments BEFORE dispatch: a malformed request is a definitive validation
+        // failure — nothing reached the server, and the connection stays healthy.
+        IReadOnlyDictionary<string, object?> arguments;
+        try
+        {
+            arguments = McpArguments.Parse(invocation.ArgumentsJson);
+        }
+        catch (Exception ex) when (ex is JsonException or ArgumentException)
+        {
+            // Log the detail host-side only; the agent receives a sanitized, secret-free message.
+            this.LogToolFailed(this.ServerKey, toolName, ex.Message);
+            return McpToolResult.Fail(
+                invocationId, McpFailureKind.Validation, McpErrorSanitizer.ToolFailure(this.ServerKey, toolName));
+        }
+
+        if (cancellationToken.IsCancellationRequested)
+        {
+            // Cancelled before dispatch — definitive, the call never left the host.
+            return McpToolResult.Cancelled(invocationId, $"MCP tool '{toolName}' invocation was cancelled before dispatch.");
         }
 
         try
         {
-            var arguments = McpArguments.Parse(argumentsJson);
             var result = await activeClient.CallToolAsync(toolName, arguments, cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
-            var mapped = McpResultMapper.ToToolResult(result);
+            var mapped = McpResultMapper.ToToolResult(invocationId, result);
             this.LogToolInvoked(this.ServerKey, toolName, mapped.IsError);
             return mapped;
         }
-#pragma warning disable CA1031 // Tool/transport failures map to a structured result, never thrown.
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Cancelled after dispatch started: the server may have executed the call. The
+            // connection itself is still healthy — only this invocation is ambiguous.
+            this.LogToolCancelledMidCall(this.ServerKey, toolName, invocationId);
+            return McpToolResult.Unknown(
+                invocationId,
+                McpFailureKind.Cancellation,
+                $"MCP tool '{toolName}' on server '{this.ServerKey}' was cancelled mid-call; it may still have executed.");
+        }
+        catch (McpException ex)
+        {
+            // The server RESPONDED with a protocol-level error: it received and rejected/failed
+            // the call, so this is a definitive failure — not an ambiguous outcome.
+            this.LogToolFailed(this.ServerKey, toolName, ex.Message);
+            return McpToolResult.Fail(
+                invocationId, McpFailureKind.Tool, McpErrorSanitizer.ToolFailure(this.ServerKey, toolName));
+        }
+#pragma warning disable CA1031 // Transport failures map to a structured result, never thrown.
         catch (Exception ex)
         {
-            // Log the detail host-side only; the agent receives a sanitized, secret-free message.
-            this.LogToolFailed(this.ServerKey, toolName, ex.Message);
-            return McpToolResult.Fail(McpErrorSanitizer.ToolFailure(this.ServerKey, toolName));
+            // Fatal transport closure after dispatch started (process exit, broken pipe, socket
+            // loss): the outcome is unknowable, the connection is dead, and the ORIGINAL
+            // invocation is never replayed. Clear client/tools so the catalog drops them.
+            this.LogTransportFailed(this.ServerKey, toolName, ex.Message);
+            this.HandleTransportFailure($"transport failed during '{toolName}': {ex.Message}");
+            return McpToolResult.Unknown(
+                invocationId,
+                McpFailureKind.Transport,
+                $"MCP server '{this.ServerKey}' transport failed mid-call; the invocation may still have executed.");
+        }
+#pragma warning restore CA1031
+    }
+
+    /// <summary>
+    /// Tears down a connection whose transport failed mid-call: clears the client and cached
+    /// tools and moves to <see cref="McpServerStatus.Error"/>. The host service drops the dead
+    /// tools from the catalog immediately; the periodic reconciliation recreates the connection.
+    /// </summary>
+    private void HandleTransportFailure(string reason)
+    {
+        McpClient? deadClient;
+        lock (this.stateLock)
+        {
+            deadClient = this.client;
+            this.client = null;
+            this.tools = [];
+            this.status = McpServerStatus.Error;
+            this.lastError = reason;
+        }
+
+        if (deadClient is not null)
+        {
+            // Best-effort, fire-and-forget: the dead client must not block the invocation's
+            // (already ambiguous) result from reaching the agent.
+            _ = this.DisposeClientQuietlyAsync(deadClient);
+        }
+    }
+
+    private async Task DisposeClientQuietlyAsync(McpClient deadClient)
+    {
+        try
+        {
+            await deadClient.DisposeAsync().ConfigureAwait(false);
+        }
+#pragma warning disable CA1031 // Best-effort disposal of an already-dead client.
+        catch (Exception ex)
+        {
+            this.LogDisposeFailed(this.ServerKey, ex.Message);
         }
 #pragma warning restore CA1031
     }
@@ -207,6 +298,12 @@ public abstract partial class McpServerConnectionBase : IMcpServerConnection
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "MCP tool failed: server '{ServerKey}' tool '{ToolName}': {Error}")]
     private partial void LogToolFailed(string serverKey, string toolName, string error);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "MCP tool cancelled mid-call: server '{ServerKey}' tool '{ToolName}' invocation {InvocationId}; outcome unknown")]
+    private partial void LogToolCancelledMidCall(string serverKey, string toolName, string invocationId);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "MCP transport failed mid-call: server '{ServerKey}' tool '{ToolName}': {Error}; connection moved to Error")]
+    private partial void LogTransportFailed(string serverKey, string toolName, string error);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "MCP tool invocation blocked by allow-list: server '{ServerKey}' tool '{ToolName}'")]
     private partial void LogToolNotAllowed(string serverKey, string toolName);

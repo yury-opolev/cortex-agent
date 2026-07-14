@@ -78,9 +78,10 @@ public sealed partial class TenantConnectionBootstrapper
     {
         if (this.mcpHostService is not null)
         {
-            client.OnInvokeMcpTool += invocation =>
-                this.mcpHostService.InvokeAsync(
-                    invocation.ServerKey, invocation.ToolName, invocation.ArgumentsJson, CancellationToken.None);
+            // The tracker token (not CancellationToken.None) rides along so an agent-initiated
+            // CancelMcpTool — or a lost hub connection — actually cancels the in-flight MCP call.
+            client.OnInvokeMcpTool += (invocation, cancellationToken) =>
+                this.mcpHostService.InvokeAsync(invocation, cancellationToken);
         }
 
         if (this.mcpCatalogPusher is not null)

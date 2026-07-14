@@ -45,6 +45,14 @@ public sealed class McpHostServiceTests
         Command = "node",
     };
 
+    private static McpToolInvocation Invocation(string serverKey, string tool, string argumentsJson = "{}") => new()
+    {
+        InvocationId = Guid.CreateVersion7().ToString("N"),
+        ServerKey = serverKey,
+        ToolName = tool,
+        ArgumentsJson = argumentsJson,
+    };
+
     [Fact]
     public async Task ReconcileAsync_TwoEnabledServers_AggregatesCatalog()
     {
@@ -132,28 +140,112 @@ public sealed class McpHostServiceTests
     public async Task InvokeAsync_RoutesToOwningConnection()
     {
         var connection = FakeConnection("a", Def("a", "x"));
-        connection.CallToolAsync("x", "{}", Arg.Any<CancellationToken>()).Returns(McpToolResult.Ok("result"));
+        connection.CallToolAsync(Arg.Any<McpToolInvocation>(), Arg.Any<CancellationToken>())
+            .Returns(callInfo => McpToolResult.Ok(callInfo.Arg<McpToolInvocation>().InvocationId, "result"));
         var factory = Substitute.For<IMcpServerConnectionFactory>();
         factory.TryCreate(Arg.Any<McpServerConfig>()).Returns(connection);
         await using var host = new McpHostService(factory, NullLogger<McpHostService>.Instance);
         await host.ReconcileAsync(new McpSettingsConfig { Servers = [StdioServer("a")] }, CancellationToken.None);
 
-        var result = await host.InvokeAsync("a", "x", "{}", CancellationToken.None);
+        var invocation = Invocation("a", "x");
+        var result = await host.InvokeAsync(invocation, CancellationToken.None);
 
-        Assert.False(result.IsError);
+        Assert.Equal(McpToolOutcome.Succeeded, result.Outcome);
+        Assert.Equal(invocation.InvocationId, result.InvocationId);
         Assert.Equal("result", result.Content);
+        await connection.Received(1).CallToolAsync(
+            Arg.Is<McpToolInvocation>(i => i.InvocationId == invocation.InvocationId && i.ToolName == "x"),
+            Arg.Any<CancellationToken>());
     }
 
     [Fact]
-    public async Task InvokeAsync_UnknownServer_ReturnsFailure()
+    public async Task InvokeAsync_UnknownServer_ReturnsDefinitiveFailure()
     {
         var factory = Substitute.For<IMcpServerConnectionFactory>();
         await using var host = new McpHostService(factory, NullLogger<McpHostService>.Instance);
 
-        var result = await host.InvokeAsync("missing", "x", "{}", CancellationToken.None);
+        var invocation = Invocation("missing", "x");
+        var result = await host.InvokeAsync(invocation, CancellationToken.None);
 
-        Assert.True(result.IsError);
+        // Pre-dispatch unavailability is a definitive failure, never an unknown outcome.
+        Assert.Equal(McpToolOutcome.Failed, result.Outcome);
+        Assert.Equal(McpFailureKind.Unavailable, result.FailureKind);
+        Assert.Equal(invocation.InvocationId, result.InvocationId);
         Assert.Contains("not available", result.Error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Reconcile_AfterTransportFailure_RecreatesConnection()
+    {
+        var firstStatus = McpServerStatus.Connected;
+        var firstTools = new[] { Def("a", "x") };
+        var first = FakeConnection("a");
+        first.Status.Returns(_ => firstStatus);
+        first.Tools.Returns(_ => firstTools);
+        first.CallToolAsync(Arg.Any<McpToolInvocation>(), Arg.Any<CancellationToken>())
+            .Returns(callInfo =>
+            {
+                // Simulate a fatal transport closure mid-call: the connection clears its
+                // tools, moves to Error, and reports the ambiguous outcome.
+                firstStatus = McpServerStatus.Error;
+                firstTools = [];
+                return McpToolResult.Unknown(
+                    callInfo.Arg<McpToolInvocation>().InvocationId, McpFailureKind.Transport, "transport lost");
+            });
+        var second = FakeConnection("a", Def("a", "x"));
+        var factory = Substitute.For<IMcpServerConnectionFactory>();
+        factory.TryCreate(Arg.Any<McpServerConfig>()).Returns(first, second);
+        await using var host = new McpHostService(factory, NullLogger<McpHostService>.Instance);
+        var settings = new McpSettingsConfig { Servers = [StdioServer("a")] };
+        await host.ReconcileAsync(settings, CancellationToken.None);
+        Assert.Single(host.CurrentCatalog.Tools);
+
+        var result = await host.InvokeAsync(Invocation("a", "x"), CancellationToken.None);
+
+        // The dead server's tools disappear immediately, without waiting for the next reconcile.
+        Assert.Equal(McpToolOutcome.OutcomeUnknown, result.Outcome);
+        Assert.Empty(host.CurrentCatalog.Tools);
+
+        // The existing periodic reconciliation recreates the errored connection.
+        await host.ReconcileAsync(settings, CancellationToken.None);
+
+        Assert.Single(host.CurrentCatalog.Tools);
+        await first.Received(1).DisposeAsync();
+        factory.Received(2).TryCreate(Arg.Any<McpServerConfig>());
+    }
+
+    [Fact]
+    public async Task OriginalInvocation_IsNeverDispatchedTwice()
+    {
+        var firstStatus = McpServerStatus.Connected;
+        var firstTools = new[] { Def("a", "x") };
+        var first = FakeConnection("a");
+        first.Status.Returns(_ => firstStatus);
+        first.Tools.Returns(_ => firstTools);
+        first.CallToolAsync(Arg.Any<McpToolInvocation>(), Arg.Any<CancellationToken>())
+            .Returns(callInfo =>
+            {
+                firstStatus = McpServerStatus.Error;
+                firstTools = [];
+                return McpToolResult.Unknown(
+                    callInfo.Arg<McpToolInvocation>().InvocationId, McpFailureKind.Transport, "transport lost");
+            });
+        var second = FakeConnection("a", Def("a", "x"));
+        var factory = Substitute.For<IMcpServerConnectionFactory>();
+        factory.TryCreate(Arg.Any<McpServerConfig>()).Returns(first, second);
+        await using var host = new McpHostService(factory, NullLogger<McpHostService>.Instance);
+        var settings = new McpSettingsConfig { Servers = [StdioServer("a")] };
+        await host.ReconcileAsync(settings, CancellationToken.None);
+
+        var invocation = Invocation("a", "x");
+        var result = await host.InvokeAsync(invocation, CancellationToken.None);
+        await host.ReconcileAsync(settings, CancellationToken.None); // recovery reconnect
+
+        // CRITICAL: the ambiguous invocation surfaces as OutcomeUnknown and is NEVER replayed —
+        // not on the failed connection, and not on its replacement.
+        Assert.Equal(McpToolOutcome.OutcomeUnknown, result.Outcome);
+        await first.Received(1).CallToolAsync(Arg.Any<McpToolInvocation>(), Arg.Any<CancellationToken>());
+        await second.DidNotReceive().CallToolAsync(Arg.Any<McpToolInvocation>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]

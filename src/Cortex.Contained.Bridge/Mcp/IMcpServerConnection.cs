@@ -24,6 +24,11 @@ public interface IMcpServerConnection : IAsyncDisposable
     /// <summary>Connects, handshakes, and lists tools. Never throws — failures surface via <see cref="Status"/>.</summary>
     Task ConnectAsync(CancellationToken cancellationToken);
 
-    /// <summary>Invokes a tool by its server-local name. Errors are mapped to a structured <see cref="McpToolResult"/>, never thrown.</summary>
-    Task<McpToolResult> CallToolAsync(string toolName, string argumentsJson, CancellationToken cancellationToken);
+    /// <summary>
+    /// Invokes the tool named by <paramref name="invocation"/>, preserving its identity/correlation
+    /// end to end. Errors are mapped to a structured <see cref="McpToolResult"/> (definitive
+    /// failure vs. ambiguous <see cref="McpToolOutcome.OutcomeUnknown"/>), never thrown. The
+    /// invocation is dispatched at most once — never replayed.
+    /// </summary>
+    Task<McpToolResult> CallToolAsync(McpToolInvocation invocation, CancellationToken cancellationToken);
 }

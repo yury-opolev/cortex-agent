@@ -13,4 +13,10 @@ public interface IMcpHubClient
     /// Agent → Bridge. Invoke a single MCP tool on the host and return its result.
     /// </summary>
     Task<McpToolResult> InvokeMcpTool(McpToolInvocation invocation);
+
+    /// <summary>
+    /// Agent → Bridge. Best-effort cancellation of an in-flight MCP tool invocation by its
+    /// stable id. A no-op when the invocation already completed or is unknown.
+    /// </summary>
+    Task CancelMcpTool(McpToolCancellation cancellation);
 }

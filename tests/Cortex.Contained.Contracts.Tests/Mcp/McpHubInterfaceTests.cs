@@ -27,4 +27,14 @@ public class McpHubInterfaceTests
     {
         Assert.NotNull(typeof(IMcpHubClient).GetMethod(nameof(IMcpHubClient.InvokeMcpTool)));
     }
+
+    [Fact]
+    public void McpHubClient_Exposes_CancelMcpTool()
+    {
+        var method = typeof(IMcpHubClient).GetMethod(nameof(IMcpHubClient.CancelMcpTool));
+
+        Assert.NotNull(method);
+        Assert.Equal(typeof(Task), method!.ReturnType);
+        Assert.Equal([typeof(McpToolCancellation)], method.GetParameters().Select(p => p.ParameterType).ToArray());
+    }
 }

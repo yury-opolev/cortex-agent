@@ -6,6 +6,8 @@
 //   echo        -> returns the `text` argument verbatim.
 //   reveal_env  -> returns the value of process.env.MCP_TEST_SECRET (proves env-secret injection).
 //   hidden_tool -> exists so allow-list filtering can be verified.
+//   die         -> exits the process WITHOUT replying (proves fatal-transport-closure handling).
+//   hang        -> never replies (proves in-flight cancellation handling).
 import process from 'node:process';
 import readline from 'node:readline';
 
@@ -23,6 +25,16 @@ const TOOLS = [
   {
     name: 'hidden_tool',
     description: 'A tool that should be excluded by an allow-list.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'die',
+    description: 'Exits the server process without replying, simulating a fatal transport closure.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'hang',
+    description: 'Accepts the call but never replies, for cancellation testing.',
     inputSchema: { type: 'object', properties: {} },
   },
 ];
@@ -83,9 +95,19 @@ rl.on('line', (line) => {
     case 'tools/list':
       reply(id, { tools: TOOLS });
       break;
-    case 'tools/call':
-      reply(id, callTool(params && params.name, params && params.arguments));
+    case 'tools/call': {
+      const toolName = params && params.name;
+      if (toolName === 'die') {
+        // Simulate a server crash mid-call: exit without ever replying.
+        process.exit(1);
+      }
+      if (toolName === 'hang') {
+        // Deliberately never reply; the caller must handle cancellation itself.
+        return;
+      }
+      reply(id, callTool(toolName, params && params.arguments));
       break;
+    }
     default:
       send({ jsonrpc: '2.0', id, error: { code: -32601, message: `method not found: ${method}` } });
       break;

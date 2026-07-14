@@ -1,4 +1,5 @@
 using Cortex.Contained.Bridge.Mcp;
+using Cortex.Contained.Contracts.Hub;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Cortex.Contained.Bridge.Tests.Mcp;
@@ -6,8 +7,9 @@ namespace Cortex.Contained.Bridge.Tests.Mcp;
 /// <summary>
 /// Real-SDK integration test for <see cref="StdioMcpServerConnection"/>: spawns the in-repo Node
 /// MCP server (<c>fake-mcp-server.mjs</c>) and drives a real handshake → list → call → result,
-/// including env-secret injection and allow-list filtering. Skipped (passes trivially) when Node
-/// is not on PATH so it never produces a false failure on a Node-less machine.
+/// including env-secret injection, allow-list filtering, fatal transport closure, and in-flight
+/// cancellation. Skipped (passes trivially) when Node is not on PATH so it never produces a
+/// false failure on a Node-less machine.
 /// </summary>
 public sealed class StdioMcpServerConnectionIntegrationTests
 {
@@ -33,6 +35,14 @@ public sealed class StdioMcpServerConnectionIntegrationTests
     private static string ScriptPath()
         => Path.Combine(AppContext.BaseDirectory, "Mcp", "Fixtures", "fake-mcp-server.mjs");
 
+    private static McpToolInvocation Invocation(string toolName, string argumentsJson = "{}") => new()
+    {
+        InvocationId = Guid.CreateVersion7().ToString("N"),
+        ServerKey = "fake",
+        ToolName = toolName,
+        ArgumentsJson = argumentsJson,
+    };
+
     [Fact]
     public async Task ConnectListCall_AgainstRealStdioServer_RoundTripsWithSecretAndAllowList()
     {
@@ -50,7 +60,7 @@ public sealed class StdioMcpServerConnectionIntegrationTests
             command: node,
             arguments: [ScriptPath()],
             environment: new Dictionary<string, string> { ["MCP_TEST_SECRET"] = "s3cr3t-value" },
-            toolAllowList: ["echo", "reveal_env"], // hidden_tool excluded
+            toolAllowList: ["echo", "reveal_env"], // hidden_tool/die/hang excluded
             logger: NullLogger<StdioMcpServerConnection>.Instance);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
@@ -64,19 +74,21 @@ public sealed class StdioMcpServerConnectionIntegrationTests
         Assert.Equal(["mcp__fake__echo", "mcp__fake__reveal_env"], names);
         Assert.DoesNotContain(connection.Tools, t => t.ToolName == "hidden_tool");
 
-        // Real tools/call round-trip.
-        var echo = await connection.CallToolAsync("echo", """{"text":"hello mcp"}""", cts.Token);
-        Assert.False(echo.IsError);
+        // Real tools/call round-trip, with the invocation ID preserved on the result.
+        var echoInvocation = Invocation("echo", """{"text":"hello mcp"}""");
+        var echo = await connection.CallToolAsync(echoInvocation, cts.Token);
+        Assert.Equal(McpToolOutcome.Succeeded, echo.Outcome);
+        Assert.Equal(echoInvocation.InvocationId, echo.InvocationId);
         Assert.Equal("hello mcp", echo.Content);
 
         // Env-secret reaches the spawned process.
-        var secret = await connection.CallToolAsync("reveal_env", "{}", cts.Token);
+        var secret = await connection.CallToolAsync(Invocation("reveal_env"), cts.Token);
         Assert.False(secret.IsError);
         Assert.Equal("s3cr3t-value", secret.Content);
     }
 
     [Fact]
-    public async Task CallTool_WhenInvocationThrows_ReturnsSanitizedErrorWithoutDetail()
+    public async Task CallTool_WhenArgumentsAreMalformed_ReturnsDefinitiveValidationFailure()
     {
         var node = FindNode();
         if (node is null)
@@ -96,13 +108,17 @@ public sealed class StdioMcpServerConnectionIntegrationTests
         await connection.ConnectAsync(cts.Token);
         Assert.Equal(McpServerStatus.Connected, connection.Status);
 
-        // Malformed arguments JSON forces the invocation path to throw; the agent must only ever see
-        // the generic, secret-free message — never the raw exception text.
-        var result = await connection.CallToolAsync("echo", "{ this is not json", cts.Token);
+        // Malformed arguments JSON fails BEFORE dispatch — a definitive validation failure. The
+        // agent must only ever see the generic, secret-free message — never the raw exception text.
+        var result = await connection.CallToolAsync(Invocation("echo", "{ this is not json"), cts.Token);
 
-        Assert.True(result.IsError);
+        Assert.Equal(McpToolOutcome.Failed, result.Outcome);
+        Assert.Equal(McpFailureKind.Validation, result.FailureKind);
         Assert.Equal(McpErrorSanitizer.ToolFailure("fake", "echo"), result.Error);
         Assert.DoesNotContain("json", result.Error, StringComparison.OrdinalIgnoreCase);
+
+        // Pre-dispatch failures never poison the connection.
+        Assert.Equal(McpServerStatus.Connected, connection.Status);
     }
 
     [Fact]
@@ -116,9 +132,85 @@ public sealed class StdioMcpServerConnectionIntegrationTests
             toolAllowList: [],
             logger: NullLogger<StdioMcpServerConnection>.Instance);
 
-        var result = await connection.CallToolAsync("echo", "{}", CancellationToken.None);
+        var result = await connection.CallToolAsync(Invocation("echo"), CancellationToken.None);
 
-        Assert.True(result.IsError);
+        Assert.Equal(McpToolOutcome.Failed, result.Outcome);
+        Assert.Equal(McpFailureKind.Unavailable, result.FailureKind);
         Assert.Contains("not connected", result.Error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task TransportClosure_MarksConnectionErrorAndDropsTools()
+    {
+        var node = FindNode();
+        if (node is null)
+        {
+            return;
+        }
+
+        await using var connection = new StdioMcpServerConnection(
+            serverKey: "fake",
+            command: node,
+            arguments: [ScriptPath()],
+            environment: new Dictionary<string, string>(),
+            toolAllowList: [],
+            logger: NullLogger<StdioMcpServerConnection>.Instance);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await connection.ConnectAsync(cts.Token);
+        Assert.Equal(McpServerStatus.Connected, connection.Status);
+        Assert.NotEmpty(connection.Tools);
+
+        // 'die' kills the server process without replying: dispatch started, no answer will come.
+        var result = await connection.CallToolAsync(Invocation("die"), cts.Token);
+
+        // Ambiguous by definition — the call may have executed before the crash.
+        Assert.Equal(McpToolOutcome.OutcomeUnknown, result.Outcome);
+        Assert.Equal(McpFailureKind.Transport, result.FailureKind);
+
+        // The dead connection is unusable: client/tools cleared, status Error.
+        Assert.Equal(McpServerStatus.Error, connection.Status);
+        Assert.Empty(connection.Tools);
+
+        // Follow-up calls fail definitively (nothing is dispatched to a dead transport).
+        var after = await connection.CallToolAsync(Invocation("echo", """{"text":"x"}"""), cts.Token);
+        Assert.Equal(McpToolOutcome.Failed, after.Outcome);
+        Assert.Equal(McpFailureKind.Unavailable, after.FailureKind);
+    }
+
+    [Fact]
+    public async Task CallTool_CancelledMidCall_ReturnsOutcomeUnknown_WithoutKillingConnection()
+    {
+        var node = FindNode();
+        if (node is null)
+        {
+            return;
+        }
+
+        await using var connection = new StdioMcpServerConnection(
+            serverKey: "fake",
+            command: node,
+            arguments: [ScriptPath()],
+            environment: new Dictionary<string, string>(),
+            toolAllowList: [],
+            logger: NullLogger<StdioMcpServerConnection>.Instance);
+
+        using var connectCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await connection.ConnectAsync(connectCts.Token);
+        Assert.Equal(McpServerStatus.Connected, connection.Status);
+
+        // 'hang' never replies; the caller's token fires mid-call. That is a real end-to-end
+        // cancellation of an in-flight MCP call — and its outcome is unknown, never "succeeded".
+        using var callCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
+        var result = await connection.CallToolAsync(Invocation("hang"), callCts.Token);
+
+        Assert.Equal(McpToolOutcome.OutcomeUnknown, result.Outcome);
+        Assert.Equal(McpFailureKind.Cancellation, result.FailureKind);
+
+        // The server is still alive: the connection survives and later calls succeed.
+        Assert.Equal(McpServerStatus.Connected, connection.Status);
+        var echo = await connection.CallToolAsync(Invocation("echo", """{"text":"still alive"}"""), connectCts.Token);
+        Assert.Equal(McpToolOutcome.Succeeded, echo.Outcome);
+        Assert.Equal("still alive", echo.Content);
     }
 }

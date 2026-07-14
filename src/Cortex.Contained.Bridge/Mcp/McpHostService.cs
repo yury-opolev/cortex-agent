@@ -128,23 +128,43 @@ public sealed partial class McpHostService : IAsyncDisposable
         return null;
     }
 
-    /// <summary>Routes a tool invocation to the owning connection, or returns a structured failure when it is unavailable.</summary>
-    public async Task<McpToolResult> InvokeAsync(
-        string serverKey, string toolName, string argumentsJson, CancellationToken cancellationToken)
+    /// <summary>
+    /// Routes a tool invocation to the owning connection, preserving its identity/correlation end
+    /// to end, or returns a definitive structured failure when the server is unavailable before
+    /// dispatch. If the connection's transport died during the call, the catalog is rebuilt and
+    /// re-pushed immediately so the dead tools disappear; the ORIGINAL invocation is never
+    /// replayed — the periodic reconciliation only reconnects the server for FUTURE calls.
+    /// </summary>
+    public async Task<McpToolResult> InvokeAsync(McpToolInvocation invocation, CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(invocation);
+
         IMcpServerConnection? connection;
         lock (this.stateLock)
         {
-            this.connections.TryGetValue(serverKey, out connection);
+            this.connections.TryGetValue(invocation.ServerKey, out connection);
         }
 
         if (connection is null)
         {
-            this.LogInvokeUnavailable(serverKey, toolName);
-            return McpToolResult.Fail($"MCP server '{serverKey}' is not available.");
+            this.LogInvokeUnavailable(invocation.ServerKey, invocation.ToolName);
+            return McpToolResult.Fail(
+                invocation.InvocationId,
+                McpFailureKind.Unavailable,
+                $"MCP server '{invocation.ServerKey}' is not available.");
         }
 
-        return await connection.CallToolAsync(toolName, argumentsJson, cancellationToken).ConfigureAwait(false);
+        var result = await connection.CallToolAsync(invocation, cancellationToken).ConfigureAwait(false);
+
+        if (connection.Status == McpServerStatus.Error)
+        {
+            // Fatal transport closure mid-call: drop the dead server's tools from the agent's
+            // catalog now (deliberately not bound to the possibly-cancelled invocation token).
+            var catalog = this.RebuildCatalog();
+            await this.NotifyCatalogChangedAsync(catalog, CancellationToken.None).ConfigureAwait(false);
+        }
+
+        return result;
     }
 
     private static Dictionary<string, McpServerConfig> BuildDesired(McpSettingsConfig settings)
