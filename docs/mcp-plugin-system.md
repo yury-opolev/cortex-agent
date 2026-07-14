@@ -184,7 +184,7 @@ per-tool allow-list.
 
 ## Approval-gated mutations, invocation identity, and reliability guarantees
 
-*Status: implemented (ICM reliability foundation, Tasks 1-11).* Every MCP tool call — read or
+*Status: implemented (subagent + MCP reliability foundation).* Every MCP tool call — read or
 mutation — now carries a stable identity end-to-end and resolves to one of four explicit
 outcomes. Tools an administrator has classified as mutating never dispatch to the remote server
 until a human approves the *exact* arguments the agent proposed.
@@ -219,12 +219,12 @@ the MCP server's own (untrusted) annotations:
 
 ```yaml
 mcpServers:
-  - key: agency-icm
+  - key: example-server
     transport: stdio
-    command: agency
-    args: [mcp, icm]
-    toolAllowList: [search_incidents, get_incident, post_discussion_entry, mitigate_incident]
-    mutationToolAllowList: [post_discussion_entry, mitigate_incident]
+    command: my-mcp-server
+    args: [serve]
+    toolAllowList: [search_items, get_item, add_comment, apply_change]
+    mutationToolAllowList: [add_comment, apply_change]
 ```
 
 - A tool in `mutationToolAllowList` is classified `RequiresApproval = true` in the catalog the
@@ -339,8 +339,7 @@ clamped) outside that range by the Agent Host registry, `POST /api/settings`, an
 `AgentConfig`/`BridgeConfig` validation. Fifty is a **safety ceiling** the admission path will
 never exceed — it is *not* a claim that the configured LLM/MCP providers can actually sustain 50
 simultaneous workers. Provider rate limits, token cost, and MCP server capacity are explicitly
-deferred (see the follow-up list in
-[`documents/cortex-icm-orchestrator-proposal.md`](../documents/cortex-icm-orchestrator-proposal.md)).
+deferred and require a separate design.
 
 ### Subagent durability
 

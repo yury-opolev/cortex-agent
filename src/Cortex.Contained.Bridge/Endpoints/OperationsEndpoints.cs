@@ -14,7 +14,7 @@ namespace Cortex.Contained.Bridge.Endpoints;
 /// <see cref="SubagentWorkerSnapshot"/> and <see cref="ProjectAction"/>'s closed field list.
 /// The subagent endpoint needs a LIVE agent connection (503 when disconnected); the MCP action
 /// history endpoint is Bridge-local (backed by <see cref="IMcpActionStore"/>) and stays
-/// available while the agent is disconnected — this is what a future IcM dashboard, or the
+/// available while the agent is disconnected — this is what a future operations dashboard, or the
 /// agent's own workspace files, consume.
 /// </summary>
 internal static class OperationsEndpoints

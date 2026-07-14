@@ -5,7 +5,7 @@ namespace Cortex.Contained.Agent.Host.Agent;
 /// <summary>
 /// Projects <see cref="SubagentSessionStore"/> + <see cref="SubagentRunnerRegistry"/> state into
 /// content-free <see cref="SubagentWorkerSnapshot"/>/<see cref="SubagentAggregateSnapshot"/> DTOs
-/// for generic operational observability (a future IcM dashboard, the agent's own workspace
+/// for generic operational observability (a future operations dashboard, the agent's own workspace
 /// files). NEVER surfaces prompt, message history, result, or eval text — only identifiers,
 /// lifecycle state, and timing/counters computed from <see cref="TimeProvider"/>.
 /// <para>
