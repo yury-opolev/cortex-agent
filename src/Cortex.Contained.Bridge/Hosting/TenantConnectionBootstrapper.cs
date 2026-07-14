@@ -25,6 +25,7 @@ public sealed partial class TenantConnectionBootstrapper
     private readonly Cortex.Contained.Channels.Discord.IEnrollmentProgressNotifier? enrollmentProgressNotifier;
     private readonly Cortex.Contained.Bridge.Mcp.McpHostService? mcpHostService;
     private readonly Cortex.Contained.Bridge.Mcp.McpCatalogPusher? mcpCatalogPusher;
+    private readonly Cortex.Contained.Bridge.Mcp.Actions.McpActionService? mcpActionService;
     private readonly ILogger<TenantConnectionBootstrapper> logger;
 
     /// <summary>
@@ -43,7 +44,8 @@ public sealed partial class TenantConnectionBootstrapper
         Cortex.Contained.Bridge.SpeakerId.SignalRVoiceprintCache? voiceprintCache = null,
         Cortex.Contained.Channels.Discord.IEnrollmentProgressNotifier? enrollmentProgressNotifier = null,
         Cortex.Contained.Bridge.Mcp.McpHostService? mcpHostService = null,
-        Cortex.Contained.Bridge.Mcp.McpCatalogPusher? mcpCatalogPusher = null)
+        Cortex.Contained.Bridge.Mcp.McpCatalogPusher? mcpCatalogPusher = null,
+        Cortex.Contained.Bridge.Mcp.Actions.McpActionService? mcpActionService = null)
     {
         this.dispatcher = dispatcher;
         this.credentialsPusher = credentialsPusher;
@@ -54,6 +56,7 @@ public sealed partial class TenantConnectionBootstrapper
         this.enrollmentProgressNotifier = enrollmentProgressNotifier;
         this.mcpHostService = mcpHostService;
         this.mcpCatalogPusher = mcpCatalogPusher;
+        this.mcpActionService = mcpActionService;
     }
 
     /// <summary>
@@ -65,21 +68,31 @@ public sealed partial class TenantConnectionBootstrapper
         this.dispatcher.WireHubClient(client, tenantId);
         this.WireHubEvents(client, tenantId);
         this.externalAgentBinder?.WireHubClient(client, tenantId);
-        this.WireMcp(client);
+        this.WireMcp(client, tenantId);
         this.LogTenantEventsWired(tenantId);
     }
 
     /// <summary>
-    /// Wires MCP routing for a connected agent: tool invocations route to the host service (which
-    /// attaches auth on the host), and the current tool catalog is pushed so the agent registers the
-    /// available <c>mcp__*</c> tools. Re-pushed on reconnect.
+    /// Wires MCP routing for a connected agent: tool invocations route through the action
+    /// service (which gates mutation-classified tools behind durable exact-argument approval
+    /// and forwards read tools to the host service), and the current tool catalog is pushed so
+    /// the agent registers the available <c>mcp__*</c> tools. Re-pushed on reconnect.
     /// </summary>
-    private void WireMcp(HubClient client)
+    private void WireMcp(HubClient client, string tenantId)
     {
-        if (this.mcpHostService is not null)
+        if (this.mcpActionService is not null)
         {
             // The tracker token (not CancellationToken.None) rides along so an agent-initiated
             // CancelMcpTool — or a lost hub connection — actually cancels the in-flight MCP call.
+            client.OnInvokeMcpTool += (invocation, cancellationToken) =>
+                this.mcpActionService.InvokeAsync(tenantId, invocation, cancellationToken);
+            client.OnGetMcpActionStatus += (request, cancellationToken) =>
+                this.mcpActionService.GetStatusAsync(tenantId, request.ActionId, cancellationToken);
+            client.OnCancelMcpAction += (request, cancellationToken) =>
+                this.mcpActionService.CancelAsync(tenantId, request.ActionId, request.ArgumentsHash, "agent", cancellationToken);
+        }
+        else if (this.mcpHostService is not null)
+        {
             client.OnInvokeMcpTool += (invocation, cancellationToken) =>
                 this.mcpHostService.InvokeAsync(invocation, cancellationToken);
         }

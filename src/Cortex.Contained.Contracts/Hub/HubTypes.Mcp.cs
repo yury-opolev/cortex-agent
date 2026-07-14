@@ -134,6 +134,25 @@ public sealed record McpToolInvocation
 }
 
 /// <summary>
+/// How an MCP tool invocation was disposed of by the Bridge. A mutation-classified tool never
+/// executes inline: it is recorded as a proposed action and the invocation completes
+/// successfully with <see cref="AwaitingApproval"/> — the actual dispatch happens later,
+/// after a human approves the exact canonical arguments.
+/// </summary>
+public enum McpToolDisposition
+{
+    /// <summary>The invocation ran to completion (the normal read-tool path).</summary>
+    Completed,
+
+    /// <summary>
+    /// The invocation was recorded as a proposed mutation awaiting exact-argument human
+    /// approval. Nothing was dispatched to the remote server. The caller must NOT repeat
+    /// the call — the action id tracks the pending mutation.
+    /// </summary>
+    AwaitingApproval,
+}
+
+/// <summary>
 /// The result of an MCP tool invocation, mapped back to the agent over the hub. Carries an
 /// explicit <see cref="Outcome"/> instead of a bare error flag so callers can distinguish a
 /// definitive failure (safe to retry deliberately) from an ambiguous
@@ -146,6 +165,15 @@ public sealed record McpToolResult
 
     /// <summary>The explicit outcome of the invocation.</summary>
     public required McpToolOutcome Outcome { get; init; }
+
+    /// <summary>The durable action id when the invocation proposed an approval-gated mutation.</summary>
+    public string? ActionId { get; init; }
+
+    /// <summary>The canonical-argument hash the pending approval is bound to, when applicable.</summary>
+    public string? ArgumentsHash { get; init; }
+
+    /// <summary>How the invocation was disposed of. Defaults to <see cref="McpToolDisposition.Completed"/>.</summary>
+    public McpToolDisposition Disposition { get; init; }
 
     /// <summary>Why the invocation did not succeed; <see cref="McpFailureKind.None"/> on success.</summary>
     public McpFailureKind FailureKind { get; init; }
@@ -203,6 +231,91 @@ public sealed record McpToolResult
         FailureKind = failureKind,
         Error = error,
     };
+
+    /// <summary>
+    /// A SUCCESSFUL result recording that the invocation was persisted as a proposed mutation
+    /// awaiting exact-argument approval — deliberately not an error, so no retry machinery
+    /// ever re-issues the mutation. <paramref name="content"/> carries the agent-facing JSON
+    /// payload describing the pending action.
+    /// </summary>
+    public static McpToolResult AwaitingApproval(string invocationId, string actionId, string argumentsHash, string content) => new()
+    {
+        InvocationId = invocationId,
+        Outcome = McpToolOutcome.Succeeded,
+        Content = content,
+        ActionId = actionId,
+        ArgumentsHash = argumentsHash,
+        Disposition = McpToolDisposition.AwaitingApproval,
+    };
+}
+
+/// <summary>Agent → Bridge request for the current status of one approval-gated MCP action.</summary>
+public sealed record McpActionStatusRequest
+{
+    /// <summary>The durable action id (as returned in an awaiting-approval tool result).</summary>
+    public required string ActionId { get; init; }
+}
+
+/// <summary>Bridge → Agent answer to an <see cref="McpActionStatusRequest"/>.</summary>
+public sealed record McpActionStatusResponse
+{
+    /// <summary>True when the action exists for the requesting tenant.</summary>
+    public required bool Found { get; init; }
+
+    /// <summary>The action id, when found.</summary>
+    public string? ActionId { get; init; }
+
+    /// <summary>The action's lifecycle status (snake_case, e.g. <c>proposed</c>, <c>outcome_unknown</c>).</summary>
+    public string? Status { get; init; }
+
+    /// <summary>The canonical-argument hash the action is bound to.</summary>
+    public string? ArgumentsHash { get; init; }
+
+    /// <summary>The target MCP server key.</summary>
+    public string? ServerKey { get; init; }
+
+    /// <summary>The target tool name.</summary>
+    public string? ToolName { get; init; }
+
+    /// <summary>The dispatched tool's result content, when the action succeeded.</summary>
+    public string? ResultContent { get; init; }
+
+    /// <summary>The most recent error recorded on the action, if any.</summary>
+    public string? Error { get; init; }
+
+    /// <summary>A remote-system reference recorded on completion/reconciliation, if any.</summary>
+    public string? RemoteReference { get; init; }
+}
+
+/// <summary>
+/// Agent → Bridge request to cancel one approval-gated MCP action. The
+/// <see cref="ArgumentsHash"/> must match the stored canonical hash exactly — a stale hash
+/// never mutates anything.
+/// </summary>
+public sealed record McpActionCancelRequest
+{
+    /// <summary>The durable action id to cancel.</summary>
+    public required string ActionId { get; init; }
+
+    /// <summary>The exact canonical-argument hash the cancel is bound to.</summary>
+    public required string ArgumentsHash { get; init; }
+}
+
+/// <summary>
+/// Bridge → Agent answer to an <see cref="McpActionCancelRequest"/>. A dispatching action is
+/// never reported cancelled: the dispatch outcome decides (a call that already reached the
+/// remote server resolves to <c>outcome_unknown</c>, never <c>cancelled</c>).
+/// </summary>
+public sealed record McpActionCancelResponse
+{
+    /// <summary>True when the cancel request was accepted (immediately applied or recorded).</summary>
+    public required bool Accepted { get; init; }
+
+    /// <summary>The action's status after the cancel request (snake_case).</summary>
+    public string? Status { get; init; }
+
+    /// <summary>Why the cancel was not accepted, if it was not.</summary>
+    public string? Error { get; init; }
 }
 
 /// <summary>

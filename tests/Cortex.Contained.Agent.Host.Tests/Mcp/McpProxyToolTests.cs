@@ -105,6 +105,24 @@ public class McpProxyToolTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_AwaitingApproval_IsSuccessfulContent_NotARetryableError()
+    {
+        // A gated mutation completes SUCCESSFULLY with the awaiting-approval payload — it must
+        // never look like an error the agent (or any retry machinery) would repeat.
+        var content = """{"actionId":"act-1","status":"proposed","argumentsHash":"sha256:abc","message":"Awaiting exact-argument approval. Do not repeat this mutation."}""";
+        var gateway = GatewayReturning(McpToolResult.AwaitingApproval("inv-1", "act-1", "sha256:abc", content));
+        var tool = BuildTool(gateway);
+
+        var result = await tool.ExecuteAsync("""{"title":"t"}""", Context, CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Equal(content, result.Content);
+        await gateway.Received(1).InvokeAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(),
+            Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task ExecuteAsync_CancelledOutcome_ReturnsFailureWithoutRetry()
     {
         var gateway = GatewayReturning(McpToolResult.Cancelled("inv-1", "cancelled before dispatch"));

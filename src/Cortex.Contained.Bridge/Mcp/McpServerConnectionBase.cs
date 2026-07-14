@@ -126,7 +126,13 @@ public abstract partial class McpServerConnectionBase : IMcpServerConnection
 #pragma warning restore CA1031
     }
 
-    public async Task<McpToolResult> CallToolAsync(McpToolInvocation invocation, CancellationToken cancellationToken)
+    public Task<McpToolResult> CallToolAsync(McpToolInvocation invocation, CancellationToken cancellationToken)
+        => this.CallToolCoreAsync(invocation, bypassMutationRefusal: false, cancellationToken);
+
+    public Task<McpToolResult> CallApprovedMutationAsync(McpToolInvocation invocation, CancellationToken cancellationToken)
+        => this.CallToolCoreAsync(invocation, bypassMutationRefusal: true, cancellationToken);
+
+    private async Task<McpToolResult> CallToolCoreAsync(McpToolInvocation invocation, bool bypassMutationRefusal, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(invocation);
         var invocationId = invocation.InvocationId;
@@ -143,9 +149,11 @@ public abstract partial class McpServerConnectionBase : IMcpServerConnection
 
         // SECURITY: mutation classification is RE-CHECKED immediately before dispatch — never
         // trusted from the catalog the agent saw. A mutation-classified tool must not execute
-        // through this direct path at all: it requires the human-approval flow, which binds the
-        // approval to the exact canonical argument hash.
-        if (McpToolFilter.IsMutation(toolName, this.mutationToolAllowList))
+        // through the direct path at all: it requires the human-approval flow, which binds the
+        // approval to the exact canonical argument hash. The ONLY caller allowed to bypass this
+        // refusal is the outbox dispatcher (CallApprovedMutationAsync), which dispatches the
+        // stored canonical arguments of a human-approved action.
+        if (!bypassMutationRefusal && McpToolFilter.IsMutation(toolName, this.mutationToolAllowList))
         {
             this.LogMutationToolRefused(this.ServerKey, toolName);
             return McpToolResult.Fail(

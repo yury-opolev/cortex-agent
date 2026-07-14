@@ -11,7 +11,7 @@ namespace Cortex.Contained.Bridge.Mcp;
 /// Raises <see cref="CatalogChanged"/> whenever the aggregated catalog changes so the pusher can
 /// re-push it to the agent.
 /// </summary>
-public sealed partial class McpHostService : IAsyncDisposable
+public sealed partial class McpHostService : IAsyncDisposable, IMcpInvocationTarget
 {
     private readonly IMcpServerConnectionFactory factory;
     private readonly ILogger<McpHostService> logger;
@@ -135,7 +135,19 @@ public sealed partial class McpHostService : IAsyncDisposable
     /// re-pushed immediately so the dead tools disappear; the ORIGINAL invocation is never
     /// replayed — the periodic reconciliation only reconnects the server for FUTURE calls.
     /// </summary>
-    public async Task<McpToolResult> InvokeAsync(McpToolInvocation invocation, CancellationToken cancellationToken)
+    public Task<McpToolResult> InvokeAsync(McpToolInvocation invocation, CancellationToken cancellationToken)
+        => this.InvokeCoreAsync(invocation, approvedMutation: false, cancellationToken);
+
+    /// <summary>
+    /// Outbox-only dispatch of a HUMAN-APPROVED mutation: routes to the owning connection like
+    /// <see cref="InvokeAsync"/> but bypasses the direct-path mutation refusal (the ordinary
+    /// allow-list is still enforced by the connection). Only the action dispatcher may call
+    /// this, and only with the stored canonical arguments of an approved action.
+    /// </summary>
+    public Task<McpToolResult> InvokeApprovedAsync(McpToolInvocation invocation, CancellationToken cancellationToken)
+        => this.InvokeCoreAsync(invocation, approvedMutation: true, cancellationToken);
+
+    private async Task<McpToolResult> InvokeCoreAsync(McpToolInvocation invocation, bool approvedMutation, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(invocation);
 
@@ -154,7 +166,9 @@ public sealed partial class McpHostService : IAsyncDisposable
                 $"MCP server '{invocation.ServerKey}' is not available.");
         }
 
-        var result = await connection.CallToolAsync(invocation, cancellationToken).ConfigureAwait(false);
+        var result = approvedMutation
+            ? await connection.CallApprovedMutationAsync(invocation, cancellationToken).ConfigureAwait(false)
+            : await connection.CallToolAsync(invocation, cancellationToken).ConfigureAwait(false);
 
         if (connection.Status == McpServerStatus.Error)
         {

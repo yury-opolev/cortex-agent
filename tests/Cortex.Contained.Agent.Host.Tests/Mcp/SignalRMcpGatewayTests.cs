@@ -134,6 +134,72 @@ public class SignalRMcpGatewayTests
     }
 
     [Fact]
+    public async Task GetActionStatusAsync_BridgeConnected_ReturnsBridgeResponse()
+    {
+        var client = Substitute.For<IAgentHubClient>();
+        client.GetMcpActionStatus(Arg.Any<McpActionStatusRequest>())
+            .Returns(new McpActionStatusResponse { Found = true, ActionId = "act-1", Status = "approved" });
+        var gateway = BuildGateway(client);
+
+        var response = await gateway.GetActionStatusAsync("act-1", CancellationToken.None);
+
+        Assert.True(response.Found);
+        Assert.Equal("approved", response.Status);
+        await client.Received(1).GetMcpActionStatus(Arg.Is<McpActionStatusRequest>(r => r.ActionId == "act-1"));
+    }
+
+    [Fact]
+    public async Task GetActionStatusAsync_BridgeUnavailable_ReturnsNotFound_NoThrow()
+    {
+        var gateway = BuildGateway(client: null);
+
+        var response = await gateway.GetActionStatusAsync("act-1", CancellationToken.None);
+
+        Assert.False(response.Found);
+        Assert.Contains("unreachable", response.Error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task GetActionStatusAsync_TransportFault_ReturnsNotFound_NoThrow()
+    {
+        var client = Substitute.For<IAgentHubClient>();
+        client.GetMcpActionStatus(Arg.Any<McpActionStatusRequest>())
+            .Returns<Task<McpActionStatusResponse>>(_ => throw new InvalidOperationException("connection dropped"));
+        var gateway = BuildGateway(client);
+
+        var response = await gateway.GetActionStatusAsync("act-1", CancellationToken.None);
+
+        Assert.False(response.Found);
+        Assert.NotNull(response.Error);
+    }
+
+    [Fact]
+    public async Task CancelActionAsync_BridgeConnected_PassesExactHash()
+    {
+        var client = Substitute.For<IAgentHubClient>();
+        client.CancelMcpAction(Arg.Any<McpActionCancelRequest>())
+            .Returns(new McpActionCancelResponse { Accepted = true, Status = "cancelled" });
+        var gateway = BuildGateway(client);
+
+        var response = await gateway.CancelActionAsync("act-1", "sha256:abc", CancellationToken.None);
+
+        Assert.True(response.Accepted);
+        await client.Received(1).CancelMcpAction(Arg.Is<McpActionCancelRequest>(r =>
+            r.ActionId == "act-1" && r.ArgumentsHash == "sha256:abc"));
+    }
+
+    [Fact]
+    public async Task CancelActionAsync_BridgeUnavailable_ReturnsNotAccepted_NoThrow()
+    {
+        var gateway = BuildGateway(client: null);
+
+        var response = await gateway.CancelActionAsync("act-1", "sha256:abc", CancellationToken.None);
+
+        Assert.False(response.Accepted);
+        Assert.Contains("unreachable", response.Error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task InvokeAsync_CancelledBeforeDispatch_ReturnsDefinitiveCancelled()
     {
         var client = Substitute.For<IAgentHubClient>();

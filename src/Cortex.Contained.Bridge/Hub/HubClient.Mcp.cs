@@ -26,6 +26,12 @@ public sealed partial class HubClient
     /// </summary>
     public event Func<McpToolInvocation, CancellationToken, Task<McpToolResult>>? OnInvokeMcpTool;
 
+    /// <summary>Agent → Bridge: look up the status of one approval-gated MCP action.</summary>
+    public event Func<McpActionStatusRequest, CancellationToken, Task<McpActionStatusResponse>>? OnGetMcpActionStatus;
+
+    /// <summary>Agent → Bridge: cancel one approval-gated MCP action (exact-hash bound).</summary>
+    public event Func<McpActionCancelRequest, CancellationToken, Task<McpActionCancelResponse>>? OnCancelMcpAction;
+
     /// <summary>Bridge → Agent: replace the agent's MCP tool catalog with <paramref name="catalog"/>.</summary>
     public async Task PushMcpToolCatalogAsync(McpToolCatalog catalog, CancellationToken cancellationToken)
     {
@@ -54,6 +60,14 @@ public sealed partial class HubClient
                 this.LogMcpCancellationReceived(cancellation.InvocationId, cancellation.Reason, found);
                 return Task.CompletedTask;
             });
+
+        connection.On<McpActionStatusRequest, McpActionStatusResponse>(
+            nameof(IAgentHubClient.GetMcpActionStatus),
+            request => this.DispatchMcpActionStatusAsync(request));
+
+        connection.On<McpActionCancelRequest, McpActionCancelResponse>(
+            nameof(IAgentHubClient.CancelMcpAction),
+            request => this.DispatchMcpActionCancelAsync(request));
 
         // Close/reconnect of the CURRENT connection strands any in-flight invocation — its result
         // can never reach the agent. The generation guard keeps a late Closed event from a disposed,
@@ -126,6 +140,36 @@ public sealed partial class HubClient
         {
             this.mcpInvocationTracker.Complete(invocation.InvocationId);
         }
+    }
+
+    internal async Task<McpActionStatusResponse> DispatchMcpActionStatusAsync(McpActionStatusRequest request)
+    {
+        var handler = this.OnGetMcpActionStatus;
+        if (handler is null)
+        {
+            return new McpActionStatusResponse
+            {
+                Found = false,
+                Error = "No MCP action handler registered on the Bridge.",
+            };
+        }
+
+        return await handler(request, CancellationToken.None).ConfigureAwait(false);
+    }
+
+    internal async Task<McpActionCancelResponse> DispatchMcpActionCancelAsync(McpActionCancelRequest request)
+    {
+        var handler = this.OnCancelMcpAction;
+        if (handler is null)
+        {
+            return new McpActionCancelResponse
+            {
+                Accepted = false,
+                Error = "No MCP action handler registered on the Bridge.",
+            };
+        }
+
+        return await handler(request, CancellationToken.None).ConfigureAwait(false);
     }
 
     [LoggerMessage(Level = LogLevel.Information, Message = "MCP cancellation received for invocation {InvocationId} (reason: {Reason}); matched in-flight invocation: {Found}")]

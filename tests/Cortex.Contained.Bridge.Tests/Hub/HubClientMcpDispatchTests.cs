@@ -149,4 +149,64 @@ public sealed class HubClientMcpDispatchTests
         await dispatch;
         Assert.Equal(0, client.McpInvocationTracker.ActiveCount);
     }
+
+    [Fact]
+    public async Task ActionStatusDispatch_RoutesToHandler()
+    {
+        await using var client = CreateClient();
+        client.OnGetMcpActionStatus += (request, _) => Task.FromResult(new McpActionStatusResponse
+        {
+            Found = true,
+            ActionId = request.ActionId,
+            Status = "approved",
+        });
+
+        var response = await client.DispatchMcpActionStatusAsync(new McpActionStatusRequest { ActionId = "act-1" });
+
+        Assert.True(response.Found);
+        Assert.Equal("act-1", response.ActionId);
+        Assert.Equal("approved", response.Status);
+    }
+
+    [Fact]
+    public async Task ActionStatusDispatch_NoHandler_ReturnsNotFound()
+    {
+        await using var client = CreateClient();
+
+        var response = await client.DispatchMcpActionStatusAsync(new McpActionStatusRequest { ActionId = "act-1" });
+
+        Assert.False(response.Found);
+        Assert.NotNull(response.Error);
+    }
+
+    [Fact]
+    public async Task ActionCancelDispatch_RoutesToHandler_WithExactHash()
+    {
+        await using var client = CreateClient();
+        McpActionCancelRequest? received = null;
+        client.OnCancelMcpAction += (request, _) =>
+        {
+            received = request;
+            return Task.FromResult(new McpActionCancelResponse { Accepted = true, Status = "cancelled" });
+        };
+
+        var response = await client.DispatchMcpActionCancelAsync(
+            new McpActionCancelRequest { ActionId = "act-1", ArgumentsHash = "sha256:abc" });
+
+        Assert.True(response.Accepted);
+        Assert.NotNull(received);
+        Assert.Equal("sha256:abc", received.ArgumentsHash);
+    }
+
+    [Fact]
+    public async Task ActionCancelDispatch_NoHandler_ReturnsNotAccepted()
+    {
+        await using var client = CreateClient();
+
+        var response = await client.DispatchMcpActionCancelAsync(
+            new McpActionCancelRequest { ActionId = "act-1", ArgumentsHash = "sha256:abc" });
+
+        Assert.False(response.Accepted);
+        Assert.NotNull(response.Error);
+    }
 }

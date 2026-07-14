@@ -116,6 +116,72 @@ public sealed partial class SignalRMcpGateway : IMcpGateway
         }
     }
 
+    /// <inheritdoc />
+    public async Task<McpActionStatusResponse> GetActionStatusAsync(string actionId, CancellationToken cancellationToken)
+    {
+        var client = this.bridgeClient.Client;
+        if (client is null)
+        {
+            return new McpActionStatusResponse
+            {
+                Found = false,
+                Error = $"{UnreachableMessage}: the agent is not connected to the Bridge.",
+            };
+        }
+
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutCts.CancelAfter(this.invokeTimeout);
+        try
+        {
+            var request = new McpActionStatusRequest { ActionId = actionId };
+            return await client.GetMcpActionStatus(request).WaitAsync(timeoutCts.Token).ConfigureAwait(false);
+        }
+#pragma warning disable CA1031 // A status lookup is read-only; transport failures surface as a structured result.
+        catch (Exception ex)
+#pragma warning restore CA1031
+        {
+            this.LogActionCallFailed("status", actionId, ex.Message);
+            return new McpActionStatusResponse
+            {
+                Found = false,
+                Error = $"{UnreachableMessage}: {ex.Message}",
+            };
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<McpActionCancelResponse> CancelActionAsync(string actionId, string argumentsHash, CancellationToken cancellationToken)
+    {
+        var client = this.bridgeClient.Client;
+        if (client is null)
+        {
+            return new McpActionCancelResponse
+            {
+                Accepted = false,
+                Error = $"{UnreachableMessage}: the agent is not connected to the Bridge.",
+            };
+        }
+
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutCts.CancelAfter(this.invokeTimeout);
+        try
+        {
+            var request = new McpActionCancelRequest { ActionId = actionId, ArgumentsHash = argumentsHash };
+            return await client.CancelMcpAction(request).WaitAsync(timeoutCts.Token).ConfigureAwait(false);
+        }
+#pragma warning disable CA1031 // The Bridge decides the cancel; a transport failure here must surface as not-accepted, never a crash.
+        catch (Exception ex)
+#pragma warning restore CA1031
+        {
+            this.LogActionCallFailed("cancel", actionId, ex.Message);
+            return new McpActionCancelResponse
+            {
+                Accepted = false,
+                Error = $"{UnreachableMessage}: {ex.Message}. The cancel may not have been recorded — check the action's status.",
+            };
+        }
+    }
+
     /// <summary>
     /// Best-effort cancellation signal to the Bridge, bounded by a short fresh timeout token so
     /// the gateway never waits indefinitely for an acknowledgement from an unresponsive Bridge.
@@ -147,4 +213,7 @@ public sealed partial class SignalRMcpGateway : IMcpGateway
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "MCP cancellation send failed for invocation {InvocationId}: {ErrorMessage}")]
     private partial void LogCancellationSendFailed(string invocationId, string errorMessage);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "MCP action {Operation} call failed for action {ActionId}: {ErrorMessage}")]
+    private partial void LogActionCallFailed(string operation, string actionId, string errorMessage);
 }

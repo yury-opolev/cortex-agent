@@ -182,4 +182,71 @@ public class McpDtoTests
 
         Assert.Equal(cancellation, roundTripped);
     }
+
+    [Fact]
+    public void Result_Disposition_DefaultsToCompleted_WithNoActionIdentity()
+    {
+        var result = McpToolResult.Ok("inv-1", "x");
+
+        Assert.Equal(McpToolDisposition.Completed, result.Disposition);
+        Assert.Null(result.ActionId);
+        Assert.Null(result.ArgumentsHash);
+    }
+
+    [Fact]
+    public void AwaitingApproval_Result_IsSuccessfulContent_NotAnError()
+    {
+        var result = McpToolResult.AwaitingApproval("inv-1", "act-1", "sha256:abc", """{"actionId":"act-1"}""");
+
+        // The approval-required result is SUCCESSFUL tool content — never a retryable error.
+        Assert.Equal(McpToolOutcome.Succeeded, result.Outcome);
+        Assert.False(result.IsError);
+        Assert.Equal(McpToolDisposition.AwaitingApproval, result.Disposition);
+        Assert.Equal("act-1", result.ActionId);
+        Assert.Equal("sha256:abc", result.ArgumentsHash);
+        Assert.Equal("""{"actionId":"act-1"}""", result.Content);
+    }
+
+    [Fact]
+    public void AwaitingApproval_Result_RoundTripsThroughSystemTextJson()
+    {
+        var result = McpToolResult.AwaitingApproval("inv-1", "act-1", "sha256:abc", "{}");
+
+        var json = JsonSerializer.Serialize(result);
+        var roundTripped = JsonSerializer.Deserialize<McpToolResult>(json);
+
+        Assert.Equal(result, roundTripped);
+        Assert.Equal(McpToolDisposition.AwaitingApproval, roundTripped!.Disposition);
+        Assert.Equal("act-1", roundTripped.ActionId);
+    }
+
+    [Fact]
+    public void ActionStatusTypes_RoundTripThroughSystemTextJson()
+    {
+        var request = new McpActionStatusRequest { ActionId = "act-1" };
+        var response = new McpActionStatusResponse
+        {
+            Found = true,
+            ActionId = "act-1",
+            Status = "outcome_unknown",
+            ArgumentsHash = "sha256:abc",
+            ServerKey = "github",
+            ToolName = "create_issue",
+            Error = "transport lost",
+            RemoteReference = "https://github.example/i/42",
+        };
+
+        Assert.Equal(request, JsonSerializer.Deserialize<McpActionStatusRequest>(JsonSerializer.Serialize(request)));
+        Assert.Equal(response, JsonSerializer.Deserialize<McpActionStatusResponse>(JsonSerializer.Serialize(response)));
+    }
+
+    [Fact]
+    public void ActionCancelTypes_RoundTripThroughSystemTextJson()
+    {
+        var request = new McpActionCancelRequest { ActionId = "act-1", ArgumentsHash = "sha256:abc" };
+        var response = new McpActionCancelResponse { Accepted = true, Status = "cancelled" };
+
+        Assert.Equal(request, JsonSerializer.Deserialize<McpActionCancelRequest>(JsonSerializer.Serialize(request)));
+        Assert.Equal(response, JsonSerializer.Deserialize<McpActionCancelResponse>(JsonSerializer.Serialize(response)));
+    }
 }

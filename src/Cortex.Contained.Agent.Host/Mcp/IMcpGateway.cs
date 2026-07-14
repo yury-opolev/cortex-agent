@@ -23,4 +23,17 @@ public interface IMcpGateway
         string? channelId,
         string? correlationId,
         CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Look up the status of one approval-gated MCP action on the Bridge. Never throws for
+    /// transport failures — an unreachable Bridge yields <c>Found = false</c> with an error.
+    /// </summary>
+    Task<McpActionStatusResponse> GetActionStatusAsync(string actionId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Cancel one approval-gated MCP action on the Bridge, bound to its exact
+    /// canonical-argument hash. Never throws for transport failures — an unreachable Bridge
+    /// yields <c>Accepted = false</c> with an error.
+    /// </summary>
+    Task<McpActionCancelResponse> CancelActionAsync(string actionId, string argumentsHash, CancellationToken cancellationToken);
 }

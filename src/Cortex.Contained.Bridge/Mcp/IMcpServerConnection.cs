@@ -31,4 +31,12 @@ public interface IMcpServerConnection : IAsyncDisposable
     /// invocation is dispatched at most once — never replayed.
     /// </summary>
     Task<McpToolResult> CallToolAsync(McpToolInvocation invocation, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Outbox-only variant of <see cref="CallToolAsync"/> for a HUMAN-APPROVED mutation: the
+    /// ordinary allow-list is still enforced, but the direct-path mutation refusal is bypassed.
+    /// Must only ever be called by the action dispatcher with the stored canonical arguments of
+    /// an approved action.
+    /// </summary>
+    Task<McpToolResult> CallApprovedMutationAsync(McpToolInvocation invocation, CancellationToken cancellationToken);
 }
