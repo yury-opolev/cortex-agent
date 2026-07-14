@@ -11,7 +11,9 @@ public interface IMcpActionStore : IAsyncDisposable
 {
     /// <summary>
     /// Records a new proposed mutation. Idempotent on (tenant, invocation): re-proposing an
-    /// already-recorded invocation returns the existing action. A proposal whose
+    /// already-recorded invocation with the SAME arguments hash returns the existing action;
+    /// re-proposing it with a DIFFERENT arguments hash throws
+    /// <see cref="InvalidOperationException"/> instead of silently aliasing. A proposal whose
     /// (tenant, server, tool, arguments-hash) fingerprint matches an ACTIVE action
     /// (proposed/approved/dispatching/outcome_unknown) deduplicates to that action.
     /// </summary>
@@ -34,7 +36,9 @@ public interface IMcpActionStore : IAsyncDisposable
 
     /// <summary>
     /// Cancels a proposed or approved action (immediate transition to cancelled). For a
-    /// dispatching action the cancel request is only recorded — the dispatch outcome decides.
+    /// dispatching action the cancel request is only recorded — the dispatch outcome decides:
+    /// a completion that positively did not start honors the pending cancel (the action ends
+    /// cancelled instead of returning to the outbox); any other outcome stands.
     /// </summary>
     Task<McpActionCancelResult> CancelAsync(string tenantId, string actionId, string expectedArgumentsHash, string actor, CancellationToken cancellationToken);
 

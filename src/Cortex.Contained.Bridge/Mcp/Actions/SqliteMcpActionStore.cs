@@ -111,6 +111,16 @@ public sealed partial class SqliteMcpActionStore : IMcpActionStore
                 cancellationToken).ConfigureAwait(false);
             if (byInvocation is not null)
             {
+                // True idempotency requires the SAME arguments. Silently returning the old
+                // action for different arguments would let the caller believe its new
+                // arguments were recorded.
+                if (!string.Equals(byInvocation.ArgumentsHash, proposal.ArgumentsHash, StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        $"MCP invocation '{proposal.InvocationId}' was already proposed with different arguments " +
+                        $"(stored hash '{byInvocation.ArgumentsHash}', proposed hash '{proposal.ArgumentsHash}').");
+                }
+
                 return byInvocation;
             }
 
@@ -643,11 +653,16 @@ public sealed partial class SqliteMcpActionStore : IMcpActionStore
                 _ => "outcome_unknown",
             };
 
+            // completed_at_utc IS NULL binds this completion to the OPEN attempt row: a
+            // late/duplicate completion of an already-closed attempt matches zero rows and is
+            // rejected below, so it can never re-complete the action with stale evidence
+            // while a newer attempt is in flight.
             await using (var cmd = this.CreateCommand(transaction, """
                 UPDATE mcp_action_attempts
                 SET outcome = @outcome, failure_kind = @failureKind, completed_at_utc = @completedAtUtc,
                     result_content = @resultContent, error = @error, remote_reference = @remoteReference
                 WHERE action_id = @actionId AND attempt_number = @attemptNumber
+                    AND completed_at_utc IS NULL
                 """))
             {
                 cmd.Parameters.AddWithValue("@outcome", attemptOutcome);
@@ -664,8 +679,43 @@ public sealed partial class SqliteMcpActionStore : IMcpActionStore
                 if (updatedRows != 1)
                 {
                     throw new InvalidOperationException(
-                        $"Unknown dispatch attempt {completion.AttemptNumber} for MCP action '{completion.ActionId}'.");
+                        $"Dispatch attempt {completion.AttemptNumber} for MCP action '{completion.ActionId}' is unknown or already completed.");
                 }
+            }
+
+            if (completion.State == McpActionState.Approved
+                && await this.HasPendingCancelAsync(transaction, completion.ActionId, cancellationToken).ConfigureAwait(false))
+            {
+                // The attempt positively did not start AND a cancel was accepted while it was
+                // in flight: honor the cancel now instead of returning the mutation to the
+                // outbox (where it would execute on the next attempt). This collapses the two
+                // legal edges dispatching → approved → cancelled into one committed transition;
+                // the audit trail records both edges.
+                await using (var cmd = this.CreateCommand(transaction, """
+                    UPDATE mcp_actions
+                    SET status = 'cancelled', next_attempt_at_utc = NULL, error = @error,
+                        completed_at_utc = @now, updated_at_utc = @now, version = version + 1
+                    WHERE action_id = @actionId
+                    """))
+                {
+                    cmd.Parameters.AddWithValue("@actionId", completion.ActionId);
+                    cmd.Parameters.AddWithValue("@now", FormatUtc(completion.CompletedAtUtc));
+                    cmd.Parameters.AddWithValue("@error", NullableText(completion.Error));
+                    await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+                }
+
+                await this.AppendEventAsync(
+                    transaction, completion.ActionId, "dispatching", "approved", "dispatch_not_started",
+                    "outbox", detail: completion.Error ?? completion.FailureKind.ToString(),
+                    completion.CompletedAtUtc, cancellationToken).ConfigureAwait(false);
+                await this.AppendEventAsync(
+                    transaction, completion.ActionId, "approved", "cancelled", "cancelled", "system",
+                    detail: "pending cancel honored: attempt positively did not start",
+                    completion.CompletedAtUtc, cancellationToken).ConfigureAwait(false);
+                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+                this.LogAttemptCompleted(completion.ActionId, completion.AttemptNumber, attemptOutcome);
+                this.LogPendingCancelHonored(completion.ActionId);
+                return;
             }
 
             var (actionSql, eventType) = completion.State switch
@@ -939,7 +989,11 @@ public sealed partial class SqliteMcpActionStore : IMcpActionStore
             return;
         }
 
+        // Fail new operations fast, then wait for any in-flight operation to release the gate
+        // before tearing down, so its transaction (and `finally { gate.Release(); }`) never
+        // observes a disposed gate or connection.
         this.disposed = true;
+        await this.gate.WaitAsync().ConfigureAwait(false);
         this.gate.Dispose();
         SqliteConnection.ClearPool(this.connection);
         await this.connection.DisposeAsync().ConfigureAwait(false);
@@ -1015,6 +1069,16 @@ public sealed partial class SqliteMcpActionStore : IMcpActionStore
         cmd.Transaction = transaction;
         cmd.CommandText = sql;
         return cmd;
+    }
+
+    private async Task<bool> HasPendingCancelAsync(SqliteTransaction transaction, string actionId, CancellationToken cancellationToken)
+    {
+        await using var cmd = this.CreateCommand(transaction, """
+            SELECT cancel_requested_at_utc FROM mcp_actions WHERE action_id = @actionId
+            """);
+        cmd.Parameters.AddWithValue("@actionId", actionId);
+        var value = await cmd.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        return value is string;
     }
 
     private Task<McpAction?> LoadActionAsync(SqliteTransaction transaction, string tenantId, string actionId, CancellationToken cancellationToken)
@@ -1263,6 +1327,9 @@ public sealed partial class SqliteMcpActionStore : IMcpActionStore
 
     [LoggerMessage(Level = LogLevel.Information, Message = "MCP action {ActionId} attempt {AttemptNumber} completed: {Outcome}")]
     private partial void LogAttemptCompleted(string actionId, int attemptNumber, string outcome);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "MCP action {ActionId} cancelled: pending cancel honored after the attempt positively did not start")]
+    private partial void LogPendingCancelHonored(string actionId);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Recovered {Count} interrupted MCP dispatch(es) to outcome_unknown after restart")]
     private partial void LogRecovered(int count);

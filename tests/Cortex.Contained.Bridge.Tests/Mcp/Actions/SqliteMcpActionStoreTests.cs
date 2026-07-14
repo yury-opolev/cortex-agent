@@ -149,6 +149,29 @@ public sealed class SqliteMcpActionStoreTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ProposeAsync_DuplicateInvocationWithDifferentHash_ThrowsWithoutAliasing()
+    {
+        // Re-proposing the SAME invocation with DIFFERENT arguments must not silently return
+        // the old action — the caller would believe its new arguments were recorded.
+        var original = await _store.ProposeAsync(
+            NewProposal(invocationId: "inv-x"), CancellationToken.None);
+
+        var conflicting = NewProposal(
+            invocationId: "inv-x",
+            canonicalArgumentsJson: """{"body":"DIFFERENT","title":"t"}""");
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => _store.ProposeAsync(conflicting, CancellationToken.None));
+
+        // The original action is untouched and no second action was created.
+        var reloaded = await _store.GetAsync(original.TenantId, original.ActionId, CancellationToken.None);
+        Assert.Equal(original.ArgumentsHash, reloaded!.ArgumentsHash);
+        Assert.Equal(original.CanonicalArgumentsJson, reloaded.CanonicalArgumentsJson);
+        var all = await _store.ListAsync(new McpActionQuery { TenantId = original.TenantId }, CancellationToken.None);
+        Assert.Single(all);
+    }
+
+    [Fact]
     public async Task ProposeAsync_SameFingerprintAfterTerminal_CreatesNewAction()
     {
         // The active-fingerprint unique index only covers ACTIVE actions: after the first
@@ -371,6 +394,60 @@ public sealed class SqliteMcpActionStoreTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task CompleteAttemptAsync_ClosedAttempt_RejectedWithoutStateChange()
+    {
+        // A late/duplicate completion for an ALREADY-CLOSED attempt must be rejected: it must
+        // not re-complete the action with stale evidence while a newer attempt is in flight.
+        var (action, lease1) = await ProposeApproveClaimAsync();
+
+        await _store.CompleteAttemptAsync(new McpActionDispatchCompletion
+        {
+            ActionId = lease1.ActionId,
+            AttemptNumber = lease1.AttemptNumber,
+            State = McpActionState.Approved, // attempt 1 positively did not start
+            FailureKind = McpFailureKind.Unavailable,
+            Error = "server unreachable before dispatch",
+            CompletedAtUtc = Now,
+            RetryAtUtc = Now,
+        }, CancellationToken.None);
+
+        var lease2 = await _store.TryClaimNextApprovedAsync(Now, CancellationToken.None);
+        Assert.NotNull(lease2);
+        Assert.Equal(2, lease2.AttemptNumber); // attempt 2 is genuinely in flight
+
+        // Late duplicate completion of the CLOSED attempt 1 arrives with stale evidence.
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _store.CompleteAttemptAsync(
+            new McpActionDispatchCompletion
+            {
+                ActionId = lease1.ActionId,
+                AttemptNumber = lease1.AttemptNumber,
+                State = McpActionState.Succeeded,
+                FailureKind = McpFailureKind.None,
+                ResultContent = """{"stale":true}""",
+                CompletedAtUtc = Now,
+            }, CancellationToken.None));
+
+        // The action is still dispatching on attempt 2, untouched by the stale completion.
+        var reloaded = await _store.GetAsync(action.TenantId, action.ActionId, CancellationToken.None);
+        Assert.Equal(McpActionState.Dispatching, reloaded!.State);
+        Assert.Null(reloaded.ResultContent);
+
+        // Attempt 2 still completes normally.
+        await _store.CompleteAttemptAsync(new McpActionDispatchCompletion
+        {
+            ActionId = lease2.ActionId,
+            AttemptNumber = lease2.AttemptNumber,
+            State = McpActionState.Succeeded,
+            FailureKind = McpFailureKind.None,
+            ResultContent = """{"issue":42}""",
+            CompletedAtUtc = Now,
+        }, CancellationToken.None);
+        reloaded = await _store.GetAsync(action.TenantId, action.ActionId, CancellationToken.None);
+        Assert.Equal(McpActionState.Succeeded, reloaded!.State);
+        Assert.Equal("""{"issue":42}""", reloaded.ResultContent);
+    }
+
+    [Fact]
     public async Task CompleteAttemptAsync_NonDispatching_Throws()
     {
         var action = await ProposeAndApproveAsync(); // approved, never claimed
@@ -459,6 +536,46 @@ public sealed class SqliteMcpActionStoreTests : IAsyncLifetime
 
         var reloaded = await _store.GetAsync(action.TenantId, action.ActionId, CancellationToken.None);
         Assert.Equal(McpActionState.Approved, reloaded!.State);
+    }
+
+    [Fact]
+    public async Task CancelAsync_WhileDispatching_AttemptDidNotStart_EndsCancelledNotRedispatched()
+    {
+        // Cancel accepted mid-attempt: the dispatch outcome decides. When the attempt is then
+        // positively known NOT to have started, the pending cancel must be honored — the action
+        // must end cancelled instead of silently returning to the outbox and executing later.
+        var (action, lease) = await ProposeApproveClaimAsync();
+
+        var cancel = await _store.CancelAsync(
+            action.TenantId, action.ActionId, action.ArgumentsHash, "user@local", CancellationToken.None);
+        Assert.True(cancel.Accepted);
+
+        // Still dispatching — the in-flight attempt owns the outcome.
+        var midFlight = await _store.GetAsync(action.TenantId, action.ActionId, CancellationToken.None);
+        Assert.Equal(McpActionState.Dispatching, midFlight!.State);
+
+        await _store.CompleteAttemptAsync(new McpActionDispatchCompletion
+        {
+            ActionId = lease.ActionId,
+            AttemptNumber = lease.AttemptNumber,
+            State = McpActionState.Approved, // positively known not to have started
+            FailureKind = McpFailureKind.Unavailable,
+            Error = "server unreachable before dispatch",
+            CompletedAtUtc = Now,
+            RetryAtUtc = Now,
+        }, CancellationToken.None);
+
+        var reloaded = await _store.GetAsync(action.TenantId, action.ActionId, CancellationToken.None);
+        Assert.Equal(McpActionState.Cancelled, reloaded!.State);
+        Assert.NotNull(reloaded.CompletedAtUtc);
+
+        // Never re-dispatched: the cancelled mutation must not execute on attempt 2.
+        Assert.Null(await _store.TryClaimNextApprovedAsync(Now, CancellationToken.None));
+
+        // The audit trail records both legal edges of the collapse.
+        var events = await ReadEventsAsync(action.ActionId);
+        Assert.Equal(("dispatching", "approved"), (events[^2].FromStatus, events[^2].ToStatus));
+        Assert.Equal(("approved", "cancelled"), (events[^1].FromStatus, events[^1].ToStatus));
     }
 
     [Fact]
@@ -618,6 +735,72 @@ public sealed class SqliteMcpActionStoreTests : IAsyncLifetime
         Assert.Equal(("proposed", "approved"), (events[1].FromStatus, events[1].ToStatus));
         Assert.Equal(("approved", "dispatching"), (events[2].FromStatus, events[2].ToStatus));
         Assert.Equal(("dispatching", "succeeded"), (events[3].FromStatus, events[3].ToStatus));
+    }
+
+    // ── State machine ────────────────────────────────────────────────────
+
+    public static TheoryData<McpActionState, McpActionState, bool> AllTransitionPairs()
+    {
+        // The spec's complete edge list (McpActionModels.cs). Every other (from, to) pair —
+        // including every edge OUT of a terminal state — must be disallowed.
+        var allowedEdges = new HashSet<(McpActionState From, McpActionState To)>
+        {
+            (McpActionState.Proposed, McpActionState.Approved),
+            (McpActionState.Proposed, McpActionState.Rejected),
+            (McpActionState.Proposed, McpActionState.Cancelled),
+            (McpActionState.Proposed, McpActionState.Expired),
+            (McpActionState.Approved, McpActionState.Dispatching),
+            (McpActionState.Approved, McpActionState.Cancelled),
+            (McpActionState.Approved, McpActionState.Expired),
+            (McpActionState.Dispatching, McpActionState.Succeeded),
+            (McpActionState.Dispatching, McpActionState.Failed),
+            (McpActionState.Dispatching, McpActionState.OutcomeUnknown),
+            (McpActionState.Dispatching, McpActionState.Approved),
+            (McpActionState.OutcomeUnknown, McpActionState.ReconciledSucceeded),
+            (McpActionState.OutcomeUnknown, McpActionState.ReconciledFailed),
+        };
+
+        var data = new TheoryData<McpActionState, McpActionState, bool>();
+        foreach (var from in Enum.GetValues<McpActionState>())
+        {
+            foreach (var to in Enum.GetValues<McpActionState>())
+            {
+                data.Add(from, to, allowedEdges.Contains((from, to)));
+            }
+        }
+
+        return data;
+    }
+
+    [Theory]
+    [MemberData(nameof(AllTransitionPairs))]
+    public void IsTransitionAllowed_MatchesSpecExactly(McpActionState from, McpActionState to, bool expected)
+        => Assert.Equal(expected, SqliteMcpActionStore.IsTransitionAllowed(from, to));
+
+    // ── Dispose ──────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task DisposeAsync_WaitsForInFlightOperation()
+    {
+        // Simulate an in-flight operation holding the serialization gate: DisposeAsync must
+        // wait for it instead of disposing the gate/connection out from under it (which would
+        // make the operation's `finally { gate.Release(); }` throw ObjectDisposedException).
+        var gateField = typeof(SqliteMcpActionStore).GetField(
+            "gate", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        Assert.NotNull(gateField);
+        var gate = (SemaphoreSlim)gateField.GetValue(_store)!;
+        await gate.WaitAsync();
+
+        var disposeTask = _store.DisposeAsync().AsTask();
+        var winner = await Task.WhenAny(disposeTask, Task.Delay(TimeSpan.FromMilliseconds(250)));
+        Assert.NotSame(disposeTask, winner); // still waiting on the in-flight operation
+
+        gate.Release(); // the in-flight operation finishes and releases without throwing
+        await disposeTask;
+
+        // After disposal, new operations fail fast.
+        await Assert.ThrowsAsync<ObjectDisposedException>(
+            () => _store.GetAsync("tenant-1", "missing", CancellationToken.None));
     }
 
     // ── Encryption ───────────────────────────────────────────────────────
