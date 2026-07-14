@@ -5,8 +5,9 @@
  *
  * Lists configured MCP servers with live status + tool counts, supports add/edit/delete,
  * master + per-server enable toggles (live, like the speech toggles), an OAuth "Connect" flow
- * (opens the host browser, then polls until connected), per-tool allow-list checkboxes, and a
- * "Test connect" handshake that surfaces discovered tools or the server's error/stderr.
+ * (opens the host browser, then polls until connected), per-tool allow-list checkboxes, a separate
+ * explicit mutation-tool classification (tools that require human approval), and a "Test connect"
+ * handshake that surfaces discovered tools or the server's error/stderr.
  *
  * Security: the secret field is WRITE-ONLY — it is never pre-filled or echoed back from the server.
  * The list/projection responses only ever carry `hasSecret` / `secretRef`, never a secret value.
@@ -126,6 +127,9 @@ function mcpServersPage() {
                 secret: "",                 // write-only: never pre-filled
                 hasSecret: !!s.hasSecret,
                 toolAllowList: [...(s.toolAllowList || [])],
+                mutationToolAllowList: [...(s.mutationToolAllowList || [])],
+                callTimeoutSeconds: s.callTimeoutSeconds || 45,
+                maxResultBytes: s.maxResultBytes || 51200,
                 tools: [...(s.tools || [])],
             };
             this.showModal = true;
@@ -151,6 +155,25 @@ function mcpServersPage() {
             this.form.toolAllowList = [];
         },
 
+        // Mutation classification: EXPLICIT admin policy, fully separate from exposure above.
+        // A checked tool requires human approval and is refused on the direct invocation path.
+        // Unchecked tools are treated as read-only — never inferred from names or annotations.
+        isMutation(tool) {
+            return this.form.mutationToolAllowList.includes(tool);
+        },
+        toggleMutationTool(tool) {
+            const list = this.form.mutationToolAllowList;
+            if (list.includes(tool)) {
+                this.form.mutationToolAllowList = list.filter(t => t !== tool);
+                return;
+            }
+            this.form.mutationToolAllowList = [...list, tool];
+            // Policy rule: with a restricted allow-list, a mutation tool must also be exposed there.
+            if (this.form.toolAllowList.length > 0 && !this.form.toolAllowList.includes(tool)) {
+                this.form.toolAllowList = [...this.form.toolAllowList, tool];
+            }
+        },
+
         async saveServer() {
             this.saving = true;
             this.modalError = "";
@@ -165,6 +188,11 @@ function mcpServersPage() {
                     auth: this.form.auth,
                     apiKeyHeader: this.form.apiKeyHeader.trim() || null,
                     toolAllowList: this.form.toolAllowList,
+                    mutationToolAllowList: this.form.mutationToolAllowList,
+                    callTimeoutSeconds: Number.isFinite(Number(this.form.callTimeoutSeconds)) && this.form.callTimeoutSeconds !== ""
+                        ? Number(this.form.callTimeoutSeconds) : null,
+                    maxResultBytes: Number.isFinite(Number(this.form.maxResultBytes)) && this.form.maxResultBytes !== ""
+                        ? Number(this.form.maxResultBytes) : null,
                 };
                 // Secret is sent ONLY when the user typed one (write-only). Blank = leave unchanged.
                 if (this.form.secret && this.form.secret.length > 0) {
@@ -290,6 +318,9 @@ function emptyMcpForm() {
         secret: "",
         hasSecret: false,
         toolAllowList: [],
+        mutationToolAllowList: [],
+        callTimeoutSeconds: 45,
+        maxResultBytes: 51200,
         tools: [],
     };
 }

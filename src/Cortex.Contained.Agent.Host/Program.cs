@@ -595,6 +595,17 @@ builder.Services.AddSingleton(sp =>
         sp.GetRequiredService<Cortex.Contained.Agent.Host.Mcp.IMcpGateway>(),
         sp.GetRequiredService<ILoggerFactory>()));
 
+// Native MCP action tools: follow up on approval-gated mutations by action id — the safe
+// alternative to ever repeating a mutating MCP tool call.
+builder.Services.AddSingleton<IAgentTool>(sp =>
+    new Cortex.Contained.Agent.Host.Mcp.McpActionStatusTool(
+        sp.GetRequiredService<Cortex.Contained.Agent.Host.Mcp.IMcpGateway>(),
+        sp.GetRequiredService<ILoggerFactory>().CreateLogger<Cortex.Contained.Agent.Host.Mcp.McpActionStatusTool>()));
+builder.Services.AddSingleton<IAgentTool>(sp =>
+    new Cortex.Contained.Agent.Host.Mcp.McpActionCancelTool(
+        sp.GetRequiredService<Cortex.Contained.Agent.Host.Mcp.IMcpGateway>(),
+        sp.GetRequiredService<ILoggerFactory>().CreateLogger<Cortex.Contained.Agent.Host.Mcp.McpActionCancelTool>()));
+
 builder.Services.AddSingleton<ToolRegistry>();
 
 builder.Services.AddSingleton<BridgeClientAccessor>();

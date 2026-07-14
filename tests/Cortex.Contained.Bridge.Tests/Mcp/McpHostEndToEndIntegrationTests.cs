@@ -1,6 +1,7 @@
 using Cortex.Contained.Bridge.Mcp;
 using Cortex.Contained.Bridge.Mcp.Auth;
 using Cortex.Contained.Contracts.Config;
+using Cortex.Contained.Contracts.Hub;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Cortex.Contained.Bridge.Tests.Mcp;
@@ -35,6 +36,14 @@ public sealed class McpHostEndToEndIntegrationTests
 
     private static string ScriptPath()
         => Path.Combine(AppContext.BaseDirectory, "Mcp", "Fixtures", "fake-mcp-server.mjs");
+
+    private static McpToolInvocation Invocation(string toolName, string argumentsJson = "{}") => new()
+    {
+        InvocationId = Guid.CreateVersion7().ToString("N"),
+        ServerKey = "fake",
+        ToolName = toolName,
+        ArgumentsJson = argumentsJson,
+    };
 
     [Fact]
     public async Task ReconcileInvoke_RealStack_RoundTripsWithSecretAndMasterGate()
@@ -77,19 +86,56 @@ public sealed class McpHostEndToEndIntegrationTests
         var names = host.CurrentCatalog.Tools.Select(t => t.FullName).OrderBy(n => n, StringComparer.Ordinal).ToList();
         Assert.Equal(["mcp__fake__echo", "mcp__fake__reveal_env"], names);
 
-        var echo = await host.InvokeAsync("fake", "echo", """{"text":"round trip"}""", cts.Token);
-        Assert.False(echo.IsError);
+        var echoInvocation = Invocation("echo", """{"text":"round trip"}""");
+        var echo = await host.InvokeAsync(echoInvocation, cts.Token);
+        Assert.Equal(McpToolOutcome.Succeeded, echo.Outcome);
+        Assert.Equal(echoInvocation.InvocationId, echo.InvocationId);
         Assert.Equal("round trip", echo.Content);
 
         // The DPAPI secret flowed config → McpStaticAuth → env → spawned process.
-        var secret = await host.InvokeAsync("fake", "reveal_env", "{}", cts.Token);
+        var secret = await host.InvokeAsync(Invocation("reveal_env"), cts.Token);
         Assert.False(secret.IsError);
         Assert.Equal("dpapi-secret", secret.Content);
+
+        // Live mutation reclassification: marking echo as a mutation must (a) surface
+        // RequiresApproval=true in the rebuilt catalog and (b) refuse echo on the direct path,
+        // with no restart — the config signature change forces a reconnect + re-classify.
+        var mutationSettings = new McpSettingsConfig
+        {
+            Enabled = true,
+            Servers =
+            [
+                new McpServerConfig
+                {
+                    Key = "fake",
+                    Enabled = true,
+                    Transport = McpTransport.Stdio,
+                    Command = node,
+                    Args = [ScriptPath()],
+                    Env = new Dictionary<string, string> { ["MCP_TEST_SECRET"] = "${secret:mcp/test/token}" },
+                    ToolAllowList = ["echo", "reveal_env"],
+                    MutationToolAllowList = ["echo"],
+                },
+            ],
+        };
+        await host.ReconcileAsync(mutationSettings, cts.Token);
+
+        Assert.True(host.CurrentCatalog.Tools.Single(t => t.FullName == "mcp__fake__echo").RequiresApproval);
+        Assert.False(host.CurrentCatalog.Tools.Single(t => t.FullName == "mcp__fake__reveal_env").RequiresApproval);
+
+        var refused = await host.InvokeAsync(Invocation("echo", """{"text":"must not run"}"""), cts.Token);
+        Assert.Equal(McpToolOutcome.Failed, refused.Outcome);
+        Assert.Equal(McpFailureKind.Policy, refused.FailureKind);
+
+        // A read tool on the same server still works.
+        var stillReadable = await host.InvokeAsync(Invocation("reveal_env"), cts.Token);
+        Assert.False(stillReadable.IsError);
 
         // Master kill-switch removes everything live.
         await host.ReconcileAsync(new McpSettingsConfig { Enabled = false, Servers = settings.Servers }, cts.Token);
         Assert.Empty(host.CurrentCatalog.Tools);
-        var afterKill = await host.InvokeAsync("fake", "echo", "{}", cts.Token);
-        Assert.True(afterKill.IsError);
+        var afterKill = await host.InvokeAsync(Invocation("echo"), cts.Token);
+        Assert.Equal(McpToolOutcome.Failed, afterKill.Outcome);
+        Assert.Equal(McpFailureKind.Unavailable, afterKill.FailureKind);
     }
 }

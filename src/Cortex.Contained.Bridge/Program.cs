@@ -943,6 +943,43 @@ builder.Services.AddSingleton<Cortex.Contained.Bridge.Mcp.McpCatalogPusher>(sp =
         sp.GetRequiredService<ILogger<Cortex.Contained.Bridge.Mcp.McpCatalogPusher>>()));
 builder.Services.AddHostedService<Cortex.Contained.Bridge.Mcp.McpHostBootstrapper>();
 
+// --- MCP action store (durable, encrypted store of record for approval-gated MCP mutations) ---
+builder.Services.AddSingleton<Cortex.Contained.Bridge.Mcp.Actions.IMcpActionStore>(sp =>
+    new Cortex.Contained.Bridge.Mcp.Actions.SqliteMcpActionStore(
+        Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Cortex", "mcp", "actions.db"),
+        sp.GetRequiredService<SecretManager>().GetOrCreateDatabaseKey(),
+        sp.GetRequiredService<TimeProvider>(),
+        sp.GetRequiredService<ILogger<Cortex.Contained.Bridge.Mcp.Actions.SqliteMcpActionStore>>()));
+
+// --- MCP approval service + outbox dispatcher ---
+// Every agent MCP invocation routes through McpActionService: read tools dispatch directly,
+// mutation-classified tools persist a proposed action (NO remote call) and the dispatcher
+// outbox dispatches ONLY human-approved actions — exactly the stored canonical arguments,
+// at-most-once, with crash recovery to outcome_unknown.
+builder.Services.AddSingleton<Cortex.Contained.Bridge.Mcp.IMcpInvocationTarget>(sp =>
+    sp.GetRequiredService<Cortex.Contained.Bridge.Mcp.McpHostService>());
+builder.Services.AddSingleton<Cortex.Contained.Bridge.Mcp.Actions.McpActionDispatchRegistry>();
+builder.Services.AddSingleton<Cortex.Contained.Bridge.Mcp.Actions.McpActionService>(sp =>
+    new Cortex.Contained.Bridge.Mcp.Actions.McpActionService(
+        sp.GetRequiredService<Cortex.Contained.Bridge.Mcp.Actions.IMcpActionStore>(),
+        sp.GetRequiredService<Cortex.Contained.Bridge.Mcp.IMcpInvocationTarget>(),
+        sp.GetRequiredService<Cortex.Contained.Bridge.Mcp.McpConfigStore>(),
+        sp.GetRequiredService<Cortex.Contained.Bridge.Mcp.Actions.McpActionDispatchRegistry>(),
+        sp.GetRequiredService<TimeProvider>(),
+        sp.GetRequiredService<ILogger<Cortex.Contained.Bridge.Mcp.Actions.McpActionService>>()));
+builder.Services.AddSingleton<Cortex.Contained.Bridge.Mcp.Actions.McpActionDispatcher>(sp =>
+    new Cortex.Contained.Bridge.Mcp.Actions.McpActionDispatcher(
+        sp.GetRequiredService<Cortex.Contained.Bridge.Mcp.Actions.IMcpActionStore>(),
+        sp.GetRequiredService<Cortex.Contained.Bridge.Mcp.IMcpInvocationTarget>(),
+        sp.GetRequiredService<Cortex.Contained.Bridge.Mcp.McpConfigStore>(),
+        sp.GetRequiredService<Cortex.Contained.Bridge.Mcp.Actions.McpActionDispatchRegistry>(),
+        sp.GetRequiredService<TimeProvider>(),
+        sp.GetRequiredService<ILogger<Cortex.Contained.Bridge.Mcp.Actions.McpActionDispatcher>>()));
+builder.Services.AddHostedService(sp =>
+    sp.GetRequiredService<Cortex.Contained.Bridge.Mcp.Actions.McpActionDispatcher>());
+
 // --- Worker ---
 builder.Services.AddSingleton<Worker>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<Worker>());
@@ -1087,6 +1124,8 @@ app.MapMemoryEndpoints(cortexConfigPath);
 
 // --- MCP server management API ---
 app.MapMcpEndpoints();
+// --- MCP action approval API (list/approve/reject/cancel/reconcile gated mutations) ---
+app.MapMcpActionEndpoints();
 // --- MCP OAuth loopback callback (unauthenticated; state-protected) ---
 app.MapMcpOAuthCallbackEndpoint();
 // --- Message History API ---

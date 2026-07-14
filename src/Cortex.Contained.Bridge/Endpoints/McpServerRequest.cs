@@ -43,4 +43,27 @@ public sealed class McpServerRequest
 
     [JsonPropertyName("toolAllowList")]
     public List<string>? ToolAllowList { get; set; }
+
+    /// <summary>
+    /// Tools the administrator explicitly classifies as mutating (require approval). Distinct
+    /// from <see cref="ToolAllowList"/>, which controls exposure; when that list is non-empty,
+    /// every mutation tool must also be present there.
+    /// </summary>
+    [JsonPropertyName("mutationToolAllowList")]
+    public List<string>? MutationToolAllowList { get; set; }
+
+    /// <summary>
+    /// Per-call timeout, in seconds. <c>null</c> = leave unchanged (add uses the config default).
+    /// Out-of-range values are REJECTED by <c>McpServerRequestMapper.ValidateBounds</c> — never
+    /// silently clamped.
+    /// </summary>
+    [JsonPropertyName("callTimeoutSeconds")]
+    public int? CallTimeoutSeconds { get; set; }
+
+    /// <summary>
+    /// Maximum UTF-8 byte size of a flattened tool result. <c>null</c> = leave unchanged (add uses
+    /// the config default). Out-of-range values are REJECTED — never silently clamped.
+    /// </summary>
+    [JsonPropertyName("maxResultBytes")]
+    public int? MaxResultBytes { get; set; }
 }

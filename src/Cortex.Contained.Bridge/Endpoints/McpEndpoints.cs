@@ -51,7 +51,20 @@ internal static class McpEndpoints
                 return Results.Json(new { error = keyError }, statusCode: 400);
             }
 
+            var boundsError = McpServerRequestMapper.ValidateBounds(request);
+            if (boundsError is not null)
+            {
+                return Results.Json(new { error = boundsError }, statusCode: 400);
+            }
+
             var config = McpServerRequestMapper.ToConfig(request);
+            var mutationError = McpServerRequestMapper.ValidateMutationAllowList(
+                config.ToolAllowList, config.MutationToolAllowList);
+            if (mutationError is not null)
+            {
+                return Results.Json(new { error = mutationError }, statusCode: 400);
+            }
+
             ApplySecret(secretManager, config, request.Secret);
 
             settings.Servers.Add(config);
@@ -74,6 +87,20 @@ internal static class McpEndpoints
             if (config is null)
             {
                 return Results.Json(new { error = $"No MCP server with key '{key}'." }, statusCode: 404);
+            }
+
+            // Validate BEFORE ApplyTo: GetSettings() hands out the live config object, so an
+            // invalid mutation policy or out-of-range bound must be rejected without mutating it.
+            var mutationError = McpServerRequestMapper.ValidateMutationPolicy(config, request);
+            if (mutationError is not null)
+            {
+                return Results.Json(new { error = mutationError }, statusCode: 400);
+            }
+
+            var boundsError = McpServerRequestMapper.ValidateBounds(request);
+            if (boundsError is not null)
+            {
+                return Results.Json(new { error = boundsError }, statusCode: 400);
             }
 
             McpServerRequestMapper.ApplyTo(config, request);

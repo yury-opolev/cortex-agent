@@ -7,7 +7,9 @@ namespace Cortex.Contained.Agent.Host.Mcp;
 /// A dynamic <see cref="IAgentTool"/> built from a pushed <see cref="McpToolDefinition"/>.
 /// Its name/description/schema mirror the definition; execution routes through the
 /// <see cref="IMcpGateway"/> to the Bridge's MCP host. To the LLM it is indistinguishable
-/// from a built-in tool.
+/// from a built-in tool. Dispatches each call exactly once — an ambiguous
+/// <see cref="McpToolOutcome.OutcomeUnknown"/> result is surfaced with an explicit warning
+/// not to repeat the call, never retried.
 /// </summary>
 public sealed partial class McpProxyTool : IAgentTool
 {
@@ -41,27 +43,39 @@ public sealed partial class McpProxyTool : IAgentTool
             this.definition.ToolName,
             argumentsJson,
             context.ConversationId,
+            context.ChannelId,
+            context.CorrelationId,
             cancellationToken).ConfigureAwait(false);
 
-        this.LogOutcome(this.definition.ServerKey, this.definition.ToolName, result.IsError);
+        this.LogOutcome(this.definition.ServerKey, this.definition.ToolName, result.InvocationId, result.Outcome, result.FailureKind);
 
-        if (result.IsError)
+        if (!result.IsError)
         {
-            var error = result.Error ?? "MCP tool invocation failed.";
-            if (result.NeedsAuth)
-            {
-                return AgentToolResult.Fail($"needs authorization: {error}");
-            }
-
-            return AgentToolResult.Fail(error);
+            return AgentToolResult.Ok(result.Content);
         }
 
-        return AgentToolResult.Ok(result.Content);
+        var error = result.Error ?? "MCP tool invocation failed.";
+        if (result.Outcome == McpToolOutcome.OutcomeUnknown)
+        {
+            // The single agent-visible surface for ambiguous outcomes: it must explicitly warn
+            // against repeating a potentially mutating call. The invocation is never auto-retried.
+            return AgentToolResult.Fail(
+                $"MCP tool call outcome is UNKNOWN: {error}. The call may have already executed on the server. "
+                + "Do NOT repeat this call if it can modify state — check the action's status or the remote "
+                + $"system's state instead. Invocation id: {result.InvocationId}.");
+        }
+
+        if (result.NeedsAuth)
+        {
+            return AgentToolResult.Fail($"needs authorization: {error}");
+        }
+
+        return AgentToolResult.Fail(error);
     }
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Invoking MCP tool {ServerKey}/{ToolName}")]
     private partial void LogInvoking(string serverKey, string toolName);
 
-    [LoggerMessage(Level = LogLevel.Debug, Message = "MCP tool {ServerKey}/{ToolName} completed: isError={IsError}")]
-    private partial void LogOutcome(string serverKey, string toolName, bool isError);
+    [LoggerMessage(Level = LogLevel.Debug, Message = "MCP tool {ServerKey}/{ToolName} completed (invocation {InvocationId}): outcome={Outcome} failureKind={FailureKind}")]
+    private partial void LogOutcome(string serverKey, string toolName, string invocationId, McpToolOutcome outcome, McpFailureKind failureKind);
 }

@@ -10,13 +10,30 @@ namespace Cortex.Contained.Agent.Host.Mcp;
 public interface IMcpGateway
 {
     /// <summary>
-    /// Invoke an MCP tool on the Bridge. Never throws for transport failures —
-    /// they map to <see cref="McpToolResult.Fail(string, bool)"/>.
+    /// Invoke an MCP tool on the Bridge. Generates the invocation's stable id and never throws
+    /// for transport failures — pre-dispatch failures map to a definitive
+    /// <see cref="McpToolOutcome.Failed"/>, while post-dispatch timeouts, cancellations, and
+    /// transport losses map to <see cref="McpToolOutcome.OutcomeUnknown"/> (never auto-retried).
     /// </summary>
     Task<McpToolResult> InvokeAsync(
         string serverKey,
         string toolName,
         string argumentsJson,
         string? conversationId,
+        string? channelId,
+        string? correlationId,
         CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Look up the status of one approval-gated MCP action on the Bridge. Never throws for
+    /// transport failures — an unreachable Bridge yields <c>Found = false</c> with an error.
+    /// </summary>
+    Task<McpActionStatusResponse> GetActionStatusAsync(string actionId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Cancel one approval-gated MCP action on the Bridge, bound to its exact
+    /// canonical-argument hash. Never throws for transport failures — an unreachable Bridge
+    /// yields <c>Accepted = false</c> with an error.
+    /// </summary>
+    Task<McpActionCancelResponse> CancelActionAsync(string actionId, string argumentsHash, CancellationToken cancellationToken);
 }

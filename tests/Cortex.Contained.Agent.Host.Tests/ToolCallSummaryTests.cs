@@ -34,6 +34,26 @@ public class ToolCallSummaryTests
     }
 
     [Fact]
+    public void ToolCallSummary_McpArguments_AreRedacted()
+    {
+        // An mcp__* tool's raw arguments (which may carry incident content, PII, or telemetry)
+        // must never land in the persisted tool-call summary — only the redacted placeholder does.
+        var result = ToolCallSummary.TruncateArgs("mcp__github__create_issue", """{"title":"sensitive incident details","body":"secret"}""");
+
+        Assert.Equal("[redacted MCP payload]", result);
+    }
+
+    [Fact]
+    public void TruncateArgs_WithToolName_BuiltInTool_TruncatesNormally()
+    {
+        var input = new string('a', 50);
+        var result = ToolCallSummary.TruncateArgs("file_read", input);
+
+        Assert.Equal(33, result.Length); // 32 chars + "…"
+        Assert.EndsWith("…", result);
+    }
+
+    [Fact]
     public void SerializeJson_RoundTripsEntries()
     {
         var entries = new List<ToolCallSummaryEntry>

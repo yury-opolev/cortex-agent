@@ -37,6 +37,15 @@ public sealed record McpServerView
 
     public IReadOnlyList<string> ToolAllowList { get; init; } = [];
 
+    /// <summary>Tools explicitly classified as mutating by the admin (require approval).</summary>
+    public IReadOnlyList<string> MutationToolAllowList { get; init; } = [];
+
+    /// <summary>Per-call timeout, in seconds, before the Bridge reports an ambiguous timeout.</summary>
+    public int CallTimeoutSeconds { get; init; }
+
+    /// <summary>Maximum UTF-8 byte size of a flattened tool result before it is truncated.</summary>
+    public int MaxResultBytes { get; init; }
+
     /// <summary><c>"connected"</c> / <c>"error"</c> / <c>"needsLogin"</c> / <c>"connecting"</c> / <c>"disconnected"</c> / <c>"disabled"</c>.</summary>
     public required string Status { get; init; }
 

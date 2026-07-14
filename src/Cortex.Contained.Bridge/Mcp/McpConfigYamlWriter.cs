@@ -33,6 +33,8 @@ internal static class McpConfigYamlWriter
             sb.AppendLine(CultureInfo.InvariantCulture, $"      enabled: {Bool(server.Enabled)}");
             sb.AppendLine(CultureInfo.InvariantCulture, $"      transport: {server.Transport.ToString().ToLowerInvariant()}");
             sb.AppendLine(CultureInfo.InvariantCulture, $"      auth: {Camel(server.Auth)}");
+            sb.AppendLine(CultureInfo.InvariantCulture, $"      callTimeoutSeconds: {server.CallTimeoutSeconds}");
+            sb.AppendLine(CultureInfo.InvariantCulture, $"      maxResultBytes: {server.MaxResultBytes}");
 
             if (!string.IsNullOrWhiteSpace(server.Url))
             {
@@ -76,6 +78,15 @@ internal static class McpConfigYamlWriter
             {
                 sb.AppendLine("      toolAllowList:");
                 foreach (var tool in server.ToolAllowList)
+                {
+                    sb.AppendLine(CultureInfo.InvariantCulture, $"        - {Quote(tool)}");
+                }
+            }
+
+            if (server.MutationToolAllowList.Count > 0)
+            {
+                sb.AppendLine("      mutationToolAllowList:");
+                foreach (var tool in server.MutationToolAllowList)
                 {
                     sb.AppendLine(CultureInfo.InvariantCulture, $"        - {Quote(tool)}");
                 }

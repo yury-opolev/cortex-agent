@@ -11,7 +11,7 @@ namespace Cortex.Contained.Bridge.Mcp;
 /// Raises <see cref="CatalogChanged"/> whenever the aggregated catalog changes so the pusher can
 /// re-push it to the agent.
 /// </summary>
-public sealed partial class McpHostService : IAsyncDisposable
+public sealed partial class McpHostService : IAsyncDisposable, IMcpInvocationTarget
 {
     private readonly IMcpServerConnectionFactory factory;
     private readonly ILogger<McpHostService> logger;
@@ -128,23 +128,57 @@ public sealed partial class McpHostService : IAsyncDisposable
         return null;
     }
 
-    /// <summary>Routes a tool invocation to the owning connection, or returns a structured failure when it is unavailable.</summary>
-    public async Task<McpToolResult> InvokeAsync(
-        string serverKey, string toolName, string argumentsJson, CancellationToken cancellationToken)
+    /// <summary>
+    /// Routes a tool invocation to the owning connection, preserving its identity/correlation end
+    /// to end, or returns a definitive structured failure when the server is unavailable before
+    /// dispatch. If the connection's transport died during the call, the catalog is rebuilt and
+    /// re-pushed immediately so the dead tools disappear; the ORIGINAL invocation is never
+    /// replayed — the periodic reconciliation only reconnects the server for FUTURE calls.
+    /// </summary>
+    public Task<McpToolResult> InvokeAsync(McpToolInvocation invocation, CancellationToken cancellationToken)
+        => this.InvokeCoreAsync(invocation, approvedMutation: false, cancellationToken);
+
+    /// <summary>
+    /// Outbox-only dispatch of a HUMAN-APPROVED mutation: routes to the owning connection like
+    /// <see cref="InvokeAsync"/> but bypasses the direct-path mutation refusal (the ordinary
+    /// allow-list is still enforced by the connection). Only the action dispatcher may call
+    /// this, and only with the stored canonical arguments of an approved action.
+    /// </summary>
+    public Task<McpToolResult> InvokeApprovedAsync(McpToolInvocation invocation, CancellationToken cancellationToken)
+        => this.InvokeCoreAsync(invocation, approvedMutation: true, cancellationToken);
+
+    private async Task<McpToolResult> InvokeCoreAsync(McpToolInvocation invocation, bool approvedMutation, CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(invocation);
+
         IMcpServerConnection? connection;
         lock (this.stateLock)
         {
-            this.connections.TryGetValue(serverKey, out connection);
+            this.connections.TryGetValue(invocation.ServerKey, out connection);
         }
 
         if (connection is null)
         {
-            this.LogInvokeUnavailable(serverKey, toolName);
-            return McpToolResult.Fail($"MCP server '{serverKey}' is not available.");
+            this.LogInvokeUnavailable(invocation.ServerKey, invocation.ToolName);
+            return McpToolResult.Fail(
+                invocation.InvocationId,
+                McpFailureKind.Unavailable,
+                $"MCP server '{invocation.ServerKey}' is not available.");
         }
 
-        return await connection.CallToolAsync(toolName, argumentsJson, cancellationToken).ConfigureAwait(false);
+        var result = approvedMutation
+            ? await connection.CallApprovedMutationAsync(invocation, cancellationToken).ConfigureAwait(false)
+            : await connection.CallToolAsync(invocation, cancellationToken).ConfigureAwait(false);
+
+        if (connection.Status == McpServerStatus.Error)
+        {
+            // Fatal transport closure mid-call: drop the dead server's tools from the agent's
+            // catalog now (deliberately not bound to the possibly-cancelled invocation token).
+            var catalog = this.RebuildCatalog();
+            await this.NotifyCatalogChangedAsync(catalog, CancellationToken.None).ConfigureAwait(false);
+        }
+
+        return result;
     }
 
     private static Dictionary<string, McpServerConfig> BuildDesired(McpSettingsConfig settings)
@@ -319,7 +353,7 @@ public sealed partial class McpHostService : IAsyncDisposable
             '\n',
             catalog.Tools
                 .OrderBy(t => t.FullName, StringComparer.Ordinal)
-                .Select(t => $"{t.FullName}{t.Description}{t.ParametersSchemaJson}"));
+                .Select(t => $"{t.FullName}{t.Description}{t.ParametersSchemaJson}{t.RequiresApproval}"));
     }
 
     private static bool IsHealthy(McpServerStatus status) => status == McpServerStatus.Connected;
@@ -329,7 +363,14 @@ public sealed partial class McpHostService : IAsyncDisposable
         var env = string.Join(',', server.Env.OrderBy(kvp => kvp.Key, StringComparer.Ordinal).Select(kvp => $"{kvp.Key}={kvp.Value}"));
         var args = string.Join(',', server.Args);
         var allow = string.Join(',', server.ToolAllowList);
-        return $"{server.Transport}|{server.Url}|{server.Command}|{args}|{env}|{server.Auth}|{server.ApiKeyHeader}|{server.SecretRef}|{allow}";
+        // The mutation list is part of the signature so editing it live rebuilds the connection —
+        // re-classifying the catalog AND refreshing the dispatch-time policy immediately.
+        var mutation = string.Join(',', server.MutationToolAllowList);
+        // The per-call bounds are captured by the connection at construction, so they too must be
+        // part of the signature: a bounds-only live edit otherwise stays inert until the next
+        // full restart. Including them makes StopUndesiredAsync rebuild the connection with the
+        // new value the moment either bound changes.
+        return $"{server.Transport}|{server.Url}|{server.Command}|{args}|{env}|{server.Auth}|{server.ApiKeyHeader}|{server.SecretRef}|{allow}|{mutation}|{server.CallTimeoutSeconds}|{server.MaxResultBytes}";
     }
 
     public async ValueTask DisposeAsync()

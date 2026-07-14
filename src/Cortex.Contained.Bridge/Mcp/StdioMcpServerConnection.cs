@@ -1,3 +1,4 @@
+using Cortex.Contained.Contracts.Config;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Client;
 
@@ -22,8 +23,11 @@ public sealed class StdioMcpServerConnection : McpServerConnectionBase
         IReadOnlyDictionary<string, string> environment,
         IReadOnlyCollection<string> toolAllowList,
         ILogger<StdioMcpServerConnection> logger,
-        string? workingDirectory = null)
-        : base(serverKey, toolAllowList, logger)
+        IReadOnlyCollection<string> mutationToolAllowList,
+        string? workingDirectory = null,
+        int callTimeoutSeconds = McpServerConfig.DefaultCallTimeoutSeconds,
+        int maxResultBytes = McpResultMapper.DefaultMaxResultBytes)
+        : base(serverKey, toolAllowList, mutationToolAllowList, logger, callTimeoutSeconds, maxResultBytes)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(command);
         this.command = command;

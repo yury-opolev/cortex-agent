@@ -52,8 +52,10 @@ public class ToolRegistryMcpTests
     public async Task ExecuteAsync_McpTool_DispatchesToProxy()
     {
         var gateway = Substitute.For<IMcpGateway>();
-        gateway.InvokeAsync("srv", "alpha", Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
-            .Returns(McpToolResult.Ok("mcp-result"));
+        gateway.InvokeAsync(
+                "srv", "alpha", Arg.Any<string>(),
+                Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(McpToolResult.Ok("inv-1", "mcp-result"));
         var store = new McpToolStore(gateway);
         store.Update(new McpToolCatalog { Tools = [Def("srv", "alpha")] });
         var registry = new ToolRegistry([new StaticTool()], new ActiveChannelStore(), NullLogger<ToolRegistry>.Instance, mcpToolStore: store);
@@ -63,7 +65,8 @@ public class ToolRegistryMcpTests
 
         Assert.True(result.Success);
         Assert.Equal("mcp-result", result.Content);
-        await gateway.Received(1).InvokeAsync("srv", "alpha", "{}", "conv-1", Arg.Any<CancellationToken>());
+        await gateway.Received(1).InvokeAsync(
+            "srv", "alpha", "{}", "conv-1", "webchat-default", Arg.Any<string?>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]

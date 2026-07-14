@@ -880,6 +880,9 @@ public sealed partial class HubClient : IAsyncDisposable
     /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {
+        // Cancels every outstanding MCP invocation before the connection goes away.
+        this.mcpInvocationTracker.Dispose();
+
         if (this.connection is not null)
         {
             await this.connection.DisposeAsync().ConfigureAwait(false);

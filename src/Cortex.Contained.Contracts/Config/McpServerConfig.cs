@@ -42,4 +42,47 @@ public sealed class McpServerConfig
 
     /// <summary>Allowed tool names; empty = all tools exposed.</summary>
     public List<string> ToolAllowList { get; set; } = [];
+
+    /// <summary>
+    /// Tool names the administrator EXPLICITLY classified as mutating (state-changing). This is
+    /// admin policy only — never inferred from tool names, descriptions, or untrusted MCP
+    /// annotations. A mutation tool surfaces <c>RequiresApproval=true</c> in the agent catalog and
+    /// is refused by the direct invocation path; empty = no tool is classified as a mutation.
+    /// Names are normalized exactly like <see cref="ToolAllowList"/>, and when
+    /// <see cref="ToolAllowList"/> is non-empty every mutation tool must also be present there.
+    /// </summary>
+    public List<string> MutationToolAllowList { get; set; } = [];
+
+    /// <summary>Minimum valid <see cref="CallTimeoutSeconds"/> (must be positive).</summary>
+    public const int MinCallTimeoutSeconds = 1;
+
+    /// <summary>
+    /// Maximum valid <see cref="CallTimeoutSeconds"/>. Deliberately kept BELOW the Agent-side
+    /// gateway ceiling (60s — see <c>SignalRMcpGateway.TimeoutCeilingSeconds</c>) so the Bridge's
+    /// own per-call bound always resolves first: the Agent should see a definitive Bridge timeout
+    /// result rather than its own gateway timing out first and reporting an ambiguous outcome.
+    /// </summary>
+    public const int MaxCallTimeoutSeconds = 59;
+
+    /// <summary>Default <see cref="CallTimeoutSeconds"/> when a server config does not override it.</summary>
+    public const int DefaultCallTimeoutSeconds = 45;
+
+    /// <summary>
+    /// How long the Bridge waits for a single <c>tools/call</c> to complete before treating it as
+    /// an ambiguous, never-retried timeout (<c>McpFailureKind.Timeout</c> / <c>OutcomeUnknown</c>).
+    /// Out-of-range values are REJECTED at the config-edit boundary — never silently clamped. Must
+    /// stay within [<see cref="MinCallTimeoutSeconds"/>, <see cref="MaxCallTimeoutSeconds"/>].
+    /// </summary>
+    public int CallTimeoutSeconds { get; set; } = DefaultCallTimeoutSeconds;
+
+    /// <summary>Minimum valid <see cref="MaxResultBytes"/> (must be positive).</summary>
+    public const int MinMaxResultBytes = 1;
+
+    /// <summary>
+    /// Maximum UTF-8 byte size of a flattened MCP tool result before it is truncated with a
+    /// deterministic marker. Bounds what a single MCP call can push back across the Bridge→Agent
+    /// SignalR hub. Out-of-range values are REJECTED at the config-edit boundary — never silently
+    /// clamped. Must be at least <see cref="MinMaxResultBytes"/>.
+    /// </summary>
+    public int MaxResultBytes { get; set; } = 50 * 1024;
 }
