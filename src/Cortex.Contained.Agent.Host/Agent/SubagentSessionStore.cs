@@ -257,6 +257,35 @@ public sealed partial class SubagentSessionStore : SqliteStoreBase
         }
     }
 
+    /// <summary>
+    /// Get the most-recently-created tasks (newest first), bounded by <paramref name="limit"/>.
+    /// When <paramref name="includeTerminal"/> is false, only active (queued/running/revising)
+    /// tasks are returned. Used by <c>SubagentObservabilityService</c> to page the generic
+    /// operational-observability worker list; unlike <see cref="GetActive"/> this is bounded
+    /// and can include terminal history.
+    /// </summary>
+    public IReadOnlyList<SubagentTask> GetRecent(int limit, bool includeTerminal)
+    {
+        lock (this.syncLock)
+        {
+            using var cmd = this.Connection.CreateCommand();
+            cmd.CommandText = includeTerminal
+                ? """
+                    SELECT * FROM subagent_tasks
+                    ORDER BY created_at DESC
+                    LIMIT $limit
+                    """
+                : """
+                    SELECT * FROM subagent_tasks
+                    WHERE state IN ('queued', 'running', 'revising')
+                    ORDER BY created_at DESC
+                    LIMIT $limit
+                    """;
+            cmd.Parameters.AddWithValue("$limit", limit);
+            return ReadTasks(cmd);
+        }
+    }
+
     /// <summary>Get the oldest queued task, or null if none.</summary>
     public SubagentTask? GetOldestQueued()
     {

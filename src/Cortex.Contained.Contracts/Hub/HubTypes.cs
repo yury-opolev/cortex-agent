@@ -214,6 +214,14 @@ public sealed record HealthInfo
     /// Additive: consumers that do not understand it simply ignore it.
     /// </summary>
     public AgentMetricsSnapshot? Metrics { get; init; }
+
+    /// <summary>
+    /// Optional, Bridge-computed aggregate of approval-gated MCP actions (counts by wire
+    /// status — never canonical arguments or result content). Null when the Bridge could not
+    /// compute it (e.g. the action store probe failed); a failure here never makes
+    /// <see cref="Healthy"/> false. See <c>HealthEndpoints</c>.
+    /// </summary>
+    public McpActionAggregateSnapshot? McpActions { get; init; }
 }
 
 /// <summary>

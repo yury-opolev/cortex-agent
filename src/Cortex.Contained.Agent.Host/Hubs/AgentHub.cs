@@ -41,6 +41,7 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
     private readonly IHttpClientFactory httpClientFactory;
     private readonly AgentMetrics metrics;
     private readonly SubagentExecutionCoordinator subagentCoordinator;
+    private readonly SubagentObservabilityService subagentObservability;
     private readonly ILogger<AgentHub> logger;
 
     public AgentHub(
@@ -63,6 +64,7 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
         IHttpClientFactory httpClientFactory,
         AgentMetrics metrics,
         SubagentExecutionCoordinator subagentCoordinator,
+        SubagentObservabilityService subagentObservability,
         ILogger<AgentHub> logger,
         Cortex.Contained.Agent.Host.SpeakerId.EnrollmentOrchestrator? enrollmentOrchestrator = null)
     {
@@ -86,6 +88,7 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
         this.httpClientFactory = httpClientFactory;
         this.metrics = metrics;
         this.subagentCoordinator = subagentCoordinator;
+        this.subagentObservability = subagentObservability;
         this.logger = logger;
     }
 
