@@ -8,6 +8,9 @@
 //   hidden_tool -> exists so allow-list filtering can be verified.
 //   die         -> exits the process WITHOUT replying (proves fatal-transport-closure handling).
 //   hang        -> never replies (proves in-flight cancellation handling).
+//   protocol_error -> replies with a JSON-RPC error RESPONSE (proves definitive Failed/Tool mapping
+//                     of the SDK's McpProtocolException — the server rejected the call, so the tool
+//                     did NOT execute).
 import process from 'node:process';
 import readline from 'node:readline';
 
@@ -35,6 +38,11 @@ const TOOLS = [
   {
     name: 'hang',
     description: 'Accepts the call but never replies, for cancellation testing.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'protocol_error',
+    description: 'Replies with a JSON-RPC error response, simulating a protocol-level rejection.',
     inputSchema: { type: 'object', properties: {} },
   },
 ];
@@ -104,6 +112,12 @@ rl.on('line', (line) => {
       if (toolName === 'hang') {
         // Deliberately never reply; the caller must handle cancellation itself.
         return;
+      }
+      if (toolName === 'protocol_error') {
+        // Reject the call at the JSON-RPC protocol layer: the SDK surfaces this as an
+        // McpProtocolException, and the tool's business logic never runs.
+        send({ jsonrpc: '2.0', id, error: { code: -32602, message: 'invalid params (simulated protocol error)' } });
+        break;
       }
       reply(id, callTool(toolName, params && params.arguments));
       break;

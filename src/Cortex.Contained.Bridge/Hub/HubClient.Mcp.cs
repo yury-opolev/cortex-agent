@@ -33,14 +33,14 @@ public sealed partial class HubClient
         await this.connection!.InvokeAsync(nameof(IAgentHub.UpdateMcpToolCatalog), catalog, cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>Test seam: the tracker holding this client's in-flight MCP invocations.</summary>
+    internal McpInvocationTracker McpInvocationTracker => this.mcpInvocationTracker;
+
     private void RegisterMcpCallbacks(HubConnection connection)
     {
-        // A new connection replaces the previous one (or is the first). Any invocation still
-        // in flight from a previous connection can no longer deliver its result — the agent's
-        // pending SignalR invoke died with that connection — so cancel it now. This runs
-        // BEFORE the new connection starts receiving, so no new invocation can be hit.
-        var generation = Interlocked.Increment(ref this.mcpConnectionGeneration);
-        this.mcpInvocationTracker.CancelAll("hub connection replaced");
+        // A new connection replaces the previous one (or is the first). This runs BEFORE the new
+        // connection starts receiving, so no new invocation can be hit.
+        var generation = this.BeginMcpGeneration();
 
         connection.On<McpToolInvocation, McpToolResult>(
             nameof(IAgentHubClient.InvokeMcpTool),
@@ -55,31 +55,50 @@ public sealed partial class HubClient
                 return Task.CompletedTask;
             });
 
-        // Close/reconnect of the CURRENT connection strands any in-flight invocation the same
-        // way — its result can never reach the agent. The generation guard keeps a late Closed
-        // event from a disposed, already-replaced connection from cancelling fresh invocations.
+        // Close/reconnect of the CURRENT connection strands any in-flight invocation — its result
+        // can never reach the agent. The generation guard keeps a late Closed event from a disposed,
+        // already-replaced connection from cancelling the fresh generation's invocations.
         connection.Closed += _ =>
         {
-            if (generation == Volatile.Read(ref this.mcpConnectionGeneration))
-            {
-                this.mcpInvocationTracker.CancelAll("hub connection closed");
-            }
-
+            this.CancelMcpInvocationsForGeneration(generation, "hub connection closed");
             return Task.CompletedTask;
         };
 
         connection.Reconnected += _ =>
         {
-            if (generation == Volatile.Read(ref this.mcpConnectionGeneration))
-            {
-                this.mcpInvocationTracker.CancelAll("hub connection re-established");
-            }
-
+            this.CancelMcpInvocationsForGeneration(generation, "hub connection re-established");
             return Task.CompletedTask;
         };
     }
 
-    private async Task<McpToolResult> DispatchMcpInvocationAsync(McpToolInvocation invocation)
+    /// <summary>
+    /// Opens a new hub-connection generation: increments the generation counter and cancels every
+    /// invocation still outstanding from the PREVIOUS connection (their results can no longer be
+    /// delivered). Returns the new generation so this connection's close/reconnect handlers can
+    /// guard against firing after they have themselves been superseded.
+    /// </summary>
+    internal int BeginMcpGeneration()
+    {
+        var generation = Interlocked.Increment(ref this.mcpConnectionGeneration);
+        this.mcpInvocationTracker.CancelAll("hub connection replaced");
+        return generation;
+    }
+
+    /// <summary>
+    /// Cancels every outstanding invocation, but ONLY when <paramref name="capturedGeneration"/> is
+    /// still the current generation. A late Closed/Reconnected event from an already-replaced
+    /// connection carries a stale generation and must NOT cancel the fresh generation's in-flight
+    /// invocations — inverting this comparison would silently disable close-cancellation.
+    /// </summary>
+    internal void CancelMcpInvocationsForGeneration(int capturedGeneration, string reason)
+    {
+        if (capturedGeneration == Volatile.Read(ref this.mcpConnectionGeneration))
+        {
+            this.mcpInvocationTracker.CancelAll(reason);
+        }
+    }
+
+    internal async Task<McpToolResult> DispatchMcpInvocationAsync(McpToolInvocation invocation)
     {
         var handler = this.OnInvokeMcpTool;
         if (handler is null)

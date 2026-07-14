@@ -179,6 +179,45 @@ public sealed class StdioMcpServerConnectionIntegrationTests
     }
 
     [Fact]
+    public async Task CallTool_WhenServerReturnsJsonRpcError_ReturnsDefinitiveToolFailure_WithoutKillingConnection()
+    {
+        var node = FindNode();
+        if (node is null)
+        {
+            return;
+        }
+
+        await using var connection = new StdioMcpServerConnection(
+            serverKey: "fake",
+            command: node,
+            arguments: [ScriptPath()],
+            environment: new Dictionary<string, string>(),
+            toolAllowList: [],
+            logger: NullLogger<StdioMcpServerConnection>.Instance);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await connection.ConnectAsync(cts.Token);
+        Assert.Equal(McpServerStatus.Connected, connection.Status);
+
+        // 'protocol_error' makes the server reply with a JSON-RPC error RESPONSE; the SDK surfaces
+        // that as an McpProtocolException. The request reached the server and was rejected at the
+        // protocol layer BEFORE the tool ran, so the side effect definitively did NOT occur — a
+        // DEFINITIVE Failed/Tool, NOT an ambiguous OutcomeUnknown.
+        var result = await connection.CallToolAsync(Invocation("protocol_error"), cts.Token);
+
+        Assert.Equal(McpToolOutcome.Failed, result.Outcome);
+        Assert.Equal(McpFailureKind.Tool, result.FailureKind);
+        Assert.Equal(McpErrorSanitizer.ToolFailure("fake", "protocol_error"), result.Error);
+
+        // A protocol rejection is not a transport failure: the connection survives, tools intact.
+        Assert.Equal(McpServerStatus.Connected, connection.Status);
+        Assert.NotEmpty(connection.Tools);
+        var echo = await connection.CallToolAsync(Invocation("echo", """{"text":"still alive"}"""), cts.Token);
+        Assert.Equal(McpToolOutcome.Succeeded, echo.Outcome);
+        Assert.Equal("still alive", echo.Content);
+    }
+
+    [Fact]
     public async Task CallTool_CancelledMidCall_ReturnsOutcomeUnknown_WithoutKillingConnection()
     {
         var node = FindNode();

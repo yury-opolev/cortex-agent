@@ -186,11 +186,26 @@ public abstract partial class McpServerConnectionBase : IMcpServerConnection
         }
         catch (McpException ex)
         {
-            // The server RESPONDED with a protocol-level error: it received and rejected/failed
-            // the call, so this is a definitive failure — not an ambiguous outcome.
-            this.LogToolFailed(this.ServerKey, toolName, ex.Message);
-            return McpToolResult.Fail(
-                invocationId, McpFailureKind.Tool, McpErrorSanitizer.ToolFailure(this.ServerKey, toolName));
+            // Post-dispatch MCP fault. McpResultMapper.FromCallException decides definiteness:
+            //   * A McpProtocolException (server returned a JSON-RPC error RESPONSE) rejected the
+            //     call at the protocol layer BEFORE the tool ran — the side effect definitively did
+            //     NOT occur — so it is a definitive Failed/Tool and the connection stays healthy.
+            //   * ANY other McpException (session terminated, transport-level, invalid response) is
+            //     AMBIGUOUS: the request left the Bridge and MAY have executed. It becomes
+            //     OutcomeUnknown (never auto-retried), and the now-suspect connection is torn down
+            //     so its dead tools drop from the catalog and reconciliation rebuilds a fresh one.
+            var mapped = McpResultMapper.FromCallException(invocationId, this.ServerKey, toolName, ex);
+            if (mapped.Outcome == McpToolOutcome.OutcomeUnknown)
+            {
+                this.LogTransportFailed(this.ServerKey, toolName, ex.Message);
+                this.HandleTransportFailure($"MCP fault during '{toolName}': {ex.Message}");
+            }
+            else
+            {
+                this.LogToolFailed(this.ServerKey, toolName, ex.Message);
+            }
+
+            return mapped;
         }
 #pragma warning disable CA1031 // Transport failures map to a structured result, never thrown.
         catch (Exception ex)
