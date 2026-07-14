@@ -2,7 +2,7 @@ namespace Cortex.Contained.Contracts.Hub;
 
 /// <summary>
 /// Content-free operational snapshot of ONE subagent worker task, exposed to generic
-/// observability surfaces (a future IcM dashboard, the agent's own workspace files).
+/// observability surfaces (a future operations dashboard, the agent's own workspace files).
 /// Deliberately carries NO prompt, message history, result, or eval text — only
 /// identifiers, lifecycle state, and timing/counters. See
 /// <see cref="ISubagentHub.GetSubagentSnapshots"/> for how this is produced.
