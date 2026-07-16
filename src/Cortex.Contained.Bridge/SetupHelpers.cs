@@ -617,6 +617,7 @@ public static class SetupHelpers
                     Description = e.ModelPickerDescription,
                     ContextWindow = e.Capabilities?.Limits?.MaxContextWindowTokens ?? 0,
                     MaxOutputTokens = e.Capabilities?.Limits?.MaxOutputTokens ?? 0,
+                    SupportedEndpoints = NormalizeSupportedEndpoints(e.SupportedEndpoints),
                 };
             })
             .OrderBy(m => m.Publisher, StringComparer.OrdinalIgnoreCase)
@@ -743,6 +744,36 @@ public static class SetupHelpers
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Normalize the <c>supported_endpoints</c> list reported by the Copilot /models API:
+    /// blank entries are dropped, duplicates are removed case-insensitively (first occurrence
+    /// wins), and the original order is preserved.
+    /// </summary>
+    internal static List<string> NormalizeSupportedEndpoints(List<string>? endpoints)
+    {
+        if (endpoints is not { Count: > 0 })
+        {
+            return [];
+        }
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var result = new List<string>();
+        foreach (var endpoint in endpoints)
+        {
+            if (string.IsNullOrWhiteSpace(endpoint))
+            {
+                continue;
+            }
+
+            if (seen.Add(endpoint))
+            {
+                result.Add(endpoint);
+            }
+        }
+
+        return result;
     }
 
     /// <summary>Infer publisher name from a Copilot model ID.</summary>
@@ -906,6 +937,13 @@ public sealed class AvailableModel
     /// <summary>Maximum output tokens per completion (0 = unknown).</summary>
     [JsonPropertyName("maxOutputTokens")]
     public int MaxOutputTokens { get; set; }
+
+    /// <summary>
+    /// API endpoints the model supports (e.g. <c>/responses</c>, <c>ws:/responses</c>).
+    /// Empty when the provider doesn't report this metadata.
+    /// </summary>
+    [JsonPropertyName("supportedEndpoints")]
+    public List<string> SupportedEndpoints { get; set; } = [];
 }
 
 /// <summary>Provider template shown in the setup wizard.</summary>
@@ -1067,6 +1105,10 @@ internal sealed class CopilotModelEntry
     public string? Vendor { get; set; }
     public string? ModelPickerDescription { get; set; }
     public CopilotModelCapabilities? Capabilities { get; set; }
+
+    /// <summary>API endpoints this model supports (e.g. <c>/responses</c>, <c>ws:/responses</c>).</summary>
+    [JsonPropertyName("supported_endpoints")]
+    public List<string> SupportedEndpoints { get; set; } = [];
 }
 
 /// <summary>Capabilities section of a Copilot model entry.</summary>
