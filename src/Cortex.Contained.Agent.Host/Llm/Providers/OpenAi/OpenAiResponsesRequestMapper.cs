@@ -17,6 +17,12 @@ internal static class OpenAiResponsesRequestMapper
         var systemTexts = new List<string>();
         var input = new List<OpenAiResponsesInputItem>();
 
+        // Pair function_call / function_call_output items by call ID before mapping.
+        // Orphaned calls (no matching result) and orphaned results (no matching call
+        // or empty ID) are dropped so the Responses API does not reject the request
+        // with HTTP 400 — mirroring Chat's SanitizeToolCalls semantics.
+        var pairedCallIds = ComputePairedCallIds(request.Messages);
+
         foreach (var message in request.Messages)
         {
             switch (message.Role)
@@ -54,6 +60,11 @@ internal static class OpenAiResponsesRequestMapper
                     {
                         foreach (var toolCall in message.ToolCalls)
                         {
+                            if (!pairedCallIds.Contains(toolCall.Id))
+                            {
+                                continue;
+                            }
+
                             input.Add(new OpenAiResponsesFunctionCallItem
                             {
                                 CallId = toolCall.Id,
@@ -66,11 +77,15 @@ internal static class OpenAiResponsesRequestMapper
                     break;
 
                 case "tool":
-                    input.Add(new OpenAiResponsesFunctionCallOutputItem
+                    if (message.ToolCallId is { Length: > 0 } toolCallId
+                        && pairedCallIds.Contains(toolCallId))
                     {
-                        CallId = message.ToolCallId ?? string.Empty,
-                        Output = message.Content ?? string.Empty,
-                    });
+                        input.Add(new OpenAiResponsesFunctionCallOutputItem
+                        {
+                            CallId = toolCallId,
+                            Output = message.Content ?? string.Empty,
+                        });
+                    }
 
                     break;
             }
@@ -84,6 +99,44 @@ internal static class OpenAiResponsesRequestMapper
             Input = input,
             Tools = BuildTools(request.Tools),
         };
+    }
+
+    /// <summary>
+    /// Determines which tool call IDs form a complete function_call/function_call_output
+    /// pair. A call ID is kept only when its assistant tool-call group is fully
+    /// responded: every call in the group has a matching tool result with a non-empty
+    /// call ID. Partially-responded groups are dropped atomically so no orphaned call
+    /// or result survives. Matching is ordinal by call ID.
+    /// </summary>
+    private static HashSet<string> ComputePairedCallIds(IReadOnlyList<LlmMessage> messages)
+    {
+        var respondedCallIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var message in messages)
+        {
+            if (message.Role == "tool" && message.ToolCallId is { Length: > 0 } toolCallId)
+            {
+                respondedCallIds.Add(toolCallId);
+            }
+        }
+
+        var pairedCallIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var message in messages)
+        {
+            if (message.Role != "assistant" || message.ToolCalls is not { Count: > 0 } toolCalls)
+            {
+                continue;
+            }
+
+            if (toolCalls.All(toolCall => respondedCallIds.Contains(toolCall.Id)))
+            {
+                foreach (var toolCall in toolCalls)
+                {
+                    pairedCallIds.Add(toolCall.Id);
+                }
+            }
+        }
+
+        return pairedCallIds;
     }
 
     private static List<OpenAiResponsesContentPart> BuildUserContent(LlmMessage message)

@@ -176,13 +176,144 @@ public class OpenAiResponsesRequestTests
                         new LlmToolCall { Id = "call_9", Name = "noop", Arguments = "{}" },
                     ],
                 },
+                new LlmMessage { Role = "tool", ToolCallId = "call_9", Content = "ok" },
             ],
         };
 
         var body = OpenAiResponsesRequestMapper.Build(request);
 
-        var call = Assert.IsType<OpenAiResponsesFunctionCallItem>(Assert.Single(body.Input));
+        var call = Assert.IsType<OpenAiResponsesFunctionCallItem>(body.Input[0]);
         Assert.Equal("call_9", call.CallId);
+        Assert.DoesNotContain(body.Input, item => item is OpenAiResponsesMessageItem);
+    }
+
+    [Fact]
+    public void Build_AssistantToolCallWithoutResult_OmitsCallButKeepsText()
+    {
+        // Orphaned function_call (no matching later tool result) must be dropped
+        // so Responses does not reject the request with HTTP 400. Assistant text
+        // is preserved.
+        var request = BuildRequest() with
+        {
+            Messages =
+            [
+                new LlmMessage
+                {
+                    Role = "assistant",
+                    Content = "let me look that up",
+                    ToolCalls =
+                    [
+                        new LlmToolCall { Id = "call_x", Name = "search", Arguments = "{}" },
+                    ],
+                },
+            ],
+        };
+
+        var body = OpenAiResponsesRequestMapper.Build(request);
+
+        var message = Assert.IsType<OpenAiResponsesMessageItem>(Assert.Single(body.Input));
+        Assert.Equal("assistant", message.Role);
+        Assert.Equal("let me look that up", Assert.Single(message.Content).Text);
+        Assert.DoesNotContain(body.Input, item => item is OpenAiResponsesFunctionCallItem);
+    }
+
+    [Fact]
+    public void Build_OrphanToolResult_WithoutPriorCall_IsOmitted()
+    {
+        var request = BuildRequest() with
+        {
+            Messages =
+            [
+                new LlmMessage { Role = "user", Content = "hi" },
+                new LlmMessage { Role = "tool", ToolCallId = "call_orphan", Content = "stale result" },
+            ],
+        };
+
+        var body = OpenAiResponsesRequestMapper.Build(request);
+
+        var user = Assert.IsType<OpenAiResponsesMessageItem>(Assert.Single(body.Input));
+        Assert.Equal("user", user.Role);
+    }
+
+    [Fact]
+    public void Build_ToolResultWithEmptyCallId_IsOmitted()
+    {
+        var request = BuildRequest() with
+        {
+            Messages =
+            [
+                new LlmMessage { Role = "user", Content = "hi" },
+                new LlmMessage { Role = "tool", ToolCallId = string.Empty, Content = "result" },
+                new LlmMessage { Role = "tool", ToolCallId = null, Content = "result" },
+            ],
+        };
+
+        var body = OpenAiResponsesRequestMapper.Build(request);
+
+        var user = Assert.IsType<OpenAiResponsesMessageItem>(Assert.Single(body.Input));
+        Assert.Equal("user", user.Role);
+    }
+
+    [Fact]
+    public void Build_FullyPairedToolCall_RemainsInOrder()
+    {
+        var request = BuildRequest() with
+        {
+            Messages =
+            [
+                new LlmMessage
+                {
+                    Role = "assistant",
+                    Content = "calling now",
+                    ToolCalls =
+                    [
+                        new LlmToolCall { Id = "call_1", Name = "do_thing", Arguments = "{}" },
+                    ],
+                },
+                new LlmMessage { Role = "tool", ToolCallId = "call_1", Content = "done" },
+            ],
+        };
+
+        var body = OpenAiResponsesRequestMapper.Build(request);
+
+        Assert.Equal(3, body.Input.Count);
+        Assert.Equal("message", body.Input[0].Type);
+        var call = Assert.IsType<OpenAiResponsesFunctionCallItem>(body.Input[1]);
+        Assert.Equal("call_1", call.CallId);
+        var output = Assert.IsType<OpenAiResponsesFunctionCallOutputItem>(body.Input[2]);
+        Assert.Equal("call_1", output.CallId);
+    }
+
+    [Fact]
+    public void Build_PartiallyRespondedToolCallGroup_StripsEntireGroupAtomically()
+    {
+        // One assistant turn requests two tool calls but only one has a result.
+        // The whole group must be stripped so no orphaned call/output survives,
+        // while the assistant's text stays.
+        var request = BuildRequest() with
+        {
+            Messages =
+            [
+                new LlmMessage
+                {
+                    Role = "assistant",
+                    Content = "running two tools",
+                    ToolCalls =
+                    [
+                        new LlmToolCall { Id = "call_a", Name = "a", Arguments = "{}" },
+                        new LlmToolCall { Id = "call_b", Name = "b", Arguments = "{}" },
+                    ],
+                },
+                new LlmMessage { Role = "tool", ToolCallId = "call_a", Content = "a done" },
+            ],
+        };
+
+        var body = OpenAiResponsesRequestMapper.Build(request);
+
+        var message = Assert.IsType<OpenAiResponsesMessageItem>(Assert.Single(body.Input));
+        Assert.Equal("running two tools", Assert.Single(message.Content).Text);
+        Assert.DoesNotContain(body.Input, item => item is OpenAiResponsesFunctionCallItem);
+        Assert.DoesNotContain(body.Input, item => item is OpenAiResponsesFunctionCallOutputItem);
     }
 
     [Fact]
