@@ -96,4 +96,29 @@ internal sealed class ProviderState
         // Release any task waiting for the refresh to complete
         Interlocked.Exchange(ref this.pendingRefresh, null)?.TrySetResult(true);
     }
+
+    /// <summary>
+    /// Finds the <see cref="LlmModelMetadata"/> for <paramref name="model"/> in
+    /// <see cref="Credential"/>'s pushed metadata, matching model IDs with
+    /// <see cref="StringComparison.OrdinalIgnoreCase"/>. Returns <see langword="null"/> when no
+    /// metadata was pushed or no entry matches.
+    /// </summary>
+    public LlmModelMetadata? FindModelMetadata(string model)
+    {
+        var metadata = Credential.ModelMetadata;
+        if (metadata is null)
+        {
+            return null;
+        }
+
+        foreach (var entry in metadata)
+        {
+            if (string.Equals(entry.Id, model, StringComparison.OrdinalIgnoreCase))
+            {
+                return entry;
+            }
+        }
+
+        return null;
+    }
 }

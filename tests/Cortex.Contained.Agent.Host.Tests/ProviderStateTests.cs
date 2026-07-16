@@ -75,4 +75,79 @@ public class ProviderStateTests
         Assert.Equal(newExpiry, state.CurrentAccessTokenExpiresAtMs);
         Assert.Null(state.CurrentRefreshToken);
     }
+
+    [Fact]
+    public void FindModelMetadata_ExactMatch_ReturnsEntry()
+    {
+        var state = new ProviderState(new LlmProviderCredential
+        {
+            Name = "github-copilot",
+            Api = "github-copilot-api",
+            Kind = CredentialKind.GitHubCopilotBearer,
+            Models = ["gpt-5.6-sol"],
+            ModelMetadata =
+            [
+                new LlmModelMetadata { Id = "gpt-5.6-sol", SupportedEndpoints = ["/responses"] },
+            ],
+        });
+
+        var metadata = state.FindModelMetadata("gpt-5.6-sol");
+
+        Assert.NotNull(metadata);
+        Assert.Equal("gpt-5.6-sol", metadata.Id);
+        Assert.Equal(["/responses"], metadata.SupportedEndpoints);
+    }
+
+    [Fact]
+    public void FindModelMetadata_CaseInsensitive_ReturnsEntry()
+    {
+        var state = new ProviderState(new LlmProviderCredential
+        {
+            Name = "github-copilot",
+            Api = "github-copilot-api",
+            Kind = CredentialKind.GitHubCopilotBearer,
+            Models = ["gpt-5.6-sol"],
+            ModelMetadata =
+            [
+                new LlmModelMetadata { Id = "gpt-5.6-sol", SupportedEndpoints = ["/responses"] },
+            ],
+        });
+
+        var metadata = state.FindModelMetadata("GPT-5.6-SOL");
+
+        Assert.NotNull(metadata);
+        Assert.Equal("gpt-5.6-sol", metadata.Id);
+    }
+
+    [Fact]
+    public void FindModelMetadata_MissingModel_ReturnsNull()
+    {
+        var state = new ProviderState(new LlmProviderCredential
+        {
+            Name = "github-copilot",
+            Api = "github-copilot-api",
+            Kind = CredentialKind.GitHubCopilotBearer,
+            Models = ["gpt-5.6-sol"],
+            ModelMetadata =
+            [
+                new LlmModelMetadata { Id = "gpt-5.6-sol", SupportedEndpoints = ["/responses"] },
+            ],
+        });
+
+        Assert.Null(state.FindModelMetadata("nonexistent-model"));
+    }
+
+    [Fact]
+    public void FindModelMetadata_NoMetadataPushed_ReturnsNull()
+    {
+        var state = new ProviderState(new LlmProviderCredential
+        {
+            Name = "github-copilot",
+            Api = "github-copilot-api",
+            Kind = CredentialKind.GitHubCopilotBearer,
+            Models = ["gpt-5.6-sol"],
+        });
+
+        Assert.Null(state.FindModelMetadata("gpt-5.6-sol"));
+    }
 }
