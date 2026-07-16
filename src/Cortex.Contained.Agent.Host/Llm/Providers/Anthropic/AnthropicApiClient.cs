@@ -95,21 +95,26 @@ internal sealed partial class AnthropicApiClient : IProviderApiClient
                 : requestJson;
             this.LogLlmErrorContext(request.RequestId, httpVer, maskedHeaders, bodyPreview);
 
-            // Anthropic OAuth: retry once on 401 (expired) or 403 (revoked).
-            // 401 → refresh the token via Bridge (normal expiry)
-            // 403 → reload from secrets.json via Bridge (another process rotated the token)
-            if ((response.StatusCode == System.Net.HttpStatusCode.Unauthorized
-                 || response.StatusCode == System.Net.HttpStatusCode.Forbidden)
-                && provider.Credential.Kind == CredentialKind.AnthropicOAuth)
+            // Retry once on 401/403. Anthropic OAuth: 401 → refresh (expired), 403 → reload from
+            // secrets.json (revoked by another process). GitHub Copilot bearer: 401 → re-mint via
+            // the Bridge (same round-trip the OpenAI Copilot path uses). The retry reuses the same
+            // Messages body and, via AddAnthropicHeaders, the refreshed Copilot bearer.
+            var isAnthropicOAuthRetry = (response.StatusCode == System.Net.HttpStatusCode.Unauthorized
+                    || response.StatusCode == System.Net.HttpStatusCode.Forbidden)
+                && provider.Credential.Kind == CredentialKind.AnthropicOAuth;
+            var isCopilotBearerRetry = response.StatusCode == System.Net.HttpStatusCode.Unauthorized
+                && provider.Credential.Kind == CredentialKind.GitHubCopilotBearer;
+
+            if (isAnthropicOAuthRetry || isCopilotBearerRetry)
             {
-                if (response.StatusCode == System.Net.HttpStatusCode.Forbidden)
+                if (isAnthropicOAuthRetry && response.StatusCode == System.Net.HttpStatusCode.Forbidden)
                 {
                     // Token revoked — ask Bridge to re-read secrets.json
                     await this.tokenManager.RequestTokenReloadAsync(provider, cancellationToken).ConfigureAwait(false);
                 }
                 else
                 {
-                    // Token expired — normal refresh flow
+                    // Token expired (401) — normal refresh/re-mint flow
                     await this.tokenManager.ForceRefreshAsync(provider, cancellationToken).ConfigureAwait(false);
                 }
 
@@ -285,12 +290,19 @@ internal sealed partial class AnthropicApiClient : IProviderApiClient
                 : requestJson;
             this.LogLlmErrorContext(request.RequestId, httpVer, maskedHeaders, bodyPreview);
 
-            // Anthropic OAuth: retry once on 401 (expired) or 403 (revoked).
-            if ((response.StatusCode == System.Net.HttpStatusCode.Unauthorized
-                 || response.StatusCode == System.Net.HttpStatusCode.Forbidden)
-                && provider.Credential.Kind == CredentialKind.AnthropicOAuth)
+            // Retry once on 401/403. Anthropic OAuth: 401 → refresh, 403 → reload (revoked).
+            // GitHub Copilot bearer: 401 → re-mint via the Bridge. Copilot never sees a 403 reload
+            // path (no secrets.json rotation), so wasRevoked stays false for it.
+            var isAnthropicOAuthRetry = (response.StatusCode == System.Net.HttpStatusCode.Unauthorized
+                    || response.StatusCode == System.Net.HttpStatusCode.Forbidden)
+                && provider.Credential.Kind == CredentialKind.AnthropicOAuth;
+            var isCopilotBearerRetry = response.StatusCode == System.Net.HttpStatusCode.Unauthorized
+                && provider.Credential.Kind == CredentialKind.GitHubCopilotBearer;
+
+            if (isAnthropicOAuthRetry || isCopilotBearerRetry)
             {
-                var wasRevoked = response.StatusCode == System.Net.HttpStatusCode.Forbidden;
+                var wasRevoked = isAnthropicOAuthRetry
+                    && response.StatusCode == System.Net.HttpStatusCode.Forbidden;
                 response.Dispose();
                 response = null;
 
@@ -575,11 +587,16 @@ internal sealed partial class AnthropicApiClient : IProviderApiClient
     }
 
     /// <summary>
-    /// Returns the base URL for Anthropic API requests.
+    /// Returns the base URL for Messages API requests. Falls back to the Copilot host for a
+    /// <c>github-copilot-api</c> credential with no explicit base URL, otherwise the Anthropic host.
     /// </summary>
     private static string GetAnthropicBaseUrl(ProviderState provider)
     {
-        return (provider.Credential.BaseUrl?.TrimEnd('/') ?? "https://api.anthropic.com") + "/";
+        var baseUrl = provider.Credential.BaseUrl?.TrimEnd('/')
+            ?? (provider.Credential.Api == "github-copilot-api"
+                ? "https://api.githubcopilot.com"
+                : "https://api.anthropic.com");
+        return baseUrl + "/";
     }
 
     /// <summary>
@@ -599,6 +616,21 @@ internal sealed partial class AnthropicApiClient : IProviderApiClient
         request.VersionPolicy = HttpVersionPolicy.RequestVersionOrHigher;
 
         request.Headers.Add("anthropic-version", "2023-06-01");
+
+        if (provider.Credential.Api == "github-copilot-api")
+        {
+            // GitHub Copilot Messages: the Bridge-minted bearer is used directly as
+            // Authorization: ****** the OpenCode-style Copilot headers. No x-api-key and no
+            // Anthropic OAuth beta query/header — Copilot is not the Anthropic OAuth surface. The
+            // live value is the current (possibly just-refreshed) bearer in CurrentAccessToken,
+            // falling back to the pushed AccessToken.
+            var bearer = provider.CurrentAccessToken ?? provider.Credential.AccessToken ?? string.Empty;
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
+            request.Headers.Add("Openai-Intent", "conversation-edits");
+            request.Headers.Add("x-initiator", "user");
+            request.Headers.Add("X-GitHub-Api-Version", "2026-06-01");
+            return;
+        }
 
         if (provider.Credential.Kind is CredentialKind.AnthropicOAuth or CredentialKind.AnthropicSetupToken)
         {

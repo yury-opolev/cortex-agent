@@ -2,6 +2,7 @@ using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
+using Cortex.Contained.Agent.Host.Llm.Providers.Copilot;
 using Cortex.Contained.Contracts.Hub;
 using Cortex.Contained.Contracts.Llm;
 
@@ -40,26 +41,21 @@ internal sealed partial class OpenAiCompatibleApiClient : IProviderApiClient
             await this.tokenManager.EnsureFreshTokenAsync(provider, cancellationToken).ConfigureAwait(false);
         }
 
-        using var httpClient = CreateHttpClient(provider);
-        var endpoint = GetOpenAiEndpoint(provider);
+        // Select the endpoint ONCE from the current model's live metadata. The same endpoint and
+        // serialized body drive both the initial request and the 401 retry — no fallback to Chat
+        // Completions based on a model-name heuristic.
+        var endpoint = SelectEndpoint(provider, request.Model);
+        var path = GetRequestPath(provider, endpoint);
 
-        var body = BuildOpenAiRequestBody(request, stream: false, provider.Credential.Api);
-        var json = JsonSerializer.Serialize(body, ProviderClientHelpers.JsonOptions);
-        var requestUrl = $"{httpClient.BaseAddress}{endpoint}";
+        using var httpClient = CreateHttpClient(provider);
+
+        var json = this.BuildRequestJson(provider, request, endpoint, stream: false);
+        var requestUrl = $"{httpClient.BaseAddress}{path}";
         this.LogLlmRequest(request.RequestId, requestUrl, json.Length, request.Messages.Count);
 
-        // Diagnostic: log last message role in serialized body to trace "must end with user" errors
-        if (body.Messages is { Count: > 0 })
-        {
-            var lastMsg = body.Messages[^1];
-            var lastRole = lastMsg.Role ?? "null";
-            var lastContentNull = lastMsg.Content is null;
-            var lastContentType = lastMsg.Content?.GetType().Name ?? "null";
-            this.LogLlmRequestTail(request.RequestId, body.Messages.Count, lastRole, lastContentNull, lastContentType);
-        }
         using var content = new StringContent(json, Encoding.UTF8, "application/json");
 
-        using var response = await httpClient.PostAsync(endpoint, content, cancellationToken).ConfigureAwait(false);
+        using var response = await httpClient.PostAsync(path, content, cancellationToken).ConfigureAwait(false);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -70,6 +66,7 @@ internal sealed partial class OpenAiCompatibleApiClient : IProviderApiClient
             // Bridge-minted Copilot bearer: retry once on 401 by requesting a fresh bearer
             // from the Bridge (same round-trip Anthropic uses). The PAT never enters the
             // container — the Bridge re-mints. Legacy GitHubPat/GitHubOAuth have no retry path.
+            // The retry reuses the SAME endpoint and serialized body as the initial attempt.
             if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized
                 && provider.Credential.Kind == CredentialKind.GitHubCopilotBearer)
             {
@@ -79,30 +76,19 @@ internal sealed partial class OpenAiCompatibleApiClient : IProviderApiClient
                     await this.tokenManager.ForceRefreshAsync(provider, cancellationToken).ConfigureAwait(false);
 
                     using var retryClient = CreateHttpClient(provider);
-                    var retryJson = JsonSerializer.Serialize(body, ProviderClientHelpers.JsonOptions);
-                    using var retryContent = new StringContent(retryJson, Encoding.UTF8, "application/json");
+                    using var retryContent = new StringContent(json, Encoding.UTF8, "application/json");
                     using var retryResponse = await retryClient.PostAsync(
-                        endpoint, retryContent, cancellationToken).ConfigureAwait(false);
+                        path, retryContent, cancellationToken).ConfigureAwait(false);
 
                     if (retryResponse.IsSuccessStatusCode)
                     {
                         var retryResponseJson = await retryResponse.Content
                             .ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-                        var retryCompletion = JsonSerializer.Deserialize<OpenAiChatResponse>(
-                            retryResponseJson, ProviderClientHelpers.JsonOptions);
+                        var retryResult = ParseCompletion(retryResponseJson, endpoint, provider);
 
-                        if (retryCompletion is not null)
+                        if (retryResult is not null)
                         {
-                            var retryChoice = retryCompletion.Choices?.FirstOrDefault();
-                            return new LlmCompletionResult
-                            {
-                                Success = true,
-                                Content = retryChoice?.Message?.Content?.ToString(),
-                                ToolCalls = MapToolCalls(retryChoice?.Message?.ToolCalls),
-                                FinishReason = retryChoice?.FinishReason,
-                                Usage = MapUsage(retryCompletion.Usage),
-                                ProviderId = provider.Credential.Name,
-                            };
+                            return retryResult;
                         }
                     }
                 }
@@ -129,30 +115,15 @@ internal sealed partial class OpenAiCompatibleApiClient : IProviderApiClient
 
         var responseJson = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
         this.LogLlmResponse(request.RequestId, (int)response.StatusCode, responseJson.Length);
-        var completionResponse = JsonSerializer.Deserialize<OpenAiChatResponse>(responseJson, ProviderClientHelpers.JsonOptions);
 
-        if (completionResponse is null)
-        {
-            return new LlmCompletionResult
+        return ParseCompletion(responseJson, endpoint, provider)
+            ?? new LlmCompletionResult
             {
                 Success = false,
                 ErrorCode = "LlmError",
                 ErrorMessage = "Failed to deserialize response.",
                 ProviderId = provider.Credential.Name,
             };
-        }
-
-        var choice = completionResponse.Choices?.FirstOrDefault();
-
-        return new LlmCompletionResult
-        {
-            Success = true,
-            Content = choice?.Message?.Content?.ToString(),
-            ToolCalls = MapToolCalls(choice?.Message?.ToolCalls),
-            FinishReason = choice?.FinishReason,
-            Usage = MapUsage(completionResponse.Usage),
-            ProviderId = provider.Credential.Name,
-        };
     }
 
     public async IAsyncEnumerable<LlmStreamChunk> StreamAsync(
@@ -169,29 +140,18 @@ internal sealed partial class OpenAiCompatibleApiClient : IProviderApiClient
             await this.tokenManager.EnsureFreshTokenAsync(provider, cancellationToken).ConfigureAwait(false);
         }
 
+        var endpoint = SelectEndpoint(provider, request.Model);
+        var path = GetRequestPath(provider, endpoint);
+
         using var httpClient = CreateHttpClient(provider);
-        var endpoint = GetOpenAiEndpoint(provider);
 
-        var body = BuildOpenAiRequestBody(request, stream: true, provider.Credential.Api);
-        body.StreamOptions = new OpenAiStreamOptions { IncludeUsage = true };
-
-        var json = JsonSerializer.Serialize(body, ProviderClientHelpers.JsonOptions);
-        var requestUrl = $"{httpClient.BaseAddress}{endpoint}";
+        var json = this.BuildRequestJson(provider, request, endpoint, stream: true);
+        var requestUrl = $"{httpClient.BaseAddress}{path}";
         this.LogLlmRequest(request.RequestId, requestUrl, json.Length, request.Messages.Count);
-
-        // Diagnostic: log last message role in serialized body
-        if (body.Messages is { Count: > 0 })
-        {
-            var lastMsg = body.Messages[^1];
-            var lastRole = lastMsg.Role ?? "null";
-            var lastContentNull = lastMsg.Content is null;
-            var lastContentType = lastMsg.Content?.GetType().Name ?? "null";
-            this.LogLlmRequestTail(request.RequestId, body.Messages.Count, lastRole, lastContentNull, lastContentType);
-        }
 
         using var httpContent = new StringContent(json, Encoding.UTF8, "application/json");
 
-        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, endpoint)
+        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, path)
         {
             Content = httpContent,
         };
@@ -240,11 +200,8 @@ internal sealed partial class OpenAiCompatibleApiClient : IProviderApiClient
                     await this.tokenManager.ForceRefreshAsync(provider, cancellationToken).ConfigureAwait(false);
 
                     retryClient = CreateHttpClient(provider);
-                    var retryBody = BuildOpenAiRequestBody(request, stream: true, provider.Credential.Api);
-                    retryBody.StreamOptions = new OpenAiStreamOptions { IncludeUsage = true };
-                    var retryJson = JsonSerializer.Serialize(retryBody, ProviderClientHelpers.JsonOptions);
-                    using var retryHttpContent = new StringContent(retryJson, Encoding.UTF8, "application/json");
-                    using var retryRequest = new HttpRequestMessage(HttpMethod.Post, endpoint)
+                    using var retryHttpContent = new StringContent(json, Encoding.UTF8, "application/json");
+                    using var retryRequest = new HttpRequestMessage(HttpMethod.Post, path)
                     {
                         Content = retryHttpContent,
                     };
@@ -282,8 +239,8 @@ internal sealed partial class OpenAiCompatibleApiClient : IProviderApiClient
                             .ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
                         using var retryReader = new StreamReader(retryStream, Encoding.UTF8);
 
-                        await foreach (var chunk in ParseOpenAiSseAsync(
-                            retryReader, request.RequestId, cancellationToken).ConfigureAwait(false))
+                        await foreach (var chunk in this.ReadSseAsync(
+                            retryReader, endpoint, request.RequestId, cancellationToken).ConfigureAwait(false))
                         {
                             yield return chunk;
                         }
@@ -316,7 +273,7 @@ internal sealed partial class OpenAiCompatibleApiClient : IProviderApiClient
         using var stream = await response!.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
         using var reader = new StreamReader(stream, Encoding.UTF8);
 
-        await foreach (var chunk in ParseOpenAiSseAsync(reader, request.RequestId, cancellationToken)
+        await foreach (var chunk in this.ReadSseAsync(reader, endpoint, request.RequestId, cancellationToken)
             .ConfigureAwait(false))
         {
             yield return chunk;
@@ -456,6 +413,106 @@ internal sealed partial class OpenAiCompatibleApiClient : IProviderApiClient
             _ => "v1/chat/completions",
         };
     }
+
+    /// <summary>
+    /// Selects the protocol for this call from the current model's live endpoint metadata.
+    /// Only GitHub Copilot models route by metadata (Responses &gt; Messages &gt; Chat); every
+    /// other OpenAI-compatible provider always uses Chat Completions. Metadata-only — no
+    /// model-name heuristics. <see cref="CopilotEndpoint.Messages"/> is never produced for this
+    /// client (the facade dispatches Messages models to the Anthropic client); if it ever reached
+    /// here it degrades to Chat via <see cref="GetRequestPath"/>/<see cref="BuildRequestJson"/>.
+    /// </summary>
+    private static CopilotEndpoint SelectEndpoint(ProviderState provider, string model)
+        => provider.Credential.Api == "github-copilot-api"
+            ? CopilotEndpointResolver.Resolve(provider.FindModelMetadata(model)?.SupportedEndpoints)
+            : CopilotEndpoint.ChatCompletions;
+
+    /// <summary>The request path for the selected endpoint (relative to the client base URL).</summary>
+    private static string GetRequestPath(ProviderState provider, CopilotEndpoint endpoint)
+        => endpoint == CopilotEndpoint.Responses
+            ? (provider.Credential.Api == "github-copilot-api" ? "responses" : "v1/responses")
+            : GetOpenAiEndpoint(provider);
+
+    /// <summary>
+    /// Serializes the request body for the selected endpoint: the Responses request shape for
+    /// <see cref="CopilotEndpoint.Responses"/> (with <c>stream</c> set), otherwise the Chat
+    /// Completions body (adding <c>stream_options.include_usage</c> when streaming). Emitted once
+    /// per call and reused for the 401 retry.
+    /// </summary>
+    private string BuildRequestJson(
+        ProviderState provider, LlmCompletionRequest request, CopilotEndpoint endpoint, bool stream)
+    {
+        if (endpoint == CopilotEndpoint.Responses)
+        {
+            var responsesBody = OpenAiResponsesRequestMapper.Build(request);
+            responsesBody.Stream = stream;
+            return JsonSerializer.Serialize(responsesBody, ProviderClientHelpers.JsonOptions);
+        }
+
+        var body = BuildOpenAiRequestBody(request, stream, provider.Credential.Api);
+        if (stream)
+        {
+            body.StreamOptions = new OpenAiStreamOptions { IncludeUsage = true };
+        }
+
+        var json = JsonSerializer.Serialize(body, ProviderClientHelpers.JsonOptions);
+
+        // Diagnostic (Chat only): log the last serialized message role to trace "must end with
+        // user" errors. Responses items carry no equivalent tail role.
+        if (body.Messages is { Count: > 0 })
+        {
+            var lastMsg = body.Messages[^1];
+            this.LogLlmRequestTail(
+                request.RequestId,
+                body.Messages.Count,
+                lastMsg.Role ?? "null",
+                lastMsg.Content is null,
+                lastMsg.Content?.GetType().Name ?? "null");
+        }
+
+        return json;
+    }
+
+    /// <summary>
+    /// Parses a non-streaming success body for the selected endpoint. Responses always yields a
+    /// result (a <c>failed</c> status/error becomes a clean failure result); Chat returns
+    /// <see langword="null"/> when the body cannot be deserialized so callers can fall through.
+    /// </summary>
+    private static LlmCompletionResult? ParseCompletion(
+        string json, CopilotEndpoint endpoint, ProviderState provider)
+        => endpoint == CopilotEndpoint.Responses
+            ? OpenAiResponsesResponse.Parse(json, provider)
+            : ParseChatCompletionOrNull(json, provider);
+
+    /// <summary>Parses a Chat Completions body; returns <see langword="null"/> when it deserializes to nothing.</summary>
+    private static LlmCompletionResult? ParseChatCompletionOrNull(string json, ProviderState provider)
+    {
+        var completionResponse = JsonSerializer.Deserialize<OpenAiChatResponse>(
+            json, ProviderClientHelpers.JsonOptions);
+
+        if (completionResponse is null)
+        {
+            return null;
+        }
+
+        var choice = completionResponse.Choices?.FirstOrDefault();
+        return new LlmCompletionResult
+        {
+            Success = true,
+            Content = choice?.Message?.Content?.ToString(),
+            ToolCalls = MapToolCalls(choice?.Message?.ToolCalls),
+            FinishReason = choice?.FinishReason,
+            Usage = MapUsage(completionResponse.Usage),
+            ProviderId = provider.Credential.Name,
+        };
+    }
+
+    /// <summary>Selects the SSE parser for the streamed body: Responses events or Chat deltas.</summary>
+    private IAsyncEnumerable<LlmStreamChunk> ReadSseAsync(
+        StreamReader reader, CopilotEndpoint endpoint, string requestId, CancellationToken cancellationToken)
+        => endpoint == CopilotEndpoint.Responses
+            ? OpenAiResponsesSseReader.ReadAsync(reader, cancellationToken)
+            : this.ParseOpenAiSseAsync(reader, requestId, cancellationToken);
 
     internal static OpenAiChatRequest BuildOpenAiRequestBody(
         LlmCompletionRequest request, bool stream, string apiType)

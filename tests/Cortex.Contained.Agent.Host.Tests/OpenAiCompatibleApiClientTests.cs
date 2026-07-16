@@ -256,6 +256,208 @@ public class OpenAiCompatibleApiClientTests
         Assert.All(handler.CreatedResponses, r => Assert.True(r.IsDisposed));
     }
 
+    // ── Responses endpoint routing (model metadata ["/responses"]) ───────────────
+    // A Copilot model whose live metadata advertises the Responses API must POST /responses,
+    // serialize the Responses request shape, and parse the Responses response — on both the
+    // complete and stream paths, and on the 401 refresh retry — while preserving the same
+    // Copilot bearer + header set used by Chat. Absent metadata keeps Chat Completions.
+
+    /// <summary>A non-streaming Responses body: one assistant output_text "hi".</summary>
+    private const string CopilotResponsesJson =
+        """{"status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hi"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}""";
+
+    /// <summary>A Responses SSE stream: one output_text delta "hi" then response.completed.</summary>
+    private const string CopilotResponsesStreamSse =
+        "data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"delta\":\"hi\"}\n\n" +
+        "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n";
+
+    /// <summary>A request whose model matches the Responses-advertising metadata below.</summary>
+    private static LlmCompletionRequest BuildResponsesRequest() => new()
+    {
+        Model = "gpt-5.6-sol",
+        Messages = [new LlmMessage { Role = "user", Content = "hello" }],
+        RequestId = "req-1",
+        ConversationId = "conv-1",
+    };
+
+    /// <summary>A Copilot bearer provider whose model advertises the Responses endpoint.</summary>
+    private static ProviderState BuildCopilotResponsesProvider() => new(new LlmProviderCredential
+    {
+        Name = "github-copilot",
+        Api = "github-copilot-api",
+        Kind = CredentialKind.GitHubCopilotBearer,
+        AccessToken = StaleBearer,
+        ApiKey = null,
+        AccessTokenExpiresAt = DateTimeOffset.UtcNow.AddMinutes(20).ToUnixTimeMilliseconds(),
+        Models = ["gpt-5.6-sol"],
+        ModelMetadata =
+        [
+            new LlmModelMetadata { Id = "gpt-5.6-sol", SupportedEndpoints = ["/responses"] },
+        ],
+    });
+
+    [Fact]
+    public async Task CompleteAsync_GitHubCopilotResponses_PostsToResponsesEndpointWithResponsesShape()
+    {
+        var handler = new RecordingHandler((HttpStatusCode.OK, CopilotResponsesJson));
+        var factory = new RecordingHttpClientFactory(handler);
+        using var tokenManager = new OAuthTokenManager(NullLogger.Instance, metrics: null);
+        var client = new OpenAiCompatibleApiClient(factory, tokenManager, NullLogger.Instance);
+
+        var result = await client.CompleteAsync(
+            BuildCopilotResponsesProvider(), BuildResponsesRequest(), CancellationToken.None);
+
+        // Responses parser produced the assistant text.
+        Assert.True(result.Success);
+        Assert.Equal("hi", result.Content);
+
+        var sent = Assert.Single(handler.Requests);
+        Assert.EndsWith("/responses", sent.AbsolutePath);
+        Assert.DoesNotContain("chat/completions", sent.AbsolutePath);
+
+        // Responses request shape (input/instructions), not Chat (messages).
+        Assert.Contains("\"input\"", sent.Body);
+        Assert.DoesNotContain("\"messages\"", sent.Body);
+
+        // Copilot bearer + header set preserved.
+        Assert.Equal("Bearer", sent.Authorization?.Scheme);
+        Assert.Equal(StaleBearer, sent.Authorization?.Parameter);
+        Assert.Equal("conversation-edits", sent.Headers.GetValueOrDefault("Openai-Intent"));
+        Assert.Equal("user", sent.Headers.GetValueOrDefault("x-initiator"));
+        Assert.Equal("2026-06-01", sent.Headers.GetValueOrDefault("X-GitHub-Api-Version"));
+    }
+
+    [Fact]
+    public async Task StreamAsync_GitHubCopilotResponses_PostsToResponsesEndpointWithStreamShape()
+    {
+        var handler = new RecordingHandler((HttpStatusCode.OK, CopilotResponsesStreamSse));
+        var factory = new RecordingHttpClientFactory(handler);
+        using var tokenManager = new OAuthTokenManager(NullLogger.Instance, metrics: null);
+        var client = new OpenAiCompatibleApiClient(factory, tokenManager, NullLogger.Instance);
+
+        var chunks = new List<LlmStreamChunk>();
+        await foreach (var chunk in client.StreamAsync(
+            BuildCopilotResponsesProvider(), BuildResponsesRequest(), CancellationToken.None))
+        {
+            chunks.Add(chunk);
+        }
+
+        // Responses SSE parser produced the delta and no error chunk.
+        Assert.DoesNotContain(chunks, c => !string.IsNullOrEmpty(c.ErrorMessage));
+        Assert.Contains(chunks, c => c.ContentDelta == "hi");
+
+        var sent = Assert.Single(handler.Requests);
+        Assert.EndsWith("/responses", sent.AbsolutePath);
+        Assert.Contains("\"stream\":true", sent.Body);
+        Assert.Contains("\"input\"", sent.Body);
+        Assert.DoesNotContain("\"messages\"", sent.Body);
+        Assert.Equal("2026-06-01", sent.Headers.GetValueOrDefault("X-GitHub-Api-Version"));
+    }
+
+    [Fact]
+    public async Task CompleteAsync_GitHubCopilotResponses_401_RefreshesOnceAndRetriesResponsesWithFreshBearer()
+    {
+        var handler = new RecordingHandler(
+            (HttpStatusCode.Unauthorized, """{"error":"unauthorized"}"""),
+            (HttpStatusCode.OK, CopilotResponsesJson));
+        var factory = new RecordingHttpClientFactory(handler);
+        var (tokenManager, refreshCount) = BuildTokenManagerWithRefresh();
+        using (tokenManager)
+        {
+            var client = new OpenAiCompatibleApiClient(factory, tokenManager, NullLogger.Instance);
+
+            var result = await client.CompleteAsync(
+                BuildCopilotResponsesProvider(), BuildResponsesRequest(), CancellationToken.None);
+
+            Assert.True(result.Success);
+            Assert.Equal("hi", result.Content);
+
+            // Both attempts targeted /responses (no fallback to Chat on the retry).
+            Assert.Equal(2, handler.Requests.Count);
+            Assert.All(handler.Requests, r => Assert.EndsWith("/responses", r.AbsolutePath));
+
+            // Exactly one Bridge refresh; stale bearer first, refreshed bearer on the retry.
+            Assert.Equal(1, refreshCount());
+            Assert.Equal(StaleBearer, handler.Requests[0].Authorization?.Parameter);
+            Assert.Equal(RefreshedBearer, handler.Requests[1].Authorization?.Parameter);
+        }
+    }
+
+    [Fact]
+    public async Task StreamAsync_GitHubCopilotResponses_401_RefreshesOnceAndRetriesResponsesWithFreshBearer()
+    {
+        var handler = new RecordingHandler(
+            (HttpStatusCode.Unauthorized, """{"error":"unauthorized"}"""),
+            (HttpStatusCode.OK, CopilotResponsesStreamSse));
+        var factory = new RecordingHttpClientFactory(handler);
+        var (tokenManager, refreshCount) = BuildTokenManagerWithRefresh();
+        using (tokenManager)
+        {
+            var client = new OpenAiCompatibleApiClient(factory, tokenManager, NullLogger.Instance);
+
+            var chunks = new List<LlmStreamChunk>();
+            await foreach (var chunk in client.StreamAsync(
+                BuildCopilotResponsesProvider(), BuildResponsesRequest(), CancellationToken.None))
+            {
+                chunks.Add(chunk);
+            }
+
+            Assert.DoesNotContain(chunks, c => !string.IsNullOrEmpty(c.ErrorMessage));
+            Assert.Contains(chunks, c => c.ContentDelta == "hi");
+
+            Assert.Equal(2, handler.Requests.Count);
+            Assert.All(handler.Requests, r => Assert.EndsWith("/responses", r.AbsolutePath));
+            Assert.Equal(1, refreshCount());
+            Assert.Equal(StaleBearer, handler.Requests[0].Authorization?.Parameter);
+            Assert.Equal(RefreshedBearer, handler.Requests[1].Authorization?.Parameter);
+        }
+
+        // No leaked response across the retry branch.
+        Assert.All(handler.CreatedResponses, r => Assert.True(r.IsDisposed));
+    }
+
+    [Fact]
+    public async Task CompleteAsync_GitHubCopilotResponses_CallerCancellation_IsRethrownNotDegraded()
+    {
+        using var cts = new CancellationTokenSource();
+        var handler = new RecordingHandler(
+            (HttpStatusCode.Unauthorized, """{"error":"unauthorized"}"""));
+        var factory = new RecordingHttpClientFactory(handler);
+        using var tokenManager = new OAuthTokenManager(NullLogger.Instance, metrics: null);
+        tokenManager.SetRequestTokenRefreshCallback(_ =>
+        {
+            cts.Cancel();
+            return Task.FromResult(new TokenRefreshResult
+            {
+                Success = true,
+                AccessToken = RefreshedBearer,
+                ExpiresAtMs = DateTimeOffset.UtcNow.AddMinutes(20).ToUnixTimeMilliseconds(),
+            });
+        });
+        var client = new OpenAiCompatibleApiClient(factory, tokenManager, NullLogger.Instance);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            client.CompleteAsync(BuildCopilotResponsesProvider(), BuildResponsesRequest(), cts.Token));
+    }
+
+    [Fact]
+    public async Task CompleteAsync_GitHubCopilotNoMetadata_UsesChatCompletionsEndpoint()
+    {
+        var handler = new RecordingHandler((HttpStatusCode.OK, CopilotResponseJson));
+        var factory = new RecordingHttpClientFactory(handler);
+        using var tokenManager = new OAuthTokenManager(NullLogger.Instance, metrics: null);
+        var client = new OpenAiCompatibleApiClient(factory, tokenManager, NullLogger.Instance);
+
+        // BuildCopilotBearerProvider has no model metadata → must stay on Chat Completions.
+        var result = await client.CompleteAsync(
+            BuildCopilotBearerProvider(), BuildRequest(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        var sent = Assert.Single(handler.Requests);
+        Assert.EndsWith("/chat/completions", sent.AbsolutePath);
+        Assert.Contains("\"messages\"", sent.Body);
+    }
+
     private sealed class SingleClientFactory : IHttpClientFactory
     {
         private readonly HttpMessageHandler handler;
