@@ -15,9 +15,12 @@ public class CopilotEndpointResolverTests
     [InlineData("/v1/chat/completions", CopilotEndpoint.ChatCompletions)]
     [InlineData("", CopilotEndpoint.ChatCompletions)]
     [InlineData("ws:/responses", CopilotEndpoint.ChatCompletions)]
-    public void Resolve_SelectsEndpointByFixedPriority(string csv, CopilotEndpoint expected)
+    // `expected` is boxed as `object` because CopilotEndpoint is internal: an internal
+    // parameter type on a public xUnit theory method would be less accessible than the
+    // method (CS0051). The enum is unboxed inside the body, which InternalsVisibleTo permits.
+    public void Resolve_SelectsEndpointByFixedPriority(string csv, object expected)
     {
-        Assert.Equal(expected, CopilotEndpointResolver.Resolve(Parse(csv)));
+        Assert.Equal((CopilotEndpoint)expected, CopilotEndpointResolver.Resolve(Parse(csv)));
     }
 
     [Theory]
@@ -79,9 +82,9 @@ public class CopilotEndpointResolverTests
     [InlineData("/V1/Responses", CopilotEndpoint.Responses)]
     [InlineData("/V1/Messages", CopilotEndpoint.Messages)]
     [InlineData("/Chat/Completions", CopilotEndpoint.ChatCompletions)]
-    public void Resolve_IsCaseInsensitive(string endpoint, CopilotEndpoint expected)
+    public void Resolve_IsCaseInsensitive(string endpoint, object expected)
     {
-        Assert.Equal(expected, CopilotEndpointResolver.Resolve([endpoint]));
+        Assert.Equal((CopilotEndpoint)expected, CopilotEndpointResolver.Resolve([endpoint]));
     }
 
     // ── Missing / null / empty / unknown metadata → ChatCompletions ──────

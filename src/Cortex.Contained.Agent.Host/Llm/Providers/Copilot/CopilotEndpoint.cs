@@ -5,7 +5,7 @@ namespace Cortex.Contained.Agent.Host.Llm.Providers.Copilot;
 /// capability order. Resolved from a model's provider-reported endpoint metadata by
 /// <see cref="CopilotEndpointResolver"/>.
 /// </summary>
-public enum CopilotEndpoint
+internal enum CopilotEndpoint
 {
     /// <summary>OpenAI-style Chat Completions (<c>/chat/completions</c>). Default fallback.</summary>
     ChatCompletions,
