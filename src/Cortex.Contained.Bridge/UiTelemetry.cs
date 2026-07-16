@@ -27,6 +27,9 @@ internal static partial class BridgeLogMessages
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Restart requested via Web UI; scheduling graceful shutdown")]
     public static partial void LogRestartRequested(ILogger logger);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to refresh live Copilot endpoint metadata for provider '{Provider}': {Error}")]
+    public static partial void LogEndpointOverlayRefreshFailed(ILogger logger, string provider, string error);
 }
 
 /// <summary>
