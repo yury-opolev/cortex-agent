@@ -2,6 +2,7 @@ using Cortex.Contained.Contracts.Channels;
 using Cortex.Contained.Contracts.Hub;
 using Cortex.Contained.Contracts.Messages;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace Cortex.Contained.Channels.WebChat;
@@ -18,15 +19,18 @@ public sealed partial class WebChatHub : Hub
     private readonly WebChatChannel channel;
     private readonly IWebChatHubProxy hubProxy;
     private readonly ILogger<WebChatHub> logger;
+    private readonly IHostApplicationLifetime lifetime;
 
     public WebChatHub(
         WebChatChannel channel,
         IWebChatHubProxy hubProxy,
-        ILogger<WebChatHub> logger)
+        ILogger<WebChatHub> logger,
+        IHostApplicationLifetime lifetime)
     {
         this.channel = channel;
         this.hubProxy = hubProxy;
         this.logger = logger;
+        this.lifetime = lifetime;
     }
 
     /// <summary>
@@ -81,6 +85,18 @@ public sealed partial class WebChatHub : Hub
     /// <inheritdoc />
     public override async Task OnConnectedAsync()
     {
+        // Refuse connections that arrive while the host is draining. A WebSocket is a
+        // long-lived in-flight request, so one accepted here would hold Kestrel's
+        // graceful shutdown open until the host shutdown timeout elapses and the
+        // process is force-killed. The Web UI's SignalR client reconnects the instant
+        // shutdown drops its socket, which lands squarely in that window on restart.
+        if (this.lifetime.ApplicationStopping.IsCancellationRequested)
+        {
+            this.LogConnectionRefusedDuringShutdown(Context.ConnectionId);
+            Context.Abort();
+            return;
+        }
+
         this.LogClientConnected(Context.ConnectionId);
         await base.OnConnectedAsync().ConfigureAwait(false);
     }
@@ -99,6 +115,9 @@ public sealed partial class WebChatHub : Hub
 
     [LoggerMessage(Level = LogLevel.Information, Message = "WebChat client connected: {ConnectionId}")]
     private partial void LogClientConnected(string connectionId);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "WebChat connection {ConnectionId} refused: the Bridge is shutting down")]
+    private partial void LogConnectionRefusedDuringShutdown(string connectionId);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "WebChat client disconnected: {ConnectionId}, reason={Reason}")]
     private partial void LogClientDisconnected(string connectionId, string? reason);
