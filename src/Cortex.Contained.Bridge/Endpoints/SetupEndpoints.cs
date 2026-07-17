@@ -278,6 +278,8 @@ internal static class SetupEndpoints
             Worker worker,
             TenantRouter tenantRouter,
             ModelCatalog modelCatalog,
+            IHttpClientFactory httpFactory,
+            ILoggerFactory loggerFactory,
             IHostEnvironment env) =>
         {
             var providerConfigs = new List<LlmProviderConfig>();
@@ -332,11 +334,10 @@ internal static class SetupEndpoints
                 }
             }
 
-            // Enrich model definitions with limits from models.dev catalog
-            foreach (var pc in providerConfigs)
-            {
-                modelCatalog.EnrichModelDefinitions(pc);
-            }
+            // Enrich model definitions with models.dev limits, then overlay live Copilot endpoint metadata.
+            var setupSaveLogger = loggerFactory.CreateLogger("Cortex.Contained.Bridge.Setup.Save");
+            await EnrichProviderConfigsAsync(
+                providerConfigs, modelCatalog, httpFactory, setupSaveLogger, CancellationToken.None).ConfigureAwait(false);
 
             // Resolve fallback order: map template IDs → provider names, filter to known providers
             var fallbackOrder = request.FallbackOrder.Count > 0
@@ -372,5 +373,27 @@ internal static class SetupEndpoints
 
             return Results.Ok(new { success = true });
         }).RequireAuthorization();
+    }
+
+    /// <summary>
+    /// Enriches every provider config with (1) context/output token limits from the models.dev catalog and
+    /// (2) live Copilot <c>/models</c> endpoint metadata (<see cref="CopilotEndpointOverlay"/>). Extracted as
+    /// the testable seam for <c>POST /api/setup/save</c> — the save payload only carries selected model IDs,
+    /// so this is the only place that ever populates <see cref="LlmModelDefinition.SupportedEndpoints"/> for
+    /// a newly-configured or re-saved Copilot provider.
+    /// </summary>
+    internal static async Task EnrichProviderConfigsAsync(
+        IEnumerable<LlmProviderConfig> providerConfigs,
+        ModelCatalog modelCatalog,
+        IHttpClientFactory httpClientFactory,
+        ILogger logger,
+        CancellationToken cancellationToken)
+    {
+        foreach (var pc in providerConfigs)
+        {
+            modelCatalog.EnrichModelDefinitions(pc);
+            await CopilotEndpointOverlay.RefreshSupportedEndpointsAsync(
+                pc, httpClientFactory, logger, cancellationToken).ConfigureAwait(false);
+        }
     }
 }

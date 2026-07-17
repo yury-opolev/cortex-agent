@@ -120,6 +120,48 @@ public sealed class CredentialsPusherCopilotBearerTests : IDisposable
     }
 
     [Fact]
+    public async Task BuildProviderCredentialsAsync_CopilotProvider_PushesSupportedEndpointsMetadata()
+    {
+        var strategy = new FakeStrategy
+        {
+            Handles = true,
+            Outcome = new TokenRefreshOutcome
+            {
+                AccessToken = "minted-bearer-xyz",
+                RefreshToken = null,
+                ExpiresAtMs = NowMs() + (15 * 60 * 1000),
+            },
+        };
+        var service = this.BuildService(strategy);
+
+        var provider = new LlmProviderConfig
+        {
+            Name = "github-copilot",
+            Api = "github-copilot-api",
+            TokenType = "pat",
+            ApiKey = "ghp_durable_pat",
+            Models = ["gpt-5.6-sol"],
+            ModelDefinitions =
+            [
+                new LlmModelDefinition
+                {
+                    Id = "gpt-5.6-sol",
+                    SupportedEndpoints = ["/responses"],
+                },
+            ],
+        };
+        var config = new BridgeConfig { LlmProviders = [provider] };
+        var pusher = this.BuildPusher(config, service);
+
+        var creds = await pusher.BuildProviderCredentialsAsync(CancellationToken.None);
+
+        var copilot = Assert.Single(creds);
+        var metadata = Assert.Single(copilot.ModelMetadata!);
+        Assert.Equal("gpt-5.6-sol", metadata.Id);
+        Assert.Equal(["/responses"], metadata.SupportedEndpoints);
+    }
+
+    [Fact]
     public async Task BuildProviderCredentialsAsync_CopilotMintFails_SkipsProviderGracefully()
     {
         var strategy = new FakeStrategy

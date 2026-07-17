@@ -214,6 +214,12 @@ public sealed class LlmModelDefinition
     /// <summary>Maximum output tokens per completion.</summary>
     [Range(1, 1_000_000)]
     public int MaxOutputTokens { get; set; } = 8_192;
+
+    /// <summary>
+    /// API endpoints this model supports (e.g. <c>/responses</c>, <c>ws:/responses</c>),
+    /// as reported by the provider. Empty when unknown.
+    /// </summary>
+    public List<string> SupportedEndpoints { get; set; } = [];
 }
 
 /// <summary>Global LLM proxy settings.</summary>

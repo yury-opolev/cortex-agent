@@ -704,4 +704,11 @@ public sealed record LlmModelMetadata
 
     /// <summary>Maximum output tokens per completion.</summary>
     public int MaxOutputTokens { get; init; } = 8_192;
+
+    /// <summary>
+    /// API endpoints this model supports (e.g. <c>/responses</c>), as reported by the
+    /// provider. Lets the Agent Host route Copilot models to the correct endpoint.
+    /// Empty when unknown (falls back to Chat Completions).
+    /// </summary>
+    public IReadOnlyList<string> SupportedEndpoints { get; init; } = [];
 }

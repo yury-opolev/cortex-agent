@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using Cortex.Contained.Agent.Host.Llm.Providers;
 using Cortex.Contained.Agent.Host.Llm.Providers.Anthropic;
+using Cortex.Contained.Agent.Host.Llm.Providers.Copilot;
 using Cortex.Contained.Agent.Host.Llm.Providers.OpenAi;
 using Cortex.Contained.Contracts.Hub;
 using Cortex.Contained.Contracts.Llm;
@@ -135,10 +136,14 @@ public sealed partial class DirectLlmClient : ILlmClient, IDisposable
             if (existing is not null
                 && cred.Kind is CredentialKind.AnthropicOAuth or CredentialKind.GitHubCopilotBearer)
             {
-                // Update token fields in-place — this also completes any pending refresh awaiter,
-                // releasing the caller of EnsureFreshTokenAsync so it can retry. Applies to both
-                // Anthropic OAuth and the Bridge-minted Copilot bearer (a re-push updates the
-                // bearer in place, preserving the pending-refresh awaiter).
+                // Refresh the pushed configuration/metadata (supported endpoints, model list,
+                // limits) FIRST so a caller released by UpdateOAuthTokens' pending-refresh signal
+                // observes the fresh config, then update the token fields in-place — this also
+                // completes any pending refresh awaiter, releasing the caller of
+                // EnsureFreshTokenAsync so it can retry. Applies to both Anthropic OAuth and the
+                // Bridge-minted Copilot bearer (a re-push updates the bearer AND endpoint metadata
+                // in place, preserving the pending-refresh awaiter — no reconnect needed).
+                existing.UpdateConfiguration(cred);
                 existing.UpdateOAuthTokens(
                     cred.AccessToken ?? string.Empty,
                     cred.RefreshToken,
@@ -268,7 +273,9 @@ public sealed partial class DirectLlmClient : ILlmClient, IDisposable
         ProviderState provider, LlmCompletionRequest request, CancellationToken cancellationToken)
         => provider.Credential.Api switch
         {
-            "openai-completions" or "github-copilot-api" =>
+            "github-copilot-api" =>
+                SelectCopilotClient(provider, request.Model).CompleteAsync(provider, request, cancellationToken),
+            "openai-completions" =>
                 this.openAiClient.CompleteAsync(provider, request, cancellationToken),
             "anthropic-messages" =>
                 this.anthropicClient.CompleteAsync(provider, request, cancellationToken),
@@ -575,12 +582,28 @@ public sealed partial class DirectLlmClient : ILlmClient, IDisposable
         ProviderState provider, LlmCompletionRequest request, CancellationToken cancellationToken)
         => provider.Credential.Api switch
         {
-            "openai-completions" or "github-copilot-api" =>
+            "github-copilot-api" =>
+                SelectCopilotClient(provider, request.Model).StreamAsync(provider, request, cancellationToken),
+            "openai-completions" =>
                 this.openAiClient.StreamAsync(provider, request, cancellationToken),
             "anthropic-messages" =>
                 this.anthropicClient.StreamAsync(provider, request, cancellationToken),
             _ => ProviderClientHelpers.ErrorStream($"Unsupported API type '{provider.Credential.Api}'."),
         };
+
+    /// <summary>
+    /// Picks the wire client for a GitHub Copilot model from its live endpoint metadata:
+    /// a model that advertises the Anthropic Messages endpoint dispatches through
+    /// <see cref="AnthropicApiClient"/> (Copilot base URL + bearer auth); Responses and Chat
+    /// Completions models stay on <see cref="OpenAiCompatibleApiClient"/>, which selects the
+    /// Responses-vs-Chat protocol itself. Same-provider retry and failover remain owned by the
+    /// facade around this call. Endpoint selection is metadata-only — no model-name heuristics.
+    /// </summary>
+    private IProviderApiClient SelectCopilotClient(ProviderState provider, string model)
+        => CopilotEndpointResolver.Resolve(provider.FindModelMetadata(model)?.SupportedEndpoints)
+            == CopilotEndpoint.Messages
+            ? this.anthropicClient
+            : this.openAiClient;
 
     // ── LoggerMessage ────────────────────────────────────────────────
 

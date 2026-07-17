@@ -227,6 +227,7 @@ public sealed partial class CredentialsPusher : ICredentialReplisher
                         Id = d.Id,
                         ContextWindow = d.ContextWindow,
                         MaxOutputTokens = d.MaxOutputTokens,
+                        SupportedEndpoints = d.SupportedEndpoints,
                     }).ToList()
                     : null,
             };

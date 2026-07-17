@@ -8,7 +8,19 @@ namespace Cortex.Contained.Agent.Host.Llm;
 /// </summary>
 internal sealed class ProviderState
 {
-    public LlmProviderCredential Credential { get; }
+    /// <summary>
+    /// The provider credential and its pushed configuration (base URL, model list, and per-model
+    /// <see cref="LlmModelMetadata"/>/supported endpoints). Swapped in place by
+    /// <see cref="UpdateConfiguration"/> on every Bridge re-push so a subsequent push's endpoint
+    /// metadata takes effect without a reconnect. Read via <see cref="Volatile"/> so other threads
+    /// observe the latest reference.
+    /// </summary>
+    public LlmProviderCredential Credential
+    {
+        get => Volatile.Read(ref this.credential);
+        private set => Volatile.Write(ref this.credential, value);
+    }
+    private LlmProviderCredential credential;
 
     // ── Bridge-refreshed token state (Anthropic OAuth + Copilot bearer) ─────────
     // Initialised from the credential; updated in-place by UpdateOAuthTokens
@@ -49,7 +61,7 @@ internal sealed class ProviderState
 
     public ProviderState(LlmProviderCredential credential)
     {
-        Credential = credential;
+        this.credential = credential;
 
         // Seed the mutable OAuth fields for every kind whose access token is refreshed
         // via the Bridge round-trip: Anthropic OAuth (with a rotating refresh token) and
@@ -95,5 +107,50 @@ internal sealed class ProviderState
 
         // Release any task waiting for the refresh to complete
         Interlocked.Exchange(ref this.pendingRefresh, null)?.TrySetResult(true);
+    }
+
+    /// <summary>
+    /// Replaces <see cref="Credential"/> with a freshly pushed one, refreshing the provider
+    /// configuration/metadata (base URL, model list, and per-model <see cref="LlmModelMetadata"/>
+    /// supported endpoints) while deliberately leaving the live token state
+    /// (<see cref="CurrentAccessToken"/>/<see cref="CurrentRefreshToken"/>/
+    /// <see cref="CurrentAccessTokenExpiresAtMs"/>) and any pending refresh awaiter untouched.
+    /// <para>
+    /// Called by <see cref="DirectLlmClient.ConfigureCredentials"/> when the Bridge re-pushes
+    /// credentials for a provider that is refreshed in place (Anthropic OAuth / Copilot bearer),
+    /// so a subsequent push's endpoint metadata takes effect without a reconnect. The token fields
+    /// remain authoritative and are updated separately via <see cref="UpdateOAuthTokens"/>; this
+    /// method must run before that call so a released refresh awaiter observes both fresh config
+    /// and fresh token.
+    /// </para>
+    /// </summary>
+    public void UpdateConfiguration(LlmProviderCredential credential)
+    {
+        Credential = credential;
+    }
+
+    /// <summary>
+    /// Finds the <see cref="LlmModelMetadata"/> for <paramref name="model"/> in
+    /// <see cref="Credential"/>'s pushed metadata, matching model IDs with
+    /// <see cref="StringComparison.OrdinalIgnoreCase"/>. Returns <see langword="null"/> when no
+    /// metadata was pushed or no entry matches.
+    /// </summary>
+    public LlmModelMetadata? FindModelMetadata(string model)
+    {
+        var metadata = Credential.ModelMetadata;
+        if (metadata is null)
+        {
+            return null;
+        }
+
+        foreach (var entry in metadata)
+        {
+            if (string.Equals(entry.Id, model, StringComparison.OrdinalIgnoreCase))
+            {
+                return entry;
+            }
+        }
+
+        return null;
     }
 }

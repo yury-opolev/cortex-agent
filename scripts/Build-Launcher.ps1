@@ -81,6 +81,18 @@ if ($LASTEXITCODE -ne 0) { throw "Bridge publish failed" }
 Write-Host "`nPublishing coda (coding engine)..." -ForegroundColor Yellow
 $codaProject = "$repoRoot\lib\coda-cli\src\Coda.Tui\Coda.Tui.csproj"
 if (Test-Path $codaProject) {
+    # Regenerate the submodule's version.props from its version.json BEFORE
+    # publishing. version.props is a git-ignored generated file that can lag the
+    # pinned commit's version.json, which would otherwise bundle new Coda code
+    # while `coda --version` reports the stale version. build.ps1 -NoBump is
+    # Coda's supported, authoritative no-bump version-props regeneration path
+    # (it never touches version.json). Delegating avoids duplicating the version
+    # formatting here.
+    $codaBuild = "$repoRoot\lib\coda-cli\build.ps1"
+    Write-Host "Stamping bundled Coda version (build.ps1 -NoBump)..." -ForegroundColor Gray
+    & $codaBuild -NoBump -Configuration $Configuration
+    if ($LASTEXITCODE -ne 0) { throw "Coda version-props regeneration (build.ps1 -NoBump) failed" }
+
     $codaOut = "$OutputDir\Bridge\coda"
     dotnet publish "$codaProject" `
         -c $Configuration `

@@ -98,6 +98,15 @@ internal static class BridgeSettingsWriter
                     sb.AppendLine(CultureInfo.InvariantCulture, $"      - id: {def.Id}");
                     sb.AppendLine(CultureInfo.InvariantCulture, $"        contextWindow: {def.ContextWindow}");
                     sb.AppendLine(CultureInfo.InvariantCulture, $"        maxOutputTokens: {def.MaxOutputTokens}");
+
+                    if (def.SupportedEndpoints.Count > 0)
+                    {
+                        sb.AppendLine("        supportedEndpoints:");
+                        foreach (var endpoint in def.SupportedEndpoints)
+                        {
+                            sb.AppendLine(CultureInfo.InvariantCulture, $"          - {endpoint}");
+                        }
+                    }
                 }
             }
         }

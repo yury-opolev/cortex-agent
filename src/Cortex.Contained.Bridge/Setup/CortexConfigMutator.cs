@@ -144,6 +144,17 @@ public static class CortexConfigMutator
                     dNode.Add("maxOutputTokens", d.MaxOutputTokens.ToString(System.Globalization.CultureInfo.InvariantCulture));
                 }
 
+                if (d.SupportedEndpoints is { Count: > 0 } endpoints)
+                {
+                    var endpointsSeq = new YamlSequenceNode();
+                    foreach (var endpoint in endpoints)
+                    {
+                        endpointsSeq.Add(new YamlScalarNode(endpoint));
+                    }
+
+                    dNode.Add("supportedEndpoints", endpointsSeq);
+                }
+
                 defsSeq.Add(dNode);
             }
 
