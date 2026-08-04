@@ -29,6 +29,12 @@ public sealed record AgentLoopConfig
     /// <summary>Max output tokens per LLM call.</summary>
     public int MaxOutputTokens { get; init; } = 8192;
 
+    /// <summary>
+    /// Requested reasoning effort for this loop's calls. Null = leave the provider on its own
+    /// default. Resolved per provider and per model before it reaches the wire.
+    /// </summary>
+    public string? ReasoningEffort { get; init; }
+
     /// <summary>Total context window for the model.</summary>
     public int ContextWindow { get; init; } = 128_000;
 
@@ -197,6 +203,7 @@ public sealed partial class AgentLoop
                 MaxTokens = config.MaxOutputTokens,
                 RequestId = requestId,
                 ConversationId = config.ConversationId,
+                ReasoningEffort = config.ReasoningEffort,
             };
 
             if (config.Temperature.HasValue)

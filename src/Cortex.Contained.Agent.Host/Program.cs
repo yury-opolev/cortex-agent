@@ -108,10 +108,16 @@ builder.Services.AddSingleton(sp =>
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Agent.AgentMetrics>();
 
 builder.Services.AddSingleton(sp =>
-    new DirectLlmClient(
+{
+    var agentConfig = sp.GetRequiredService<IOptions<AgentConfig>>().Value;
+    return new DirectLlmClient(
         sp.GetRequiredService<IHttpClientFactory>(),
         sp.GetRequiredService<ILogger<DirectLlmClient>>(),
-        sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.AgentMetrics>()));
+        Cortex.Contained.Agent.Host.Llm.Providers.LlmStreamTimeouts.FromSeconds(
+            agentConfig.LlmFirstTokenTimeoutSeconds,
+            agentConfig.LlmStreamIdleTimeoutSeconds),
+        sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.AgentMetrics>());
+});
 builder.Services.AddSingleton<ILlmClient>(sp => sp.GetRequiredService<DirectLlmClient>());
 
 // HttpClient for direct LLM provider calls.
@@ -674,7 +680,8 @@ builder.Services.AddSingleton(sp =>
         subagentRegistry: sp.GetRequiredService<SubagentRunnerRegistry>(),
         // Loop-back edge of the at-least-once protocol: releasing a completion notification
         // must wake the coordinator's dispatch loop so it re-scans and redelivers.
-        wakeSubagentCoordinator: sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.SubagentExecutionCoordinator>().SignalWorkAvailable));
+        wakeSubagentCoordinator: sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.SubagentExecutionCoordinator>().SignalWorkAvailable,
+        reasoningEffort: sp.GetRequiredService<IOptions<AgentConfig>>().Value.ReasoningEffort));
 builder.Services.AddSingleton<IAgentRuntime>(sp => sp.GetRequiredService<AgentRuntime>());
 
 // Bootstrap context store removed — replaced by self-notes

@@ -104,6 +104,49 @@ internal sealed partial class OpenAiCompatibleApiClient : IProviderApiClient
                 }
             }
 
+            // Stale endpoint metadata: Copilot refused this model on the endpoint the pushed
+            // snapshot selected. Re-shape the request for the alternate endpoint, try once, and
+            // remember the endpoint that worked so later turns skip the known-bad one.
+            if (provider.Credential.Api == "github-copilot-api"
+                && CopilotEndpointMismatch.IsMismatch((int)response.StatusCode, errorBody)
+                && CopilotEndpointMismatch.Alternate(endpoint) is { } alternate)
+            {
+                this.LogCopilotEndpointMismatch(
+                    provider.Credential.Name, request.Model, endpoint.ToString(), alternate.ToString());
+                try
+                {
+                    var altPath = GetRequestPath(provider, alternate);
+                    var altJson = this.BuildRequestJson(provider, request, alternate, stream: false);
+
+                    using var altClient = CreateHttpClient(provider);
+                    using var altContent = new StringContent(altJson, Encoding.UTF8, "application/json");
+                    using var altResponse = await altClient.PostAsync(
+                        altPath, altContent, cancellationToken).ConfigureAwait(false);
+
+                    if (altResponse.IsSuccessStatusCode)
+                    {
+                        var altResponseJson = await altResponse.Content
+                            .ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+                        var altResult = ParseCompletion(altResponseJson, alternate, provider);
+
+                        if (altResult is not null)
+                        {
+                            provider.SetEndpointOverride(request.Model, alternate);
+                            return altResult;
+                        }
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    // The alternate endpoint failed too — degrade to the original error below.
+                    this.LogCopilotRetryFailed(provider.Credential.Name, request.RequestId, ex.Message);
+                }
+            }
+
             return new LlmCompletionResult
             {
                 Success = false,
@@ -258,6 +301,77 @@ internal sealed partial class OpenAiCompatibleApiClient : IProviderApiClient
                     ErrorMessage = $"HTTP {statusCode}: {ProviderClientHelpers.TruncateError(errorBody)}",
                 };
                 yield break;
+            }
+
+            // Stale endpoint metadata: Copilot refused this model on the endpoint the pushed
+            // snapshot selected. Re-shape the request for the alternate endpoint, try once, and
+            // remember the endpoint that worked so later turns skip the known-bad one.
+            if (provider.Credential.Api == "github-copilot-api"
+                && CopilotEndpointMismatch.IsMismatch((int)response!.StatusCode, errorBody)
+                && CopilotEndpointMismatch.Alternate(endpoint) is { } altEndpoint)
+            {
+                this.LogCopilotEndpointMismatch(
+                    provider.Credential.Name, request.Model, endpoint.ToString(), altEndpoint.ToString());
+
+                HttpClient? altClient = null;
+                HttpResponseMessage? altResponse = null;
+                try
+                {
+                    var altPath = GetRequestPath(provider, altEndpoint);
+                    var altJson = this.BuildRequestJson(provider, request, altEndpoint, stream: true);
+
+                    altClient = CreateHttpClient(provider);
+                    using var altContent = new StringContent(altJson, Encoding.UTF8, "application/json");
+                    using var altRequest = new HttpRequestMessage(HttpMethod.Post, altPath)
+                    {
+                        Content = altContent,
+                    };
+                    altRequest.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
+
+                    altResponse = await altClient.SendAsync(
+                        altRequest,
+                        HttpCompletionOption.ResponseHeadersRead,
+                        cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    altResponse?.Dispose();
+                    altClient?.Dispose();
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    this.LogCopilotRetryFailed(provider.Credential.Name, request.RequestId, ex.Message);
+                    altResponse?.Dispose();
+                    altClient?.Dispose();
+                    altResponse = null;
+                    altClient = null;
+                }
+
+                if (altResponse is not null && altResponse.IsSuccessStatusCode)
+                {
+                    provider.SetEndpointOverride(request.Model, altEndpoint);
+                    response.Dispose();
+
+                    using (altClient)
+                    using (altResponse)
+                    {
+                        using var altStream = await altResponse.Content
+                            .ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+                        using var altReader = new StreamReader(altStream, Encoding.UTF8);
+
+                        await foreach (var chunk in this.ReadSseAsync(
+                            altReader, altEndpoint, request.RequestId, cancellationToken).ConfigureAwait(false))
+                        {
+                            yield return chunk;
+                        }
+                    }
+
+                    yield break;
+                }
+
+                altResponse?.Dispose();
+                altClient?.Dispose();
             }
 
             yield return new LlmStreamChunk
@@ -424,7 +538,8 @@ internal sealed partial class OpenAiCompatibleApiClient : IProviderApiClient
     /// </summary>
     private static CopilotEndpoint SelectEndpoint(ProviderState provider, string model)
         => provider.Credential.Api == "github-copilot-api"
-            ? CopilotEndpointResolver.Resolve(provider.FindModelMetadata(model)?.SupportedEndpoints)
+            ? provider.GetEndpointOverride(model)
+                ?? CopilotEndpointResolver.Resolve(provider.FindModelMetadata(model)?.SupportedEndpoints)
             : CopilotEndpoint.ChatCompletions;
 
     /// <summary>The request path for the selected endpoint (relative to the client base URL).</summary>
@@ -582,13 +697,12 @@ internal sealed partial class OpenAiCompatibleApiClient : IProviderApiClient
         // Omitting it lets the API use the model's built-in default. Per-model temperature
         // configuration can be added later when we have model metadata.
 
-        // Copilot API (api.githubcopilot.com) uses max_tokens for all models
-        // including Claude. GitHub Models and OpenAI APIs use max_completion_tokens.
-        if (apiType == "github-copilot-api")
-        {
-            result.MaxTokens = request.MaxTokens;
-        }
-        else
+        // Copilot API (api.githubcopilot.com) intentionally gets NO explicit output cap. The
+        // cap is optional there, and because it also bounds reasoning tokens an explicit value
+        // caused turns to stop with finish_reason=max_tokens before emitting any text. Copilot's
+        // own server-side default is the safer ceiling. Mirrors coda's OpenAiRequest and
+        // opencode; the Anthropic path still sends a real max_tokens (the API requires it).
+        if (apiType != "github-copilot-api")
         {
             // Modern models (gpt-4o, gpt-5, etc.) require max_completion_tokens.
             // Older models used max_tokens, but the new parameter is backward-compatible
@@ -721,20 +835,7 @@ internal sealed partial class OpenAiCompatibleApiClient : IProviderApiClient
         }).ToArray();
     }
 
-    private static LlmTokenUsage? MapUsage(OpenAiUsage? usage)
-    {
-        if (usage is null)
-        {
-            return null;
-        }
-
-        return new LlmTokenUsage
-        {
-            PromptTokens = usage.PromptTokens,
-            CompletionTokens = usage.CompletionTokens,
-            TotalTokens = usage.TotalTokens,
-        };
-    }
+    private static LlmTokenUsage? MapUsage(OpenAiUsage? usage) => usage?.ToTokenUsage();
 
     // ── LoggerMessage ────────────────────────────────────────────────
 
@@ -770,4 +871,10 @@ internal sealed partial class OpenAiCompatibleApiClient : IProviderApiClient
 
     [LoggerMessage(Level = LogLevel.Error, Message = "Copilot API 401 token re-mint/retry failed: provider={Provider}, requestId={RequestId}, error={Error}")]
     private partial void LogCopilotRetryFailed(string provider, string requestId, string error);
+
+    [LoggerMessage(
+        Level = LogLevel.Warning,
+        Message = "Copilot endpoint metadata is stale: provider={Provider}, model={Model} was refused on {Attempted}; retrying on {Alternate} and remembering it")]
+    private partial void LogCopilotEndpointMismatch(
+        string provider, string model, string attempted, string alternate);
 }

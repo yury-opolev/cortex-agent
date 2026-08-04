@@ -48,6 +48,13 @@ public sealed record LlmCompletionRequest
 
     /// <summary>Conversation ID for cost tracking / rate limiting.</summary>
     public required string ConversationId { get; init; }
+
+    /// <summary>
+    /// Requested reasoning effort (<c>minimal</c>|<c>low</c>|<c>medium</c>|<c>high</c>|<c>max</c>),
+    /// or null to let the provider apply its own default. Resolved per provider family and per
+    /// model before it reaches the wire — not every model accepts the parameter or every level.
+    /// </summary>
+    public string? ReasoningEffort { get; init; }
 }
 
 /// <summary>
@@ -255,4 +262,12 @@ public sealed record LlmTokenUsage
 
     /// <summary>Tokens read from the prompt cache (Anthropic: cache_read_input_tokens).</summary>
     public int CacheReadTokens { get; init; }
+
+    /// <summary>
+    /// Every input token the request occupied, cached or not. This is the number to compare
+    /// against a context window: <see cref="PromptTokens"/> alone counts only the FRESH part, so
+    /// on a provider with heavy prompt caching it can be a small fraction of real occupancy and
+    /// would silently stop a compaction threshold from ever being reached.
+    /// </summary>
+    public int TotalInputTokens => this.PromptTokens + this.CacheWriteTokens + this.CacheReadTokens;
 }

@@ -49,12 +49,17 @@ internal sealed partial class AnthropicApiClient : IProviderApiClient
             };
         }
 
+        // Resolved once and reused by the body AND the beta header: the parameter is legal only
+        // on models that accept it, and only behind the gating header.
+        var effort = LlmReasoningEffort.ResolveForAnthropic(provider.Credential.Api, request.Model, request.ReasoningEffort);
+
         var body = new AnthropicMessagesRequest
         {
             Model     = request.Model,
             Messages  = messages,
             System    = BuildAnthropicSystemBlocks(system),
             MaxTokens = request.MaxTokens > 0 ? request.MaxTokens : 32000,
+            OutputConfig = effort is null ? null : new AnthropicOutputConfig { Effort = effort },
         };
 
         if (request.Tools is { Count: > 0 })
@@ -74,7 +79,7 @@ internal sealed partial class AnthropicApiClient : IProviderApiClient
         {
             Content = new StringContent(requestJson, Encoding.UTF8, "application/json"),
         };
-        AddAnthropicHeaders(httpRequest, provider);
+        AddAnthropicHeaders(httpRequest, provider, effort);
 
         using var response = await httpClient.SendAsync(httpRequest, cancellationToken).ConfigureAwait(false);
 
@@ -125,7 +130,7 @@ internal sealed partial class AnthropicApiClient : IProviderApiClient
                     Content = new StringContent(
                         JsonSerializer.Serialize(body, ProviderClientHelpers.JsonOptions), Encoding.UTF8, "application/json"),
                 };
-                AddAnthropicHeaders(retryRequest, provider);
+                AddAnthropicHeaders(retryRequest, provider, effort);
 
                 using var retryResponse = await retryHttpClient.SendAsync(
                     retryRequest, cancellationToken).ConfigureAwait(false);
@@ -226,12 +231,17 @@ internal sealed partial class AnthropicApiClient : IProviderApiClient
             yield break;
         }
 
+        // Resolved once and reused by the body AND the beta header: the parameter is legal only
+        // on models that accept it, and only behind the gating header.
+        var effort = LlmReasoningEffort.ResolveForAnthropic(provider.Credential.Api, request.Model, request.ReasoningEffort);
+
         var body = new AnthropicMessagesRequest
         {
             Model     = request.Model,
             Messages  = messages,
             System    = BuildAnthropicSystemBlocks(system),
             MaxTokens = request.MaxTokens > 0 ? request.MaxTokens : 32000,
+            OutputConfig = effort is null ? null : new AnthropicOutputConfig { Effort = effort },
             Stream    = true,
         };
 
@@ -252,7 +262,7 @@ internal sealed partial class AnthropicApiClient : IProviderApiClient
         {
             Content = new StringContent(requestJson, Encoding.UTF8, "application/json"),
         };
-        AddAnthropicHeaders(httpRequest, provider);
+        AddAnthropicHeaders(httpRequest, provider, effort);
 
         HttpResponseMessage? response = null;
         string? httpError = null;
@@ -322,7 +332,7 @@ internal sealed partial class AnthropicApiClient : IProviderApiClient
                     Content = new StringContent(
                         JsonSerializer.Serialize(body, ProviderClientHelpers.JsonOptions), Encoding.UTF8, "application/json"),
                 };
-                AddAnthropicHeaders(retryRequest, provider);
+                AddAnthropicHeaders(retryRequest, provider, effort);
                 retryRequest.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
 
                 HttpResponseMessage? retryResponse = null;
@@ -609,7 +619,7 @@ internal sealed partial class AnthropicApiClient : IProviderApiClient
             : "v1/messages";
     }
 
-    private static void AddAnthropicHeaders(HttpRequestMessage request, ProviderState provider)
+    private static void AddAnthropicHeaders(HttpRequestMessage request, ProviderState provider, string? effort)
     {
         // Anthropic OAuth requires HTTP/2 for Claude 4 models
         request.Version = System.Net.HttpVersion.Version20;
@@ -642,8 +652,8 @@ internal sealed partial class AnthropicApiClient : IProviderApiClient
             // Matches opencode's opencode-anthropic-auth plugin behavior.
             var token = provider.CurrentAccessToken ?? string.Empty;
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-            request.Headers.Add("anthropic-beta",
-                "oauth-2025-04-20,interleaved-thinking-2025-05-14,claude-code-20250219,fine-grained-tool-streaming-2025-05-14");
+            request.Headers.Add("anthropic-beta", WithEffortBeta(
+                "oauth-2025-04-20,interleaved-thinking-2025-05-14,claude-code-20250219,fine-grained-tool-streaming-2025-05-14", effort));
             request.Headers.Add("user-agent", "claude-cli/2.1.2 (external, cli)");
 
             // NOTE: ?beta=true is appended at request construction site, not here.
@@ -652,11 +662,18 @@ internal sealed partial class AnthropicApiClient : IProviderApiClient
         else
         {
             // Static API key: standard x-api-key header
-            request.Headers.Add("anthropic-beta",
-                "claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14");
+            request.Headers.Add("anthropic-beta", WithEffortBeta(
+                "claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14", effort));
             request.Headers.Add("x-api-key", provider.Credential.ApiKey ?? string.Empty);
         }
     }
+
+    /// <summary>
+    /// Appends the effort beta gate to an <c>anthropic-beta</c> list when an effort was resolved.
+    /// The <c>output_config.effort</c> parameter is rejected without it.
+    /// </summary>
+    private static string WithEffortBeta(string betas, string? effort)
+        => effort is null ? betas : $"{betas},{LlmReasoningEffort.AnthropicBetaHeader}";
 
     internal static (string? System, List<AnthropicMessage> Messages) BuildAnthropicMessages(
         IReadOnlyList<LlmMessage> messages)
