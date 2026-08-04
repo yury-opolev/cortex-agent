@@ -1,3 +1,4 @@
+using Cortex.Contained.Agent.Host.Llm.Providers.Copilot;
 using Cortex.Contained.Contracts.Hub;
 
 namespace Cortex.Contained.Agent.Host.Llm;
@@ -127,7 +128,28 @@ internal sealed class ProviderState
     public void UpdateConfiguration(LlmProviderCredential credential)
     {
         Credential = credential;
+
+        // Freshly pushed metadata is authoritative: drop anything learned from a rejection so a
+        // corrected snapshot is never shadowed by a stale in-memory override.
+        this.endpointOverrides.Clear();
     }
+
+    /// <summary>
+    /// Endpoints learned from a Copilot rejection, keyed by model. Populated when a request is
+    /// refused because the model is not served on the endpoint the pushed metadata selected, so
+    /// later turns skip the known-bad endpoint instead of paying the failure every time. Cleared
+    /// whenever the Bridge re-pushes metadata.
+    /// </summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, CopilotEndpoint> endpointOverrides =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Records the endpoint that actually served <paramref name="model"/>.</summary>
+    public void SetEndpointOverride(string model, CopilotEndpoint endpoint)
+        => this.endpointOverrides[model] = endpoint;
+
+    /// <summary>The learned endpoint for <paramref name="model"/>, if a rejection taught us one.</summary>
+    public CopilotEndpoint? GetEndpointOverride(string model)
+        => this.endpointOverrides.TryGetValue(model, out var endpoint) ? endpoint : null;
 
     /// <summary>
     /// Finds the <see cref="LlmModelMetadata"/> for <paramref name="model"/> in
