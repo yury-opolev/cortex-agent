@@ -441,6 +441,19 @@ public sealed partial class DirectLlmClient : ILlmClient, IDisposable
             return false;
         }
 
+        // A guarded stream fault (see LlmStreamFault) already carries its own verdict: a
+        // transport blip is provider-side and worth another provider, while anything else
+        // (a mapper bug, a bad state) would fail identically everywhere.
+        if (msg.StartsWith(Providers.LlmStreamFault.TerminalPrefix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (msg.StartsWith(Providers.LlmStreamFault.TransientPrefix, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
         var m = HttpErrorMessageRegex().Match(msg);
         if (m.Success
             && int.TryParse(
@@ -477,6 +490,18 @@ public sealed partial class DirectLlmClient : ILlmClient, IDisposable
         if (errorMessage.Contains("context window exceeded", StringComparison.OrdinalIgnoreCase))
         {
             return false;
+        }
+
+        // A guarded stream fault (see LlmStreamFault) already classified itself: retry a
+        // transport blip, never retry a fault that would recur identically.
+        if (errorMessage.StartsWith(Providers.LlmStreamFault.TerminalPrefix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (errorMessage.StartsWith(Providers.LlmStreamFault.TransientPrefix, StringComparison.Ordinal))
+        {
+            return true;
         }
 
         var m = HttpErrorMessageRegex().Match(errorMessage);
@@ -580,16 +605,18 @@ public sealed partial class DirectLlmClient : ILlmClient, IDisposable
 
     private IAsyncEnumerable<LlmStreamChunk> StreamOnceAsync(
         ProviderState provider, LlmCompletionRequest request, CancellationToken cancellationToken)
-        => provider.Credential.Api switch
-        {
-            "github-copilot-api" =>
-                SelectCopilotClient(provider, request.Model).StreamAsync(provider, request, cancellationToken),
-            "openai-completions" =>
-                this.openAiClient.StreamAsync(provider, request, cancellationToken),
-            "anthropic-messages" =>
-                this.anthropicClient.StreamAsync(provider, request, cancellationToken),
-            _ => ProviderClientHelpers.ErrorStream($"Unsupported API type '{provider.Credential.Api}'."),
-        };
+        => LlmStreamFault.Guard(
+            provider.Credential.Api switch
+            {
+                "github-copilot-api" =>
+                    SelectCopilotClient(provider, request.Model).StreamAsync(provider, request, cancellationToken),
+                "openai-completions" =>
+                    this.openAiClient.StreamAsync(provider, request, cancellationToken),
+                "anthropic-messages" =>
+                    this.anthropicClient.StreamAsync(provider, request, cancellationToken),
+                _ => ProviderClientHelpers.ErrorStream($"Unsupported API type '{provider.Credential.Api}'."),
+            },
+            cancellationToken);
 
     /// <summary>
     /// Picks the wire client for a GitHub Copilot model from its live endpoint metadata:
