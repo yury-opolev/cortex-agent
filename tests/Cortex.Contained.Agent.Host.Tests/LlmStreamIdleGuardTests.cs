@@ -137,6 +137,32 @@ public class LlmStreamIdleGuardTests
         Assert.True(DirectLlmClient.IsErrorTransientRetryable(chunk.ErrorMessage));
     }
 
+    [Fact]
+    public async Task Guard_SourceIgnoresCancellation_StillTimesOutPromptly()
+    {
+        // A provider read that never honours the linked token must not stall the guard: the
+        // breach is reported without waiting for the abandoned read, and the enumerator is left
+        // undisposed rather than racing DisposeAsync against an in-flight MoveNextAsync.
+        var source = Stubborn();
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+
+        await Assert.ThrowsAsync<TimeoutException>(
+            () => DrainAsync(LlmStreamIdleGuard.Apply(source, Fast, CancellationToken.None)));
+
+        sw.Stop();
+        Assert.True(
+            sw.Elapsed < TimeSpan.FromSeconds(15),
+            $"guard should not wait for an unresponsive read (took {sw.Elapsed}).");
+    }
+
+    private static async IAsyncEnumerable<LlmStreamChunk> Stubborn(
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        // Deliberately ignores the token — models a provider read stuck in native/socket code.
+        await Task.Delay(TimeSpan.FromSeconds(8), CancellationToken.None).ConfigureAwait(false);
+        yield return new LlmStreamChunk { ContentDelta = "late" };
+    }
+
     // ── Configuration ─────────────────────────────────────────────────
 
     [Fact]

@@ -65,6 +65,11 @@ internal static class LlmStreamIdleGuard
         var enumerator = source.GetAsyncEnumerator(linked.Token);
         var started = false;
 
+        // An abandoned MoveNextAsync, kept so a breach can settle it before disposal. Calling
+        // DisposeAsync while a MoveNextAsync is still in flight is undefined for an async
+        // iterator, so the guard must never race the two.
+        Task<bool>? pending = null;
+
         try
         {
             while (true)
@@ -75,10 +80,19 @@ internal static class LlmStreamIdleGuard
                 var timedOut = false;
                 try
                 {
-                    var advance = enumerator.MoveNextAsync();
-                    var hasChunk = budget == Timeout.InfiniteTimeSpan
-                        ? await advance.ConfigureAwait(false)
-                        : await advance.AsTask().WaitAsync(budget, cancellationToken).ConfigureAwait(false);
+                    bool hasChunk;
+                    if (budget == Timeout.InfiniteTimeSpan)
+                    {
+                        hasChunk = await enumerator.MoveNextAsync().ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        // Materialised once: a ValueTask may only be consumed a single time, and
+                        // the Task form is what survives an abandoned WaitAsync.
+                        pending = enumerator.MoveNextAsync().AsTask();
+                        hasChunk = await pending.WaitAsync(budget, cancellationToken).ConfigureAwait(false);
+                        pending = null;
+                    }
 
                     if (hasChunk)
                     {
@@ -92,7 +106,11 @@ internal static class LlmStreamIdleGuard
 
                 if (timedOut)
                 {
+                    // Cancel the provider read, then give it a bounded moment to unwind so the
+                    // pending MoveNextAsync settles before the finally disposes the enumerator.
                     await linked.CancelAsync().ConfigureAwait(false);
+                    pending = await SettleAsync(pending).ConfigureAwait(false);
+
                     throw new TimeoutException(
                         started
                             ? $"LLM stream produced no data for {budget.TotalSeconds:0.#}s."
@@ -110,14 +128,56 @@ internal static class LlmStreamIdleGuard
         }
         finally
         {
-            try
+            // Only dispose when nothing is in flight. A provider read that ignored cancellation
+            // is left to the cancelled token and the finalizer rather than risking the undefined
+            // concurrent MoveNextAsync/DisposeAsync pair.
+            if (pending is null)
             {
-                await enumerator.DisposeAsync().ConfigureAwait(false);
+                try
+                {
+                    await enumerator.DisposeAsync().ConfigureAwait(false);
+                }
+                catch (Exception)
+                {
+                    // A disposal fault must not mask the outcome already reported.
+                }
             }
-            catch (Exception)
-            {
-                // A disposal fault must not mask the outcome already reported.
-            }
+        }
+    }
+
+    /// <summary>Grace period for an abandoned read to notice cancellation and unwind.</summary>
+    private static readonly TimeSpan SettleGrace = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// Waits briefly for an abandoned read to finish, always observing its exception so it never
+    /// surfaces as an unobserved task fault. Returns null once settled, or the still-running task
+    /// when the provider ignored cancellation.
+    /// </summary>
+    private static async Task<Task<bool>?> SettleAsync(Task<bool>? pending)
+    {
+        if (pending is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            await pending.WaitAsync(SettleGrace).ConfigureAwait(false);
+            return null;
+        }
+        catch (TimeoutException)
+        {
+            // Still running: observe whenever it does finish, and tell the caller not to dispose.
+            _ = pending.ContinueWith(
+                static t => _ = t.Exception,
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+            return pending;
+        }
+        catch (Exception)
+        {
+            return null; // faulted or cancelled — settled, and now observed
         }
     }
 }
