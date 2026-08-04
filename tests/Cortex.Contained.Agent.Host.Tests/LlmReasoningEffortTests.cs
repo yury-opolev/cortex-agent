@@ -51,6 +51,35 @@ public class LlmReasoningEffortTests
         Assert.Equal(expected, LlmReasoningEffort.ResolveForResponses("gpt-5.6-sol", requested));
     }
 
+    [Theory]
+    [InlineData("gpt-4o")]
+    [InlineData("gpt-4.1")]
+    [InlineData("llama-3.1-70b")]
+    public void ResolveForResponses_NonReasoningModels_SendNothing(string model)
+    {
+        // reasoning.effort on a model that does not reason is an HTTP 400, which the failover
+        // policy treats as terminal — so every turn would fail until config is edited.
+        Assert.Null(LlmReasoningEffort.ResolveForResponses(model, "high"));
+    }
+
+    [Theory]
+    [InlineData("gpt-5.6-sol")]
+    [InlineData("gpt-5-mini")]
+    [InlineData("o3")]
+    [InlineData("o4-mini")]
+    [InlineData("gpt-5.3-codex")]
+    public void ResolveForResponses_ReasoningModels_SendEffort(string model)
+    {
+        Assert.Equal("high", LlmReasoningEffort.ResolveForResponses(model, "high"));
+    }
+
+    [Fact]
+    public void ResolveForResponses_MinimalOnNonGpt5ReasoningModel_IsClampedToLow()
+    {
+        // "minimal" is a gpt-5-family level; the o-series rejects it.
+        Assert.Equal("low", LlmReasoningEffort.ResolveForResponses("o3", "minimal"));
+    }
+
     [Fact]
     public void ResolveForResponses_MaxIsClampedToHigh()
     {
@@ -73,9 +102,21 @@ public class LlmReasoningEffortTests
     [InlineData("claude-opus-4-8")]
     [InlineData("claude-opus-4-6")]
     [InlineData("claude-sonnet-4-6")]
+    [InlineData("claude-opus-4.8")]
+    [InlineData("claude-sonnet-4.6")]
     public void ResolveForAnthropic_SupportedModels_SendEffort(string model)
     {
-        Assert.Equal("high", LlmReasoningEffort.ResolveForAnthropic(model, "high"));
+        // Both the hyphenated (direct Anthropic) and dotted (catalog) ID forms must match.
+        Assert.Equal("high", LlmReasoningEffort.ResolveForAnthropic("anthropic-messages", model, "high"));
+    }
+
+    [Fact]
+    public void ResolveForAnthropic_CopilotServedClaude_SendsNothing()
+    {
+        // Copilot's Messages surface never receives an anthropic-beta header, and
+        // output_config.effort without its gating beta is an HTTP 400 — which the failover policy
+        // treats as terminal, so the turn would fail outright with no retry.
+        Assert.Null(LlmReasoningEffort.ResolveForAnthropic("github-copilot-api", "claude-opus-4.8", "high"));
     }
 
     [Theory]
@@ -85,33 +126,33 @@ public class LlmReasoningEffortTests
     public void ResolveForAnthropic_UnsupportedModels_SendNothing(string model)
     {
         // Sending output_config.effort to a model that does not accept it is an HTTP 400.
-        Assert.Null(LlmReasoningEffort.ResolveForAnthropic(model, "high"));
+        Assert.Null(LlmReasoningEffort.ResolveForAnthropic("anthropic-messages", model, "high"));
     }
 
     [Fact]
     public void ResolveForAnthropic_MaxOnOpus_IsHonoured()
     {
-        Assert.Equal("max", LlmReasoningEffort.ResolveForAnthropic("claude-opus-4-8", "max"));
+        Assert.Equal("max", LlmReasoningEffort.ResolveForAnthropic("anthropic-messages", "claude-opus-4-8", "max"));
     }
 
     [Fact]
     public void ResolveForAnthropic_MaxOnNonOpus_IsClampedToHigh()
     {
         // Only Opus offers "max"; asking for it on Sonnet must degrade rather than fail.
-        Assert.Equal("high", LlmReasoningEffort.ResolveForAnthropic("claude-sonnet-4-6", "max"));
+        Assert.Equal("high", LlmReasoningEffort.ResolveForAnthropic("anthropic-messages", "claude-sonnet-4-6", "max"));
     }
 
     [Fact]
     public void ResolveForAnthropic_MinimalIsClampedToLow()
     {
         // Anthropic's lowest level is "low"; "minimal" is an OpenAI level.
-        Assert.Equal("low", LlmReasoningEffort.ResolveForAnthropic("claude-opus-4-8", "minimal"));
+        Assert.Equal("low", LlmReasoningEffort.ResolveForAnthropic("anthropic-messages", "claude-opus-4-8", "minimal"));
     }
 
     [Fact]
     public void ResolveForAnthropic_NoRequest_SendsNothing()
     {
-        Assert.Null(LlmReasoningEffort.ResolveForAnthropic("claude-opus-4-8", null));
+        Assert.Null(LlmReasoningEffort.ResolveForAnthropic("anthropic-messages", "claude-opus-4-8", null));
     }
 }
 

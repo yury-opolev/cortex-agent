@@ -38,26 +38,75 @@ internal static class LlmReasoningEffort
 
     /// <summary>
     /// The value for the Responses API's <c>reasoning.effort</c>, or <see langword="null"/> to
-    /// send nothing. <c>max</c> clamps to <c>high</c> because it is an Anthropic-only level.
+    /// send nothing. Gated on the model: the parameter is only legal on reasoning models, and
+    /// sending it elsewhere is an HTTP 400 that the failover policy treats as terminal.
+    /// <c>max</c> clamps to <c>high</c> (an Anthropic-only level) and <c>minimal</c> clamps to
+    /// <c>low</c> outside the gpt-5 family that offers it.
     /// </summary>
     internal static string? ResolveForResponses(string model, string? requested)
     {
-        _ = model;
         var level = Normalize(requested);
-        if (level is null)
+        if (level is null || !ResponsesModelSupportsEffort(model))
         {
             return null;
         }
 
-        return level == "max" ? "high" : level;
+        if (level == "max")
+        {
+            return "high";
+        }
+
+        if (level == "minimal" && !IsGpt5Family(model))
+        {
+            return "low";
+        }
+
+        return level;
+    }
+
+    /// <summary>
+    /// Reasoning families served over the Responses API. Deliberately a allow-list: a model we do
+    /// not recognise gets no reasoning parameter rather than a turn-killing 400.
+    /// </summary>
+    private static bool ResponsesModelSupportsEffort(string? model)
+    {
+        var m = (model ?? string.Empty).ToLowerInvariant();
+        return IsGpt5Family(m)
+            || m.Contains("codex", StringComparison.Ordinal)
+            || StartsWithOSeries(m);
+    }
+
+    private static bool IsGpt5Family(string? model)
+        => (model ?? string.Empty).ToLowerInvariant().Contains("gpt-5", StringComparison.Ordinal);
+
+    /// <summary>OpenAI's o-series reasoning models (o1, o3, o4-mini, ...).</summary>
+    private static bool StartsWithOSeries(string model)
+    {
+        if (model.Length < 2 || model[0] != 'o' || !char.IsAsciiDigit(model[1]))
+        {
+            return false;
+        }
+
+        return true;
     }
 
     /// <summary>
     /// The value for Anthropic's <c>output_config.effort</c>, or <see langword="null"/> to send
-    /// nothing (including for every model that does not accept the parameter).
+    /// nothing (including for every model or surface that does not accept the parameter).
     /// </summary>
-    internal static string? ResolveForAnthropic(string model, string? requested)
+    /// <param name="providerApi">
+    /// The provider's API type. GitHub Copilot serves Claude over the Messages shape but never
+    /// receives an <c>anthropic-beta</c> header, and <c>output_config.effort</c> without its
+    /// gating beta is an HTTP 400 — so effort is never sent there. Resolving the value and the
+    /// header from this single decision keeps the body and the gate from ever disagreeing.
+    /// </param>
+    internal static string? ResolveForAnthropic(string providerApi, string model, string? requested)
     {
+        if (string.Equals(providerApi, "github-copilot-api", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
         var level = Normalize(requested);
         if (level is null || !AnthropicModelSupportsEffort(model))
         {
@@ -79,19 +128,29 @@ internal static class LlmReasoningEffort
         return level;
     }
 
-    /// <summary>The Claude 4 models that accept the effort parameter.</summary>
+    /// <summary>
+    /// The Claude 4 models that accept the effort parameter. Matches both the hyphenated
+    /// (<c>opus-4-8</c>) and dotted (<c>opus-4.8</c>) ID forms, which different catalogs use for
+    /// the same model.
+    /// </summary>
     private static bool AnthropicModelSupportsEffort(string? model)
-    {
-        var m = (model ?? string.Empty).ToLowerInvariant();
-        return m.Contains("opus-4-8", StringComparison.Ordinal)
-            || m.Contains("opus-4-6", StringComparison.Ordinal)
-            || m.Contains("sonnet-4-6", StringComparison.Ordinal);
-    }
+        => MatchesAny(model, ["opus-4-8", "opus-4-6", "sonnet-4-6"]);
 
     private static bool AnthropicModelSupportsMaxEffort(string? model)
+        => MatchesAny(model, ["opus-4-8", "opus-4-6"]);
+
+    /// <summary>Substring match that treats '.' and '-' as equivalent version separators.</summary>
+    private static bool MatchesAny(string? model, string[] hyphenatedNeedles)
     {
-        var m = (model ?? string.Empty).ToLowerInvariant();
-        return m.Contains("opus-4-8", StringComparison.Ordinal)
-            || m.Contains("opus-4-6", StringComparison.Ordinal);
+        var m = (model ?? string.Empty).ToLowerInvariant().Replace('.', '-');
+        foreach (var needle in hyphenatedNeedles)
+        {
+            if (m.Contains(needle, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

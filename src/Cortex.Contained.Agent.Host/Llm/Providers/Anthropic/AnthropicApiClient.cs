@@ -51,7 +51,7 @@ internal sealed partial class AnthropicApiClient : IProviderApiClient
 
         // Resolved once and reused by the body AND the beta header: the parameter is legal only
         // on models that accept it, and only behind the gating header.
-        var effort = LlmReasoningEffort.ResolveForAnthropic(request.Model, request.ReasoningEffort);
+        var effort = LlmReasoningEffort.ResolveForAnthropic(provider.Credential.Api, request.Model, request.ReasoningEffort);
 
         var body = new AnthropicMessagesRequest
         {
@@ -233,7 +233,7 @@ internal sealed partial class AnthropicApiClient : IProviderApiClient
 
         // Resolved once and reused by the body AND the beta header: the parameter is legal only
         // on models that accept it, and only behind the gating header.
-        var effort = LlmReasoningEffort.ResolveForAnthropic(request.Model, request.ReasoningEffort);
+        var effort = LlmReasoningEffort.ResolveForAnthropic(provider.Credential.Api, request.Model, request.ReasoningEffort);
 
         var body = new AnthropicMessagesRequest
         {

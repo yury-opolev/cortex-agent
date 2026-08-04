@@ -262,4 +262,12 @@ public sealed record LlmTokenUsage
 
     /// <summary>Tokens read from the prompt cache (Anthropic: cache_read_input_tokens).</summary>
     public int CacheReadTokens { get; init; }
+
+    /// <summary>
+    /// Every input token the request occupied, cached or not. This is the number to compare
+    /// against a context window: <see cref="PromptTokens"/> alone counts only the FRESH part, so
+    /// on a provider with heavy prompt caching it can be a small fraction of real occupancy and
+    /// would silently stop a compaction threshold from ever being reached.
+    /// </summary>
+    public int TotalInputTokens => this.PromptTokens + this.CacheWriteTokens + this.CacheReadTokens;
 }

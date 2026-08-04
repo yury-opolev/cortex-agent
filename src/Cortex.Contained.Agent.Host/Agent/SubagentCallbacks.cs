@@ -156,9 +156,9 @@ public sealed partial class SubagentCallbacks : IAgentLoopCallbacks
         if (usage is not null && this.messages.Count >= MinMessagesForCompaction)
         {
             var threshold = (int)(this.contextWindow * CompactionThreshold);
-            if (usage.PromptTokens > threshold)
+            if (usage.TotalInputTokens > threshold)
             {
-                this.LogCompactionTriggered(this.conversationId, usage.PromptTokens, threshold);
+                this.LogCompactionTriggered(this.conversationId, usage.TotalInputTokens, threshold);
                 await CompactAsync(ct).ConfigureAwait(false);
             }
         }

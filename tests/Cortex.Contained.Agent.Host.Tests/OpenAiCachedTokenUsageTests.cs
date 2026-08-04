@@ -120,4 +120,37 @@ public class OpenAiCachedTokenUsageTests
         Assert.Equal(120, mapped.PromptTokens);
         Assert.Equal(0, mapped.CacheReadTokens);
     }
+
+    // ── Context occupancy ─────────────────────────────────────────────
+
+    [Fact]
+    public void TotalInputTokens_CountsCachedTokensToo()
+    {
+        // Splitting cached out of PromptTokens must not shrink apparent context occupancy:
+        // OpenAI caches automatically above ~1024 tokens and typically covers most of a long
+        // prefix, so comparing PromptTokens alone against a window would stop compaction firing.
+        var usage = new OpenAiResponsesUsage
+        {
+            InputTokens = 100_000,
+            OutputTokens = 100,
+            TotalTokens = 100_100,
+            InputTokensDetails = new OpenAiResponsesTokenDetails { CachedTokens = 95_000 },
+        }.ToTokenUsage();
+
+        Assert.Equal(5_000, usage.PromptTokens);
+        Assert.Equal(100_000, usage.TotalInputTokens);
+    }
+
+    [Fact]
+    public void TotalInputTokens_IncludesAnthropicCacheWrites()
+    {
+        var usage = new Cortex.Contained.Contracts.Llm.LlmTokenUsage
+        {
+            PromptTokens = 10,
+            CacheWriteTokens = 200,
+            CacheReadTokens = 3_000,
+        };
+
+        Assert.Equal(3_210, usage.TotalInputTokens);
+    }
 }

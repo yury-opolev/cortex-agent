@@ -792,7 +792,7 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
             if (streamed.Usage is not null)
             {
                 lastUsage = streamed.Usage;
-                session.LastPromptTokens = streamed.Usage.PromptTokens + streamed.Usage.CacheWriteTokens + streamed.Usage.CacheReadTokens;
+                session.LastPromptTokens = streamed.Usage.TotalInputTokens;
                 this.LogTokenUsage(session.ConversationId, round + 1, streamed.Usage.PromptTokens, streamed.Usage.CompletionTokens, streamed.Usage.TotalTokens, session.MessageCount, streamed.Usage.CacheWriteTokens, streamed.Usage.CacheReadTokens);
             }
 
