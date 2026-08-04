@@ -342,7 +342,10 @@ public class VoiceChannelTests : IAsyncDisposable
         // Track overlap: if two playbacks ran simultaneously, max concurrency would be > 1.
         var active = 0;
         var maxConcurrent = 0;
+        var completed = 0;
         var lockObj = new object();
+        const int expectedPlaybacks = 3;
+        var allPlaybacksDone = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         SetupTtsStreaming(new byte[] { 1 });
         _playback.PlayAsync(Arg.Any<byte[]>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
@@ -359,7 +362,14 @@ public class VoiceChannelTests : IAsyncDisposable
                 }
                 finally
                 {
-                    lock (lockObj) { active--; }
+                    lock (lockObj)
+                    {
+                        active--;
+                        if (++completed == expectedPlaybacks)
+                        {
+                            allPlaybacksDone.TrySetResult();
+                        }
+                    }
                 }
             });
 
@@ -370,12 +380,14 @@ public class VoiceChannelTests : IAsyncDisposable
         await _sut.SendMessageAsync(CreateOutboundMessage("msg-2", "Two"));
         await _sut.SendMessageAsync(CreateOutboundMessage("msg-3", "Three"));
 
-        // Wait for all queued playbacks to drain. ActivePlaybackTask reflects the
-        // most-recently-queued one; waiting on it ensures at least it finished.
-        await WaitForPlaybackCompletionAsync();
+        // Wait for EVERY queued playback to finish. Awaiting ActivePlaybackTask instead would be a
+        // race: it is a snapshot of the most-recently-queued playback, so the last message may not
+        // have been queued yet when it is read, and the assertions below would then run against a
+        // partially-drained queue (the intermittent "received 2 calls, expected 3" failure).
+        await allPlaybacksDone.Task.WaitAsync(TimeSpan.FromSeconds(10));
 
         // All three should have executed, but never overlapped.
-        await _playback.Received(3).PlayAsync(Arg.Any<byte[]>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+        await _playback.Received(expectedPlaybacks).PlayAsync(Arg.Any<byte[]>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
         Assert.Equal(1, maxConcurrent);
     }
 
