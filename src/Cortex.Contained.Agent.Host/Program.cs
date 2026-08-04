@@ -108,10 +108,16 @@ builder.Services.AddSingleton(sp =>
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Agent.AgentMetrics>();
 
 builder.Services.AddSingleton(sp =>
-    new DirectLlmClient(
+{
+    var agentConfig = sp.GetRequiredService<IOptions<AgentConfig>>().Value;
+    return new DirectLlmClient(
         sp.GetRequiredService<IHttpClientFactory>(),
         sp.GetRequiredService<ILogger<DirectLlmClient>>(),
-        sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.AgentMetrics>()));
+        Cortex.Contained.Agent.Host.Llm.Providers.LlmStreamTimeouts.FromSeconds(
+            agentConfig.LlmFirstTokenTimeoutSeconds,
+            agentConfig.LlmStreamIdleTimeoutSeconds),
+        sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.AgentMetrics>());
+});
 builder.Services.AddSingleton<ILlmClient>(sp => sp.GetRequiredService<DirectLlmClient>());
 
 // HttpClient for direct LLM provider calls.

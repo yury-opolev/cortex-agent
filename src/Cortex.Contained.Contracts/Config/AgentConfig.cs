@@ -20,6 +20,22 @@ public sealed class AgentConfig
     [Range(0.0, 2.0)]
     public double Temperature { get; set; } = 0.7;
 
+    /// <summary>
+    /// Maximum silence, in seconds, before the FIRST token of a streamed response arrives.
+    /// Time-to-first-token grows with prompt size, so this is deliberately generous and separate
+    /// from <see cref="LlmStreamIdleTimeoutSeconds"/>. 0 disables the guard.
+    /// </summary>
+    [Range(0, 3600)]
+    public int LlmFirstTokenTimeoutSeconds { get; set; } = 300;
+
+    /// <summary>
+    /// Maximum silence, in seconds, BETWEEN streamed chunks once generation has started. Needed
+    /// because HttpClient.Timeout stops applying once response headers are read, leaving a
+    /// silent provider stream unbounded. 0 disables the guard.
+    /// </summary>
+    [Range(0, 3600)]
+    public int LlmStreamIdleTimeoutSeconds { get; set; } = 120;
+
     /// <summary>Security settings.</summary>
     public SecurityConfig Security { get; set; } = new();
 
