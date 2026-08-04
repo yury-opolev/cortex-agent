@@ -323,8 +323,12 @@ public class DirectLlmClientMultimodalTests
     }
 
     [Fact]
-    public void BuildOpenAiRequestBody_CopilotApi_UsesMaxTokens()
+    public void BuildOpenAiRequestBody_CopilotApi_OmitsOutputTokenCap()
     {
+        // Copilot's OpenAI-compatible API makes the cap optional, and an explicit per-response
+        // cap also bounds REASONING tokens — so a reasoning-heavy turn could burn the budget and
+        // stop with finish_reason=max_tokens before emitting any text. Letting Copilot apply its
+        // own server-side default matches coda (src/LlmClient/OpenAiRequest.cs) and opencode.
         var request = MakeRequest(
             4096,
             new LlmMessage
@@ -335,8 +339,45 @@ public class DirectLlmClientMultimodalTests
 
         var body = OpenAiCompatibleApiClient.BuildOpenAiRequestBody(request, stream: false, apiType: "github-copilot-api");
 
-        Assert.Equal(4096, body.MaxTokens);
+        Assert.Null(body.MaxTokens);
         Assert.Null(body.MaxCompletionTokens);
+    }
+
+    [Fact]
+    public void BuildOpenAiRequestBody_CopilotApi_SerializedBodyHasNoTokenCap()
+    {
+        var request = MakeRequest(
+            4096,
+            new LlmMessage
+            {
+                Role = "user",
+                ContentBlocks = [LlmContentBlock.TextBlock("test")],
+            });
+
+        var body = OpenAiCompatibleApiClient.BuildOpenAiRequestBody(request, stream: false, apiType: "github-copilot-api");
+        var json = System.Text.Json.JsonSerializer.Serialize(
+            body, Cortex.Contained.Agent.Host.Llm.Providers.ProviderClientHelpers.JsonOptions);
+
+        Assert.DoesNotContain("max_tokens", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("max_completion_tokens", json, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BuildOpenAiRequestBody_NonCopilotApi_StillSendsMaxCompletionTokens()
+    {
+        // Only Copilot is exempt: a plain OpenAI-compatible endpoint keeps its explicit cap.
+        var request = MakeRequest(
+            4096,
+            new LlmMessage
+            {
+                Role = "user",
+                ContentBlocks = [LlmContentBlock.TextBlock("test")],
+            });
+
+        var body = OpenAiCompatibleApiClient.BuildOpenAiRequestBody(request, stream: false, apiType: "openai-completions");
+
+        Assert.Null(body.MaxTokens);
+        Assert.Equal(4096, body.MaxCompletionTokens);
     }
 
     [Fact]

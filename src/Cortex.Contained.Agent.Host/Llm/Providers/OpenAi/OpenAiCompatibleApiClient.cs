@@ -582,13 +582,12 @@ internal sealed partial class OpenAiCompatibleApiClient : IProviderApiClient
         // Omitting it lets the API use the model's built-in default. Per-model temperature
         // configuration can be added later when we have model metadata.
 
-        // Copilot API (api.githubcopilot.com) uses max_tokens for all models
-        // including Claude. GitHub Models and OpenAI APIs use max_completion_tokens.
-        if (apiType == "github-copilot-api")
-        {
-            result.MaxTokens = request.MaxTokens;
-        }
-        else
+        // Copilot API (api.githubcopilot.com) intentionally gets NO explicit output cap. The
+        // cap is optional there, and because it also bounds reasoning tokens an explicit value
+        // caused turns to stop with finish_reason=max_tokens before emitting any text. Copilot's
+        // own server-side default is the safer ceiling. Mirrors coda's OpenAiRequest and
+        // opencode; the Anthropic path still sends a real max_tokens (the API requires it).
+        if (apiType != "github-copilot-api")
         {
             // Modern models (gpt-4o, gpt-5, etc.) require max_completion_tokens.
             // Older models used max_tokens, but the new parameter is backward-compatible
