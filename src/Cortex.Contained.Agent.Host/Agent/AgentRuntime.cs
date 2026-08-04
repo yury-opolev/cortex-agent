@@ -107,6 +107,14 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
     private double temperature = 0.7;
 
     /// <summary>
+    /// Requested reasoning effort for the agent's own conversational turns, from
+    /// <c>Agent:ReasoningEffort</c>. Null leaves each provider on its own default. Deliberately
+    /// NOT applied to utility calls (memory extraction, compaction, image description) — those
+    /// are cheap classification work that gains nothing from longer deliberation.
+    /// </summary>
+    private readonly string? reasoningEffort;
+
+    /// <summary>
     /// Safety-net round limit. The real termination signals are: model stops calling tools,
     /// context window fills up, or doom loop detection fires. This cap exists only as a
     /// last-resort circuit breaker for truly pathological cases.
@@ -177,8 +185,10 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
         ILoggerFactory? loggerFactory = null,
         Memory.MemorySettingsStore? memorySettingsStore = null,
         SubagentRunnerRegistry? subagentRegistry = null,
-        Action? wakeSubagentCoordinator = null)
+        Action? wakeSubagentCoordinator = null,
+        string? reasoningEffort = null)
     {
+        this.reasoningEffort = Llm.LlmReasoningEffort.IsLevel(reasoningEffort) ? reasoningEffort : null;
         this.subagentStore = subagentStore;
         this.todoResolver = todoResolver;
         this.selfNotesStore = selfNotesStore;
@@ -764,6 +774,7 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
                 RequestId = requestId,
                 ConversationId = session.ConversationId,
                 Tools = toolDefinitions.Count > 0 ? toolDefinitions : null,
+                ReasoningEffort = this.reasoningEffort,
             };
 
             var streamed = await this.StreamLlmTurnAsync(request, delivery, session, round, replyConversationId, latency, cancellationToken).ConfigureAwait(false);

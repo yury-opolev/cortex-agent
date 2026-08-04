@@ -98,6 +98,9 @@ internal static class OpenAiResponsesRequestMapper
             Instructions = systemTexts.Count > 0 ? string.Join(SystemSeparator, systemTexts) : null,
             Input = input,
             Tools = BuildTools(request.Tools),
+            Reasoning = LlmReasoningEffort.ResolveForResponses(request.Model, request.ReasoningEffort) is { } effort
+                ? new OpenAiResponsesReasoning { Effort = effort }
+                : null,
         };
     }
 

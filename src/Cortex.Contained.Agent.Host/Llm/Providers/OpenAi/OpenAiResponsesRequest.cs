@@ -19,4 +19,13 @@ internal sealed class OpenAiResponsesRequest
     public required IReadOnlyList<OpenAiResponsesInputItem> Input { get; set; }
 
     public IReadOnlyList<OpenAiResponsesTool>? Tools { get; set; }
+
+    /// <summary>Reasoning controls; omitted entirely when no effort was resolved.</summary>
+    public OpenAiResponsesReasoning? Reasoning { get; set; }
+}
+
+/// <summary>Reasoning controls for the Responses API.</summary>
+internal sealed class OpenAiResponsesReasoning
+{
+    public required string Effort { get; set; }
 }

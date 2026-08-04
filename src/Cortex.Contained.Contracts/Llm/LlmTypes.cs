@@ -48,6 +48,13 @@ public sealed record LlmCompletionRequest
 
     /// <summary>Conversation ID for cost tracking / rate limiting.</summary>
     public required string ConversationId { get; init; }
+
+    /// <summary>
+    /// Requested reasoning effort (<c>minimal</c>|<c>low</c>|<c>medium</c>|<c>high</c>|<c>max</c>),
+    /// or null to let the provider apply its own default. Resolved per provider family and per
+    /// model before it reaches the wire — not every model accepts the parameter or every level.
+    /// </summary>
+    public string? ReasoningEffort { get; init; }
 }
 
 /// <summary>

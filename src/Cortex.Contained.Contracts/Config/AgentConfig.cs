@@ -36,6 +36,15 @@ public sealed class AgentConfig
     [Range(0, 3600)]
     public int LlmStreamIdleTimeoutSeconds { get; set; } = 120;
 
+    /// <summary>
+    /// Requested reasoning effort for the agent's own turns
+    /// (<c>minimal</c>|<c>low</c>|<c>medium</c>|<c>high</c>|<c>max</c>). Null or empty leaves each
+    /// provider on its own default. Resolved per provider and per model before it reaches the
+    /// wire, so an unsupported value or model simply sends nothing. Utility calls (memory
+    /// extraction, compaction, image description) deliberately never carry it.
+    /// </summary>
+    public string? ReasoningEffort { get; set; }
+
     /// <summary>Security settings.</summary>
     public SecurityConfig Security { get; set; } = new();
 

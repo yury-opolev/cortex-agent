@@ -680,7 +680,8 @@ builder.Services.AddSingleton(sp =>
         subagentRegistry: sp.GetRequiredService<SubagentRunnerRegistry>(),
         // Loop-back edge of the at-least-once protocol: releasing a completion notification
         // must wake the coordinator's dispatch loop so it re-scans and redelivers.
-        wakeSubagentCoordinator: sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.SubagentExecutionCoordinator>().SignalWorkAvailable));
+        wakeSubagentCoordinator: sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.SubagentExecutionCoordinator>().SignalWorkAvailable,
+        reasoningEffort: sp.GetRequiredService<IOptions<AgentConfig>>().Value.ReasoningEffort));
 builder.Services.AddSingleton<IAgentRuntime>(sp => sp.GetRequiredService<AgentRuntime>());
 
 // Bootstrap context store removed — replaced by self-notes
