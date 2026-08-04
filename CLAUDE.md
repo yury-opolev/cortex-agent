@@ -26,13 +26,18 @@ dotnet build src/Cortex.Contained.Agent.Host/Cortex.Contained.Agent.Host.csproj
 To put the **running** install onto a built change (Bridge MSIX + agent image). Safe to run from a coda session — coda runs on the host and triggers the deploy **detached**:
 
 ```powershell
-# 1. build the exact artifacts (+ emit artifacts/update-manifest.json); note the auto-bumped version
-.\scripts\Build-All.ps1 -CertThumbprint F578A5879BE57511D40288B6DA3A0F383BD74EEE
-# 2. verify + test-gate + schedule the detached deploy of that EXACT version, then report and exit
-.\scripts\Self-Update.ps1 -Schedule -SkipPull -TargetVersion <version>
+# deploy the current working tree — builds, test-gates, verifies, then schedules the detached deploy
+.\scripts\Self-Update.ps1 -Schedule -SkipPull
+
+# or: update this machine to the latest origin/main (drop -SkipPull to pull first)
+.\scripts\Self-Update.ps1 -Schedule
 ```
 
-`-Schedule` verifies the pinned version's manifest (sha256 + signature), runs the test gate, and schedules a one-shot task that deploys ~45s later. Installing the MSIX force-restarts the Bridge, which **ends the coda session** — that is expected; the deploy continues detached, polls `/health`, and **auto-rolls-back** on failure. After scheduling, tell the user "restarting into v\<version> in ~45s". Do NOT run `-Apply` inline from coda (it would be killed mid-deploy — see the guide). Full guide: **[docs/self-update.md](docs/self-update.md)**.
+One command: the script owns build → test-gate → verify → schedule, and deploys exactly the version it just built. Do **not** run `Build-All.ps1` first and then pass `-TargetVersion` — `Build-All` bumps `version.json` on every run, so that sequence builds twice and discards the first version. `-TargetVersion` is a pin over already-built artifacts and therefore requires `-SkipBuild` (the script fails fast otherwise).
+
+`-Schedule` verifies the manifest (sha256 + signature), runs the test gate, and schedules a one-shot task that deploys ~45s later. Installing the MSIX force-restarts the Bridge, which **ends the coda session** — that is expected; the deploy continues detached, polls `/health`, and **auto-rolls-back** on failure. After scheduling, tell the user "restarting into v\<version> in ~45s". Do NOT run `-Apply` inline from coda (it would be killed mid-deploy — see the guide). Full guide: **[docs/self-update.md](docs/self-update.md)**.
+
+The test gate runs every `tests/*.Tests` project. The live-LLM evaluation suites (`Cortex.Contained.Evals`, `Cortex.Contained.ScenarioEvals`) are **excluded by default** — they call real providers and need `EVAL_LLM_API_KEY` / `SCENARIO_EVAL_BRIDGE_PASSWORD`, so without credentials they fail environmentally and would block every deploy. Add `-IncludeEvals` on a machine that has them.
 
 ## Tests
 

@@ -9,22 +9,40 @@ Design details: [docs/superpowers/specs/2026-07-06-self-update-design.md](superp
 ## The recipe
 
 ```powershell
-# 1. Build the exact artifacts (Docker images + signed MSIX) and emit artifacts/update-manifest.json.
-#    Version auto-bumps; note the new version it prints (e.g. 0.2.310).
-./scripts/Build-All.ps1 -CertThumbprint F578A5879BE57511D40288B6DA3A0F383BD74EEE
-
-# 2. Schedule the detached deploy of that EXACT version, then report the pending restart and exit.
-./scripts/Self-Update.ps1 -Schedule -SkipPull -TargetVersion 0.2.310
+# Deploy the current working tree: builds, test-gates, verifies, then schedules the detached deploy.
+./scripts/Self-Update.ps1 -Schedule -SkipPull
 ```
 
-`-Schedule` verifies the manifest for the pinned `-TargetVersion` (sha256 + Authenticode signature +
-cert thumbprint), runs the **test gate**, then registers a one-shot `CortexSelfUpdate` Scheduled Task
-that fires in ~45s and runs the deploy detached. It returns immediately — after that, tell the user
-"restarting into v<X> in ~45s" and **expect this session to be killed** when the Bridge restarts
-(that is normal — the coding session ends; the deploy continues on its own).
+That is the whole recipe. The script owns build → test-gate → verify → schedule and deploys exactly
+the version it just built (`Build-All` runs inside it and prints the new version). To update this
+machine to the latest `origin/main` instead of the working tree, drop `-SkipPull`.
 
-Only ever pass a version you actually built in step 1. If the manifest doesn't match the pinned
-version, the script refuses (it will not deploy the wrong artifacts).
+**Do not run `Build-All.ps1` first and then pass `-TargetVersion`.** `Build-All` bumps
+`version.json` on every run, so that sequence builds twice and throws the first version away.
+`-TargetVersion` is a pin over *already-built* artifacts and therefore requires `-SkipBuild`; using
+it with a build fails fast with an explanatory error, because a build always mints a new version and
+so can never match a version pinned beforehand.
+
+`-Schedule` verifies the manifest (sha256 + Authenticode signature + cert thumbprint), runs the
+**test gate**, then registers a one-shot `CortexSelfUpdate` Scheduled Task that fires in ~45s and
+runs the deploy detached. It returns immediately — after that, tell the user "restarting into v\<X>
+in ~45s" and **expect this session to be killed** when the Bridge restarts (that is normal — the
+coding session ends; the deploy continues on its own). The scheduled task re-verifies the exact
+version it was given, so a rebuild during the delay window makes it refuse rather than ship the
+wrong artifacts.
+
+## The test gate
+
+The gate runs every `tests/*.Tests` project — currently 10, ~4200 tests.
+
+The live-LLM **evaluation** suites (`Cortex.Contained.Evals`, `Cortex.Contained.ScenarioEvals`) are
+**excluded by default**: they call real providers and require `EVAL_LLM_API_KEY` /
+`SCENARIO_EVAL_BRIDGE_PASSWORD`, so on a machine without those they fail for environmental reasons
+and would block every deploy. Pass `-IncludeEvals` to run them where the credentials exist.
+
+Selecting `*.Tests` also keeps `Cortex.Contained.Evals.Setup` — a UI app that lives under `tests/`
+but is not a test project — out of the gate, and means a newly added unit-test project is picked up
+automatically.
 
 ## What the deploy does (detached, automatic)
 
@@ -51,10 +69,14 @@ let itself be replaced. Do not run `Self-Update.ps1 -Apply` directly from a coda
 
 | Command | Effect |
 |---|---|
+| `Self-Update.ps1 -Schedule -SkipPull` | **the usual one** — build the working tree, gate, verify, schedule the detached deploy (**use this from coda**) |
+| `Self-Update.ps1 -Schedule` | same, but pulls `origin/main` first |
 | `Self-Update.ps1` (no flags) | **dry-run** — pull/build/test/verify, deploy nothing |
-| `Self-Update.ps1 -Schedule -TargetVersion X` | verify + test-gate, then schedule the detached deploy (**use this from coda**) |
-| `Self-Update.ps1 -Apply -TargetVersion X` | deploy **inline** (for a human/scratch env; will restart the Bridge in-process) |
+| `Self-Update.ps1 -Apply` | deploy **inline** (for a human/scratch env; will restart the Bridge in-process) |
 | `-SkipPull` | build/deploy the current working tree instead of pulling `origin/main` |
+| `-SkipBuild` | reuse the existing artifacts/manifest (no rebuild, no version bump) |
+| `-TargetVersion X` | pin an already-built version; **requires `-SkipBuild`** |
+| `-IncludeEvals` | also run the credential-bound live-LLM eval suites in the gate |
 | `-MsixPath <file>` | pin an explicit MSIX file (default: the manifest's) |
 
 ## Notes / prerequisites

@@ -12,6 +12,18 @@
 
     See docs/superpowers/specs/2026-07-06-self-update-design.md.
 
+    USAGE — the script owns the whole pipeline, so a deploy is ONE command:
+
+      # deploy the current working tree (what coda/an agent just built)
+      .\scripts\Self-Update.ps1 -Schedule -SkipPull
+
+      # update this machine to the latest origin/main
+      .\scripts\Self-Update.ps1 -Schedule
+
+    Do NOT run Build-All.ps1 first and then pass -TargetVersion: this script builds, and Build-All
+    bumps version.json every time, so that sequence builds twice and discards the first version.
+    -TargetVersion is a pin over already-built artifacts and requires -SkipBuild.
+
 .PARAMETER Apply
     Arm the deploy + rollback. Without it the script is a no-op past verification (dry run).
 
@@ -24,6 +36,18 @@
 
 .PARAMETER SkipTests
     Skip the test-gate. NOT recommended — a red build is exactly what rollback exists to avoid.
+
+.PARAMETER IncludeEvals
+    Also run the live-LLM evaluation suites (*Evals) in the test gate. Off by default: those suites
+    call real providers and need credentials (EVAL_LLM_API_KEY, SCENARIO_EVAL_BRIDGE_PASSWORD), so
+    on a machine without them they fail for environmental reasons and would block every deploy.
+    The gate runs every *.Tests project regardless.
+
+.PARAMETER TargetVersion
+    Pin the exact version to deploy. This is a guard over ALREADY-BUILT artifacts, so it requires
+    -SkipBuild: a build always mints a NEW version (Build-All bumps version.json), which by
+    definition cannot equal a version pinned beforehand. To build and deploy in one step, just omit
+    this — the script deploys exactly the version it built.
 
 .PARAMETER RollbackDrill
     Safely exercise the auto-rollback path. Implies -Apply. Deploys the (verified, known-good) target
@@ -39,6 +63,7 @@ param(
     [string]$Ref = '',
     [switch]$SkipBuild,
     [switch]$SkipTests,
+    [switch]$IncludeEvals,
     [switch]$SkipPull,
     [switch]$RollbackDrill,
     [int]$DelaySeconds = 45,
@@ -56,6 +81,15 @@ $ErrorActionPreference = 'Stop'
 # It must run inline (the detached scheduled task would not carry the drill flag), so forbid -Schedule.
 if ($RollbackDrill -and $Schedule) { throw "-RollbackDrill is inline-only; do not combine it with -Schedule." }
 if ($RollbackDrill) { $Apply = $true }
+
+# -TargetVersion pins an EXISTING build. A build always mints a new version (Build-All bumps
+# version.json unconditionally), so pinning while building is self-contradictory: the manifest check
+# below would reject the freshly-built version, but only AFTER paying for a multi-minute build, and
+# the discarded bump burns a version number. Fail here instead, and point at the one-step flow.
+if ($TargetVersion -and -not $SkipBuild) {
+    throw ("-TargetVersion pins an already-built version, so it requires -SkipBuild. " +
+           "To build and deploy in one step, drop -TargetVersion: the script deploys exactly what it builds.")
+}
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $artifacts = Join-Path $repoRoot 'artifacts'
 $manifestPath = Join-Path $artifacts 'update-manifest.json'
@@ -185,10 +219,48 @@ try {
     # --- 3. Test-gate --------------------------------------------------------
     # Runs before scheduling/deploying (unless -SkipTests). The detached deploy task passes
     # -SkipTests because the gate already ran here, in the scheduling/build step.
+    #
+    # Scoped to the *.Tests projects rather than the whole solution. tests/ also holds the live-LLM
+    # evaluation suites (*Evals), which call real providers and need credentials — on a machine
+    # without them they fail environmentally and would block EVERY deploy, and running the solution
+    # would also try to `dotnet test` Cortex.Contained.Evals.Setup, which is a UI app, not a test
+    # project. Selecting *.Tests drifts the safe way: a new unit-test project is picked up
+    # automatically, while anything else under tests/ has to opt in.
     if (-not $SkipTests) {
-        Say "running tests (gate)..."
-        & dotnet test (Join-Path $repoRoot 'cortex-contained.sln') --nologo 2>&1 | ForEach-Object { if ($_ -match 'Passed!|Failed!|error') { Say "test: $_" 'Gray' } }
-        if ($LASTEXITCODE -ne 0) { throw "TEST GATE FAILED — aborting before any deploy." }
+        $allTestProjects = @(Get-ChildItem (Join-Path $repoRoot 'tests') -Filter '*.csproj' -Recurse)
+        $gateProjects = @($allTestProjects | Where-Object { $_.BaseName -like '*.Tests' })
+        if ($IncludeEvals) {
+            $gateProjects += @($allTestProjects | Where-Object { $_.BaseName -like '*Evals' })
+        }
+        $gateProjects = @($gateProjects | Sort-Object FullName)
+
+        # A gate that silently selects nothing is worse than no gate — it would wave through a red build.
+        if ($gateProjects.Count -eq 0) { throw "TEST GATE FAILED — no test projects matched under tests/." }
+
+        $scope = if ($IncludeEvals) { 'including eval suites' } else { 'eval suites excluded (-IncludeEvals to add)' }
+        Say "running tests (gate): $($gateProjects.Count) project(s), $scope"
+
+        # Build once, then test each project with --no-build: the projects share most of their
+        # dependency graph, so per-project builds would repeat the same work N times.
+        & dotnet build (Join-Path $repoRoot 'cortex-contained.sln') --nologo -v quiet 2>&1 |
+            ForEach-Object { if ($_ -match ': error') { Say "build: $_" 'Gray' } }
+        if ($LASTEXITCODE -ne 0) { throw "TEST GATE FAILED — solution build failed." }
+
+        $failedProjects = @()
+        foreach ($proj in $gateProjects) {
+            # Capture the exit code IMMEDIATELY after the native call, before any other command can
+            # overwrite $LASTEXITCODE, then format the output separately.
+            $testOutput = & dotnet test $proj.FullName --no-build --nologo 2>&1
+            $testExit = $LASTEXITCODE
+            $testOutput | ForEach-Object { if ($_ -match 'Passed!|Failed!|error') { Say "test: $_" 'Gray' } }
+            if ($testExit -ne 0) {
+                Say "test: $($proj.BaseName) exited $testExit" 'Yellow'
+                $failedProjects += $proj.BaseName
+            }
+        }
+        if ($failedProjects.Count -gt 0) {
+            throw "TEST GATE FAILED ($($failedProjects -join ', ')) — aborting before any deploy."
+        }
     } else {
         Say "SkipTests — test gate bypassed" 'Yellow'
     }
