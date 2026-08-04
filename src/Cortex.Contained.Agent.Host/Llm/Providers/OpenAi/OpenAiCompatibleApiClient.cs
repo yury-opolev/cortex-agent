@@ -720,20 +720,7 @@ internal sealed partial class OpenAiCompatibleApiClient : IProviderApiClient
         }).ToArray();
     }
 
-    private static LlmTokenUsage? MapUsage(OpenAiUsage? usage)
-    {
-        if (usage is null)
-        {
-            return null;
-        }
-
-        return new LlmTokenUsage
-        {
-            PromptTokens = usage.PromptTokens,
-            CompletionTokens = usage.CompletionTokens,
-            TotalTokens = usage.TotalTokens,
-        };
-    }
+    private static LlmTokenUsage? MapUsage(OpenAiUsage? usage) => usage?.ToTokenUsage();
 
     // ── LoggerMessage ────────────────────────────────────────────────
 
