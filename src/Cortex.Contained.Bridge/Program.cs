@@ -4,6 +4,8 @@ using Cortex.Contained.Bridge;
 using Cortex.Contained.Bridge.Auth;
 using Cortex.Contained.Bridge.Channels;
 using Cortex.Contained.Bridge.Connectors;
+using Cortex.Contained.Bridge.Connectors.Pairing;
+using Cortex.Contained.Bridge.Connectors.Security;
 using Cortex.Contained.Bridge.Hub;
 using Cortex.Contained.Bridge.Logging;
 using Cortex.Contained.Bridge.Security;
@@ -418,7 +420,12 @@ builder.Services.AddSingleton<ChannelManager>();
 // --- Connector Plugin System ---
 builder.Services.AddSingleton<ConnectorHost>();
 builder.Services.AddSingleton<IConnectorRegistry>(sp => sp.GetRequiredService<ConnectorHost>());
-builder.Services.AddSingleton<IConnectorAuthenticator, AutoApproveConnectorAuthenticator>();
+// SecretManager is created manually before the container is built; wrap it in a factory lambda.
+builder.Services.AddSingleton<IConnectorSecretStore>(_ => new SecretManagerConnectorSecretStore(secretManager));
+builder.Services.AddSingleton<ConnectorTokenStore>();
+builder.Services.AddSingleton<ConnectorPairingService>();
+builder.Services.AddSingleton<IConnectorAuthenticator>(sp => sp.GetRequiredService<ConnectorPairingService>());
+builder.Services.AddSingleton<IConnectorPairingCoordinator>(sp => sp.GetRequiredService<ConnectorPairingService>());
 // TimeProvider is already registered below (line ~762); do not add a second instance.
 builder.Services.AddSingleton(sp =>
     new HubMessageDispatcher(

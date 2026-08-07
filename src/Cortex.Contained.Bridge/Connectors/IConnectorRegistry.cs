@@ -19,4 +19,7 @@ public interface IConnectorRegistry
     /// Safe to call when the channel was never attached.
     /// </summary>
     ValueTask DetachAsync(PluginChannel channel);
+
+    /// <summary>Detaches the attached channel with this id, if any. Returns true when one was detached.</summary>
+    ValueTask<bool> DetachByChannelIdAsync(string channelId);
 }

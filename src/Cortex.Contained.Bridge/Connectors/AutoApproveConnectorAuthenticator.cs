@@ -7,7 +7,8 @@ namespace Cortex.Contained.Bridge.Connectors;
 /// approves every connector attach request.
 /// </summary>
 /// <remarks>
-/// This class is replaced by the real pairing service in Phase 2.
+/// This class is no longer registered in the DI container. It is retained for use as a test double.
+/// Use <c>ConnectorPairingService</c> for production use.
 /// It accepts ANY presented token without validation and issues a fresh
 /// Base64URL-encoded random token when no token is presented.
 /// </remarks>

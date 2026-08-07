@@ -123,6 +123,24 @@ public sealed partial class ConnectorHost : IConnectorRegistry
         await channel.DisconnectAsync().ConfigureAwait(false);
     }
 
+    /// <inheritdoc/>
+    public async ValueTask<bool> DetachByChannelIdAsync(string channelId)
+    {
+        PluginChannel? channel;
+        lock (this.syncLock)
+        {
+            this.channels.TryGetValue(channelId, out channel);
+        }
+
+        if (channel is null)
+        {
+            return false;
+        }
+
+        await this.DetachAsync(channel).ConfigureAwait(false);
+        return true;
+    }
+
     /// <summary>
     /// Returns a snapshot of all currently attached plugin channels.
     /// Used by the Web UI in Phase 5 to display the connector list.
