@@ -960,6 +960,11 @@ builder.Services.AddSingleton<Cortex.Contained.Bridge.Mcp.McpConfigStore>(sp =>
         sp.GetRequiredService<BridgeConfig>(),
         cortexConfigPath,
         sp.GetRequiredService<ILogger<Cortex.Contained.Bridge.Mcp.McpConfigStore>>()));
+builder.Services.AddSingleton<Cortex.Contained.Bridge.Connectors.ConnectorConfigStore>(sp =>
+    new Cortex.Contained.Bridge.Connectors.ConnectorConfigStore(
+        sp.GetRequiredService<BridgeConfig>(),
+        cortexConfigPath,
+        sp.GetRequiredService<ILogger<Cortex.Contained.Bridge.Connectors.ConnectorConfigStore>>()));
 builder.Services.AddSingleton<Cortex.Contained.Bridge.Mcp.McpCatalogPusher>(sp =>
     new Cortex.Contained.Bridge.Mcp.McpCatalogPusher(
         sp.GetRequiredService<TenantRouter>(),
@@ -1149,6 +1154,9 @@ app.MapMemoryEndpoints(cortexConfigPath);
 
 // --- Connector Plugin System endpoint (loopback-only, no WebUI dependency) ---
 app.MapConnectorEndpoint();
+
+// --- Connector management API (list/approve/deny/enable/revoke/master toggle) ---
+app.MapConnectorEndpoints();
 
 // --- MCP server management API ---
 app.MapMcpEndpoints();

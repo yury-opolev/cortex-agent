@@ -1151,6 +1151,10 @@
                         <button class="nav-link" :class="activeTab === 'mcp' ? 'active' : ''"
                                 @click="activeTab = 'mcp'" type="button">MCP Servers</button>
                     </li>
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link" :class="activeTab === 'connectors' ? 'active' : ''"
+                                @click="activeTab = 'connectors'" type="button">Connectors</button>
+                    </li>
                 </ul>
 
                 <!-- ═══ General tab ═══ -->
@@ -2260,6 +2264,104 @@
                     </div>
                 </div>
 
+                <!-- ═══ Connectors tab ═══ -->
+                <div x-show="activeTab === 'connectors'">
+                    <div x-data="connectorsPage()" x-init="init()">
+
+                        <p class="text-secondary small mb-3">
+                            Connect third-party connector plugins over a loopback WebSocket. Each connector
+                            pairs once through a code-verified handshake and then behaves like a native channel.
+                            Credentials stay here on the host; the agent stays credential-free.
+                        </p>
+
+                        <!-- Master toggle -->
+                        <div class="d-flex align-items-center justify-content-between border-bottom pb-2 mb-3">
+                            <div class="form-check form-switch mb-0">
+                                <input class="form-check-input" type="checkbox" role="switch" id="connectors-master-toggle"
+                                       x-model="masterEnabled" @change="saveMaster()" :disabled="savingMaster">
+                                <label class="form-check-label" for="connectors-master-toggle">Connectors enabled (master)</label>
+                            </div>
+                        </div>
+
+                        <!-- Loading -->
+                        <div x-show="loading" class="text-secondary small"><div class="spinner-border spinner-border-sm me-2"></div>Loading...</div>
+
+                        <!-- Pending pairing requests -->
+                        <div x-show="!loading && pending.length > 0" class="mb-4">
+                            <h6 class="text-uppercase text-secondary border-bottom pb-2 mb-3">Pending Pairing Requests</h6>
+                            <p class="text-secondary small mb-2">
+                                Verify the code below matches what the connector displays, then approve or deny.
+                            </p>
+                            <template x-for="p in pending" :key="p.requestId">
+                                <div class="card mb-2 border-warning">
+                                    <div class="card-body py-2 px-3">
+                                        <div class="d-flex align-items-center gap-2 flex-wrap mb-2">
+                                            <strong x-text="p.displayName"></strong>
+                                            <span class="badge bg-secondary font-monospace" x-text="p.key"></span>
+                                            <span class="badge bg-secondary font-monospace" x-text="p.instanceId"></span>
+                                        </div>
+                                        <div class="small text-body-secondary mb-1">
+                                            Remote: <span class="font-monospace" x-text="p.remoteEndpoint"></span>
+                                        </div>
+                                        <div class="small text-body-secondary mb-2">
+                                            Expires: <span x-text="new Date(p.expiresAt).toLocaleTimeString()"></span>
+                                        </div>
+                                        <div class="text-center mb-2">
+                                            <code class="fs-4 user-select-all" x-text="p.code"></code>
+                                        </div>
+                                        <div class="d-flex gap-2">
+                                            <button class="btn btn-sm btn-success" @click="approve(p)">
+                                                <i class="bi bi-check-lg me-1"></i>Approve
+                                            </button>
+                                            <button class="btn btn-sm btn-danger" @click="deny(p)">
+                                                <i class="bi bi-x-lg me-1"></i>Deny
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </template>
+                        </div>
+
+                        <!-- Paired connectors list -->
+                        <div x-show="!loading">
+                            <h6 class="text-uppercase text-secondary border-bottom pb-2 mb-3">Paired Connectors</h6>
+
+                            <!-- Empty state -->
+                            <div x-show="connectors.length === 0" class="text-secondary small mb-3">
+                                No connectors paired yet.
+                            </div>
+
+                            <div x-show="connectors.length > 0" class="d-flex flex-column gap-2">
+                                <template x-for="c in connectors" :key="c.channelId">
+                                    <div class="card">
+                                        <div class="card-body py-2 px-3">
+                                            <div class="d-flex align-items-center gap-2 flex-wrap">
+                                                <strong x-text="c.displayName"></strong>
+                                                <span class="badge font-monospace bg-secondary" x-text="c.channelId"></span>
+                                                <span class="badge" :class="statusBadgeClass(c.status)" x-text="c.status"></span>
+
+                                                <div class="ms-auto d-flex align-items-center gap-1">
+                                                    <div class="form-check form-switch mb-0 me-1">
+                                                        <input class="form-check-input" type="checkbox" role="switch"
+                                                               x-model="c.enabled" @change="toggleConnector(c)"
+                                                               :title="c.enabled ? 'Disable' : 'Enable'">
+                                                    </div>
+                                                    <button class="btn btn-sm btn-outline-danger" @click="revoke(c)" title="Revoke — connector must pair again">
+                                                        <i class="bi bi-trash"></i>
+                                                    </button>
+                                                </div>
+                                            </div>
+                                            <div class="small text-body-secondary mt-1">
+                                                Last seen: <span x-text="c.lastSeenAt ? new Date(c.lastSeenAt).toLocaleString() : 'never'"></span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </template>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Restart Banner -->
                 <div x-show="showRestartBanner" class="alert alert-warning mt-3" role="alert">
                     <i class="bi bi-exclamation-triangle"></i> Configuration changed. Restart the Bridge for changes to take effect.
@@ -2412,6 +2514,7 @@
 <script src="/js/pages/tenant-memory.js"></script>
 <script src="/js/pages/global-settings.js"></script>
 <script src="/js/pages/mcp-servers.js"></script>
+<script src="/js/pages/connectors.js"></script>
 <script src="/js/pages/help.js"></script>
 
 <!-- Chat page (vanilla JS — loaded last, initializes on demand) -->
