@@ -1,4 +1,5 @@
 using Cortex.Contained.Bridge.Channels;
+using Cortex.Contained.Bridge.Connectors;
 using Cortex.Contained.Bridge.Hub;
 using Cortex.Contained.Bridge.Recording;
 using Cortex.Contained.Channels.CloudMessaging;
@@ -30,6 +31,7 @@ public sealed partial class ChannelLifecycleManager
     private readonly DiscordChannelOptions? discordOptions;
     private readonly CloudMessagingChannel? cloudMessagingChannel;
     private readonly BridgeConfig config;
+    private readonly ConnectorHost connectorHost;
     private readonly Cortex.Contained.Speech.SpeakerId.ISpeakerVerifier? speakerVerifier;
     private readonly Cortex.Contained.Speech.SpeakerId.VerificationMetrics verificationMetrics;
     private readonly Cortex.Contained.Speech.SpeakerId.ISpeakerEmbedder? speakerEmbedder;
@@ -45,6 +47,7 @@ public sealed partial class ChannelLifecycleManager
         ChannelManager channelManager,
         WebChatChannel webChatChannel,
         BridgeConfig config,
+        ConnectorHost connectorHost,
         ILogger<ChannelLifecycleManager> logger,
         VoiceChannel? voiceChannel = null,
         DiscordChannel? discordChannel = null,
@@ -63,6 +66,7 @@ public sealed partial class ChannelLifecycleManager
         this.channelManager = channelManager;
         this.webChatChannel = webChatChannel;
         this.config = config;
+        this.connectorHost = connectorHost;
         this.logger = logger;
         this.voiceChannel = voiceChannel;
         this.discordChannel = discordChannel;
@@ -359,6 +363,11 @@ public sealed partial class ChannelLifecycleManager
         if (this.voiceChannel is not null)
         {
             ids.Add("voice-default");
+        }
+
+        foreach (var channel in this.connectorHost.GetAttachedChannels())
+        {
+            ids.Add(channel.ChannelId);
         }
 
         return ids.ToArray();

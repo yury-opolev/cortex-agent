@@ -1,96 +1,33 @@
+using Cortex.Contained.Contracts.Channels;
+
 namespace Cortex.Contained.Bridge.Connectors;
 
-/// <summary>Utilities for constructing and validating plugin channel identifiers.</summary>
+/// <summary>
+/// Utilities for constructing and validating plugin channel identifiers.
+/// </summary>
+/// <remarks>
+/// The validation rules live in <see cref="PluginChannelId"/> (Contracts) because both
+/// the Bridge and the Agent Host need them. This class is a thin forwarder that preserves
+/// the existing public API so all Bridge code and tests continue to compile unchanged.
+/// </remarks>
 public static class ConnectorChannelId
 {
-    /// <summary>The prefix segment for all plugin channel IDs.</summary>
-    public const string Prefix = "plugin";
+    /// <inheritdoc cref="PluginChannelId.Prefix"/>
+    public const string Prefix = PluginChannelId.Prefix;
 
-    /// <summary>Creates a channel ID from a connector key and instance ID.</summary>
-    /// <param name="key">Connector type key (e.g. <c>terminal</c>).</param>
-    /// <param name="instanceId">Connector instance identifier (e.g. <c>default</c>).</param>
-    public static string Create(string key, string instanceId) => $"plugin:{key}:{instanceId}";
+    /// <inheritdoc cref="PluginChannelId.Create"/>
+    public static string Create(string key, string instanceId) => PluginChannelId.Create(key, instanceId);
 
-    /// <summary>
-    /// Attempts to parse a plugin channel ID into its constituent key and instance ID.
-    /// Returns false for anything that is not exactly three colon-separated segments
-    /// where the first is <c>plugin</c> and the remaining two pass <see cref="IsValidSegment"/>.
-    /// </summary>
-    public static bool TryParse(string channelId, out string? key, out string? instanceId)
-    {
-        key = null;
-        instanceId = null;
+    /// <inheritdoc cref="PluginChannelId.TryParse"/>
+    public static bool TryParse(string channelId, out string? key, out string? instanceId) =>
+        PluginChannelId.TryParse(channelId, out key, out instanceId);
 
-        if (string.IsNullOrEmpty(channelId))
-        {
-            return false;
-        }
+    /// <inheritdoc cref="PluginChannelId.IsPluginChannelId"/>
+    public static bool IsPluginChannelId(string channelId) => PluginChannelId.IsPluginChannelId(channelId);
 
-        var parts = channelId.Split(':');
-        if (parts.Length != 3)
-        {
-            return false;
-        }
+    /// <inheritdoc cref="PluginChannelId.IsValidSegment"/>
+    public static bool IsValidSegment(string? segment) => PluginChannelId.IsValidSegment(segment);
 
-        if (!string.Equals(parts[0], Prefix, StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        if (!IsValidSegment(parts[1]) || !IsValidSegment(parts[2]))
-        {
-            return false;
-        }
-
-        key = parts[1];
-        instanceId = parts[2];
-        return true;
-    }
-
-    /// <summary>Returns true when <paramref name="channelId"/> is a valid plugin channel ID.</summary>
-    public static bool IsPluginChannelId(string channelId) =>
-        TryParse(channelId, out _, out _);
-
-    /// <summary>
-    /// Returns true when <paramref name="segment"/> is non-null, between 1 and 64 characters,
-    /// and contains only ASCII lower-case letters, digits, hyphens, and underscores.
-    /// </summary>
-    public static bool IsValidSegment(string? segment)
-    {
-        if (segment is null || segment.Length is 0 or > 64)
-        {
-            return false;
-        }
-
-        foreach (var ch in segment)
-        {
-            if (!IsValidSegmentChar(ch))
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    /// <summary>
-    /// Lower-cases and trims <paramref name="segment"/>, then validates it.
-    /// Returns the normalised value when valid; null otherwise.
-    /// </summary>
-    public static string? Normalize(string? segment)
-    {
-        if (segment is null)
-        {
-            return null;
-        }
-
-        var normalized = segment.Trim().ToLowerInvariant();
-        return IsValidSegment(normalized) ? normalized : null;
-    }
-
-    private static bool IsValidSegmentChar(char ch) =>
-        (ch >= 'a' && ch <= 'z')
-        || (ch >= '0' && ch <= '9')
-        || ch == '-'
-        || ch == '_';
+    /// <inheritdoc cref="PluginChannelId.Normalize"/>
+    public static string? Normalize(string? segment) => PluginChannelId.Normalize(segment);
 }

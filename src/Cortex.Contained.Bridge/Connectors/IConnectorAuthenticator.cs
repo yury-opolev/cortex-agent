@@ -1,9 +1,9 @@
 namespace Cortex.Contained.Bridge.Connectors;
 
 /// <summary>
-/// Authenticates connector attach requests.
-/// Phase 1 uses <see cref="AutoApproveConnectorAuthenticator"/>;
-/// Phase 2 replaces this with the real pairing service.
+/// Authenticates connector attach requests: validates a presented durable token, or begins the
+/// human pairing flow when there is no valid one. Implemented by
+/// <see cref="Pairing.ConnectorPairingService"/>.
 /// </summary>
 public interface IConnectorAuthenticator
 {

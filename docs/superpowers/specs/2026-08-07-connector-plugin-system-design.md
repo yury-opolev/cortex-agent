@@ -59,8 +59,18 @@ streaming is negotiated) and registered with `ChannelManager`. From
 `HubMessageDispatcher`'s perspective it is indistinguishable from
 `DiscordChannel` or `WebChatChannel`.
 
-All new code is Bridge-side. The only shared-Contracts changes are the
-`ChannelType.Plugin` enum member and the `connectors:` config section.
+All new code is Bridge-side. The shared-Contracts changes are deliberately minimal and all
+backward compatible, which matters because `Cortex.Contained.Contracts` is compiled into the
+container image:
+
+- `ChannelType.Plugin = 7` — a new enum member, so existing values are unchanged.
+- `OutboundMessage.Timestamp` — a new nullable, non-required property carrying the timestamp the
+  agent recorded, so a channel exposing a replay cursor quotes the agent's clock rather than its
+  own. A container built without it simply yields `null`, which the Bridge falls back from.
+- `PluginChannelId` — the channel-id format and validation rules, shared because both the Bridge
+  and the Agent Host need them and duplicating the validation would be a security risk.
+- `ChannelCapabilities.MaxMessageLength` — documentation only, clarifying that the unit is UTF-16
+  code units rather than bytes.
 
 ### Identity model
 

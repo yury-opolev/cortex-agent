@@ -61,6 +61,7 @@ public sealed class WorkerWatchdogTests
             channelLifecycle: null!,
             connectionBootstrapper: null!,
             credentialsPusher: null!,
+            connectorHost: null!,
             logger: NullLogger<Worker>.Instance,
             containerManager: null,
             mcpCatalogPusher: mcpCatalogPusher);

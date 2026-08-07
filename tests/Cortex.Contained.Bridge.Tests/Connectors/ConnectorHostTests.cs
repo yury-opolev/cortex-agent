@@ -180,4 +180,104 @@ public sealed class ConnectorHostTests
         Assert.Equal(limit, successCount);
         Assert.Equal(limit, host.AttachedCount);
     }
+
+    // ── ActiveChannelsChanged callback ───────────────────────────────
+
+    [Fact]
+    public async Task TryAttachAsync_Successful_InvokesActiveChannelsChanged()
+    {
+        var (host, _) = Build();
+        var callCount = 0;
+        host.ActiveChannelsChanged = () =>
+        {
+            callCount++;
+            return Task.CompletedTask;
+        };
+
+        await host.TryAttachAsync(MakeChannel(), CancellationToken.None);
+
+        Assert.Equal(1, callCount);
+    }
+
+    [Fact]
+    public async Task DetachAsync_RemovesChannel_InvokesActiveChannelsChanged()
+    {
+        var (host, _) = Build();
+        var channel = MakeChannel();
+        await host.TryAttachAsync(channel, CancellationToken.None);
+
+        var callCount = 0;
+        host.ActiveChannelsChanged = () =>
+        {
+            callCount++;
+            return Task.CompletedTask;
+        };
+
+        await host.DetachAsync(channel);
+
+        Assert.Equal(1, callCount);
+    }
+
+    [Fact]
+    public async Task TryAttachAsync_CallbackThrows_DoesNotFailAttach()
+    {
+        var (host, _) = Build();
+        host.ActiveChannelsChanged = () => throw new InvalidOperationException("push failed");
+
+        var result = await host.TryAttachAsync(MakeChannel(), CancellationToken.None);
+
+        Assert.True(result.Success);
+    }
+
+    [Fact]
+    public async Task DetachAsync_CallbackThrows_DoesNotFailDetach()
+    {
+        var (host, manager) = Build();
+        var channel = MakeChannel();
+        await host.TryAttachAsync(channel, CancellationToken.None);
+        host.ActiveChannelsChanged = () => throw new InvalidOperationException("push failed");
+
+        await host.DetachAsync(channel);
+
+        Assert.False(manager.TryGetChannel("plugin:terminal:default", out _));
+    }
+
+    [Fact]
+    public async Task DetachAllAsync_InvokesActiveChannelsChangedOnce()
+    {
+        var (host, _) = Build();
+        await host.TryAttachAsync(MakeChannel("a", "1"), CancellationToken.None);
+        await host.TryAttachAsync(MakeChannel("b", "2"), CancellationToken.None);
+
+        var callCount = 0;
+        host.ActiveChannelsChanged = () =>
+        {
+            callCount++;
+            return Task.CompletedTask;
+        };
+
+        await host.DetachAllAsync("test");
+
+        // Exactly one push regardless of how many connectors were attached: flipping the master
+        // switch off with many connectors must not produce a burst of redundant hub calls.
+        Assert.Equal(1, callCount);
+        Assert.Empty(host.GetAttachedChannels());
+    }
+
+    [Fact]
+    public async Task DetachAllAsync_NothingAttached_DoesNotInvokeActiveChannelsChanged()
+    {
+        var (host, _) = Build();
+
+        var callCount = 0;
+        host.ActiveChannelsChanged = () =>
+        {
+            callCount++;
+            return Task.CompletedTask;
+        };
+
+        await host.DetachAllAsync("test");
+
+        Assert.Equal(0, callCount);
+    }
 }

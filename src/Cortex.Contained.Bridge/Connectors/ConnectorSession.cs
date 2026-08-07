@@ -706,10 +706,24 @@ public sealed partial class ConnectorSession : IAsyncDisposable
 
     private void OnPingTimerTickAsync(object? state)
     {
+        // Fire and forget on a timer thread: an escaping exception here would surface as an
+        // unobserved task exception, so the async body must swallow everything itself.
         _ = this.PingTimerTickAsync();
     }
 
     private async Task PingTimerTickAsync()
+    {
+        try
+        {
+            await this.PingTimerTickCoreAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            this.LogHeartbeatTickFailed(ex);
+        }
+    }
+
+    private async Task PingTimerTickCoreAsync()
     {
         lock (this.teardownLock)
         {
@@ -830,8 +844,11 @@ public sealed partial class ConnectorSession : IAsyncDisposable
     [LoggerMessage(Level = LogLevel.Debug, Message = "Pong received from channel {ChannelId}.")]
     private partial void LogPongReceived(string channelId);
 
-    [LoggerMessage(Level = LogLevel.Debug, Message = "Abort received from channel {ChannelId} (Phase 3 handling).")]
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Abort received from channel {ChannelId}.")]
     private partial void LogAbortReceived(string channelId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Connector heartbeat tick failed.")]
+    private partial void LogHeartbeatTickFailed(Exception ex);
 
     /// <summary>
     /// Logged at Warning, suppressed to at most once per minute per session so a hammering

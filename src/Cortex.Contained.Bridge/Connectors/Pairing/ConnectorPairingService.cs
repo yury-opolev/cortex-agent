@@ -17,6 +17,14 @@ public sealed partial class ConnectorPairingService : IConnectorAuthenticator, I
 {
     private const int RateLimitMaxRequests = 5;
     private const int RateLimitBucketSweepThreshold = 256;
+
+    /// <summary>
+    /// Ceiling on concurrently pending pairing requests across every channel id. The per-channel
+    /// rate limit alone does not bound this, because a hostile process can pick unlimited distinct
+    /// keys — and a flooded approval list is a social-engineering aid, since it buries the
+    /// legitimate request the user is actually looking for.
+    /// </summary>
+    private const int MaxPendingRequests = 16;
     private static readonly TimeSpan RateLimitWindow = TimeSpan.FromMinutes(10);
     private static readonly TimeSpan PairingCodeExpiry = TimeSpan.FromMinutes(5);
 
@@ -279,6 +287,15 @@ public sealed partial class ConnectorPairingService : IConnectorAuthenticator, I
                 return ConnectorAuthResult.Denied("pairing_rate_limited");
             }
 
+            // Count only live requests: an expired entry that the sweep has not reclaimed yet
+            // must not consume a slot, or a burst of abandoned attempts would lock the user out.
+            var livePending = this.pendingByChannelId.Values.Count(e => e.ExpiresAt > now);
+            if (livePending >= MaxPendingRequests)
+            {
+                this.LogPendingLimitReached(channelId, MaxPendingRequests);
+                return ConnectorAuthResult.Denied("pairing_rate_limited");
+            }
+
             bucket.Add(now);
 
             // Remove any stale entry for this channel.
@@ -403,6 +420,9 @@ public sealed partial class ConnectorPairingService : IConnectorAuthenticator, I
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Connector '{ChannelId}' exceeded pairing rate limit")]
     private partial void LogRateLimited(string channelId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Refused pairing request for '{ChannelId}': {MaxPendingRequests} requests are already awaiting approval.")]
+    private partial void LogPendingLimitReached(string channelId, int maxPendingRequests);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Pairing request '{RequestId}' started for connector '{ChannelId}'")]
     private partial void LogPairingStarted(string channelId, string requestId);

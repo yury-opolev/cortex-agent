@@ -1,4 +1,5 @@
 using Cortex.Contained.Bridge.Channels;
+using Cortex.Contained.Bridge.Connectors;
 using Cortex.Contained.Bridge.Hosting;
 using Cortex.Contained.Bridge.Mcp;
 using Cortex.Contained.Contracts.Config;
@@ -29,6 +30,7 @@ public sealed partial class Worker : BackgroundService
     private readonly ChannelLifecycleManager channelLifecycle;
     private readonly TenantConnectionBootstrapper connectionBootstrapper;
     private readonly CredentialsPusher credentialsPusher;
+    private readonly ConnectorHost connectorHost;
     private readonly McpCatalogPusher? mcpCatalogPusher;
     private readonly ILogger<Worker> logger;
 
@@ -40,6 +42,7 @@ public sealed partial class Worker : BackgroundService
         ChannelLifecycleManager channelLifecycle,
         TenantConnectionBootstrapper connectionBootstrapper,
         CredentialsPusher credentialsPusher,
+        ConnectorHost connectorHost,
         ILogger<Worker> logger,
         Tenants.IContainerManager? containerManager = null,
         McpCatalogPusher? mcpCatalogPusher = null)
@@ -51,6 +54,7 @@ public sealed partial class Worker : BackgroundService
         this.channelLifecycle = channelLifecycle;
         this.connectionBootstrapper = connectionBootstrapper;
         this.credentialsPusher = credentialsPusher;
+        this.connectorHost = connectorHost;
         this.containerManager = containerManager;
         this.mcpCatalogPusher = mcpCatalogPusher;
         this.logger = logger;
@@ -69,6 +73,11 @@ public sealed partial class Worker : BackgroundService
         // Reconnect re-push needs the active channel list — supply it from the
         // channel-lifecycle manager so the bootstrapper stays decoupled.
         this.connectionBootstrapper.ActiveChannelIdsProvider = this.channelLifecycle.BuildActiveChannelIds;
+
+        // Re-push the active channel list whenever a connector attaches or detaches so
+        // the agent immediately sees the updated set of available channels.
+        this.connectorHost.ActiveChannelsChanged = () => this.credentialsPusher.PushActiveChannelsAsync(
+            this.channelLifecycle.BuildActiveChannelIds(), CancellationToken.None);
 
         // 3. Set up auto-wiring so every tenant connection gets events attached
         this.tenantRouter.OnClientConnected = this.connectionBootstrapper.OnTenantClientConnected;

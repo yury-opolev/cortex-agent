@@ -35,6 +35,14 @@ public sealed partial class ConnectorHost : IConnectorRegistry
         this.logger = logger;
     }
 
+    /// <summary>
+    /// Optional callback invoked after a connector attaches or detaches.
+    /// Set by <c>Worker</c> to re-push the active channel list to the agent so the model
+    /// always sees an up-to-date set of available channels. A push failure is logged as a
+    /// Warning and never propagates back into the attach or detach path.
+    /// </summary>
+    public Func<Task>? ActiveChannelsChanged { get; set; }
+
     /// <inheritdoc/>
     public async ValueTask<ConnectorAttachResult> TryAttachAsync(PluginChannel channel, CancellationToken ct)
     {
@@ -93,6 +101,7 @@ public sealed partial class ConnectorHost : IConnectorRegistry
         }
 
         this.LogChannelAttached(channel.ChannelId);
+        await this.InvokeActiveChannelsChangedAsync().ConfigureAwait(false);
         return ConnectorAttachResult.Ok();
     }
 
@@ -105,6 +114,11 @@ public sealed partial class ConnectorHost : IConnectorRegistry
     /// channel id, while still guaranteeing the stale channel itself is shut down.
     /// </remarks>
     public async ValueTask DetachAsync(PluginChannel channel)
+    {
+        await this.DetachCoreAsync(channel, notify: true).ConfigureAwait(false);
+    }
+
+    private async ValueTask<bool> DetachCoreAsync(PluginChannel channel, bool notify)
     {
         bool removed;
         lock (this.syncLock)
@@ -121,6 +135,13 @@ public sealed partial class ConnectorHost : IConnectorRegistry
         }
 
         await channel.DisconnectAsync().ConfigureAwait(false);
+
+        if (removed && notify)
+        {
+            await this.InvokeActiveChannelsChangedAsync().ConfigureAwait(false);
+        }
+
+        return removed;
     }
 
     /// <inheritdoc/>
@@ -176,12 +197,40 @@ public sealed partial class ConnectorHost : IConnectorRegistry
             snapshot = [.. this.channels.Values];
         }
 
+        var anyRemoved = false;
         foreach (var channel in snapshot)
         {
-            await this.DetachAsync(channel).ConfigureAwait(false);
+            // Suppress the per-channel notification: pushing the active channel list once per
+            // connector would send a burst of redundant hub calls when the master switch is
+            // flipped off with many connectors attached.
+            anyRemoved |= await this.DetachCoreAsync(channel, notify: false).ConfigureAwait(false);
         }
 
         this.LogAllDetached(reason);
+
+        if (anyRemoved)
+        {
+            await this.InvokeActiveChannelsChangedAsync().ConfigureAwait(false);
+        }
+    }
+
+    private async Task InvokeActiveChannelsChangedAsync()
+    {
+        if (this.ActiveChannelsChanged is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await this.ActiveChannelsChanged().ConfigureAwait(false);
+        }
+#pragma warning disable CA1031 // push failure must never fail an attach or detach
+        catch (Exception ex)
+        {
+            this.LogActiveChannelsPushFailed(ex.Message);
+        }
+#pragma warning restore CA1031
     }
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Connector channel attached: {ChannelId}")]
@@ -195,4 +244,7 @@ public sealed partial class ConnectorHost : IConnectorRegistry
 
     [LoggerMessage(Level = LogLevel.Information, Message = "All connector channels detached. Reason: {Reason}")]
     private partial void LogAllDetached(string reason);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Active-channels push failed after connector attach/detach: {ErrorMessage}")]
+    private partial void LogActiveChannelsPushFailed(string errorMessage);
 }

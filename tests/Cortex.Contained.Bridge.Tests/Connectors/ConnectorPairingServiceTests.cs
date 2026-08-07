@@ -450,6 +450,46 @@ public sealed class ConnectorPairingServiceTests
         Assert.DoesNotContain("token", json, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public async Task AuthenticateAsync_TooManyPendingRequests_IsRefused()
+    {
+        // A hostile process can pick unlimited distinct keys, so the per-channel rate limit
+        // alone does not bound the approval list. A flooded list buries the legitimate request
+        // the user is looking for, which is a social-engineering aid.
+        var (svc, _, _) = BuildService();
+
+        for (var i = 0; i < 16; i++)
+        {
+            var accepted = await svc.AuthenticateAsync(MakeRequest(key: $"connector-{i}"), CancellationToken.None);
+            Assert.Equal(ConnectorAuthOutcome.PairingRequired, accepted.Outcome);
+        }
+
+        var refused = await svc.AuthenticateAsync(MakeRequest(key: "one-too-many"), CancellationToken.None);
+
+        Assert.Equal(ConnectorAuthOutcome.Denied, refused.Outcome);
+        Assert.Equal("pairing_rate_limited", refused.Reason);
+        Assert.Equal(16, svc.GetPendingRequests().Count);
+    }
+
+    [Fact]
+    public async Task AuthenticateAsync_PendingRequestsExpired_SlotsAreReleased()
+    {
+        // Expired entries must not keep consuming slots, or a burst of abandoned attempts
+        // would lock the user out of pairing anything else.
+        var (svc, _, clock) = BuildService();
+
+        for (var i = 0; i < 16; i++)
+        {
+            await svc.AuthenticateAsync(MakeRequest(key: $"connector-{i}"), CancellationToken.None);
+        }
+
+        clock.Advance(TimeSpan.FromMinutes(6));
+
+        var result = await svc.AuthenticateAsync(MakeRequest(key: "later-arrival"), CancellationToken.None);
+
+        Assert.Equal(ConnectorAuthOutcome.PairingRequired, result.Outcome);
+    }
+
     private static ConnectorTokenStore BuildTokenStore() =>
         new(new FakeConnectorSecretStore(), NullLogger<ConnectorTokenStore>.Instance);
 

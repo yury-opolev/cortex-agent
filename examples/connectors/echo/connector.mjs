@@ -39,6 +39,20 @@ const BACKOFF_INITIAL_MS = 2_000;
 const BACKOFF_MAX_MS = 60_000;
 
 // ── Persistent state (token.json next to this file) ─────────────────────────
+//
+// SECURITY — READ THIS BEFORE COPYING THIS PATTERN.
+//
+// The durable token is a bearer credential: anything holding it is accepted as
+// this connector without pairing again. This example stores it as plain JSON
+// because it must run unmodified on any OS with no dependencies, but that means
+// ANY process running as the same user can read it and impersonate you.
+//
+// A production connector should hand the token to the platform secret store
+// instead — Windows DPAPI or Credential Manager, macOS Keychain, or the Linux
+// Secret Service / libsecret. Cortex itself stores its copy DPAPI-encrypted.
+//
+// The file is created owner-only (0o600) below, which is meaningful on Unix and
+// a no-op on Windows, so do not rely on it as the control.
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 const STATE_FILE = join(__dir, "token.json");
@@ -55,7 +69,7 @@ function loadState() {
 }
 
 function saveState(state) {
-  writeFileSync(STATE_FILE, JSON.stringify(state, null, 2), "utf8");
+  writeFileSync(STATE_FILE, JSON.stringify(state, null, 2), { encoding: "utf8", mode: 0o600 });
 }
 
 // ── Frame helpers ─────────────────────────────────────────────────────────────
