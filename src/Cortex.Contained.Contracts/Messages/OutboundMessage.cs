@@ -29,4 +29,12 @@ public sealed record OutboundMessage
     /// non-streaming channels (Discord/voice) ignore it. Defaults to false.
     /// </summary>
     public bool IsThinking { get; init; }
+
+    /// <summary>
+    /// When the agent recorded this message in its history store, if known. Channels that
+    /// expose a replay cursor to an external client (see the connector plugin system) must
+    /// use this value rather than their own clock, so the cursor a client sends back matches
+    /// exactly what a later history query compares against.
+    /// </summary>
+    public DateTimeOffset? Timestamp { get; init; }
 }

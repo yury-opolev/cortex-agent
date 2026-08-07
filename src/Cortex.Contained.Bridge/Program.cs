@@ -430,6 +430,12 @@ builder.Services.AddSingleton<IConnectorAbortDispatcher>(sp =>
     new TenantRouterConnectorAbortDispatcher(
         sp.GetRequiredService<Cortex.Contained.Bridge.Tenants.TenantRouter>(),
         sp.GetRequiredService<ILoggerFactory>().CreateLogger<TenantRouterConnectorAbortDispatcher>()));
+// TenantRouter and BridgeConfig are not registered in the container; resolve from outer scope via factory lambda.
+builder.Services.AddSingleton<Cortex.Contained.Bridge.Connectors.Replay.IConnectorReplaySource>(sp =>
+    new Cortex.Contained.Bridge.Connectors.Replay.HubHistoryConnectorReplaySource(
+        sp.GetRequiredService<Cortex.Contained.Bridge.Tenants.TenantRouter>(),
+        sp.GetRequiredService<BridgeConfig>(),
+        sp.GetRequiredService<ILoggerFactory>().CreateLogger<Cortex.Contained.Bridge.Connectors.Replay.HubHistoryConnectorReplaySource>()));
 // TimeProvider is already registered below (line ~762); do not add a second instance.
 builder.Services.AddSingleton(sp =>
     new HubMessageDispatcher(

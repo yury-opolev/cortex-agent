@@ -4,6 +4,7 @@ using System.Text.Json;
 using Cortex.Contained.Bridge.Connectors;
 using Cortex.Contained.Bridge.Connectors.Pairing;
 using Cortex.Contained.Bridge.Connectors.Protocol;
+using Cortex.Contained.Bridge.Connectors.Replay;
 using Cortex.Contained.Bridge.Connectors.Security;
 using Cortex.Contained.Contracts.Channels;
 using Cortex.Contained.Contracts.Config;
@@ -128,7 +129,8 @@ public sealed class ConnectorPairingEndToEndTests
             registry ?? CreateSessionRegistry(),
             NullLoggerFactory.Instance,
             TimeProvider.System,
-            CreateAbortDispatcher());
+            CreateAbortDispatcher(),
+            CreateNoopReplaySource());
 
         return (session, transport);
     }
@@ -193,6 +195,14 @@ public sealed class ConnectorPairingEndToEndTests
 
         Assert.Fail($"No '{type}' frame was sent within {WaitTimeout}.");
         return string.Empty;
+    }
+
+    private static IConnectorReplaySource CreateNoopReplaySource()
+    {
+        var source = Substitute.For<IConnectorReplaySource>();
+        source.GetMissedMessagesAsync(Arg.Any<string>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<ConnectorReplayMessage>>([]));
+        return source;
     }
 
     private static async Task<ConnectorPairingRequest> WaitForPendingRequestAsync(ConnectorPairingService service)

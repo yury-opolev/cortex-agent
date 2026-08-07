@@ -280,6 +280,7 @@ public sealed partial class HubMessageDispatcher
                 ChannelId = channelId,
                 Content = new MessageContent { Text = response.FullText },
                 IsThinking = response.IsThinking,
+                Timestamp = response.Timestamp,
             };
 
             if (channel is IChannelWithStreaming streamingChannel)

@@ -2,6 +2,7 @@
 using System.Text.Json;
 using Cortex.Contained.Bridge.Connectors;
 using Cortex.Contained.Bridge.Connectors.Protocol;
+using Cortex.Contained.Bridge.Connectors.Replay;
 using Cortex.Contained.Contracts.Channels;
 using Cortex.Contained.Contracts.Config;
 using Cortex.Contained.Contracts.Messages;
@@ -154,7 +155,8 @@ public sealed class StreamingPluginChannelTests
             registry,
             NullLoggerFactory.Instance,
             TimeProvider.System,
-            abortDispatcher);
+            abortDispatcher,
+            CreateNoopReplaySource());
 
         await session.RunAsync(CancellationToken.None);
 
@@ -187,5 +189,13 @@ public sealed class StreamingPluginChannelTests
         authenticator.AuthenticateAsync(Arg.Any<ConnectorAuthRequest>(), Arg.Any<CancellationToken>())
             .Returns(_ => ValueTask.FromResult(ConnectorAuthResult.Approved("tok")));
         return authenticator;
+    }
+
+    private static IConnectorReplaySource CreateNoopReplaySource()
+    {
+        var source = Substitute.For<IConnectorReplaySource>();
+        source.GetMissedMessagesAsync(Arg.Any<string>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<ConnectorReplayMessage>>([]));
+        return source;
     }
 }

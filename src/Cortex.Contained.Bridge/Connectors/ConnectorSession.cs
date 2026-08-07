@@ -1,4 +1,5 @@
 using Cortex.Contained.Bridge.Connectors.Protocol;
+using Cortex.Contained.Bridge.Connectors.Replay;
 using Cortex.Contained.Contracts.Channels;
 using Cortex.Contained.Contracts.Config;
 using Cortex.Contained.Contracts.Messages;
@@ -32,6 +33,7 @@ public sealed partial class ConnectorSession : IAsyncDisposable
     private readonly ILogger<ConnectorSession> logger;
     private readonly TimeProvider timeProvider;
     private readonly IConnectorAbortDispatcher abortDispatcher;
+    private readonly IConnectorReplaySource replaySource;
     private readonly Lock teardownLock = new();
     private readonly Lock conversationLock = new();
     private readonly HashSet<string> ownedConversations = new(StringComparer.Ordinal);
@@ -57,7 +59,8 @@ public sealed partial class ConnectorSession : IAsyncDisposable
         IConnectorRegistry registry,
         ILoggerFactory loggerFactory,
         TimeProvider timeProvider,
-        IConnectorAbortDispatcher abortDispatcher)
+        IConnectorAbortDispatcher abortDispatcher,
+        IConnectorReplaySource replaySource)
     {
         this.transport = transport;
         this.authenticator = authenticator;
@@ -67,6 +70,7 @@ public sealed partial class ConnectorSession : IAsyncDisposable
         this.logger = loggerFactory.CreateLogger<ConnectorSession>();
         this.timeProvider = timeProvider;
         this.abortDispatcher = abortDispatcher;
+        this.replaySource = replaySource;
     }
 
     /// <summary>
@@ -240,11 +244,68 @@ public sealed partial class ConnectorSession : IAsyncDisposable
         this.Channel = pluginChannel;
         this.LogSessionReady(channelId, this.transport.RemoteEndpoint);
 
+        // Determine what to replay. A connector that omits sinceCursor gets no replay (by design).
+        // An UNPARSEABLE cursor also gets no replay rather than being treated as epoch, which would
+        // flood the connector with the entire history — fail closed, not open.
+        IReadOnlyList<ConnectorReplayMessage> replayMessages = [];
+        if (!ConnectorCursor.TryParse(hello.SinceCursor, out var since))
+        {
+            this.LogNoCursor(channelId, hello.SinceCursor is null ? "absent" : "unparseable");
+        }
+        else
+        {
+            try
+            {
+                replayMessages = await this.replaySource
+                    .GetMissedMessagesAsync(channelId, since, ct)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                this.LogReplaySourceFailed(channelId, ex);
+                replayMessages = [];
+            }
+        }
+
+        // Send ready FIRST with the replay count so the connector knows how many frames to expect
+        // before entering steady state; the outbound replay frames follow immediately after.
         await this.SendFrameAsync(ConnectorFrameTypes.Ready, new ConnectorReadyPayload
         {
             ChannelId = channelId,
-            ReplayCount = 0,
+            ReplayCount = replayMessages.Count,
         }, ct).ConfigureAwait(false);
+
+        // Send replay frames. A failure on any single frame aborts replay but NOT the session.
+        foreach (var replayMsg in replayMessages)
+        {
+            if (!this.transport.IsOpen)
+            {
+                break;
+            }
+
+            try
+            {
+                var replayPayload = new ConnectorOutboundPayload
+                {
+                    MessageId = replayMsg.MessageId,
+                    ConversationId = replayMsg.ConversationId,
+                    Content = new ConnectorContentPayload
+                    {
+                        Text = replayMsg.Text,
+                        IsMarkdown = false,
+                    },
+                    IsThinking = false,
+                    Cursor = ConnectorCursor.Format(replayMsg.Timestamp),
+                };
+                var replayJson = ConnectorFrame.Serialize(ConnectorFrameTypes.Outbound, replayPayload);
+                await this.transport.SendAsync(replayJson, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                this.LogReplayFrameFailed(channelId, replayMsg.MessageId, ex);
+                break;
+            }
+        }
 
         this.LastSeenUtc = this.timeProvider.GetUtcNow();
         this.pingTimer = this.timeProvider.CreateTimer(
@@ -462,6 +523,12 @@ public sealed partial class ConnectorSession : IAsyncDisposable
                     IsMarkdown = message.Content.IsMarkdown,
                 },
                 IsThinking = message.IsThinking,
+
+                // The cursor MUST be the timestamp the agent recorded, not this process's
+                // clock: the connector sends it back as sinceCursor and replay compares it
+                // against stored timestamps. Using the send-time clock would silently skip
+                // any message persisted between the store write and this dispatch.
+                Cursor = ConnectorCursor.Format(message.Timestamp ?? this.timeProvider.GetUtcNow()),
             };
             var json = ConnectorFrame.Serialize(ConnectorFrameTypes.Outbound, payload);
             await this.transport.SendAsync(json, ct).ConfigureAwait(false);
@@ -673,5 +740,14 @@ public sealed partial class ConnectorSession : IAsyncDisposable
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Frame sink: transport is closed, dropping frame.")]
     private partial void LogFrameSinkTransportClosed();
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Connector {ChannelId}: sinceCursor is {Reason}, replay skipped.")]
+    private partial void LogNoCursor(string channelId, string reason);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Connector {ChannelId}: replay source threw an unexpected exception; attaching without replay.")]
+    private partial void LogReplaySourceFailed(string channelId, Exception ex);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Connector {ChannelId}: failed to send replay frame for message {MessageId}; aborting replay.")]
+    private partial void LogReplayFrameFailed(string channelId, string messageId, Exception ex);
 }
 

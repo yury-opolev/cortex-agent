@@ -1,4 +1,5 @@
 using System.Net;
+using Cortex.Contained.Bridge.Connectors.Replay;
 using Cortex.Contained.Contracts.Config;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -65,8 +66,9 @@ public static class ConnectorEndpoint
             var loggerFactory = context.RequestServices.GetRequiredService<ILoggerFactory>();
             var timeProvider = context.RequestServices.GetRequiredService<TimeProvider>();
             var abortDispatcher = context.RequestServices.GetRequiredService<IConnectorAbortDispatcher>();
+            var replaySource = context.RequestServices.GetRequiredService<IConnectorReplaySource>();
 
-            var session = new ConnectorSession(transport, authenticator, settings, registry, loggerFactory, timeProvider, abortDispatcher);
+            var session = new ConnectorSession(transport, authenticator, settings, registry, loggerFactory, timeProvider, abortDispatcher, replaySource);
             await session.RunAsync(context.RequestAborted).ConfigureAwait(false);
         }).AllowAnonymous();
     }

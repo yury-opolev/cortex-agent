@@ -5,6 +5,7 @@
 using System.Text.Json;
 using Cortex.Contained.Bridge.Connectors;
 using Cortex.Contained.Bridge.Connectors.Protocol;
+using Cortex.Contained.Bridge.Connectors.Replay;
 using Cortex.Contained.Contracts.Channels;
 using Cortex.Contained.Contracts.Config;
 using Cortex.Contained.Contracts.Messages;
@@ -25,13 +26,15 @@ public sealed class ConnectorSessionTests
         string key = "terminal",
         string? instanceId = null,
         string? token = null,
-        string? displayName = null) =>
+        string? displayName = null,
+        string? sinceCursor = null) =>
         ConnectorFrame.Serialize("hello", new ConnectorHelloPayload
         {
             Key = key,
             InstanceId = instanceId,
             Token = token,
             DisplayName = displayName,
+            SinceCursor = sinceCursor,
         });
 
     private static ConnectorSession BuildSession(
@@ -40,7 +43,8 @@ public sealed class ConnectorSessionTests
         IConnectorRegistry? registry = null,
         ConnectorSettingsConfig? settings = null,
         TimeProvider? timeProvider = null,
-        IConnectorAbortDispatcher? abortDispatcher = null)
+        IConnectorAbortDispatcher? abortDispatcher = null,
+        IConnectorReplaySource? replaySource = null)
     {
         if (authenticator is null)
         {
@@ -62,6 +66,12 @@ public sealed class ConnectorSessionTests
         abortDispatcher.AbortAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(Task.CompletedTask);
 
+        if (replaySource is null)
+        {
+            replaySource = Substitute.For<IConnectorReplaySource>();
+            replaySource.GetMissedMessagesAsync(Arg.Any<string>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult<IReadOnlyList<ConnectorReplayMessage>>([]));
+        }
         return new ConnectorSession(
             transport,
             authenticator,
@@ -69,7 +79,8 @@ public sealed class ConnectorSessionTests
             registry,
             NullLoggerFactory.Instance,
             timeProvider ?? TimeProvider.System,
-            abortDispatcher);
+            abortDispatcher,
+            replaySource);
     }
 
     // ── 1. Peer closes without hello ─────────────────────────────────
@@ -760,6 +771,256 @@ public sealed class ConnectorSessionTests
         }
 
         Assert.True(condition(), "condition was not met within the timeout");
+    }
+
+    // ── Phase 4: Replay tests ─────────────────────────────────────────
+
+    [Fact]
+    public async Task RunAsync_HelloWithoutSinceCursor_ReplayCountZeroAndSourceNotCalled()
+    {
+        var transport = new FakeConnectorTransport();
+        transport.QueueIncoming(HelloFrame());
+        transport.CompleteIncoming();
+
+        var replaySource = Substitute.For<IConnectorReplaySource>();
+        var session = BuildSession(transport, replaySource: replaySource);
+        await session.RunAsync(CancellationToken.None);
+
+        var readyFrame = Assert.Single(transport.Sent, f => f.Contains("\"ready\""));
+        using var doc = JsonDocument.Parse(readyFrame);
+        Assert.Equal(0, doc.RootElement.GetProperty("payload").GetProperty("replayCount").GetInt32());
+
+        await replaySource.DidNotReceive().GetMissedMessagesAsync(
+            Arg.Any<string>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunAsync_HelloWithUnparseableSinceCursor_ReplayCountZeroAndSourceNotCalled()
+    {
+        var transport = new FakeConnectorTransport();
+        transport.QueueIncoming(HelloFrame(sinceCursor: "not-a-date"));
+        transport.CompleteIncoming();
+
+        var replaySource = Substitute.For<IConnectorReplaySource>();
+        var session = BuildSession(transport, replaySource: replaySource);
+        await session.RunAsync(CancellationToken.None);
+
+        var readyFrame = Assert.Single(transport.Sent, f => f.Contains("\"ready\""));
+        using var doc = JsonDocument.Parse(readyFrame);
+        Assert.Equal(0, doc.RootElement.GetProperty("payload").GetProperty("replayCount").GetInt32());
+
+        await replaySource.DidNotReceive().GetMissedMessagesAsync(
+            Arg.Any<string>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunAsync_HelloWithValidCursorAnd3Missed_ReadySendsCount3ThenOutboundFramesInOrder()
+    {
+        var cursor = ConnectorCursor.Format(DateTimeOffset.UtcNow.AddMinutes(-10));
+        var transport = new FakeConnectorTransport();
+        transport.QueueIncoming(HelloFrame(sinceCursor: cursor));
+        transport.CompleteIncoming();
+
+        var t0 = DateTimeOffset.UtcNow.AddMinutes(-9);
+        var t1 = DateTimeOffset.UtcNow.AddMinutes(-8);
+        var t2 = DateTimeOffset.UtcNow.AddMinutes(-7);
+        var missed = new List<ConnectorReplayMessage>
+        {
+            new() { MessageId = "m1", ConversationId = "c1", Text = "first", Timestamp = t0 },
+            new() { MessageId = "m2", ConversationId = "c1", Text = "second", Timestamp = t1 },
+            new() { MessageId = "m3", ConversationId = "c1", Text = "third", Timestamp = t2 },
+        };
+
+        var replaySource = Substitute.For<IConnectorReplaySource>();
+        replaySource.GetMissedMessagesAsync(Arg.Any<string>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<ConnectorReplayMessage>>(missed));
+
+        var session = BuildSession(transport, replaySource: replaySource);
+        await session.RunAsync(CancellationToken.None);
+
+        // ready must carry replayCount=3
+        var readyFrame = Assert.Single(transport.Sent, f => f.Contains("\"ready\""));
+        using var readyDoc = JsonDocument.Parse(readyFrame);
+        Assert.Equal(3, readyDoc.RootElement.GetProperty("payload").GetProperty("replayCount").GetInt32());
+
+        // ready must be sent BEFORE the outbound replay frames
+        var readyIndex = transport.Sent.IndexOf(readyFrame);
+        var outboundFrames = transport.Sent
+            .Select((f, i) => (f, i))
+            .Where(x => x.f.Contains("\"outbound\""))
+            .ToList();
+
+        Assert.Equal(3, outboundFrames.Count);
+        Assert.All(outboundFrames, x => Assert.True(x.i > readyIndex));
+
+        // verify order by text
+        var texts = outboundFrames.Select(x =>
+        {
+            using var d = JsonDocument.Parse(x.f);
+            return d.RootElement.GetProperty("payload").GetProperty("content").GetProperty("text").GetString();
+        }).ToList();
+
+        Assert.Equal(["first", "second", "third"], texts);
+
+        // each replay frame must carry a cursor
+        foreach (var (frame, _) in outboundFrames)
+        {
+            using var d = JsonDocument.Parse(frame);
+            var c = d.RootElement.GetProperty("payload").GetProperty("cursor").GetString();
+            Assert.False(string.IsNullOrWhiteSpace(c));
+            Assert.True(ConnectorCursor.TryParse(c, out _));
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_ReplaySourceThrows_SessionStillSendsReadyAndContinues()
+    {
+        var transport = new FakeConnectorTransport();
+        transport.QueueIncoming(HelloFrame(sinceCursor: ConnectorCursor.Format(DateTimeOffset.UtcNow.AddMinutes(-5))));
+        transport.CompleteIncoming();
+
+        var replaySource = Substitute.For<IConnectorReplaySource>();
+        replaySource.GetMissedMessagesAsync(Arg.Any<string>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>())
+            .Returns<Task<IReadOnlyList<ConnectorReplayMessage>>>(_ => throw new InvalidOperationException("hub gone"));
+
+        var session = BuildSession(transport, replaySource: replaySource);
+        var ex = await Record.ExceptionAsync(() => session.RunAsync(CancellationToken.None));
+        Assert.Null(ex);
+
+        var readyFrame = Assert.Single(transport.Sent, f => f.Contains("\"ready\""));
+        using var doc = JsonDocument.Parse(readyFrame);
+        Assert.Equal(0, doc.RootElement.GetProperty("payload").GetProperty("replayCount").GetInt32());
+    }
+
+    [Fact]
+    public async Task OutboundSink_LiveMessage_CarriesNonEmptyCursorThatRoundTrips()
+    {
+        var transport = new FakeConnectorTransport();
+        transport.QueueIncoming(HelloFrame());
+
+        PluginChannel? attached = null;
+        var registry = Substitute.For<IConnectorRegistry>();
+        registry.TryAttachAsync(Arg.Any<PluginChannel>(), Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                attached = call.Arg<PluginChannel>();
+                return ValueTask.FromResult(ConnectorAttachResult.Ok());
+            });
+        registry.DetachAsync(Arg.Any<PluginChannel>()).Returns(_ => ValueTask.CompletedTask);
+
+        var session = BuildSession(transport, registry: registry);
+        var run = session.RunAsync(CancellationToken.None);
+
+        await WaitForAsync(() => attached is not null);
+
+        await attached!.SendMessageAsync(new OutboundMessage
+        {
+            MessageId = "live-1",
+            ConversationId = "plugin:terminal:default",
+            ChannelId = "plugin:terminal:default",
+            Content = new MessageContent { Text = "live message" },
+        });
+
+        transport.CompleteIncoming();
+        await run;
+
+        var outbound = Assert.Single(transport.Sent, f => f.Contains("\"outbound\""));
+        using var doc = JsonDocument.Parse(outbound);
+        var cursorStr = doc.RootElement.GetProperty("payload").GetProperty("cursor").GetString();
+        Assert.False(string.IsNullOrWhiteSpace(cursorStr));
+        Assert.True(ConnectorCursor.TryParse(cursorStr, out _));
+    }
+
+    [Fact]
+    public async Task OutboundSink_MessageWithAgentTimestamp_UsesItAsCursorRatherThanTheClock()
+    {
+        // The cursor a connector sends back as sinceCursor is compared against timestamps in
+        // the agent's history store, so it must BE the agent's timestamp. Using the Bridge's
+        // send-time clock would silently skip anything persisted between the store write and
+        // the dispatch.
+        var agentTimestamp = new DateTimeOffset(2026, 3, 4, 5, 6, 7, 123, TimeSpan.Zero);
+
+        var transport = new FakeConnectorTransport();
+        transport.QueueIncoming(HelloFrame());
+
+        PluginChannel? attached = null;
+        var registry = Substitute.For<IConnectorRegistry>();
+        registry.TryAttachAsync(Arg.Any<PluginChannel>(), Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                attached = call.Arg<PluginChannel>();
+                return ValueTask.FromResult(ConnectorAttachResult.Ok());
+            });
+        registry.DetachAsync(Arg.Any<PluginChannel>()).Returns(_ => ValueTask.CompletedTask);
+
+        var session = BuildSession(transport, registry: registry);
+        var run = session.RunAsync(CancellationToken.None);
+
+        await WaitForAsync(() => attached is not null);
+
+        await attached!.SendMessageAsync(new OutboundMessage
+        {
+            MessageId = "live-2",
+            ConversationId = "plugin:terminal:default",
+            ChannelId = "plugin:terminal:default",
+            Content = new MessageContent { Text = "stored message" },
+            Timestamp = agentTimestamp,
+        });
+
+        transport.CompleteIncoming();
+        await run;
+
+        var frame = Assert.Single(transport.Sent, f => f.Contains("\"outbound\""));
+        using var parsed = JsonDocument.Parse(frame);
+        var cursor = parsed.RootElement.GetProperty("payload").GetProperty("cursor").GetString();
+
+        Assert.True(ConnectorCursor.TryParse(cursor, out var roundTripped));
+        Assert.Equal(agentTimestamp, roundTripped);
+    }
+
+    [Fact]
+    public async Task RunAsync_EndToEnd_ReattachWithCursorReplaysExactlyMissedMessages()
+    {
+        // Simulate: connect → receive outbound → disconnect → reconnect with cursor → assert replay
+        var t0 = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
+        var t1 = new DateTimeOffset(2026, 1, 1, 12, 1, 0, TimeSpan.Zero);
+        var t2 = new DateTimeOffset(2026, 1, 1, 12, 2, 0, TimeSpan.Zero);
+
+        // The last outbound frame the connector saw had timestamp t0.
+        var cursorFromLastSeen = ConnectorCursor.Format(t0);
+
+        // On re-attach, messages t1 and t2 are "missed".
+        var missed = new List<ConnectorReplayMessage>
+        {
+            new() { MessageId = "r1", ConversationId = "ch", Text = "msg at t1", Timestamp = t1 },
+            new() { MessageId = "r2", ConversationId = "ch", Text = "msg at t2", Timestamp = t2 },
+        };
+
+        var replaySource = Substitute.For<IConnectorReplaySource>();
+        replaySource.GetMissedMessagesAsync(
+                Arg.Any<string>(),
+                Arg.Is<DateTimeOffset>(d => d == t0),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<ConnectorReplayMessage>>(missed));
+
+        var transport = new FakeConnectorTransport();
+        transport.QueueIncoming(HelloFrame(sinceCursor: cursorFromLastSeen));
+        transport.CompleteIncoming();
+
+        var session = BuildSession(transport, replaySource: replaySource);
+        await session.RunAsync(CancellationToken.None);
+
+        var outboundFrames = transport.Sent.Where(f => f.Contains("\"outbound\"")).ToList();
+        Assert.Equal(2, outboundFrames.Count);
+
+        var texts = outboundFrames.Select(f =>
+        {
+            using var d = JsonDocument.Parse(f);
+            return d.RootElement.GetProperty("payload").GetProperty("content").GetProperty("text").GetString();
+        }).ToList();
+
+        Assert.Equal("msg at t1", texts[0]);
+        Assert.Equal("msg at t2", texts[1]);
     }
 }
 
