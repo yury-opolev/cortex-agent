@@ -1022,6 +1022,352 @@ public sealed class ConnectorSessionTests
         Assert.Equal("msg at t1", texts[0]);
         Assert.Equal("msg at t2", texts[1]);
     }
+
+    // ── Phase 6: Rate limiting ────────────────────────────────────────
+
+    private static ConnectorSettingsConfig SettingsWithLimit(int maxPerMinute) => new()
+    {
+        Enabled = true,
+        MaxConnectors = 16,
+        Limits = new Cortex.Contained.Contracts.Config.ConnectorLimitsConfig
+        {
+            MaxMessagesPerMinute = maxPerMinute,
+        },
+    };
+
+    [Fact]
+    public async Task RunAsync_InboundAtLimit_AllowsExactlyLimitMessages()
+    {
+        var transport = new FakeConnectorTransport();
+        transport.QueueIncoming(HelloFrame());
+        transport.QueueIncoming(ConnectorFrame.Serialize("inbound", new ConnectorInboundPayload { Content = new ConnectorContentPayload { Text = "msg 1" } }));
+        transport.QueueIncoming(ConnectorFrame.Serialize("inbound", new ConnectorInboundPayload { Content = new ConnectorContentPayload { Text = "msg 2" } }));
+        transport.QueueIncoming(ConnectorFrame.Serialize("inbound", new ConnectorInboundPayload { Content = new ConnectorContentPayload { Text = "msg 3 - over limit" } }));
+        transport.CompleteIncoming();
+
+        var received = new List<InboundMessage>();
+        var registry = Substitute.For<IConnectorRegistry>();
+        registry.TryAttachAsync(Arg.Do<PluginChannel>(ch =>
+        {
+            ch.MessageReceived += msg => { received.Add(msg); return Task.CompletedTask; };
+        }), Arg.Any<CancellationToken>()).Returns(_ => ValueTask.FromResult(ConnectorAttachResult.Ok()));
+        registry.DetachAsync(Arg.Any<PluginChannel>()).Returns(_ => ValueTask.CompletedTask);
+
+        var session = BuildSession(transport, registry: registry, settings: SettingsWithLimit(2));
+        await session.RunAsync(CancellationToken.None);
+
+        Assert.Equal(2, received.Count);
+        Assert.Contains(transport.Sent, f => f.Contains("rate_limited"));
+    }
+
+    [Fact]
+    public async Task RunAsync_RateLimitedInbound_SessionSurvivesAndContinues()
+    {
+        // After a rate_limited rejection the session must NOT close.
+        var transport = new FakeConnectorTransport();
+        transport.QueueIncoming(HelloFrame());
+        transport.QueueIncoming(ConnectorFrame.Serialize("inbound", new ConnectorInboundPayload { Content = new ConnectorContentPayload { Text = "msg 1" } }));
+        transport.QueueIncoming(ConnectorFrame.Serialize("inbound", new ConnectorInboundPayload { Content = new ConnectorContentPayload { Text = "over limit" } }));
+        transport.QueueIncoming(ConnectorFrame.Serialize("inbound", new ConnectorInboundPayload { Content = new ConnectorContentPayload { Text = "also over limit" } }));
+        transport.CompleteIncoming();
+
+        var received = new List<InboundMessage>();
+        var registry = Substitute.For<IConnectorRegistry>();
+        registry.TryAttachAsync(Arg.Do<PluginChannel>(ch =>
+        {
+            ch.MessageReceived += msg => { received.Add(msg); return Task.CompletedTask; };
+        }), Arg.Any<CancellationToken>()).Returns(_ => ValueTask.FromResult(ConnectorAttachResult.Ok()));
+        registry.DetachAsync(Arg.Any<PluginChannel>()).Returns(_ => ValueTask.CompletedTask);
+
+        var session = BuildSession(transport, registry: registry, settings: SettingsWithLimit(1));
+        await session.RunAsync(CancellationToken.None);
+
+        Assert.Single(received); // only the first message
+        var rateLimitedCount = transport.Sent.Count(f => f.Contains("rate_limited"));
+        Assert.Equal(2, rateLimitedCount); // two rejections
+    }
+
+    [Fact]
+    public async Task RunAsync_PongNotRateLimited_ProcessedWithoutRateLimitedError()
+    {
+        // Exhaust the limit with inbound, then send pong — pong must never be rate limited.
+        var transport = new FakeConnectorTransport();
+        transport.QueueIncoming(HelloFrame());
+        transport.QueueIncoming(ConnectorFrame.Serialize("inbound", new ConnectorInboundPayload { Content = new ConnectorContentPayload { Text = "exhaust" } }));
+        transport.QueueIncoming(ConnectorFrame.Serialize("pong", new { }));
+        transport.CompleteIncoming();
+
+        var registry = Substitute.For<IConnectorRegistry>();
+        registry.TryAttachAsync(Arg.Any<PluginChannel>(), Arg.Any<CancellationToken>()).Returns(_ => ValueTask.FromResult(ConnectorAttachResult.Ok()));
+        registry.DetachAsync(Arg.Any<PluginChannel>()).Returns(_ => ValueTask.CompletedTask);
+
+        var session = BuildSession(transport, registry: registry, settings: SettingsWithLimit(1));
+        await session.RunAsync(CancellationToken.None);
+
+        // pong must not produce a rate_limited frame after the limit is hit
+        // (there may be one from the next inbound if we add one, but not from pong itself)
+        Assert.DoesNotContain(transport.Sent, f =>
+            f.Contains("rate_limited") && transport.Sent.IndexOf(f) > transport.Sent.FindIndex(x => x.Contains("pong")));
+    }
+
+    [Fact]
+    public async Task RunAsync_AbortNotRateLimited_DispatcherCalledEvenWhenLimitExhausted()
+    {
+        // Exhaust the rate limit, then send abort for own channel — abort must not be rate limited.
+        var transport = new FakeConnectorTransport();
+        transport.QueueIncoming(HelloFrame());
+        // First inbound establishes conv ownership and exhausts the 1-msg limit.
+        transport.QueueIncoming(ConnectorFrame.Serialize("inbound", new ConnectorInboundPayload
+        {
+            ConversationId = "my-conv",
+            Content = new ConnectorContentPayload { Text = "sets up ownership" },
+        }));
+        // Abort for a conversation this session owns — should NOT be rate limited.
+        transport.QueueIncoming(ConnectorFrame.Serialize("abort", new ConnectorAbortPayload
+        {
+            ConversationId = "my-conv",
+        }));
+        transport.CompleteIncoming();
+
+        var abortDispatcher = Substitute.For<IConnectorAbortDispatcher>();
+        abortDispatcher.AbortAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        var session = BuildSession(transport, abortDispatcher: abortDispatcher, settings: SettingsWithLimit(1));
+        await session.RunAsync(CancellationToken.None);
+
+        await abortDispatcher.Received(1).AbortAsync(Arg.Any<string>(), "my-conv", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunAsync_RateLimitAfterWindowSlides_AllowsNewMessages()
+    {
+        var fakeTime = new FakeTimeProvider();
+        var transport = new FakeConnectorTransport();
+        transport.QueueIncoming(HelloFrame());
+
+        var received = new List<InboundMessage>();
+        var registry = Substitute.For<IConnectorRegistry>();
+        registry.TryAttachAsync(Arg.Do<PluginChannel>(ch =>
+        {
+            ch.MessageReceived += msg => { received.Add(msg); return Task.CompletedTask; };
+        }), Arg.Any<CancellationToken>()).Returns(_ => ValueTask.FromResult(ConnectorAttachResult.Ok()));
+        registry.DetachAsync(Arg.Any<PluginChannel>()).Returns(_ => ValueTask.CompletedTask);
+
+        var session = BuildSession(transport, registry: registry, settings: SettingsWithLimit(1), timeProvider: fakeTime);
+        var runTask = session.RunAsync(CancellationToken.None);
+
+        // Wait for session to attach channel.
+        await WaitForAsync(() => session.Channel is not null);
+
+        // First message — within limit.
+        transport.QueueIncoming(ConnectorFrame.Serialize("inbound", new ConnectorInboundPayload { Content = new ConnectorContentPayload { Text = "first" } }));
+        await WaitForAsync(() => received.Count == 1);
+
+        // Second message — over limit, should be rejected.
+        transport.QueueIncoming(ConnectorFrame.Serialize("inbound", new ConnectorInboundPayload { Content = new ConnectorContentPayload { Text = "second — rate limited" } }));
+        await WaitForAsync(() => transport.Sent.Any(f => f.Contains("rate_limited")));
+
+        // Advance time past the 60-second window.
+        fakeTime.Advance(TimeSpan.FromSeconds(61));
+
+        // Third message — window has slid, should be allowed again.
+        transport.QueueIncoming(ConnectorFrame.Serialize("inbound", new ConnectorInboundPayload { Content = new ConnectorContentPayload { Text = "third — should pass" } }));
+        await WaitForAsync(() => received.Count == 2);
+
+        transport.CompleteIncoming();
+        await runTask;
+
+        Assert.Equal(2, received.Count); // first and third
+    }
+
+    // ── Phase 6: maxMessageLength enforcement ─────────────────────────
+
+    [Fact]
+    public async Task RunAsync_InboundOverNegotiatedMaxLength_SendsMessageTooLong()
+    {
+        var transport = new FakeConnectorTransport();
+        transport.QueueIncoming(ConnectorFrame.Serialize("hello", new ConnectorHelloPayload
+        {
+            Key = "terminal",
+            Capabilities = new ConnectorCapabilitiesPayload { MaxMessageLength = 10 },
+        }));
+        transport.QueueIncoming(ConnectorFrame.Serialize("inbound", new ConnectorInboundPayload
+        {
+            Content = new ConnectorContentPayload { Text = "12345678901" }, // 11 chars — over limit
+        }));
+        transport.CompleteIncoming();
+
+        var received = new List<InboundMessage>();
+        var registry = Substitute.For<IConnectorRegistry>();
+        registry.TryAttachAsync(Arg.Do<PluginChannel>(ch =>
+        {
+            ch.MessageReceived += msg => { received.Add(msg); return Task.CompletedTask; };
+        }), Arg.Any<CancellationToken>()).Returns(_ => ValueTask.FromResult(ConnectorAttachResult.Ok()));
+        registry.DetachAsync(Arg.Any<PluginChannel>()).Returns(_ => ValueTask.CompletedTask);
+
+        var session = BuildSession(transport, registry: registry);
+        await session.RunAsync(CancellationToken.None);
+
+        Assert.Empty(received);
+        Assert.Contains(transport.Sent, f => f.Contains("message_too_long"));
+    }
+
+    [Fact]
+    public async Task RunAsync_InboundExactlyAtNegotiatedMaxLength_IsDelivered()
+    {
+        var transport = new FakeConnectorTransport();
+        transport.QueueIncoming(ConnectorFrame.Serialize("hello", new ConnectorHelloPayload
+        {
+            Key = "terminal",
+            Capabilities = new ConnectorCapabilitiesPayload { MaxMessageLength = 10 },
+        }));
+        transport.QueueIncoming(ConnectorFrame.Serialize("inbound", new ConnectorInboundPayload
+        {
+            Content = new ConnectorContentPayload { Text = "1234567890" }, // exactly 10 chars
+        }));
+        transport.CompleteIncoming();
+
+        var received = new List<InboundMessage>();
+        var registry = Substitute.For<IConnectorRegistry>();
+        registry.TryAttachAsync(Arg.Do<PluginChannel>(ch =>
+        {
+            ch.MessageReceived += msg => { received.Add(msg); return Task.CompletedTask; };
+        }), Arg.Any<CancellationToken>()).Returns(_ => ValueTask.FromResult(ConnectorAttachResult.Ok()));
+        registry.DetachAsync(Arg.Any<PluginChannel>()).Returns(_ => ValueTask.CompletedTask);
+
+        var session = BuildSession(transport, registry: registry);
+        await session.RunAsync(CancellationToken.None);
+
+        Assert.Single(received);
+        Assert.DoesNotContain(transport.Sent, f => f.Contains("message_too_long"));
+    }
+
+    // ── Phase 6: Handshake timeout ────────────────────────────────────
+
+    [Fact]
+    public async Task RunAsync_NoHelloWithinTimeout_SendsProtocolViolationHandshakeTimeout()
+    {
+        var fakeTime = new FakeTimeProvider();
+        var transport = new FakeConnectorTransport(); // no frames queued
+
+        var session = BuildSession(transport, timeProvider: fakeTime);
+        var runTask = session.RunAsync(CancellationToken.None);
+
+        // Give the session a moment to reach ReceiveAsync.
+        await Task.Delay(20);
+
+        // Advance past the handshake timeout.
+        fakeTime.Advance(TimeSpan.FromSeconds(ConnectorSession.HandshakeTimeoutSeconds + 1));
+
+        await runTask;
+
+        Assert.Contains(transport.Sent, f => f.Contains("protocol_violation"));
+        Assert.Contains(transport.Sent, f => f.Contains("handshake_timeout"));
+    }
+
+    // ── Phase 6: Unbounded input — id length rejection ────────────────
+
+    [Fact]
+    public async Task RunAsync_MessageIdTooLong_SendsInvalidPayloadAndContinues()
+    {
+        var transport = new FakeConnectorTransport();
+        transport.QueueIncoming(HelloFrame());
+        transport.QueueIncoming(ConnectorFrame.Serialize("inbound", new ConnectorInboundPayload
+        {
+            MessageId = new string('x', ConnectorSession.MaxIdLength + 1),
+            Content = new ConnectorContentPayload { Text = "hello" },
+        }));
+        transport.QueueIncoming(ConnectorFrame.Serialize("inbound", new ConnectorInboundPayload
+        {
+            MessageId = "ok-id",
+            Content = new ConnectorContentPayload { Text = "still works" },
+        }));
+        transport.CompleteIncoming();
+
+        var received = new List<InboundMessage>();
+        var registry = Substitute.For<IConnectorRegistry>();
+        registry.TryAttachAsync(Arg.Do<PluginChannel>(ch =>
+        {
+            ch.MessageReceived += msg => { received.Add(msg); return Task.CompletedTask; };
+        }), Arg.Any<CancellationToken>()).Returns(_ => ValueTask.FromResult(ConnectorAttachResult.Ok()));
+        registry.DetachAsync(Arg.Any<PluginChannel>()).Returns(_ => ValueTask.CompletedTask);
+
+        var session = BuildSession(transport, registry: registry);
+        await session.RunAsync(CancellationToken.None);
+
+        Assert.Single(received); // second message got through
+        Assert.Contains(transport.Sent, f => f.Contains("invalid_payload"));
+    }
+
+    [Fact]
+    public async Task RunAsync_ConversationIdTooLong_SendsInvalidPayload()
+    {
+        var transport = new FakeConnectorTransport();
+        transport.QueueIncoming(HelloFrame());
+        transport.QueueIncoming(ConnectorFrame.Serialize("inbound", new ConnectorInboundPayload
+        {
+            ConversationId = new string('c', ConnectorSession.MaxIdLength + 1),
+            Content = new ConnectorContentPayload { Text = "hello" },
+        }));
+        transport.CompleteIncoming();
+
+        var session = BuildSession(transport);
+        await session.RunAsync(CancellationToken.None);
+
+        Assert.Contains(transport.Sent, f => f.Contains("invalid_payload"));
+    }
+
+    [Fact]
+    public async Task RunAsync_SenderIdTooLong_SendsInvalidPayload()
+    {
+        var transport = new FakeConnectorTransport();
+        transport.QueueIncoming(HelloFrame());
+        transport.QueueIncoming(ConnectorFrame.Serialize("inbound", new ConnectorInboundPayload
+        {
+            Sender = new ConnectorSenderPayload { Id = new string('s', ConnectorSession.MaxIdLength + 1) },
+            Content = new ConnectorContentPayload { Text = "hello" },
+        }));
+        transport.CompleteIncoming();
+
+        var session = BuildSession(transport);
+        await session.RunAsync(CancellationToken.None);
+
+        Assert.Contains(transport.Sent, f => f.Contains("invalid_payload"));
+    }
+
+    [Fact]
+    public async Task RunAsync_SenderDisplayNameTooLong_TruncatesAndDelivers()
+    {
+        var transport = new FakeConnectorTransport();
+        transport.QueueIncoming(HelloFrame());
+        transport.QueueIncoming(ConnectorFrame.Serialize("inbound", new ConnectorInboundPayload
+        {
+            Sender = new ConnectorSenderPayload
+            {
+                Id = "user1",
+                DisplayName = new string('d', ConnectorSession.MaxDisplayNameLength + 10),
+            },
+            Content = new ConnectorContentPayload { Text = "hello" },
+        }));
+        transport.CompleteIncoming();
+
+        var received = new List<InboundMessage>();
+        var registry = Substitute.For<IConnectorRegistry>();
+        registry.TryAttachAsync(Arg.Do<PluginChannel>(ch =>
+        {
+            ch.MessageReceived += msg => { received.Add(msg); return Task.CompletedTask; };
+        }), Arg.Any<CancellationToken>()).Returns(_ => ValueTask.FromResult(ConnectorAttachResult.Ok()));
+        registry.DetachAsync(Arg.Any<PluginChannel>()).Returns(_ => ValueTask.CompletedTask);
+
+        var session = BuildSession(transport, registry: registry);
+        await session.RunAsync(CancellationToken.None);
+
+        // Message is delivered (not rejected) with a truncated display name.
+        Assert.Single(received);
+        Assert.Equal(ConnectorSession.MaxDisplayNameLength, received[0].Sender.DisplayName?.Length);
+        Assert.DoesNotContain(transport.Sent, f => f.Contains("invalid_payload"));
+    }
 }
 
 /// <summary>Transport that succeeds the hello then faults on the next receive.</summary>

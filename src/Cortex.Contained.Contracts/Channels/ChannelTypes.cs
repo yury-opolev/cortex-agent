@@ -34,6 +34,12 @@ public sealed record ChannelCapabilities
     public bool SupportsGroups { get; init; }
     public bool SupportsEditing { get; init; }
     public bool SupportsDeletion { get; init; }
+    /// <summary>
+    /// Maximum message length in UTF-16 code units, not bytes. For a connector this is
+    /// negotiated at handshake and capped by the Bridge; the wire-level bound on memory is
+    /// <c>connectors.limits.maxFrameBytes</c>, which is the smaller constraint in practice
+    /// because worst-case UTF-8 is four bytes per code point.
+    /// </summary>
     public int MaxMessageLength { get; init; } = int.MaxValue;
     public IReadOnlyList<string> SupportedMediaTypes { get; init; } = [];
 }

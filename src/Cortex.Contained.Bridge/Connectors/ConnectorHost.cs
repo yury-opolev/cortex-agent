@@ -153,6 +153,18 @@ public sealed partial class ConnectorHost : IConnectorRegistry
         }
     }
 
+    /// <summary>Number of currently attached plugin channels.</summary>
+    public int AttachedCount
+    {
+        get
+        {
+            lock (this.syncLock)
+            {
+                return this.channels.Count;
+            }
+        }
+    }
+
     /// <summary>
     /// Detaches every attached channel. Used by the master kill-switch.
     /// </summary>

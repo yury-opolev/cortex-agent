@@ -59,6 +59,26 @@ public static class ConnectorEndpoint
             var socket = await context.WebSockets.AcceptWebSocketAsync().ConfigureAwait(false);
             var remoteEndpoint = remoteAddress?.ToString() ?? "unknown";
 
+            // Second, independent loopback check after the socket is accepted.
+            // A proxy that rewrites RemoteIpAddress late (between the first check and socket
+            // acceptance) would bypass the pre-accept guard; this catches that case cheaply.
+            // NOTE: UseForwardedHeaders is NOT configured in Program.cs for this application,
+            // so X-Forwarded-For cannot influence RemoteIpAddress. If that ever changes and
+            // forwarded-header middleware is added, this post-accept check (using the real
+            // TCP peer address at time of socket acceptance) remains the authoritative guard.
+            // We do NOT add an X-Forwarded-For rejection here because it is not reachable in
+            // the current configuration, and dead code would be misleading. If the middleware
+            // is ever enabled, revisit this comment.
+            var postAcceptAddress = context.Connection.RemoteIpAddress;
+            if (!IsLoopbackPeer(postAcceptAddress))
+            {
+                await socket.CloseAsync(
+                    System.Net.WebSockets.WebSocketCloseStatus.PolicyViolation,
+                    "Non-loopback peer.",
+                    CancellationToken.None).ConfigureAwait(false);
+                return;
+            }
+
             var transport = new WebSocketConnectorTransport(socket, remoteEndpoint, settings.Limits.MaxFrameBytes);
 
             var authenticator = context.RequestServices.GetRequiredService<IConnectorAuthenticator>();

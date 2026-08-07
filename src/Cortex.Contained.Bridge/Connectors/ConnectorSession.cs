@@ -25,6 +25,22 @@ public sealed partial class ConnectorSession : IAsyncDisposable
     /// </summary>
     internal const int MaxTrackedConversations = 256;
 
+    /// <summary>
+    /// Seconds within which the connector must send its <c>hello</c> frame after connecting.
+    /// A connector that holds a slot without ever handshaking is treated as non-functional.
+    /// </summary>
+    internal const int HandshakeTimeoutSeconds = 10;
+
+    /// <summary>Maximum length of id fields (messageId, conversationId, sender.id).</summary>
+    /// <remarks>Reject on excess — ids are identity and truncating them silently would corrupt routing.</remarks>
+    internal const int MaxIdLength = 128;
+
+    /// <summary>Maximum length of display-name fields (sender.displayName, hello.displayName).</summary>
+    /// <remarks>Truncate on excess — display names are cosmetic and safe to shorten.</remarks>
+    internal const int MaxDisplayNameLength = 256;
+
+    private static readonly TimeSpan RateLimitLogSuppression = TimeSpan.FromMinutes(1);
+
     private readonly IConnectorTransport transport;
     private readonly IConnectorAuthenticator authenticator;
     private readonly ConnectorSettingsConfig settings;
@@ -34,11 +50,14 @@ public sealed partial class ConnectorSession : IAsyncDisposable
     private readonly TimeProvider timeProvider;
     private readonly IConnectorAbortDispatcher abortDispatcher;
     private readonly IConnectorReplaySource replaySource;
+    private readonly ConnectorRateLimiter rateLimiter;
     private readonly Lock teardownLock = new();
     private readonly Lock conversationLock = new();
     private readonly HashSet<string> ownedConversations = new(StringComparer.Ordinal);
+    private bool conversationCapLogged;
     private ITimer? pingTimer;
     private bool tornDown;
+    private DateTimeOffset? lastRateLimitLoggedAt;
 
     /// <summary>The plugin channel created during the handshake phase.</summary>
     public PluginChannel? Channel { get; private set; }
@@ -71,6 +90,7 @@ public sealed partial class ConnectorSession : IAsyncDisposable
         this.timeProvider = timeProvider;
         this.abortDispatcher = abortDispatcher;
         this.replaySource = replaySource;
+        this.rateLimiter = new ConnectorRateLimiter(settings.Limits.MaxMessagesPerMinute, timeProvider);
     }
 
     /// <summary>
@@ -101,9 +121,25 @@ public sealed partial class ConnectorSession : IAsyncDisposable
     private async Task RunInternalAsync(CancellationToken ct)
     {
         string? firstJson;
+
+        using var handshakeCts = new CancellationTokenSource();
+        // CreateCancellationTokenSource is not available in this TFM; use a timer so
+        // FakeTimeProvider can advance past the deadline in tests without real wall-clock delay.
+        using var handshakeTimer = this.timeProvider.CreateTimer(
+            static state => ((CancellationTokenSource)state!).Cancel(),
+            handshakeCts,
+            TimeSpan.FromSeconds(HandshakeTimeoutSeconds),
+            Timeout.InfiniteTimeSpan);
+        using var linkedHandshakeCts = CancellationTokenSource.CreateLinkedTokenSource(ct, handshakeCts.Token);
+
         try
         {
-            firstJson = await this.transport.ReceiveAsync(ct).ConfigureAwait(false);
+            firstJson = await this.transport.ReceiveAsync(linkedHandshakeCts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (handshakeCts.IsCancellationRequested && !ct.IsCancellationRequested)
+        {
+            await this.SendErrorAndCloseAsync(ConnectorErrorCodes.ProtocolViolation, "handshake_timeout", ct).ConfigureAwait(false);
+            return;
         }
         catch (ConnectorFrameTooLargeException ex)
         {
@@ -165,7 +201,10 @@ public sealed partial class ConnectorSession : IAsyncDisposable
         }
 
         var channelId = ConnectorChannelId.Create(normalizedKey, normalizedInstanceId);
-        var displayName = string.IsNullOrWhiteSpace(hello.DisplayName) ? normalizedKey : hello.DisplayName;
+
+        // Truncate display name — it is cosmetic, not identity, so truncation is safe.
+        var rawDisplayName = string.IsNullOrWhiteSpace(hello.DisplayName) ? normalizedKey : hello.DisplayName;
+        var displayName = ConnectorText.Truncate(rawDisplayName, MaxDisplayNameLength)!;
 
         ConnectorAuthResult authResult;
         try
@@ -443,20 +482,46 @@ public sealed partial class ConnectorSession : IAsyncDisposable
 
     private void TrackConversation(string conversationId)
     {
+        var capReached = false;
         lock (this.conversationLock)
         {
             // Bound the set so a connector cannot grow it without limit by cycling ids.
+            // Refusing to track is fail-closed: an untracked conversation simply cannot be
+            // aborted, so this can deny the connector its own abort but never authorises one.
             if (this.ownedConversations.Count >= MaxTrackedConversations)
             {
-                return;
+                capReached = !this.conversationCapLogged;
+                this.conversationCapLogged = true;
             }
+            else
+            {
+                this.ownedConversations.Add(conversationId);
+            }
+        }
 
-            this.ownedConversations.Add(conversationId);
+        if (capReached)
+        {
+            this.LogConversationCapReached(this.ChannelId ?? "?", MaxTrackedConversations);
         }
     }
 
     private async Task HandleInboundAsync(ConnectorFrame frame, CancellationToken ct)
     {
+        // Rate limiting applies exclusively to inbound frames; pong and abort bypass this check
+        // so the limiter cannot break liveness or cancellation.
+        if (!this.rateLimiter.TryAcquire())
+        {
+            var now = this.timeProvider.GetUtcNow();
+            if (this.lastRateLimitLoggedAt is null || now - this.lastRateLimitLoggedAt.Value >= RateLimitLogSuppression)
+            {
+                this.lastRateLimitLoggedAt = now;
+                this.LogRateLimited(this.ChannelId ?? "?", this.rateLimiter.MaxMessagesPerMinute);
+            }
+
+            await this.SendErrorFrameAsync(ConnectorErrorCodes.RateLimited, "Message rate limit exceeded.", ct).ConfigureAwait(false);
+            return; // Continue the loop — do not close; a well-behaved connector should back off.
+        }
+
         if (!ConnectorFrameParser.TryDeserializePayload<ConnectorInboundPayload>(frame, out var payload, out var err))
         {
             await this.SendErrorFrameAsync(ConnectorErrorCodes.InvalidPayload, err!, ct).ConfigureAwait(false);
@@ -473,26 +538,61 @@ public sealed partial class ConnectorSession : IAsyncDisposable
             return;
         }
 
+        // Enforce negotiated maximum message length.
+        var text = payload.Content!.Text!;
+        if (text.Length > this.Channel!.Capabilities.MaxMessageLength)
+        {
+            await this.SendErrorFrameAsync(ConnectorErrorCodes.MessageTooLong, "Message text exceeds the negotiated maximum length.", ct).ConfigureAwait(false);
+            return;
+        }
+
+        // Reject ids that exceed the maximum length — ids are identity and truncating them silently
+        // would corrupt routing and audit trails.
+        var rawMessageId = payload.MessageId;
+        if (rawMessageId is not null && rawMessageId.Length > MaxIdLength)
+        {
+            await this.SendErrorFrameAsync(ConnectorErrorCodes.InvalidPayload, "messageId exceeds the maximum allowed length.", ct).ConfigureAwait(false);
+            return;
+        }
+
+        var rawConversationId = payload.ConversationId;
+        if (rawConversationId is not null && rawConversationId.Length > MaxIdLength)
+        {
+            await this.SendErrorFrameAsync(ConnectorErrorCodes.InvalidPayload, "conversationId exceeds the maximum allowed length.", ct).ConfigureAwait(false);
+            return;
+        }
+
+        var rawSenderId = payload.Sender?.Id;
+        if (rawSenderId is not null && rawSenderId.Length > MaxIdLength)
+        {
+            await this.SendErrorFrameAsync(ConnectorErrorCodes.InvalidPayload, "sender.id exceeds the maximum allowed length.", ct).ConfigureAwait(false);
+            return;
+        }
+
         var channelId = this.ChannelId!;
+
+        // Truncate sender display name — cosmetic only, truncation is safe.
+        var senderDisplayName = ConnectorText.Truncate(payload.Sender?.DisplayName, MaxDisplayNameLength);
+
         var message = new InboundMessage
         {
-            MessageId = string.IsNullOrWhiteSpace(payload.MessageId)
+            MessageId = string.IsNullOrWhiteSpace(rawMessageId)
                 ? Guid.NewGuid().ToString("n")
-                : payload.MessageId,
-            ConversationId = string.IsNullOrWhiteSpace(payload.ConversationId)
+                : rawMessageId,
+            ConversationId = string.IsNullOrWhiteSpace(rawConversationId)
                 ? channelId
-                : payload.ConversationId,
+                : rawConversationId,
             ChannelId = channelId,
             ChannelType = ChannelType.Plugin,
             Sender = new SenderInfo
             {
-                Id = payload.Sender?.Id ?? "connector",
-                DisplayName = payload.Sender?.DisplayName,
+                Id = rawSenderId ?? "connector",
+                DisplayName = senderDisplayName,
                 IsVerified = false,
             },
             Content = new MessageContent
             {
-                Text = payload.Content?.Text,
+                Text = text,
                 IsMarkdown = payload.Content?.IsMarkdown ?? false,
             },
             Timestamp = this.timeProvider.GetUtcNow(),
@@ -729,6 +829,13 @@ public sealed partial class ConnectorSession : IAsyncDisposable
     [LoggerMessage(Level = LogLevel.Debug, Message = "Abort received from channel {ChannelId} (Phase 3 handling).")]
     private partial void LogAbortReceived(string channelId);
 
+    /// <summary>
+    /// Logged at Warning, suppressed to at most once per minute per session so a hammering
+    /// connector cannot itself become a log-flood vector.
+    /// </summary>
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Connector {ChannelId} exceeded rate limit of {MaxMessagesPerMinute} messages/min; further messages dropped until window slides.")]
+    private partial void LogRateLimited(string channelId, int maxMessagesPerMinute);
+
     [LoggerMessage(Level = LogLevel.Warning, Message = "Heartbeat timeout: channel {ChannelId} has not sent any frame within {TimeoutSeconds}s.")]
     private partial void LogHeartbeatTimeout(string channelId, int timeoutSeconds);
 
@@ -737,6 +844,9 @@ public sealed partial class ConnectorSession : IAsyncDisposable
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Connector {ChannelId} attempted to abort conversation {ConversationId} which it does not own; rejected.")]
     private partial void LogAbortRejected(string channelId, string conversationId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Connector {ChannelId} reached the tracked-conversation cap of {MaxTrackedConversations}; further conversations cannot be aborted by it.")]
+    private partial void LogConversationCapReached(string channelId, int maxTrackedConversations);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Frame sink: transport is closed, dropping frame.")]
     private partial void LogFrameSinkTransportClosed();

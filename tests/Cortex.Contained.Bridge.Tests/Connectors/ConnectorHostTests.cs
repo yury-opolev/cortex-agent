@@ -142,4 +142,42 @@ public sealed class ConnectorHostTests
 
         Assert.Equal(2, snapshot.Count);
     }
+
+    // ── AttachedCount ─────────────────────────────────────────────────
+
+    [Fact]
+    public async Task AttachedCount_ReflectsCurrentAttachedChannels()
+    {
+        var (host, _) = Build();
+        Assert.Equal(0, host.AttachedCount);
+
+        var ch1 = MakeChannel("e", "1");
+        await host.TryAttachAsync(ch1, CancellationToken.None);
+        Assert.Equal(1, host.AttachedCount);
+
+        await host.DetachAsync(ch1);
+        Assert.Equal(0, host.AttachedCount);
+    }
+
+    // ── Concurrent attach at limit — race safety ──────────────────────
+
+    [Fact]
+    public async Task TryAttachAsync_ConcurrentAtLimit_ExactlyLimitSucceed()
+    {
+        // Two sessions attaching simultaneously when one slot remains must result in
+        // exactly one success. Verify the check+insert is atomic (the lock in ConnectorHost
+        // covers both the count check and the insertion).
+        const int limit = 10;
+        const int concurrency = 50;
+        var (host, _) = Build(maxConnectors: limit);
+
+        var tasks = Enumerable.Range(0, concurrency).Select(i =>
+            host.TryAttachAsync(MakeChannel("bot", i.ToString(System.Globalization.CultureInfo.InvariantCulture)), CancellationToken.None).AsTask()).ToList();
+
+        var results = await Task.WhenAll(tasks);
+
+        var successCount = results.Count(r => r.Success);
+        Assert.Equal(limit, successCount);
+        Assert.Equal(limit, host.AttachedCount);
+    }
 }
