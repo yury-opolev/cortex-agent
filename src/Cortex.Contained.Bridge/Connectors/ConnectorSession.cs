@@ -12,6 +12,18 @@ namespace Cortex.Contained.Bridge.Connectors;
 /// </summary>
 public sealed partial class ConnectorSession : IAsyncDisposable
 {
+    /// <summary>Interval in seconds between ping frames sent to the connector.</summary>
+    internal const int PingIntervalSeconds = 30;
+
+    /// <summary>Seconds after which a connector is considered dead if no frame has been received.</summary>
+    internal const int HeartbeatTimeoutSeconds = 90;
+
+    /// <summary>
+    /// Upper bound on the conversation ids a single session may claim ownership of, so a
+    /// connector cannot grow the set without limit by cycling ids.
+    /// </summary>
+    internal const int MaxTrackedConversations = 256;
+
     private readonly IConnectorTransport transport;
     private readonly IConnectorAuthenticator authenticator;
     private readonly ConnectorSettingsConfig settings;
@@ -19,7 +31,11 @@ public sealed partial class ConnectorSession : IAsyncDisposable
     private readonly ILoggerFactory loggerFactory;
     private readonly ILogger<ConnectorSession> logger;
     private readonly TimeProvider timeProvider;
+    private readonly IConnectorAbortDispatcher abortDispatcher;
     private readonly Lock teardownLock = new();
+    private readonly Lock conversationLock = new();
+    private readonly HashSet<string> ownedConversations = new(StringComparer.Ordinal);
+    private ITimer? pingTimer;
     private bool tornDown;
 
     /// <summary>The plugin channel created during the handshake phase.</summary>
@@ -28,7 +44,7 @@ public sealed partial class ConnectorSession : IAsyncDisposable
     /// <summary>The channel id assigned during the handshake phase.</summary>
     public string? ChannelId => this.Channel?.ChannelId;
 
-    /// <summary>Timestamp of the last <c>pong</c> received from the connector.</summary>
+    /// <summary>Timestamp of the last frame received from the connector.</summary>
     public DateTimeOffset? LastSeenUtc { get; private set; }
 
     /// <summary>
@@ -40,7 +56,8 @@ public sealed partial class ConnectorSession : IAsyncDisposable
         ConnectorSettingsConfig settings,
         IConnectorRegistry registry,
         ILoggerFactory loggerFactory,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        IConnectorAbortDispatcher abortDispatcher)
     {
         this.transport = transport;
         this.authenticator = authenticator;
@@ -49,6 +66,7 @@ public sealed partial class ConnectorSession : IAsyncDisposable
         this.loggerFactory = loggerFactory;
         this.logger = loggerFactory.CreateLogger<ConnectorSession>();
         this.timeProvider = timeProvider;
+        this.abortDispatcher = abortDispatcher;
     }
 
     /// <summary>
@@ -76,11 +94,8 @@ public sealed partial class ConnectorSession : IAsyncDisposable
         }
     }
 
-    // ── Handshake + read loop ────────────────────────────────────────
-
     private async Task RunInternalAsync(CancellationToken ct)
     {
-        // 1. Read the first frame (peer may close immediately).
         string? firstJson;
         try
         {
@@ -103,14 +118,12 @@ public sealed partial class ConnectorSession : IAsyncDisposable
             return;
         }
 
-        // 2. Parse the frame.
         if (!ConnectorFrameParser.TryParse(firstJson, out var frame, out var parseErrorCode, out var parseErrorMessage))
         {
             await this.SendErrorAndCloseAsync(parseErrorCode!, parseErrorMessage!, ct).ConfigureAwait(false);
             return;
         }
 
-        // 3. First frame must be hello.
         if (frame!.Type != ConnectorFrameTypes.Hello)
         {
             await this.SendErrorAndCloseAsync(
@@ -120,7 +133,6 @@ public sealed partial class ConnectorSession : IAsyncDisposable
             return;
         }
 
-        // 4. Deserialise hello payload and normalise fields.
         if (!ConnectorFrameParser.TryDeserializePayload<ConnectorHelloPayload>(frame, out var hello, out var helloError))
         {
             await this.SendErrorAndCloseAsync(ConnectorErrorCodes.InvalidPayload, helloError!, ct).ConfigureAwait(false);
@@ -137,7 +149,6 @@ public sealed partial class ConnectorSession : IAsyncDisposable
             return;
         }
 
-        // A null/whitespace instanceId defaults to "default" BEFORE normalising.
         var rawInstanceId = string.IsNullOrWhiteSpace(hello.InstanceId) ? "default" : hello.InstanceId;
         var normalizedInstanceId = ConnectorChannelId.Normalize(rawInstanceId);
         if (normalizedInstanceId is null)
@@ -152,7 +163,6 @@ public sealed partial class ConnectorSession : IAsyncDisposable
         var channelId = ConnectorChannelId.Create(normalizedKey, normalizedInstanceId);
         var displayName = string.IsNullOrWhiteSpace(hello.DisplayName) ? normalizedKey : hello.DisplayName;
 
-        // 5. Authenticate.
         ConnectorAuthResult authResult;
         try
         {
@@ -178,7 +188,6 @@ public sealed partial class ConnectorSession : IAsyncDisposable
             return;
         }
 
-        // Resolve PairingRequired if it comes back.
         authResult = await this.ResolveAuthResultAsync(authResult, ct).ConfigureAwait(false);
 
         if (authResult.Outcome == ConnectorAuthOutcome.Denied)
@@ -191,7 +200,6 @@ public sealed partial class ConnectorSession : IAsyncDisposable
             return;
         }
 
-        // 6. Send paired frame (with token) BEFORE ready, when a token was issued.
         if (authResult.IssuedToken is not null)
         {
             await this.SendFrameAsync(ConnectorFrameTypes.Paired, new ConnectorPairedPayload
@@ -201,26 +209,23 @@ public sealed partial class ConnectorSession : IAsyncDisposable
             }, ct).ConfigureAwait(false);
         }
 
-        // 7. Build ChannelCapabilities from the hello payload.
         var caps = hello.Capabilities;
         var capabilities = new ChannelCapabilities
         {
             SupportsStreaming = caps?.Streaming ?? false,
             SupportsRichText = caps?.RichText ?? false,
-            // v1 never enables media even if the connector requests it — media support is reserved for v2+
             SupportsMedia = false,
             MaxMessageLength = Math.Clamp(caps?.MaxMessageLength ?? 100_000, 1, 100_000),
         };
 
-        // 8. Create channel, set sink, attach to registry.
-        var pluginChannel = new PluginChannel(
+        var pluginChannel = PluginChannelFactory.Create(
             normalizedKey,
             normalizedInstanceId,
             capabilities,
             displayName,
-            this.loggerFactory.CreateLogger<PluginChannel>());
-
+            this.loggerFactory);
         pluginChannel.OutboundSink = this.OutboundSinkAsync;
+        pluginChannel.FrameSink = this.FrameSinkAsync;
 
         var attachResult = await this.registry.TryAttachAsync(pluginChannel, ct).ConfigureAwait(false);
         if (!attachResult.Success)
@@ -235,14 +240,19 @@ public sealed partial class ConnectorSession : IAsyncDisposable
         this.Channel = pluginChannel;
         this.LogSessionReady(channelId, this.transport.RemoteEndpoint);
 
-        // 9. Send ready.
         await this.SendFrameAsync(ConnectorFrameTypes.Ready, new ConnectorReadyPayload
         {
             ChannelId = channelId,
-            ReplayCount = 0, // Phase 4 fills replay in
+            ReplayCount = 0,
         }, ct).ConfigureAwait(false);
 
-        // 10. Read loop.
+        this.LastSeenUtc = this.timeProvider.GetUtcNow();
+        this.pingTimer = this.timeProvider.CreateTimer(
+            this.OnPingTimerTickAsync,
+            null,
+            TimeSpan.FromSeconds(PingIntervalSeconds),
+            TimeSpan.FromSeconds(PingIntervalSeconds));
+
         await this.ReadLoopAsync(ct).ConfigureAwait(false);
     }
 
@@ -292,6 +302,8 @@ public sealed partial class ConnectorSession : IAsyncDisposable
 
     private async Task HandleFrameAsync(ConnectorFrame frame, CancellationToken ct)
     {
+        this.LastSeenUtc = this.timeProvider.GetUtcNow();
+
         switch (frame.Type)
         {
             case ConnectorFrameTypes.Inbound:
@@ -299,14 +311,86 @@ public sealed partial class ConnectorSession : IAsyncDisposable
                 break;
 
             case ConnectorFrameTypes.Pong:
-                this.LastSeenUtc = this.timeProvider.GetUtcNow();
                 this.LogPongReceived(this.ChannelId ?? "?");
                 break;
 
             case ConnectorFrameTypes.Abort:
-                // Phase 3 — parse and log only; do not error.
-                this.LogAbortReceived(this.ChannelId ?? "?");
+                await this.HandleAbortAsync(frame, ct).ConfigureAwait(false);
                 break;
+        }
+    }
+
+    private async Task HandleAbortAsync(ConnectorFrame frame, CancellationToken ct)
+    {
+        this.LogAbortReceived(this.ChannelId ?? "?");
+
+        if (!ConnectorFrameParser.TryDeserializePayload<ConnectorAbortPayload>(frame, out var payload, out _))
+        {
+            return;
+        }
+
+        var channelId = this.ChannelId!;
+        var conversationId = string.IsNullOrWhiteSpace(payload!.ConversationId)
+            ? channelId
+            : payload.ConversationId;
+
+        // SECURITY: the agent aborts purely by conversation id and performs no ownership
+        // check, so an unconstrained abort would let any local connector cancel a WebChat,
+        // Discord, or rival connector's in-flight turn. Only conversations this session has
+        // actually originated may be aborted.
+        if (!this.OwnsConversation(conversationId))
+        {
+            this.LogAbortRejected(channelId, conversationId);
+            await this.SendErrorFrameAsync(
+                ConnectorErrorCodes.ProtocolViolation,
+                "abort refers to a conversation this connector does not own",
+                ct).ConfigureAwait(false);
+            return;
+        }
+
+        try
+        {
+            await this.abortDispatcher.AbortAsync(channelId, conversationId, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            this.LogAbortDispatchFailed(channelId, ex);
+        }
+    }
+
+    /// <summary>
+    /// A conversation belongs to this session when it is the channel's own id (the default,
+    /// single-conversation case) or when this session has already forwarded an inbound message
+    /// for it.
+    /// </summary>
+    private bool OwnsConversation(string conversationId)
+    {
+        if (string.Equals(conversationId, this.ChannelId, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        lock (this.conversationLock)
+        {
+            return this.ownedConversations.Contains(conversationId);
+        }
+    }
+
+    private void TrackConversation(string conversationId)
+    {
+        lock (this.conversationLock)
+        {
+            // Bound the set so a connector cannot grow it without limit by cycling ids.
+            if (this.ownedConversations.Count >= MaxTrackedConversations)
+            {
+                return;
+            }
+
+            this.ownedConversations.Add(conversationId);
         }
     }
 
@@ -314,13 +398,10 @@ public sealed partial class ConnectorSession : IAsyncDisposable
     {
         if (!ConnectorFrameParser.TryDeserializePayload<ConnectorInboundPayload>(frame, out var payload, out var err))
         {
-            // Bad payload — send error but CONTINUE the loop; a bad message must not kill the session.
             await this.SendErrorFrameAsync(ConnectorErrorCodes.InvalidPayload, err!, ct).ConfigureAwait(false);
             return;
         }
 
-        // A missing/whitespace content.text AND no attachments → invalid payload; CONTINUE.
-        // v1 never has attachments (media is reserved for v2+), so reject if text is absent.
         var hasText = !string.IsNullOrWhiteSpace(payload!.Content?.Text);
         if (!hasText)
         {
@@ -332,8 +413,6 @@ public sealed partial class ConnectorSession : IAsyncDisposable
         }
 
         var channelId = this.ChannelId!;
-
-        // IsGroup and ThreadId are reserved for first-party channels in v1 — never set from connector input.
         var message = new InboundMessage
         {
             MessageId = string.IsNullOrWhiteSpace(payload.MessageId)
@@ -358,10 +437,11 @@ public sealed partial class ConnectorSession : IAsyncDisposable
             Timestamp = this.timeProvider.GetUtcNow(),
         };
 
+        // Claiming the conversation here is what later authorises an abort for it.
+        this.TrackConversation(message.ConversationId);
+
         await this.Channel!.ReceiveInboundAsync(message).ConfigureAwait(false);
     }
-
-    // ── Outbound sink ────────────────────────────────────────────────
 
     private async Task<SendResult> OutboundSinkAsync(OutboundMessage message, CancellationToken ct)
     {
@@ -394,7 +474,23 @@ public sealed partial class ConnectorSession : IAsyncDisposable
         }
     }
 
-    // ── Auth helpers ─────────────────────────────────────────────────
+    private async Task FrameSinkAsync(string json, CancellationToken ct)
+    {
+        if (!this.transport.IsOpen)
+        {
+            this.LogFrameSinkTransportClosed();
+            return;
+        }
+
+        try
+        {
+            await this.transport.SendAsync(json, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            this.LogSendFrameFailed("raw-frame", ex);
+        }
+    }
 
     private async Task<ConnectorAuthResult> ResolveAuthResultAsync(ConnectorAuthResult result, CancellationToken ct)
     {
@@ -403,8 +499,6 @@ public sealed partial class ConnectorSession : IAsyncDisposable
             return result;
         }
 
-        // Always send the pairing_required frame so the connector can display the code,
-        // even when PairingCompletion is null (which means the service is unavailable).
         await this.SendFrameAsync(ConnectorFrameTypes.PairingRequired, new ConnectorPairingRequiredPayload
         {
             Code = result.PairingCode ?? string.Empty,
@@ -439,7 +533,44 @@ public sealed partial class ConnectorSession : IAsyncDisposable
         return ConnectorAuthResult.Denied(completion.Reason ?? "pairing denied");
     }
 
-    // ── Frame helpers ────────────────────────────────────────────────
+    private void OnPingTimerTickAsync(object? state)
+    {
+        _ = this.PingTimerTickAsync();
+    }
+
+    private async Task PingTimerTickAsync()
+    {
+        lock (this.teardownLock)
+        {
+            // The timer callback can be in flight when teardown disposes the transport.
+            if (this.tornDown)
+            {
+                return;
+            }
+        }
+
+        var now = this.timeProvider.GetUtcNow();
+        var lastSeen = this.LastSeenUtc;
+        if (lastSeen.HasValue && (now - lastSeen.Value).TotalSeconds >= HeartbeatTimeoutSeconds)
+        {
+            this.LogHeartbeatTimeout(this.ChannelId ?? "?", HeartbeatTimeoutSeconds);
+            await this.SendErrorAndCloseAsync(
+                ConnectorErrorCodes.ProtocolViolation,
+                "heartbeat_timeout",
+                CancellationToken.None).ConfigureAwait(false);
+            return;
+        }
+
+        var json = ConnectorFrame.Serialize(ConnectorFrameTypes.Ping);
+        try
+        {
+            await this.transport.SendAsync(json, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            this.LogSendFrameFailed(ConnectorFrameTypes.Ping, ex);
+        }
+    }
 
     private async Task SendFrameAsync<TPayload>(string type, TPayload payload, CancellationToken ct)
     {
@@ -469,8 +600,6 @@ public sealed partial class ConnectorSession : IAsyncDisposable
         await this.transport.CloseAsync(message, ct).ConfigureAwait(false);
     }
 
-    // ── Teardown ─────────────────────────────────────────────────────
-
     private async Task TeardownAsync()
     {
         lock (this.teardownLock)
@@ -483,9 +612,14 @@ public sealed partial class ConnectorSession : IAsyncDisposable
             this.tornDown = true;
         }
 
+        if (this.pingTimer is not null)
+        {
+            await this.pingTimer.DisposeAsync().ConfigureAwait(false);
+            this.pingTimer = null;
+        }
+
         if (this.Channel is not null)
         {
-            // DetachAsync owns disconnecting the channel, so it is not disconnected here too.
             await this.registry.DetachAsync(this.Channel).ConfigureAwait(false);
         }
 
@@ -497,8 +631,6 @@ public sealed partial class ConnectorSession : IAsyncDisposable
     {
         await this.TeardownAsync().ConfigureAwait(false);
     }
-
-    // ── Logging ──────────────────────────────────────────────────────
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Connector peer closed connection before sending hello. Endpoint: {RemoteEndpoint}")]
     private partial void LogPeerClosedBeforeHello(string remoteEndpoint);
@@ -529,4 +661,17 @@ public sealed partial class ConnectorSession : IAsyncDisposable
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Abort received from channel {ChannelId} (Phase 3 handling).")]
     private partial void LogAbortReceived(string channelId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Heartbeat timeout: channel {ChannelId} has not sent any frame within {TimeoutSeconds}s.")]
+    private partial void LogHeartbeatTimeout(string channelId, int timeoutSeconds);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Abort dispatch failed for channel {ChannelId}.")]
+    private partial void LogAbortDispatchFailed(string channelId, Exception ex);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Connector {ChannelId} attempted to abort conversation {ConversationId} which it does not own; rejected.")]
+    private partial void LogAbortRejected(string channelId, string conversationId);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Frame sink: transport is closed, dropping frame.")]
+    private partial void LogFrameSinkTransportClosed();
 }
+

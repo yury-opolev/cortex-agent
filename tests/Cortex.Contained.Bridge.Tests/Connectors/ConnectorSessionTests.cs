@@ -39,7 +39,8 @@ public sealed class ConnectorSessionTests
         IConnectorAuthenticator? authenticator = null,
         IConnectorRegistry? registry = null,
         ConnectorSettingsConfig? settings = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        IConnectorAbortDispatcher? abortDispatcher = null)
     {
         if (authenticator is null)
         {
@@ -57,13 +58,18 @@ public sealed class ConnectorSessionTests
                 .Returns(_ => ValueTask.CompletedTask);
         }
 
+        abortDispatcher ??= Substitute.For<IConnectorAbortDispatcher>();
+        abortDispatcher.AbortAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
         return new ConnectorSession(
             transport,
             authenticator,
             settings ?? DefaultSettings(),
             registry,
             NullLoggerFactory.Instance,
-            timeProvider ?? TimeProvider.System);
+            timeProvider ?? TimeProvider.System,
+            abortDispatcher);
     }
 
     // ── 1. Peer closes without hello ─────────────────────────────────
@@ -447,6 +453,180 @@ public sealed class ConnectorSessionTests
         Assert.False(string.IsNullOrEmpty(received.MessageId)); // auto-generated GUID
     }
 
+    [Fact]
+    public async Task RunAsync_AbortForForeignConversation_IsRejectedAndNotDispatched()
+    {
+        // A hostile connector must not be able to cancel a WebChat, Discord, or rival
+        // connector's in-flight turn: the agent aborts purely by conversation id and does
+        // no ownership check of its own.
+        var transport = new FakeConnectorTransport();
+        transport.QueueIncoming(HelloFrame());
+        transport.QueueIncoming(ConnectorFrame.Serialize("abort", new ConnectorAbortPayload
+        {
+            ConversationId = "webchat-default",
+        }));
+        transport.CompleteIncoming();
+
+        var abortDispatcher = Substitute.For<IConnectorAbortDispatcher>();
+        abortDispatcher.AbortAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        var session = BuildSession(transport, abortDispatcher: abortDispatcher);
+        await session.RunAsync(CancellationToken.None);
+
+        await abortDispatcher.DidNotReceive().AbortAsync(
+            Arg.Any<string>(),
+            Arg.Any<string>(),
+            Arg.Any<CancellationToken>());
+        Assert.Contains(transport.Sent, f => f.Contains("protocol_violation"));
+    }
+
+    [Fact]
+    public async Task RunAsync_AbortForOwnChannelId_IsAllowedWithoutPriorInbound()
+    {
+        // The single-conversation case: conversationId == channelId is owned by definition,
+        // so a connector can abort its own default conversation before sending anything.
+        var transport = new FakeConnectorTransport();
+        transport.QueueIncoming(HelloFrame());
+        transport.QueueIncoming(ConnectorFrame.Serialize("abort", new ConnectorAbortPayload
+        {
+            ConversationId = "plugin:terminal:default",
+        }));
+        transport.CompleteIncoming();
+
+        var abortDispatcher = Substitute.For<IConnectorAbortDispatcher>();
+        abortDispatcher.AbortAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        var session = BuildSession(transport, abortDispatcher: abortDispatcher);
+        await session.RunAsync(CancellationToken.None);
+
+        await abortDispatcher.Received(1).AbortAsync(
+            "plugin:terminal:default",
+            "plugin:terminal:default",
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunAsync_AbortFrame_CallsDispatcherWithConversationId()
+    {
+        var transport = new FakeConnectorTransport();
+        transport.QueueIncoming(HelloFrame());
+        transport.QueueIncoming(ConnectorFrame.Serialize("inbound", new ConnectorInboundPayload
+        {
+            ConversationId = "conv-1",
+            Content = new ConnectorContentPayload { Text = "start a turn" },
+        }));
+        transport.QueueIncoming(ConnectorFrame.Serialize("abort", new ConnectorAbortPayload
+        {
+            ConversationId = "conv-1",
+        }));
+        transport.CompleteIncoming();
+
+        var abortDispatcher = Substitute.For<IConnectorAbortDispatcher>();
+        abortDispatcher.AbortAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        var session = BuildSession(transport, abortDispatcher: abortDispatcher);
+        await session.RunAsync(CancellationToken.None);
+
+        await abortDispatcher.Received(1).AbortAsync(
+            Arg.Is<string>(s => s.StartsWith("plugin:")),
+            "conv-1",
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunAsync_AbortFrameNoConversationId_FallsBackToChannelId()
+    {
+        var transport = new FakeConnectorTransport();
+        transport.QueueIncoming(HelloFrame());
+        transport.QueueIncoming(ConnectorFrame.Serialize("abort", new ConnectorAbortPayload()));
+        transport.CompleteIncoming();
+
+        var abortDispatcher = Substitute.For<IConnectorAbortDispatcher>();
+        abortDispatcher.AbortAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        var session = BuildSession(transport, abortDispatcher: abortDispatcher);
+        await session.RunAsync(CancellationToken.None);
+
+        await abortDispatcher.Received(1).AbortAsync(
+            Arg.Is<string>(s => s.StartsWith("plugin:")),
+            Arg.Is<string>(s => s.StartsWith("plugin:")),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunAsync_AbortDispatcherThrows_DoesNotKillLoop()
+    {
+        var transport = new FakeConnectorTransport();
+        transport.QueueIncoming(HelloFrame());
+        transport.QueueIncoming(ConnectorFrame.Serialize("inbound", new ConnectorInboundPayload
+        {
+            ConversationId = "c1",
+            Content = new ConnectorContentPayload { Text = "start a turn" },
+        }));
+        transport.QueueIncoming(ConnectorFrame.Serialize("abort", new ConnectorAbortPayload
+        {
+            ConversationId = "c1",
+        }));
+        transport.QueueIncoming(ConnectorFrame.Serialize("inbound", new ConnectorInboundPayload
+        {
+            Content = new ConnectorContentPayload { Text = "still working" },
+        }));
+        transport.CompleteIncoming();
+
+        var abortDispatcher = Substitute.For<IConnectorAbortDispatcher>();
+        abortDispatcher.AbortAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(_ => throw new InvalidOperationException("abort failed"));
+
+        var session = BuildSession(transport, abortDispatcher: abortDispatcher);
+        var ex = await Record.ExceptionAsync(() => session.RunAsync(CancellationToken.None));
+
+        Assert.Null(ex);
+        Assert.Contains(transport.Sent, f => f.Contains("ready"));
+    }
+
+    [Fact]
+    public async Task RunAsync_PingInterval_SendsPingFrame()
+    {
+        var fakeTime = new FakeTimeProvider();
+        var transport = new FakeConnectorTransport();
+        transport.QueueIncoming(HelloFrame());
+
+        var session = BuildSession(transport, timeProvider: fakeTime);
+        var runTask = session.RunAsync(CancellationToken.None);
+
+        await Task.Delay(50);
+        fakeTime.Advance(TimeSpan.FromSeconds(ConnectorSession.PingIntervalSeconds));
+        await Task.Delay(50);
+
+        Assert.Contains(transport.Sent, f => f.Contains("\"type\":\"ping\""));
+
+        transport.CompleteIncoming();
+        await runTask;
+    }
+
+    [Fact]
+    public async Task RunAsync_HeartbeatTimeout_ClosesWithProtocolViolation()
+    {
+        var fakeTime = new FakeTimeProvider();
+        var transport = new FakeConnectorTransport();
+        transport.QueueIncoming(HelloFrame());
+
+        var session = BuildSession(transport, timeProvider: fakeTime);
+        var runTask = session.RunAsync(CancellationToken.None);
+
+        await Task.Delay(50);
+        fakeTime.Advance(TimeSpan.FromSeconds(ConnectorSession.HeartbeatTimeoutSeconds));
+        await Task.Delay(50);
+
+        await runTask;
+
+        Assert.Contains(transport.Sent, f => f.Contains("protocol_violation") && f.Contains("heartbeat_timeout"));
+    }
+
     // ── 10d. Pong records LastSeenUtc ────────────────────────────────
 
     [Fact]
@@ -612,3 +792,4 @@ internal sealed class FaultyAfterHandshakeTransport : IConnectorTransport
     public Task CloseAsync(string reason, CancellationToken ct) => Task.CompletedTask;
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }
+

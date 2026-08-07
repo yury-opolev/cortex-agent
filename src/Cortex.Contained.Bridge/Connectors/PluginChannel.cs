@@ -9,12 +9,17 @@ namespace Cortex.Contained.Bridge.Connectors;
 /// communicating over the WebSocket connector protocol. Each connected
 /// <c>key</c>+<c>instanceId</c> pair is represented by exactly one <see cref="PluginChannel"/>.
 /// </summary>
-public sealed partial class PluginChannel : IChannel
+/// <remarks>
+/// This type is intentionally unsealed only so <see cref="StreamingPluginChannel"/> can inherit from it.
+/// No other subclass is expected.
+/// </remarks>
+public partial class PluginChannel : IChannel
 {
     private readonly ILogger<PluginChannel> logger;
     private readonly Lock statusLock = new();
     private ChannelStatus status = ChannelStatus.Disconnected;
     private Func<OutboundMessage, CancellationToken, Task<SendResult>>? outboundSink;
+    private Func<string, CancellationToken, Task>? frameSink;
 
     /// <summary>
     /// Initialises a new <see cref="PluginChannel"/>.
@@ -38,8 +43,6 @@ public sealed partial class PluginChannel : IChannel
         this.DisplayName = displayName;
         this.ChannelId = ConnectorChannelId.Create(pluginKey, instanceId);
     }
-
-    // ── IChannel properties ──────────────────────────────────────────
 
     /// <inheritdoc />
     public string ChannelId { get; }
@@ -74,15 +77,11 @@ public sealed partial class PluginChannel : IChannel
     /// <inheritdoc />
     public ChannelCapabilities Capabilities { get; }
 
-    // ── IChannel events ──────────────────────────────────────────────
-
     /// <inheritdoc />
     public event Func<InboundMessage, Task>? MessageReceived;
 
     /// <inheritdoc />
     public event Func<ChannelStatusChange, Task>? StatusChanged;
-
-    // ── Outbound sink ────────────────────────────────────────────────
 
     /// <summary>
     /// Set by the owning connector session to deliver outbound messages over the socket,
@@ -100,19 +99,32 @@ public sealed partial class PluginChannel : IChannel
         set => Volatile.Write(ref this.outboundSink, value);
     }
 
-    // ── IChannel methods ─────────────────────────────────────────────
+    /// <summary>
+    /// Set by the owning connector session to emit a raw protocol frame (typing, stream)
+    /// over the socket. The session serialises the frame before passing it here.
+    /// When null or when the sink throws, <see cref="StreamingPluginChannel"/> degrades to a no-op.
+    /// </summary>
+    /// <remarks>
+    /// Uses <see cref="Volatile"/> for the same cross-thread visibility guarantee as
+    /// <see cref="OutboundSink"/>.
+    /// </remarks>
+    public Func<string, CancellationToken, Task>? FrameSink
+    {
+        get => Volatile.Read(ref this.frameSink);
+        set => Volatile.Write(ref this.frameSink, value);
+    }
 
     /// <inheritdoc />
     public Task ConnectAsync(CancellationToken ct = default)
     {
-        this.LogConnected(this.ChannelId);
+        Log.LogConnected(this.logger, this.ChannelId);
         return this.SetStatusAsync(ChannelStatus.Connected, "Connector attached");
     }
 
     /// <inheritdoc />
     public Task DisconnectAsync(CancellationToken ct = default)
     {
-        this.LogDisconnected(this.ChannelId);
+        Log.LogDisconnected(this.logger, this.ChannelId);
         return this.SetStatusAsync(ChannelStatus.Disconnected, "Connector detached");
     }
 
@@ -122,7 +134,7 @@ public sealed partial class PluginChannel : IChannel
         var sink = this.OutboundSink;
         if (sink is null)
         {
-            this.LogSendWithoutSink(this.ChannelId, message.MessageId);
+            Log.LogSendWithoutSink(this.logger, this.ChannelId, message.MessageId);
             return SendResult.Error("connector is not attached");
         }
 
@@ -143,9 +155,8 @@ public sealed partial class PluginChannel : IChannel
     public async ValueTask DisposeAsync()
     {
         await this.DisconnectAsync().ConfigureAwait(false);
+        GC.SuppressFinalize(this);
     }
-
-    // ── Helpers ──────────────────────────────────────────────────────
 
     private Task SetStatusAsync(ChannelStatus newStatus, string reason)
     {
@@ -165,14 +176,15 @@ public sealed partial class PluginChannel : IChannel
         return this.StatusChanged?.Invoke(change) ?? Task.CompletedTask;
     }
 
-    // ── Logging ──────────────────────────────────────────────────────
+    private static partial class Log
+    {
+        [LoggerMessage(Level = LogLevel.Information, Message = "PluginChannel connected: {ChannelId}")]
+        public static partial void LogConnected(ILogger logger, string channelId);
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "PluginChannel connected: {ChannelId}")]
-    private partial void LogConnected(string channelId);
+        [LoggerMessage(Level = LogLevel.Information, Message = "PluginChannel disconnected: {ChannelId}")]
+        public static partial void LogDisconnected(ILogger logger, string channelId);
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "PluginChannel disconnected: {ChannelId}")]
-    private partial void LogDisconnected(string channelId);
-
-    [LoggerMessage(Level = LogLevel.Warning, Message = "PluginChannel {ChannelId}: send attempted for message {MessageId} but no outbound sink is attached.")]
-    private partial void LogSendWithoutSink(string channelId, string messageId);
+        [LoggerMessage(Level = LogLevel.Warning, Message = "PluginChannel {ChannelId}: send attempted for message {MessageId} but no outbound sink is attached.")]
+        public static partial void LogSendWithoutSink(ILogger logger, string channelId, string messageId);
+    }
 }

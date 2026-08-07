@@ -127,9 +127,18 @@ public sealed class ConnectorPairingEndToEndTests
             new ConnectorSettingsConfig { Enabled = true, MaxConnectors = 16 },
             registry ?? CreateSessionRegistry(),
             NullLoggerFactory.Instance,
-            TimeProvider.System);
+            TimeProvider.System,
+            CreateAbortDispatcher());
 
         return (session, transport);
+    }
+
+    private static IConnectorAbortDispatcher CreateAbortDispatcher()
+    {
+        var abortDispatcher = Substitute.For<IConnectorAbortDispatcher>();
+        abortDispatcher.AbortAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+        return abortDispatcher;
     }
 
     private static ConnectorPairingService BuildPairingService(ConnectorTokenStore tokenStore) =>

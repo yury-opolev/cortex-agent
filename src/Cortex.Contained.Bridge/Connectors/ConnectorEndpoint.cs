@@ -64,8 +64,9 @@ public static class ConnectorEndpoint
             var registry = context.RequestServices.GetRequiredService<IConnectorRegistry>();
             var loggerFactory = context.RequestServices.GetRequiredService<ILoggerFactory>();
             var timeProvider = context.RequestServices.GetRequiredService<TimeProvider>();
+            var abortDispatcher = context.RequestServices.GetRequiredService<IConnectorAbortDispatcher>();
 
-            var session = new ConnectorSession(transport, authenticator, settings, registry, loggerFactory, timeProvider);
+            var session = new ConnectorSession(transport, authenticator, settings, registry, loggerFactory, timeProvider, abortDispatcher);
             await session.RunAsync(context.RequestAborted).ConfigureAwait(false);
         }).AllowAnonymous();
     }

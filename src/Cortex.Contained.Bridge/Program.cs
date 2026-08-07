@@ -426,6 +426,10 @@ builder.Services.AddSingleton<ConnectorTokenStore>();
 builder.Services.AddSingleton<ConnectorPairingService>();
 builder.Services.AddSingleton<IConnectorAuthenticator>(sp => sp.GetRequiredService<ConnectorPairingService>());
 builder.Services.AddSingleton<IConnectorPairingCoordinator>(sp => sp.GetRequiredService<ConnectorPairingService>());
+builder.Services.AddSingleton<IConnectorAbortDispatcher>(sp =>
+    new TenantRouterConnectorAbortDispatcher(
+        sp.GetRequiredService<Cortex.Contained.Bridge.Tenants.TenantRouter>(),
+        sp.GetRequiredService<ILoggerFactory>().CreateLogger<TenantRouterConnectorAbortDispatcher>()));
 // TimeProvider is already registered below (line ~762); do not add a second instance.
 builder.Services.AddSingleton(sp =>
     new HubMessageDispatcher(

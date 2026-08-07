@@ -51,7 +51,11 @@ internal sealed class FakeConnectorTransport : IConnectorTransport
     }
 
     /// <inheritdoc/>
-    public Task CloseAsync(string reason, CancellationToken ct) => Task.CompletedTask;
+    public Task CloseAsync(string reason, CancellationToken ct)
+    {
+        this.incoming.Writer.TryWrite(null);
+        return Task.CompletedTask;
+    }
 
     /// <inheritdoc/>
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
