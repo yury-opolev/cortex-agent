@@ -193,6 +193,9 @@ internal static class BridgeSettingsWriter
         // MCP servers section (non-secret: secretRef ids + ${secret:id} tokens only)
         Cortex.Contained.Bridge.Mcp.McpConfigYamlWriter.AppendMcpSection(sb, config.Mcp);
 
+        // Connectors section (non-secret: connector tokens live in DPAPI, never in YAML)
+        Cortex.Contained.Bridge.Connectors.ConnectorConfigYamlWriter.AppendConnectorsSection(sb, config.Connectors);
+
         // Channels section (exclude secrets like BotToken — those live in DPAPI)
         if (config.Channels.Count > 0)
         {

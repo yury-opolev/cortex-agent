@@ -326,6 +326,44 @@ public class TransferSessionToolTests : IAsyncDisposable
         Assert.Contains("not currently active", result.Error);
     }
 
+    [Fact]
+    public async Task ExecuteAsync_PluginChannelTarget_ActiveChannel_ProceedsPastActiveCheck()
+    {
+        // Plugin channel ids must be accepted as valid targets when active.
+        // The tool will reject on "not enough history" (not "not currently active"),
+        // proving the catalog and active-channel check both passed.
+        this.activeChannelStore.Set(["webchat-default", "plugin:terminal:default"]);
+
+        var result = await this.tool.ExecuteAsync(
+            """{"target_channel":"plugin:terminal:default","user_confirmed":true}""",
+            Context,
+            CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.DoesNotContain("not currently active", result.Error ?? string.Empty);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ScheduledSourceChannel_StillRejectedAsNonTransferable()
+    {
+        // "scheduled" is a synthetic channel id — it must never be a valid transfer source
+        // even after plugin channel support was added to ChannelCatalog.
+        this.activeChannelStore.Set(["webchat-default", "voice-default"]);
+        var scheduledContext = new ToolExecutionContext
+        {
+            ConversationId = "scheduled",
+            ChannelId = "scheduled",
+        };
+
+        var result = await this.tool.ExecuteAsync(
+            """{"target_channel":"voice-default","user_confirmed":true}""",
+            scheduledContext,
+            CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Contains("not a transferable conversation", result.Error);
+    }
+
     private void SeedSourceHistory(int userTurns)
     {
         var session = this.sessionStore.GetOrCreate(Context.ConversationId);

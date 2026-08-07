@@ -3,6 +3,9 @@ using System.Threading.RateLimiting;
 using Cortex.Contained.Bridge;
 using Cortex.Contained.Bridge.Auth;
 using Cortex.Contained.Bridge.Channels;
+using Cortex.Contained.Bridge.Connectors;
+using Cortex.Contained.Bridge.Connectors.Pairing;
+using Cortex.Contained.Bridge.Connectors.Security;
 using Cortex.Contained.Bridge.Hub;
 using Cortex.Contained.Bridge.Logging;
 using Cortex.Contained.Bridge.Security;
@@ -413,6 +416,27 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<Cortex.Contained.B
 
 // --- Channel Services ---
 builder.Services.AddSingleton<ChannelManager>();
+
+// --- Connector Plugin System ---
+builder.Services.AddSingleton<ConnectorHost>();
+builder.Services.AddSingleton<IConnectorRegistry>(sp => sp.GetRequiredService<ConnectorHost>());
+// SecretManager is created manually before the container is built; wrap it in a factory lambda.
+builder.Services.AddSingleton<IConnectorSecretStore>(_ => new SecretManagerConnectorSecretStore(secretManager));
+builder.Services.AddSingleton<ConnectorTokenStore>();
+builder.Services.AddSingleton<ConnectorPairingService>();
+builder.Services.AddSingleton<IConnectorAuthenticator>(sp => sp.GetRequiredService<ConnectorPairingService>());
+builder.Services.AddSingleton<IConnectorPairingCoordinator>(sp => sp.GetRequiredService<ConnectorPairingService>());
+builder.Services.AddSingleton<IConnectorAbortDispatcher>(sp =>
+    new TenantRouterConnectorAbortDispatcher(
+        sp.GetRequiredService<Cortex.Contained.Bridge.Tenants.TenantRouter>(),
+        sp.GetRequiredService<ILoggerFactory>().CreateLogger<TenantRouterConnectorAbortDispatcher>()));
+// TenantRouter and BridgeConfig are not registered in the container; resolve from outer scope via factory lambda.
+builder.Services.AddSingleton<Cortex.Contained.Bridge.Connectors.Replay.IConnectorReplaySource>(sp =>
+    new Cortex.Contained.Bridge.Connectors.Replay.HubHistoryConnectorReplaySource(
+        sp.GetRequiredService<Cortex.Contained.Bridge.Tenants.TenantRouter>(),
+        sp.GetRequiredService<BridgeConfig>(),
+        sp.GetRequiredService<ILoggerFactory>().CreateLogger<Cortex.Contained.Bridge.Connectors.Replay.HubHistoryConnectorReplaySource>()));
+// TimeProvider is already registered below (line ~762); do not add a second instance.
 builder.Services.AddSingleton(sp =>
     new HubMessageDispatcher(
         sp.GetRequiredService<ChannelManager>(),
@@ -936,6 +960,11 @@ builder.Services.AddSingleton<Cortex.Contained.Bridge.Mcp.McpConfigStore>(sp =>
         sp.GetRequiredService<BridgeConfig>(),
         cortexConfigPath,
         sp.GetRequiredService<ILogger<Cortex.Contained.Bridge.Mcp.McpConfigStore>>()));
+builder.Services.AddSingleton<Cortex.Contained.Bridge.Connectors.ConnectorConfigStore>(sp =>
+    new Cortex.Contained.Bridge.Connectors.ConnectorConfigStore(
+        sp.GetRequiredService<BridgeConfig>(),
+        cortexConfigPath,
+        sp.GetRequiredService<ILogger<Cortex.Contained.Bridge.Connectors.ConnectorConfigStore>>()));
 builder.Services.AddSingleton<Cortex.Contained.Bridge.Mcp.McpCatalogPusher>(sp =>
     new Cortex.Contained.Bridge.Mcp.McpCatalogPusher(
         sp.GetRequiredService<TenantRouter>(),
@@ -1087,6 +1116,7 @@ _ = modelCatalog.InitializeAsync(); // Fire-and-forget; data will be ready befor
 
 // --- Middleware Pipeline ---
 app.UseRateLimiter();
+app.UseWebSockets();
 
 // --- Health endpoint (unauthenticated) ---
 app.MapHealthEndpoints();
@@ -1121,6 +1151,12 @@ app.MapSpeechEndpoints(cortexConfigPath);
 
 // --- Memory Management API ---
 app.MapMemoryEndpoints(cortexConfigPath);
+
+// --- Connector Plugin System endpoint (loopback-only, no WebUI dependency) ---
+app.MapConnectorEndpoint();
+
+// --- Connector management API (list/approve/deny/enable/revoke/master toggle) ---
+app.MapConnectorEndpoints();
 
 // --- MCP server management API ---
 app.MapMcpEndpoints();

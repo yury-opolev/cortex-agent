@@ -1,3 +1,5 @@
+using Cortex.Contained.Contracts.Channels;
+
 namespace Cortex.Contained.Agent.Host.Tools;
 
 /// <summary>
@@ -17,10 +19,15 @@ internal sealed record ChannelDescriptor(
 /// here; previously the same channel set was hand-maintained across six separate tables
 /// (the resolve switch, the alias array, the valid-names list, ToFriendlyName,
 /// ToDisplayName, and PromptAssembler's label switch).
+///
+/// Plugin (connector) channels are unbounded and dynamic, so they are NOT in
+/// <see cref="All"/>. Instead, <see cref="ResolveCanonical"/> and
+/// <see cref="ByCanonicalId"/> synthesise descriptors on demand for any id that
+/// passes <see cref="PluginChannelId.IsPluginChannelId"/>.
 /// </summary>
 internal static class ChannelCatalog
 {
-    /// <summary>All known channels, in canonical declaration order.</summary>
+    /// <summary>All known first-party channels, in canonical declaration order.</summary>
     public static readonly IReadOnlyList<ChannelDescriptor> All =
     [
         new("discord-dm", FriendlyName: "discord", DisplayName: "Discord",
@@ -46,11 +53,53 @@ internal static class ChannelCatalog
     public static IEnumerable<(string Alias, string CanonicalId)> AliasPairs =>
         All.SelectMany(channel => channel.Aliases.Select(alias => (alias, channel.CanonicalId)));
 
-    /// <summary>Resolve an input alias (case-insensitive) to a canonical id, or null if unknown.</summary>
-    public static string? ResolveCanonical(string alias) =>
-        aliasToCanonical.TryGetValue(alias, out var canonicalId) ? canonicalId : null;
+    /// <summary>
+    /// Resolve an input alias (case-insensitive) to a canonical id, or null if unknown.
+    /// A valid plugin channel id (e.g. <c>plugin:terminal:default</c>) is its own
+    /// canonical id and is returned unchanged.
+    /// </summary>
+    public static string? ResolveCanonical(string alias)
+    {
+        if (aliasToCanonical.TryGetValue(alias, out var canonicalId))
+        {
+            return canonicalId;
+        }
 
-    /// <summary>Look up a channel by its canonical id, or null if unknown.</summary>
-    public static ChannelDescriptor? ByCanonicalId(string? canonicalId) =>
-        canonicalId is not null && byCanonicalId.TryGetValue(canonicalId, out var descriptor) ? descriptor : null;
+        if (PluginChannelId.IsPluginChannelId(alias))
+        {
+            return alias;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Look up a channel by its canonical id, or null if unknown.
+    /// For a valid plugin channel id a descriptor is synthesised on demand —
+    /// plugin channels are not in <see cref="All"/> because they are unbounded.
+    /// </summary>
+    public static ChannelDescriptor? ByCanonicalId(string? canonicalId)
+    {
+        if (canonicalId is null)
+        {
+            return null;
+        }
+
+        if (byCanonicalId.TryGetValue(canonicalId, out var descriptor))
+        {
+            return descriptor;
+        }
+
+        if (PluginChannelId.TryParse(canonicalId, out var key, out _))
+        {
+            return new ChannelDescriptor(
+                CanonicalId: canonicalId,
+                FriendlyName: canonicalId,
+                DisplayName: $"Connector ({key})",
+                PromptLabel: $"the {key} connector",
+                Aliases: [canonicalId]);
+        }
+
+        return null;
+    }
 }
