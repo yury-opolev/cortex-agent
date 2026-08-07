@@ -70,6 +70,47 @@ public sealed partial class ChannelManager : IAsyncDisposable
     }
 
     /// <summary>
+    /// Remove a channel and every alias pointing at it by reference. Returns true when a
+    /// primary registration was removed.
+    /// </summary>
+    /// <param name="channelId">The primary channel id to remove.</param>
+    /// <remarks>
+    /// The caller is responsible for disconnecting and disposing the channel.
+    /// Event subscriptions made in <see cref="RegisterChannel"/> are not removed here
+    /// because the lambdas capture the channel by reference; dispose the channel to stop
+    /// its events from propagating.
+    /// </remarks>
+    public bool UnregisterChannel(string channelId)
+    {
+        bool removed;
+        lock (this.syncLock)
+        {
+            removed = this.channels.TryGetValue(channelId, out var channel)
+                      && this.channels.Remove(channelId);
+
+            if (removed && channel is not null)
+            {
+                var aliasesToRemove = this.channelAliases
+                    .Where(kv => ReferenceEquals(kv.Value, channel))
+                    .Select(kv => kv.Key)
+                    .ToList();
+
+                foreach (var alias in aliasesToRemove)
+                {
+                    this.channelAliases.Remove(alias);
+                }
+            }
+        }
+
+        if (removed)
+        {
+            this.LogChannelUnregistered(channelId);
+        }
+
+        return removed;
+    }
+
+    /// <summary>
     /// Connect all registered channels.
     /// </summary>
     public async Task ConnectAllAsync(CancellationToken ct)
@@ -202,6 +243,9 @@ public sealed partial class ChannelManager : IAsyncDisposable
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Channel registered: {ChannelId} (type={ChannelType})")]
     private partial void LogChannelRegistered(string channelId, ChannelType channelType);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Channel unregistered: {ChannelId}")]
+    private partial void LogChannelUnregistered(string channelId);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Channel alias registered: {Alias} -> {PrimaryChannelId}")]
     private partial void LogChannelAliasRegistered(string alias, string primaryChannelId);

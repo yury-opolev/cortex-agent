@@ -9,6 +9,7 @@ public enum ChannelType
     Voice = 4,
     Discord = 5,
     CloudMessaging = 6,
+    Plugin = 7,         // real identity carried by ChannelId
 }
 
 /// <summary>Connection status of a channel.</summary>

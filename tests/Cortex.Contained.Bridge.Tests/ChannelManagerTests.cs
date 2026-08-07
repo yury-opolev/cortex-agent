@@ -251,6 +251,53 @@ public class ChannelManagerTests : IAsyncDisposable
         Assert.Equal("Initial connection", receivedChange.Reason);
     }
 
+    // ── UnregisterChannel ─────────────────────────────────────────────────
+
+    [Fact]
+    public void UnregisterChannel_RemovesFromTryGetChannel()
+    {
+        var channel = CreateMockChannel("ch-1");
+        _manager.RegisterChannel(channel);
+
+        var removed = _manager.UnregisterChannel("ch-1");
+
+        Assert.True(removed);
+        Assert.False(_manager.TryGetChannel("ch-1", out _));
+    }
+
+    [Fact]
+    public void UnregisterChannel_RemovesFromGetAllChannels()
+    {
+        var channel = CreateMockChannel("ch-1");
+        _manager.RegisterChannel(channel);
+
+        _manager.UnregisterChannel("ch-1");
+
+        Assert.Empty(_manager.GetAllChannels());
+    }
+
+    [Fact]
+    public void UnregisterChannel_RemovesAliasesPointingAtChannel()
+    {
+        var channel = CreateMockChannel("ch-1");
+        _manager.RegisterChannel(channel);
+        _manager.RegisterChannelAlias("alias-a", channel);
+        _manager.RegisterChannelAlias("alias-b", channel);
+
+        _manager.UnregisterChannel("ch-1");
+
+        Assert.False(_manager.TryGetChannel("alias-a", out _));
+        Assert.False(_manager.TryGetChannel("alias-b", out _));
+    }
+
+    [Fact]
+    public void UnregisterChannel_UnknownId_ReturnsFalse()
+    {
+        var result = _manager.UnregisterChannel("does-not-exist");
+
+        Assert.False(result);
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────
 
     private static IChannel CreateMockChannel(

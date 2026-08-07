@@ -3,6 +3,7 @@ using System.Threading.RateLimiting;
 using Cortex.Contained.Bridge;
 using Cortex.Contained.Bridge.Auth;
 using Cortex.Contained.Bridge.Channels;
+using Cortex.Contained.Bridge.Connectors;
 using Cortex.Contained.Bridge.Hub;
 using Cortex.Contained.Bridge.Logging;
 using Cortex.Contained.Bridge.Security;
@@ -413,6 +414,12 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<Cortex.Contained.B
 
 // --- Channel Services ---
 builder.Services.AddSingleton<ChannelManager>();
+
+// --- Connector Plugin System ---
+builder.Services.AddSingleton<ConnectorHost>();
+builder.Services.AddSingleton<IConnectorRegistry>(sp => sp.GetRequiredService<ConnectorHost>());
+builder.Services.AddSingleton<IConnectorAuthenticator, AutoApproveConnectorAuthenticator>();
+// TimeProvider is already registered below (line ~762); do not add a second instance.
 builder.Services.AddSingleton(sp =>
     new HubMessageDispatcher(
         sp.GetRequiredService<ChannelManager>(),
@@ -1087,6 +1094,7 @@ _ = modelCatalog.InitializeAsync(); // Fire-and-forget; data will be ready befor
 
 // --- Middleware Pipeline ---
 app.UseRateLimiter();
+app.UseWebSockets();
 
 // --- Health endpoint (unauthenticated) ---
 app.MapHealthEndpoints();
@@ -1121,6 +1129,9 @@ app.MapSpeechEndpoints(cortexConfigPath);
 
 // --- Memory Management API ---
 app.MapMemoryEndpoints(cortexConfigPath);
+
+// --- Connector Plugin System endpoint (loopback-only, no WebUI dependency) ---
+app.MapConnectorEndpoint();
 
 // --- MCP server management API ---
 app.MapMcpEndpoints();

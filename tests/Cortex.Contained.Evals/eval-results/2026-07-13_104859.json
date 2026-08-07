@@ -1,0 +1,11 @@
+{
+  "timestamp": "2026-07-13T10:48:59.475153+00:00",
+  "summary": {
+    "totalScenarios": 0,
+    "passed": 0,
+    "failed": 0,
+    "totalLlmCalls": 0,
+    "totalDurationMs": 0
+  },
+  "scenarios": []
+}

@@ -52,6 +52,9 @@ public sealed class BridgeConfig
 
     /// <summary>MCP plugin-system settings (master switch + configured servers).</summary>
     public McpSettingsConfig Mcp { get; set; } = new();
+
+    /// <summary>Connector plugin-system settings.</summary>
+    public ConnectorSettingsConfig Connectors { get; set; } = new();
 }
 
 /// <summary>Memory service settings persisted on the Bridge host.</summary>
