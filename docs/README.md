@@ -12,3 +12,5 @@
 | [Memory Recall And Bounded Growth Investigation](research/2026-04-08-memory-recall-and-bounded-growth-investigation.md) | Research focused on current-fact recall reliability and keeping memory maintenance bounded as the store grows |
 | [Memory Collection Maintenance Patterns](research/2026-04-08-memory-collection-maintenance-patterns.md) | Investigation of how public teams and products maintain memory collections for personal and enterprise agents |
 | [Graph Memory And Atomic Fact Investigation](research/2026-04-08-graph-memory-and-atomic-fact-investigation.md) | Research on graph databases for agent memory, current maintenance behavior, and splitting composite memories into atomic facts |
+| [MCP Plugin System](mcp-plugin-system.md) | How the Bridge hosts third-party MCP servers and proxies their tools to the agent, credential-free |
+| [Connector Plugin System](connector-plugin-system.md) | How third-party channels (connectors) integrate with Cortex over a WebSocket protocol, out of tree, in any language |

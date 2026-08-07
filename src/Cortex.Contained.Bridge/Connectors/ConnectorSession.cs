@@ -441,8 +441,12 @@ public sealed partial class ConnectorSession : IAsyncDisposable
         if (!this.OwnsConversation(conversationId))
         {
             this.LogAbortRejected(channelId, conversationId);
+
+            // invalid_payload rather than protocol_violation: this is recoverable and the
+            // session continues, and every protocol_violation the Bridge sends is fatal.
+            // Keeping that split clean matters because connector authors key off it.
             await this.SendErrorFrameAsync(
-                ConnectorErrorCodes.ProtocolViolation,
+                ConnectorErrorCodes.InvalidPayload,
                 "abort refers to a conversation this connector does not own",
                 ct).ConfigureAwait(false);
             return;

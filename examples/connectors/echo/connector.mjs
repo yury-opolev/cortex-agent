@@ -1,0 +1,363 @@
+/**
+ * Echo Connector — minimal Cortex connector example.
+ *
+ * Connects to the Cortex Bridge WebSocket endpoint, completes the pairing flow
+ * on first run, then echoes every line typed on stdin back to Cortex as an
+ * inbound message.  Outbound (agent) replies are printed to stdout.
+ *
+ * Zero dependencies — uses the global WebSocket available in Node 22+.
+ *
+ * Protocol reference: docs/connector-plugin-system.md
+ */
+
+import { createInterface } from "node:readline";
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+
+// ── Configuration ────────────────────────────────────────────────────────────
+
+const BRIDGE_URL = "ws://127.0.0.1:5080/connector";
+
+// The connector's unique type key.  Must be [a-z0-9_-], 1–64 chars.
+const KEY = "echo";
+
+// The instance identifier — allows one key to run multiple channels.
+// Defaults to "default" when omitted in hello.
+const INSTANCE_ID = "default";
+
+// Capabilities advertised to the Bridge in the hello frame.
+const CAPABILITIES = {
+  streaming: true,        // receive stream + typing frames
+  richText: true,         // we'll render Markdown as plain text
+  media: false,           // media is accepted but not honoured in v1
+  maxMessageLength: 100000,
+};
+
+// Reconnect backoff: starts at 2 s, doubles each attempt, caps at 60 s.
+const BACKOFF_INITIAL_MS = 2_000;
+const BACKOFF_MAX_MS = 60_000;
+
+// ── Persistent state (token.json next to this file) ─────────────────────────
+
+const __dir = dirname(fileURLToPath(import.meta.url));
+const STATE_FILE = join(__dir, "token.json");
+
+function loadState() {
+  try {
+    if (existsSync(STATE_FILE)) {
+      return JSON.parse(readFileSync(STATE_FILE, "utf8"));
+    }
+  } catch {
+    // Ignore — treat as first run.
+  }
+  return {};
+}
+
+function saveState(state) {
+  writeFileSync(STATE_FILE, JSON.stringify(state, null, 2), "utf8");
+}
+
+// ── Frame helpers ─────────────────────────────────────────────────────────────
+
+/**
+ * Serialise a frame to JSON.  The wire format is always:
+ *   { "type": "...", "payload": { ... } }
+ */
+function makeFrame(type, payload = {}) {
+  return JSON.stringify({ type, payload });
+}
+
+// ── Main loop ────────────────────────────────────────────────────────────────
+
+let backoffMs = BACKOFF_INITIAL_MS;
+
+// Shared readline interface so we only create it once across reconnects.
+const rl = createInterface({
+  input: process.stdin,
+  terminal: false,
+});
+
+// Accumulate stdin lines while not yet in steady state (before "ready").
+let pendingLines = [];
+let sendLine = null; // set once steady state is reached
+
+rl.on("line", (line) => {
+  if (sendLine) {
+    sendLine(line);
+  } else {
+    pendingLines.push(line);
+  }
+});
+
+async function connect() {
+  const state = loadState();
+
+  console.log(`\n[echo] Connecting to ${BRIDGE_URL} …`);
+
+  let ws;
+  try {
+    ws = new WebSocket(BRIDGE_URL);
+  } catch (err) {
+    console.error(`[echo] Failed to create WebSocket: ${err.message}`);
+    scheduleReconnect();
+    return;
+  }
+
+  // Whether pairing was explicitly denied — do not reconnect in that case.
+  let pairingDenied = false;
+
+  // Track the streaming text for the current turn so we can print deltas inline.
+  let streamingConversation = null;
+
+  ws.addEventListener("open", () => {
+    backoffMs = BACKOFF_INITIAL_MS; // reset backoff on successful connect
+
+    // ── Protocol step 1: send hello ───────────────────────────────────────
+    // The hello frame must be sent within 10 seconds of connecting.
+    const hello = {
+      key: KEY,
+      instanceId: INSTANCE_ID,
+      displayName: "Echo Connector",
+      version: "1.0.0",
+    };
+
+    // If we have a saved token, include it — this skips the pairing flow.
+    if (state.token) {
+      hello.token = state.token;
+    }
+
+    // If we have a saved cursor, include it — this triggers replay of missed messages.
+    if (state.cursor) {
+      hello.sinceCursor = state.cursor;
+    }
+
+    hello.capabilities = CAPABILITIES;
+
+    ws.send(makeFrame("hello", hello));
+    console.log("[echo] hello sent");
+  });
+
+  ws.addEventListener("message", ({ data }) => {
+    let frame;
+    try {
+      frame = JSON.parse(data);
+    } catch {
+      console.error("[echo] Received non-JSON frame — ignoring.");
+      return;
+    }
+
+    const { type, payload = {} } = frame;
+
+    switch (type) {
+      // ── Protocol step 2a: pairing required (first run) ──────────────────
+      case "pairing_required": {
+        const { code, expiresAt } = payload;
+        const expiry = new Date(expiresAt).toLocaleTimeString();
+        console.log("\n" + "=".repeat(60));
+        console.log("  PAIRING REQUIRED");
+        console.log(`  Code: ${code}`);
+        console.log(`  Expires at: ${expiry}`);
+        console.log("  Go to Cortex → Global Settings → Connectors");
+        console.log("  and approve the request with the matching code.");
+        console.log("=".repeat(60) + "\n");
+        // The Bridge will send "paired" (or "pairing_denied") once the human acts.
+        break;
+      }
+
+      // ── Protocol step 2b: pairing approved ──────────────────────────────
+      case "paired": {
+        const { token, channelId } = payload;
+        state.token = token;
+        state.channelId = channelId;
+        saveState(state);
+        console.log(`[echo] Paired!  Channel id: ${channelId}`);
+        console.log("[echo] Token saved to token.json");
+        // "ready" will arrive immediately after "paired".
+        break;
+      }
+
+      // ── Protocol step 2c: pairing denied ────────────────────────────────
+      case "pairing_denied": {
+        const { reason } = payload;
+        console.error(`[echo] Pairing denied: ${reason}`);
+        if (reason === "pairing_rate_limited") {
+          console.error("[echo] Too many pairing attempts.  Wait 10 minutes.");
+        }
+        pairingDenied = true;
+        ws.close();
+        break;
+      }
+
+      // ── Protocol step 3: ready — entering steady state ──────────────────
+      case "ready": {
+        const { channelId, replayCount } = payload;
+        console.log(`[echo] Ready on channel ${channelId}`);
+        if (replayCount > 0) {
+          console.log(`[echo] ${replayCount} missed message(s) will be replayed.`);
+        }
+        // Flush lines typed before we were ready.
+        sendLine = (line) => sendInbound(ws, line, state);
+        for (const line of pendingLines) {
+          sendLine(line);
+        }
+        pendingLines = [];
+        console.log('[echo] Type a message and press Enter.  Type "/abort" to cancel.');
+        break;
+      }
+
+      // ── Steady state: typing indicator ───────────────────────────────────
+      case "typing": {
+        process.stdout.write("\r[echo] Agent is typing…        \r");
+        break;
+      }
+
+      // ── Steady state: streaming delta ─────────────────────────────────────
+      case "stream": {
+        const { conversationId, delta } = payload;
+        if (streamingConversation !== conversationId) {
+          if (streamingConversation !== null) {
+            process.stdout.write("\n"); // end previous response line
+          }
+          process.stdout.write("[agent] ");
+          streamingConversation = conversationId;
+        }
+        process.stdout.write(delta);
+        break;
+      }
+
+      // ── Steady state: final agent response (also replay frames) ──────────
+      case "outbound": {
+        const { conversationId, messageId, content, isThinking, cursor } = payload;
+
+        if (streamingConversation === conversationId) {
+          // The streaming deltas already printed the content; just end the line.
+          process.stdout.write("\n");
+          streamingConversation = null;
+        } else {
+          // Non-streaming or replay frame — print full content.
+          const label = isThinking ? "[thinking]" : "[agent]";
+          console.log(`${label} ${content?.text ?? ""}`);
+        }
+
+        // ── Critical: save the cursor so we can replay on next connect ────
+        if (cursor) {
+          state.cursor = cursor;
+          saveState(state);
+        }
+        break;
+      }
+
+      // ── Liveness: reply to ping with pong ────────────────────────────────
+      case "ping": {
+        ws.send(makeFrame("pong"));
+        break;
+      }
+
+      // ── Error frames ──────────────────────────────────────────────────────
+      case "error": {
+        const { code, message } = payload;
+        const fatal = isFatalError(code);
+        console.error(`[echo] ${fatal ? "FATAL " : ""}error: ${code} — ${message}`);
+        if (fatal) {
+          // Fatal errors: Bridge will close the socket.  We just log and let
+          // the "close" event handle reconnection (or not).
+        }
+        // Recoverable errors (rate_limited, message_too_long, invalid_payload):
+        // session remains open — do nothing special.
+        break;
+      }
+
+      default:
+        // Unknown frame types from the Bridge are unexpected but harmless — log and ignore.
+        console.warn(`[echo] Unknown frame type from Bridge: ${type}`);
+        break;
+    }
+  });
+
+  // Track whether reconnect has already been scheduled so we never double-schedule.
+  // Note: Node.js 22's built-in WebSocket fires "error" but NOT "close" on a
+  // connection failure (this differs from browser behaviour where close always follows
+  // error).  We therefore schedule reconnects from both handlers, guarded by this flag.
+  let reconnectScheduled = false;
+
+  ws.addEventListener("error", (evt) => {
+    console.error(`[echo] WebSocket error: ${evt.message ?? "(no message)"}`);
+    if (!pairingDenied && !reconnectScheduled) {
+      reconnectScheduled = true;
+      scheduleReconnect();
+    }
+  });
+
+  ws.addEventListener("close", ({ code, reason }) => {
+    sendLine = null; // block stdin until reconnected
+    streamingConversation = null;
+
+    if (pairingDenied) {
+      console.error("[echo] Not reconnecting after pairing denial.");
+      process.exit(1);
+    }
+
+    console.log(`[echo] Connection closed (code ${code}): ${reason || "(no reason)"}`);
+    if (!reconnectScheduled) {
+      reconnectScheduled = true;
+      scheduleReconnect();
+    }
+  });
+}
+
+/** Returns true when the error code causes the Bridge to close the socket. */
+function isFatalError(code) {
+  const fatal = new Set([
+    "malformed_frame",
+    "unknown_frame_type",
+    "protocol_violation",
+    "frame_too_large",
+    "not_paired",
+    "connector_limit_reached",
+    "duplicate_connector",
+    "connectors_disabled",
+  ]);
+  return fatal.has(code);
+}
+
+/**
+ * Send an inbound message or handle the /abort command.
+ * Called for each line from stdin once steady state is reached.
+ */
+function sendInbound(ws, line, state) {
+  if (ws.readyState !== WebSocket.OPEN) {
+    return;
+  }
+
+  // "/abort" line sends an abort frame for the default conversation.
+  if (line.trim() === "/abort") {
+    const conversationId = state.channelId ?? undefined;
+    ws.send(makeFrame("abort", conversationId ? { conversationId } : {}));
+    console.log("[echo] abort sent");
+    return;
+  }
+
+  if (!line.trim()) {
+    return; // ignore blank lines
+  }
+
+  ws.send(makeFrame("inbound", {
+    content: {
+      text: line,
+      isMarkdown: false,
+    },
+  }));
+}
+
+/** Schedule a reconnect attempt with exponential backoff. */
+function scheduleReconnect() {
+  const delay = backoffMs;
+  backoffMs = Math.min(backoffMs * 2, BACKOFF_MAX_MS);
+  console.log(`[echo] Reconnecting in ${delay / 1000} s …`);
+  setTimeout(connect, delay);
+}
+
+// ── Entry point ──────────────────────────────────────────────────────────────
+
+connect();

@@ -489,7 +489,7 @@ public sealed class ConnectorSessionTests
             Arg.Any<string>(),
             Arg.Any<string>(),
             Arg.Any<CancellationToken>());
-        Assert.Contains(transport.Sent, f => f.Contains("protocol_violation"));
+        Assert.Contains(transport.Sent, f => f.Contains("invalid_payload"));
     }
 
     [Fact]
