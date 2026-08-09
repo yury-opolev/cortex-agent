@@ -189,6 +189,29 @@ public sealed class AgentHubSubagentReadinessTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task BridgeDisconnectsMidDispatchPass_NewlyQueuedWorkIsNotClaimed()
+    {
+        // A dispatch pass drains the queue in a loop. If readiness were sampled only on entry,
+        // a Bridge disconnect part-way through the pass would not stop it, and work queued after
+        // the gate closed would still be claimed — the exact state the gate exists to prevent.
+        await ConnectAndMarkAllReadyAsync();
+
+        // Fill every slot so the pass is still inside its claim loop when the gate closes.
+        SeedQueued("sa-slot-1");
+        SeedQueued("sa-slot-2");
+        _coordinator.SignalWorkAvailable();
+        await WaitUntilAsync(() => _executor.CallCount == 2);
+
+        await _hub.OnDisconnectedAsync(null);
+
+        SeedQueued("sa-after-gate-closed");
+        _coordinator.SignalWorkAvailable();
+
+        await AssertNeverAsync(() => _executor.CallCount > 2);
+        Assert.Equal(SubagentTaskState.Queued, _store.GetById("sa-after-gate-closed")!.State);
+    }
+
+    [Fact]
     public async Task UpdateMcpToolCatalog_EmptyCatalog_MarksReady()
     {
         SeedQueued("sa-empty-catalog");
