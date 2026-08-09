@@ -1,3 +1,5 @@
+using System.Text;
+using Cortex.Contained.Bridge.Connectors.Media;
 using Cortex.Contained.Bridge.Connectors.Protocol;
 using Cortex.Contained.Bridge.Connectors.Replay;
 using Cortex.Contained.Contracts.Channels;
@@ -39,6 +41,19 @@ public sealed partial class ConnectorSession : IAsyncDisposable
     /// <remarks>Truncate on excess — display names are cosmetic and safe to shorten.</remarks>
     internal const int MaxDisplayNameLength = 256;
 
+    /// <summary>
+    /// Bytes held back from the outbound frame budget after the envelope has been measured.
+    /// Covers the JSON structure the attachment array itself adds (the field name, brackets and
+    /// separators) plus slack for any estimate being marginally optimistic.
+    /// </summary>
+    /// <remarks>
+    /// Exceeding the frame cap outbound is not fatal — <see cref="WebSocketConnectorTransport"/>
+    /// throws, the session survives, and the message is dropped with a logged error. That is
+    /// still a lost message, so the budget aims to make it unreachable rather than merely
+    /// survivable.
+    /// </remarks>
+    internal const int OutboundFrameSafetyMarginBytes = 4096;
+
     private static readonly TimeSpan RateLimitLogSuppression = TimeSpan.FromMinutes(1);
 
     private readonly IConnectorTransport transport;
@@ -51,6 +66,10 @@ public sealed partial class ConnectorSession : IAsyncDisposable
     private readonly IConnectorAbortDispatcher abortDispatcher;
     private readonly IConnectorReplaySource replaySource;
     private readonly ConnectorRateLimiter rateLimiter;
+    private readonly ConnectorMediaPolicy mediaPolicy;
+    private readonly ConnectorAttachmentValidator attachmentValidator;
+    private readonly ConnectorOutboundAttachmentProjector outboundAttachmentProjector;
+    private readonly IConnectorAttachmentResolver? attachmentResolver;
     private readonly Lock teardownLock = new();
     private readonly Lock conversationLock = new();
     private readonly HashSet<string> ownedConversations = new(StringComparer.Ordinal);
@@ -71,6 +90,22 @@ public sealed partial class ConnectorSession : IAsyncDisposable
     /// <summary>
     /// Initialises a new <see cref="ConnectorSession"/>.
     /// </summary>
+    /// <param name="transport">The connector's transport.</param>
+    /// <param name="authenticator">Pairing and token authentication.</param>
+    /// <param name="settings">Connector subsystem settings.</param>
+    /// <param name="registry">Registry the negotiated channel attaches to.</param>
+    /// <param name="loggerFactory">Logger factory.</param>
+    /// <param name="timeProvider">Time source for heartbeats, rate limiting and timestamps.</param>
+    /// <param name="abortDispatcher">Dispatcher for abort requests.</param>
+    /// <param name="replaySource">Source of missed messages on reattach.</param>
+    /// <param name="attachmentResolver">
+    /// Resolves attachment handles to bytes. Null means the Bridge is holding no uploaded
+    /// content, so every handle a connector presents is treated as unknown.
+    /// </param>
+    /// <param name="attachmentIssuer">
+    /// Issues handles for outbound attachments too large to inline. Null means oversized
+    /// outbound attachments are dropped rather than carried.
+    /// </param>
     public ConnectorSession(
         IConnectorTransport transport,
         IConnectorAuthenticator authenticator,
@@ -79,7 +114,9 @@ public sealed partial class ConnectorSession : IAsyncDisposable
         ILoggerFactory loggerFactory,
         TimeProvider timeProvider,
         IConnectorAbortDispatcher abortDispatcher,
-        IConnectorReplaySource replaySource)
+        IConnectorReplaySource replaySource,
+        IConnectorAttachmentResolver? attachmentResolver = null,
+        IConnectorAttachmentIssuer? attachmentIssuer = null)
     {
         this.transport = transport;
         this.authenticator = authenticator;
@@ -90,7 +127,11 @@ public sealed partial class ConnectorSession : IAsyncDisposable
         this.timeProvider = timeProvider;
         this.abortDispatcher = abortDispatcher;
         this.replaySource = replaySource;
+        this.attachmentResolver = attachmentResolver;
         this.rateLimiter = new ConnectorRateLimiter(settings.Limits.MaxMessagesPerMinute, timeProvider);
+        this.mediaPolicy = ConnectorMediaPolicy.From(settings.Media, settings.Limits.MaxFrameBytes);
+        this.attachmentValidator = new ConnectorAttachmentValidator(this.mediaPolicy);
+        this.outboundAttachmentProjector = new ConnectorOutboundAttachmentProjector(this.mediaPolicy, attachmentIssuer);
     }
 
     /// <summary>
@@ -257,7 +298,10 @@ public sealed partial class ConnectorSession : IAsyncDisposable
         {
             SupportsStreaming = caps?.Streaming ?? false,
             SupportsRichText = caps?.RichText ?? false,
-            SupportsMedia = false,
+
+            // The operator kill-switch beats the connector's own declaration: a connector can
+            // only opt IN to media, never enable it when policy has turned it off.
+            SupportsMedia = this.mediaPolicy.Enabled && (caps?.Media ?? false),
             MaxMessageLength = Math.Clamp(caps?.MaxMessageLength ?? 100_000, 1, 100_000),
         };
 
@@ -533,17 +577,19 @@ public sealed partial class ConnectorSession : IAsyncDisposable
         }
 
         var hasText = !string.IsNullOrWhiteSpace(payload!.Content?.Text);
-        if (!hasText)
+        var hasAttachments = payload.Content?.Attachments is { Count: > 0 };
+        if (!hasText && !hasAttachments)
         {
             await this.SendErrorFrameAsync(
                 ConnectorErrorCodes.InvalidPayload,
-                "Inbound message must have text content.",
+                "Inbound message must have text content or at least one attachment.",
                 ct).ConfigureAwait(false);
             return;
         }
 
-        // Enforce negotiated maximum message length.
-        var text = payload.Content!.Text!;
+        // Enforce negotiated maximum message length. An attachment-only message has no text,
+        // which is legal — the agent's own validator accepts it too.
+        var text = payload.Content?.Text ?? string.Empty;
         if (text.Length > this.Channel!.Capabilities.MaxMessageLength)
         {
             await this.SendErrorFrameAsync(ConnectorErrorCodes.MessageTooLong, "Message text exceeds the negotiated maximum length.", ct).ConfigureAwait(false);
@@ -575,6 +621,31 @@ public sealed partial class ConnectorSession : IAsyncDisposable
 
         var channelId = this.ChannelId!;
 
+        // Attachments are validated after the id checks so a malformed id is still the first
+        // thing reported, and before the message is built so nothing unvalidated can reach the
+        // agent. Every failure here is NON-FATAL: a bad attachment must not kill a live session.
+        var attachmentResult = this.attachmentValidator.Validate(
+            payload.Content?.Attachments,
+            this.Channel!.Capabilities.SupportsMedia);
+
+        if (!attachmentResult.Success)
+        {
+            await this.SendErrorFrameAsync(
+                attachmentResult.ErrorCode!,
+                attachmentResult.ErrorMessage!,
+                ct).ConfigureAwait(false);
+            return;
+        }
+
+        if (!this.TryMaterialiseAttachments(attachmentResult.Attachments, channelId, out var attachments))
+        {
+            await this.SendErrorFrameAsync(
+                ConnectorErrorCodes.AttachmentNotFound,
+                "An attachment handle is unknown, expired, or was issued to another channel.",
+                ct).ConfigureAwait(false);
+            return;
+        }
+
         // Truncate sender display name — cosmetic only, truncation is safe.
         var senderDisplayName = ConnectorText.Truncate(payload.Sender?.DisplayName, MaxDisplayNameLength);
 
@@ -598,6 +669,7 @@ public sealed partial class ConnectorSession : IAsyncDisposable
             {
                 Text = text,
                 IsMarkdown = payload.Content?.IsMarkdown ?? false,
+                Attachments = attachments,
             },
             Timestamp = this.timeProvider.GetUtcNow(),
         };
@@ -606,6 +678,77 @@ public sealed partial class ConnectorSession : IAsyncDisposable
         this.TrackConversation(message.ConversationId);
 
         await this.Channel!.ReceiveInboundAsync(message).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Converts validated attachments into <see cref="MediaAttachment"/>s, resolving any that
+    /// arrived as handles. Returns false when a handle cannot be resolved, so the caller can
+    /// refuse the whole message rather than silently deliver it with an attachment missing.
+    /// </summary>
+    private bool TryMaterialiseAttachments(
+        IReadOnlyList<ValidatedAttachment> validated,
+        string channelId,
+        out IReadOnlyList<MediaAttachment>? attachments)
+    {
+        attachments = null;
+
+        if (validated.Count == 0)
+        {
+            return true;
+        }
+
+        var materialised = new List<MediaAttachment>(validated.Count);
+
+        foreach (var attachment in validated)
+        {
+            var mimeType = attachment.MimeType;
+            var fileName = attachment.FileName;
+            var caption = attachment.Caption;
+            var data = attachment.Data;
+
+            if (data is null)
+            {
+                // Arrived as a handle. Without a resolver the Bridge is not holding any uploaded
+                // content, so the handle is by definition unknown.
+                var content = this.attachmentResolver?.Resolve(attachment.Handle!, channelId);
+                if (content is null)
+                {
+                    this.LogAttachmentHandleUnresolved(channelId);
+                    return false;
+                }
+
+                // Defence in depth. The store validated this content when it was uploaded, but
+                // policy can be NARROWED afterwards, and a store bug must not be the only thing
+                // standing between a connector and a disallowed type. Re-checking on read costs
+                // an allow-list lookup and a 12-byte signature comparison.
+                if (!this.mediaPolicy.IsMimeTypeAllowed(content.MimeType)
+                    || !ImageContentSniffer.MatchesDeclaredType(content.Data, content.MimeType))
+                {
+                    this.LogAttachmentHandleContentRejected(channelId);
+                    return false;
+                }
+
+                data = content.Data;
+                mimeType = content.MimeType;
+
+                // Frame-supplied metadata wins when present: the connector may caption an
+                // upload at send time rather than at upload time.
+                fileName ??= content.FileName;
+                caption ??= content.Caption;
+            }
+
+            materialised.Add(new MediaAttachment
+            {
+                MimeType = mimeType,
+                FileName = fileName,
+                Caption = caption,
+                Data = data,
+                SizeBytes = data.LongLength,
+            });
+        }
+
+        attachments = materialised;
+        return true;
     }
 
     private async Task<SendResult> OutboundSinkAsync(OutboundMessage message, CancellationToken ct)
@@ -617,7 +760,13 @@ public sealed partial class ConnectorSession : IAsyncDisposable
 
         try
         {
-            var payload = new ConnectorOutboundPayload
+            var cursor = ConnectorCursor.Format(message.Timestamp ?? this.timeProvider.GetUtcNow());
+
+            // Measure the frame WITHOUT attachments first. A fixed reserve cannot work here:
+            // message text alone may be up to MaxMessageLength characters, which dwarfs any
+            // constant we could pick. Budgeting from the real envelope is what makes
+            // "attachments never overflow the frame" true rather than merely likely.
+            var skeleton = new ConnectorOutboundPayload
             {
                 MessageId = message.MessageId,
                 ConversationId = message.ConversationId,
@@ -627,16 +776,62 @@ public sealed partial class ConnectorSession : IAsyncDisposable
                     IsMarkdown = message.Content.IsMarkdown,
                 },
                 IsThinking = message.IsThinking,
+                Cursor = cursor,
+            };
+
+            var envelopeBytes = Encoding.UTF8.GetByteCount(
+                ConnectorFrame.Serialize(ConnectorFrameTypes.Outbound, skeleton));
+
+            var inlineBudget = (int)Math.Clamp(
+                this.settings.Limits.MaxFrameBytes - envelopeBytes - OutboundFrameSafetyMarginBytes,
+                0,
+                int.MaxValue);
+
+            var attachmentProjection = this.outboundAttachmentProjector.Project(
+                message.Content.Attachments,
+                this.ChannelId ?? string.Empty,
+                this.Channel?.Capabilities.SupportsMedia ?? false,
+                inlineBudget);
+
+            if (attachmentProjection.DroppedCount > 0)
+            {
+                this.LogOutboundAttachmentsDropped(
+                    this.ChannelId ?? "?",
+                    attachmentProjection.DroppedCount,
+                    message.MessageId);
+            }
+
+            var payload = new ConnectorOutboundPayload
+            {
+                MessageId = message.MessageId,
+                ConversationId = message.ConversationId,
+                Content = new ConnectorContentPayload
+                {
+                    Text = message.Content.Text,
+                    IsMarkdown = message.Content.IsMarkdown,
+                    Attachments = attachmentProjection.Attachments,
+                },
+                IsThinking = message.IsThinking,
 
                 // The cursor MUST be the timestamp the agent recorded, not this process's
                 // clock: the connector sends it back as sinceCursor and replay compares it
                 // against stored timestamps. Using the send-time clock would silently skip
                 // any message persisted between the store write and this dispatch.
-                Cursor = ConnectorCursor.Format(message.Timestamp ?? this.timeProvider.GetUtcNow()),
+                Cursor = cursor,
             };
             var json = ConnectorFrame.Serialize(ConnectorFrameTypes.Outbound, payload);
             await this.transport.SendAsync(json, ct).ConfigureAwait(false);
             return SendResult.Ok(message.MessageId);
+        }
+        catch (ConnectorFrameTooLargeException ex)
+        {
+            // The attachment budget cannot prevent this on its own: a message whose TEXT alone
+            // exceeds the frame cap is already too large before any attachment is considered.
+            // The transport backstop caught it, so the session survives and only this message is
+            // lost — but it is lost silently from the connector's point of view, so say so
+            // clearly here rather than letting it look like a network fault.
+            this.LogOutboundFrameTooLarge(this.ChannelId ?? "?", message.MessageId, ex.MaxFrameBytes);
+            return SendResult.Error($"outbound frame exceeds the {ex.MaxFrameBytes}-byte limit");
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -868,6 +1063,36 @@ public sealed partial class ConnectorSession : IAsyncDisposable
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Connector {ChannelId} reached the tracked-conversation cap of {MaxTrackedConversations}; further conversations cannot be aborted by it.")]
     private partial void LogConversationCapReached(string channelId, int maxTrackedConversations);
+
+    /// <summary>
+    /// Logged without the handle value: a handle is a bearer capability, and the four reasons a
+    /// lookup fails (unknown, expired, consumed, wrong channel) are deliberately not distinguished
+    /// so the log cannot be used to confirm another connector's attachment exists.
+    /// </summary>
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Connector {ChannelId} referenced an attachment handle that could not be resolved; message rejected.")]
+    private partial void LogAttachmentHandleUnresolved(string channelId);
+
+    /// <summary>
+    /// Fires when stored content resolves but no longer satisfies the current media policy —
+    /// normally because the allow-list was narrowed after the upload, otherwise a store defect.
+    /// </summary>
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Connector {ChannelId} referenced stored attachment content that is not allowed by the current media policy; message rejected.")]
+    private partial void LogAttachmentHandleContentRejected(string channelId);
+
+    /// <summary>
+    /// Fires when the agent sent attachments that could not be delivered — the connector does not
+    /// support media, the type is not allowed, or the content is too large to inline with no
+    /// out-of-band channel available. The message itself is still delivered, minus the media.
+    /// </summary>
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Connector {ChannelId}: {DroppedCount} outbound attachment(s) on message {MessageId} could not be delivered and were dropped.")]
+    private partial void LogOutboundAttachmentsDropped(string channelId, int droppedCount, string messageId);
+
+    /// <summary>
+    /// Fires when a whole outbound message is too large for a frame, which after attachment
+    /// budgeting means its text alone overflows the cap. The session survives; the message does not.
+    /// </summary>
+    [LoggerMessage(Level = LogLevel.Error, Message = "Connector {ChannelId}: outbound message {MessageId} exceeds the {MaxFrameBytes}-byte frame limit and was NOT delivered. The session remains open.")]
+    private partial void LogOutboundFrameTooLarge(string channelId, string messageId, int maxFrameBytes);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Frame sink: transport is closed, dropping frame.")]
     private partial void LogFrameSinkTransportClosed();

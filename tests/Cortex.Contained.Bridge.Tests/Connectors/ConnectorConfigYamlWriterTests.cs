@@ -1,5 +1,6 @@
 using System.Text;
 using Cortex.Contained.Bridge.Connectors;
+using Cortex.Contained.Bridge.Connectors.Media;
 using Cortex.Contained.Bridge.Mcp;
 using Cortex.Contained.Contracts.Config;
 using Cortex.Contained.Contracts.Config.Yaml;
@@ -60,6 +61,98 @@ public sealed class ConnectorConfigYamlWriterTests
     }
 
     [Fact]
+    public void AppendConnectorsSection_WritesMediaFields()
+    {
+        var yaml = Write(new ConnectorSettingsConfig
+        {
+            Enabled = true,
+            Media = new ConnectorMediaConfig
+            {
+                Enabled = false,
+                MaxAttachmentsPerMessage = 2,
+                MaxAttachmentBytes = 1234,
+                MaxInlineBytes = 567,
+                HandleTtl = TimeSpan.FromMinutes(3),
+                MaxStoredBytesPerConnector = 999,
+                MaxUploadsPerMinute = 7,
+                AllowedMimeTypes = ["image/png", "image/webp"],
+            },
+        });
+
+        Assert.Contains("  media:", yaml, StringComparison.Ordinal);
+        Assert.Contains("    enabled: false", yaml, StringComparison.Ordinal);
+        Assert.Contains("    maxAttachmentsPerMessage: 2", yaml, StringComparison.Ordinal);
+        Assert.Contains("    maxAttachmentBytes: 1234", yaml, StringComparison.Ordinal);
+        Assert.Contains("    maxInlineBytes: 567", yaml, StringComparison.Ordinal);
+        Assert.Contains("    maxStoredBytesPerConnector: 999", yaml, StringComparison.Ordinal);
+        Assert.Contains("    maxUploadsPerMinute: 7", yaml, StringComparison.Ordinal);
+        Assert.Contains("      - image/png", yaml, StringComparison.Ordinal);
+        Assert.Contains("      - image/webp", yaml, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ConnectorMediaConfig_DefaultsMatchAgentAllowances()
+    {
+        var media = new ConnectorMediaConfig();
+
+        Assert.True(media.Enabled);
+        Assert.Equal(4, media.MaxAttachmentsPerMessage);
+        Assert.Equal(8L * 1024 * 1024, media.MaxAttachmentBytes);
+        Assert.Equal(256 * 1024, media.MaxInlineBytes);
+        Assert.Equal(TimeSpan.FromMinutes(10), media.HandleTtl);
+
+        // Empty by design: IConfiguration.Bind APPENDS to a seeded collection, so seeding the
+        // defaults here would make narrowing the allow-list from YAML impossible.
+        Assert.Empty(media.AllowedMimeTypes);
+        Assert.Equal(
+            ["image/png", "image/jpeg", "image/gif", "image/webp"],
+            ConnectorMediaConfig.DefaultAllowedMimeTypes);
+    }
+
+    [Fact]
+    public void AppendConnectorsSection_EmptyAllowedMimeTypes_RoundTripsAsDefaultsNotAsBlockEverything()
+    {
+        // Locks in the design decision: an unset allow-list must survive write -> read -> resolve
+        // as the four built-in image types. If the writer ever emits a bare `allowedMimeTypes:`
+        // key that binds to a non-null empty list, the policy would take the "operator configured
+        // something" branch and silently allow nothing.
+        var connectors = new ConnectorSettingsConfig
+        {
+            Enabled = true,
+            Media = new ConnectorMediaConfig { AllowedMimeTypes = [] },
+        };
+
+        var sb = new StringBuilder();
+        sb.AppendLine("agentHubUrl: http://127.0.0.1:5100/hub/agent");
+        ConnectorConfigYamlWriter.AppendConnectorsSection(sb, connectors);
+
+        var dir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Cortex",
+            "tests");
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, $"connector-cfg-{Guid.NewGuid():N}.yml");
+        File.WriteAllText(path, sb.ToString());
+
+        try
+        {
+            var configuration = new ConfigurationBuilder().AddYamlFile(path).Build();
+            var bound = new BridgeConfig();
+            configuration.Bind(bound);
+
+            var policy = ConnectorMediaPolicy.From(bound.Connectors.Media, bound.Connectors.Limits.MaxFrameBytes);
+
+            Assert.Equal(4, policy.AllowedMimeTypes.Count);
+            Assert.True(policy.IsMimeTypeAllowed("image/png"));
+            Assert.True(policy.IsMimeTypeAllowed("image/webp"));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void AppendConnectorsSection_DoesNotClobberOtherSections()
     {
         var mcp = new McpSettingsConfig { Enabled = true };
@@ -70,6 +163,17 @@ public sealed class ConnectorConfigYamlWriterTests
             MaxConnectors = 3,
             Replay = new ConnectorReplayConfig { MaxMessages = 11, MaxAge = TimeSpan.FromHours(5) },
             Limits = new ConnectorLimitsConfig { MaxFrameBytes = 4096, MaxMessagesPerMinute = 42 },
+            Media = new ConnectorMediaConfig
+            {
+                Enabled = true,
+                MaxAttachmentsPerMessage = 2,
+                MaxAttachmentBytes = 4321,
+                MaxInlineBytes = 765,
+                HandleTtl = TimeSpan.FromMinutes(2),
+                MaxStoredBytesPerConnector = 888,
+                MaxUploadsPerMinute = 9,
+                AllowedMimeTypes = ["image/png", "image/gif"],
+            },
         };
 
         var sb = new StringBuilder();
@@ -100,6 +204,15 @@ public sealed class ConnectorConfigYamlWriterTests
             Assert.Equal(TimeSpan.FromHours(5), bound.Connectors.Replay.MaxAge);
             Assert.Equal(4096, bound.Connectors.Limits.MaxFrameBytes);
             Assert.Equal(42, bound.Connectors.Limits.MaxMessagesPerMinute);
+
+            Assert.True(bound.Connectors.Media.Enabled);
+            Assert.Equal(2, bound.Connectors.Media.MaxAttachmentsPerMessage);
+            Assert.Equal(4321, bound.Connectors.Media.MaxAttachmentBytes);
+            Assert.Equal(765, bound.Connectors.Media.MaxInlineBytes);
+            Assert.Equal(TimeSpan.FromMinutes(2), bound.Connectors.Media.HandleTtl);
+            Assert.Equal(888, bound.Connectors.Media.MaxStoredBytesPerConnector);
+            Assert.Equal(9, bound.Connectors.Media.MaxUploadsPerMinute);
+            Assert.Equal(["image/png", "image/gif"], bound.Connectors.Media.AllowedMimeTypes);
         }
         finally
         {

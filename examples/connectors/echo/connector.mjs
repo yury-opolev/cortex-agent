@@ -11,13 +11,18 @@
  */
 
 import { createInterface } from "node:readline";
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 // ── Configuration ────────────────────────────────────────────────────────────
 
 const BRIDGE_URL = "ws://127.0.0.1:5080/connector";
+
+// Attachment transfer endpoints. Same host and port as the WebSocket; these are the only
+// /api/connectors/* routes that accept a connector token rather than the Web UI session.
+const ATTACHMENTS_URL = "http://127.0.0.1:5080/api/connectors/attachments";
+
 
 // The connector's unique type key.  Must be [a-z0-9_-], 1–64 chars.
 const KEY = "echo";
@@ -30,7 +35,7 @@ const INSTANCE_ID = "default";
 const CAPABILITIES = {
   streaming: true,        // receive stream + typing frames
   richText: true,         // we'll render Markdown as plain text
-  media: false,           // media is accepted but not honoured in v1
+  media: true,            // send and receive image attachments
   maxMessageLength: 100000,
 };
 
@@ -56,6 +61,9 @@ const BACKOFF_MAX_MS = 60_000;
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 const STATE_FILE = join(__dir, "token.json");
+
+// Received images are written here.
+const DOWNLOAD_DIR = join(__dir, "received");
 
 function loadState() {
   try {
@@ -123,6 +131,10 @@ async function connect() {
 
   // Track the streaming text for the current turn so we can print deltas inline.
   let streamingConversation = null;
+
+  // Tracks whether the handshake completed. The ready frame is what makes
+  // invalid_payload recoverable rather than fatal - see isFatalError.
+  let established = false;
 
   ws.addEventListener("open", () => {
     backoffMs = BACKOFF_INITIAL_MS; // reset backoff on successful connect
@@ -254,6 +266,21 @@ async function connect() {
           console.log(`${label} ${content?.text ?? ""}`);
         }
 
+        // ── Media: an attachment arrives either inline or as a handle ─────
+        // BOTH modes must be handled. The Bridge inlines what fits the frame
+        // and spills anything larger to a handle, so you cannot assume `data`.
+        for (const attachment of content?.attachments ?? []) {
+          if (attachment.data) {
+            const bytes = Buffer.from(attachment.data, "base64");
+            saveAttachment(attachment, bytes);
+          } else if (attachment.handle) {
+            // Handles are single-use and expire — fetch promptly, once.
+            fetchAttachment(attachment, state).catch((err) =>
+              console.error(`[echo] attachment fetch failed: ${err.message}`),
+            );
+          }
+        }
+
         // ── Critical: save the cursor so we can replay on next connect ────
         if (cursor) {
           state.cursor = cursor;
@@ -271,7 +298,7 @@ async function connect() {
       // ── Error frames ──────────────────────────────────────────────────────
       case "error": {
         const { code, message } = payload;
-        const fatal = isFatalError(code);
+        const fatal = isFatalError(code, established);
         console.error(`[echo] ${fatal ? "FATAL " : ""}error: ${code} — ${message}`);
         if (fatal) {
           // Fatal errors: Bridge will close the socket.  We just log and let
@@ -306,6 +333,7 @@ async function connect() {
   ws.addEventListener("close", ({ code, reason }) => {
     sendLine = null; // block stdin until reconnected
     streamingConversation = null;
+    established = false;
 
     if (pairingDenied) {
       console.error("[echo] Not reconnecting after pairing denial.");
@@ -321,18 +349,25 @@ async function connect() {
 }
 
 /** Returns true when the error code causes the Bridge to close the socket. */
-function isFatalError(code) {
+function isFatalError(code, isEstablished = true) {
   const fatal = new Set([
     "malformed_frame",
     "unknown_frame_type",
     "protocol_violation",
     "frame_too_large",
-    "not_paired",
     "connector_limit_reached",
     "duplicate_connector",
     "connectors_disabled",
   ]);
-  return fatal.has(code);
+  if (fatal.has(code)) return true;
+
+  // invalid_payload is the one code whose fatality depends on WHERE you are: the Bridge closes
+  // the socket for a bad hello or an unparseable frame, but keeps the session open for a bad
+  // inbound. Having received `ready` is the signal.
+  //
+  // Note there is deliberately no "not_paired" above: it is defined in the protocol but the
+  // state machine makes it unreachable, so the Bridge never sends it.
+  return code === "invalid_payload" && !isEstablished;
 }
 
 /**
@@ -356,12 +391,107 @@ function sendInbound(ws, line, state) {
     return; // ignore blank lines
   }
 
+  // "/send <path> [caption]" uploads an image and references it by handle.
+  if (line.startsWith("/send ")) {
+    const [, filePath, ...captionWords] = line.trim().split(/\s+/);
+    const caption = captionWords.join(" ") || undefined;
+
+    uploadAttachment(filePath, state)
+      .then((handle) => {
+        ws.send(makeFrame("inbound", {
+          content: {
+            text: caption ?? "what is in this image?",
+            attachments: [{ mimeType: guessMimeType(filePath), handle, caption }],
+          },
+        }));
+        console.log(`[echo] sent ${filePath} as ${handle}`);
+      })
+      .catch((err) => console.error(`[echo] upload failed: ${err.message}`));
+    return;
+  }
+
   ws.send(makeFrame("inbound", {
     content: {
       text: line,
       isMarkdown: false,
     },
   }));
+}
+
+/** Map a file extension to one of the four allowed image types. */
+function guessMimeType(filePath) {
+  const ext = filePath.slice(filePath.lastIndexOf(".")).toLowerCase();
+  return {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+  }[ext] ?? "image/png";
+}
+
+/**
+ * Write a received attachment to disk.  fileName is UNTRUSTED metadata even though
+ * the Bridge sanitises it, so we take only the base name and never join a caller
+ * path directly.
+ */
+function saveAttachment(attachment, bytes) {
+  mkdirSync(DOWNLOAD_DIR, { recursive: true });
+
+  const safeName = (attachment.fileName ?? "image")
+    .replace(/[\/\\:]/g, "")
+    .replace(/^\.+/, "") || "image";
+  const target = join(DOWNLOAD_DIR, `${Date.now()}-${safeName}`);
+
+  writeFileSync(target, bytes);
+  const caption = attachment.caption ? ` — ${attachment.caption}` : "";
+  console.log(`[echo] saved ${bytes.length} byte ${attachment.mimeType}${caption} -> ${target}`);
+}
+
+/**
+ * Fetch a handle-carried attachment over the REST endpoint.
+ *
+ * Handles are SINGLE-USE and expire (10 minutes by default), so fetch promptly and
+ * exactly once.  A 404 means unknown, expired, already consumed, or issued to another
+ * connector — the four are deliberately indistinguishable.
+ */
+async function fetchAttachment(attachment, state) {
+  const response = await fetch(`${ATTACHMENTS_URL}/${attachment.handle}`, {
+    headers: { Authorization: `Bearer ${state.token}` },
+  });
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status} fetching attachment`);
+  }
+
+  const bytes = Buffer.from(await response.arrayBuffer());
+  saveAttachment(attachment, bytes);
+}
+
+/**
+ * Upload an image and return a handle to reference in an inbound frame.
+ *
+ * Anything over ~256 KB must travel this way: a WebSocket frame is capped at 1 MiB and
+ * exceeding it is FATAL, and base64 inflates payloads by about a third.
+ */
+async function uploadAttachment(filePath, state) {
+  const bytes = readFileSync(filePath);
+  const form = new FormData();
+  form.append("file", new Blob([bytes]), filePath.split(/[\\/]/).pop());
+
+  const response = await fetch(ATTACHMENTS_URL, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${state.token}` },
+    body: form,
+  });
+
+  if (!response.ok) {
+    // 415 = not an allowed image, 429 = rate limited, 507 = your storage quota is full.
+    throw new Error(`HTTP ${response.status} uploading attachment`);
+  }
+
+  const { handle } = await response.json();
+  return handle;
 }
 
 /** Schedule a reconnect attempt with exponential backoff. */

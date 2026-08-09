@@ -133,6 +133,42 @@ public sealed partial class ConnectorTokenStore
         }
     }
 
+    /// <summary>
+    /// Returns the enabled connector whose token equals <paramref name="token"/>, or null when
+    /// no enabled connector matches.
+    /// </summary>
+    /// <param name="token">The bearer token presented by a connector.</param>
+    /// <remarks>
+    /// SECURITY: every record is compared even after a match is found. Returning early would
+    /// make the lookup's duration depend on the matching connector's position in the registry,
+    /// which is an oracle a local process could use to learn about other connectors. The
+    /// per-token comparison itself is already constant-time via
+    /// <see cref="ConnectorTokenGenerator.TokensEqual"/>.
+    /// </remarks>
+    public ConnectorRecord? FindByToken(string? token)
+    {
+        if (string.IsNullOrEmpty(token))
+        {
+            return null;
+        }
+
+        ConnectorRecord? match = null;
+
+        lock (this.syncLock)
+        {
+            foreach (var record in this.LoadRegistry().Values)
+            {
+                // Deliberately unconditional and without break — see the remarks above.
+                if (ConnectorTokenGenerator.TokensEqual(record.Token, token) && record.Enabled)
+                {
+                    match = record;
+                }
+            }
+        }
+
+        return match;
+    }
+
     private Dictionary<string, ConnectorRecord> LoadRegistry()
     {
         var blob = this.secretStore.GetSecret(SecretId);

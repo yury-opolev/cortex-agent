@@ -18,13 +18,13 @@ node connector.mjs
 ## First run (no token.json)
 
 1. The connector connects and sends a `hello` frame.
-2. The Bridge responds with `pairing_required` containing a short code (e.g. `A3F7`).
+2. The Bridge responds with `pairing_required` containing an 8-character code in the shape `XXXX-XXX` (e.g. `A3F7-2QT`).
 3. The connector prints the code prominently:
 
    ```
    ============================================================
      PAIRING REQUIRED
-     Code: A3F7
+     Code: A3F7-2QT
      Expires at: 2:05:00 PM
      Go to Cortex → Global Settings → Connectors
      and approve the request with the matching code.
@@ -50,6 +50,28 @@ streaming `stream` deltas (printed inline) followed by a final `outbound` frame.
 
 Type `/abort` to cancel an in-flight generation.
 
+## Sending and receiving images
+
+The connector declares `capabilities.media: true`, so it can exchange images with the agent.
+
+Send one with `/send <path> [caption]`:
+
+```
+/send C:\Users\me\Pictures\screenshot.png what is in this?
+```
+
+The file is uploaded to `POST /api/connectors/attachments` using the saved pairing token as a
+bearer credential, and the returned handle is referenced from the `inbound` frame. Uploading
+rather than inlining is what lets an image exceed the 1 MiB WebSocket frame cap.
+
+Images sent **by** the agent are written to `received/`. Note the connector handles **both**
+carrying modes — an `outbound` attachment arrives either as inline base64 (`data`) or as a
+`handle` to fetch — because the Bridge inlines what fits the frame and spills anything larger.
+A connector that only implements one mode will silently miss images.
+
+Handles are single-use and expire after 10 minutes, so `fetchAttachment` runs immediately on
+receipt rather than lazily.
+
 ## Reconnection
 
 The connector reconnects automatically with exponential backoff (2 s → 4 s → … → 60 s)
@@ -62,3 +84,4 @@ the process exits with code 1.
 |---|---|
 | `connector.mjs` | The connector itself |
 | `token.json` | Created on first successful pairing; contains `token`, `channelId`, and `cursor` |
+| `received/` | Images sent by the agent, written on arrival |

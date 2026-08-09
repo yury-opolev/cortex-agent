@@ -1,0 +1,426 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yury-opolev/cortex-agent/docs/connector-protocol.schema.json",
+  "title": "Cortex Connector Protocol",
+  "description": "Every frame exchanged over the Cortex connector WebSocket (ws://127.0.0.1:5080/connector). One WebSocket TEXT message carries exactly one frame, UTF-8 encoded. Unknown fields are ignored and field names are matched case-insensitively, so a connector must tolerate additive protocol changes. See docs/connector-plugin-system.md for semantics; this schema is the shape only.",
+  "oneOf": [
+    { "$ref": "#/$defs/helloFrame" },
+    { "$ref": "#/$defs/inboundFrame" },
+    { "$ref": "#/$defs/abortFrame" },
+    { "$ref": "#/$defs/pongFrame" },
+    { "$ref": "#/$defs/pairingRequiredFrame" },
+    { "$ref": "#/$defs/pairedFrame" },
+    { "$ref": "#/$defs/pairingDeniedFrame" },
+    { "$ref": "#/$defs/readyFrame" },
+    { "$ref": "#/$defs/typingFrame" },
+    { "$ref": "#/$defs/streamFrame" },
+    { "$ref": "#/$defs/outboundFrame" },
+    { "$ref": "#/$defs/errorFrame" },
+    { "$ref": "#/$defs/pingFrame" }
+  ],
+
+  "$defs": {
+    "connectorId": {
+      "type": "string",
+      "description": "Connector key or instance id. Normalised to lowercase by the Bridge.",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+
+    "entityId": {
+      "type": "string",
+      "description": "messageId, conversationId or sender.id. REJECTED (not truncated) when longer than the maximum. Length is counted in UTF-16 code units.",
+      "maxLength": 128
+    },
+
+    "isoTimestamp": {
+      "type": "string",
+      "description": "ISO-8601 timestamp. Round-trip cursors verbatim rather than reformatting them.",
+      "format": "date-time"
+    },
+
+    "capabilities": {
+      "type": "object",
+      "description": "Declared in hello. Each capability is an opt-in; the Bridge never enables one the connector did not ask for, and an operator can disable any of them globally.",
+      "properties": {
+        "streaming": {
+          "type": "boolean",
+          "default": false,
+          "description": "Receive typing and stream frames during generation."
+        },
+        "richText": {
+          "type": "boolean",
+          "default": false,
+          "description": "The surface can render Markdown."
+        },
+        "media": {
+          "type": "boolean",
+          "default": false,
+          "description": "Send and receive content.attachments. Without it, inbound attachments are refused with media_not_supported and outbound frames omit the field entirely."
+        },
+        "maxMessageLength": {
+          "type": "integer",
+          "description": "Maximum inbound text length the connector accepts, in UTF-16 code units. Clamped by the Bridge to [1, 100000].",
+          "minimum": 1,
+          "default": 100000
+        }
+      }
+    },
+
+    "attachment": {
+      "type": "object",
+      "description": "A media attachment. The SAME shape is used inbound and outbound. Exactly one of data or handle carries the bytes. There is deliberately no url field: the Bridge never dereferences a connector-supplied location, and a frame containing url is rejected with invalid_payload rather than having the field ignored.",
+      "required": ["mimeType"],
+      "properties": {
+        "mimeType": {
+          "type": "string",
+          "description": "Declared type. VERIFIED against the content's magic bytes - mislabelled content is rejected with attachment_type_not_allowed.",
+          "enum": ["image/png", "image/jpeg", "image/gif", "image/webp"]
+        },
+        "fileName": {
+          "type": "string",
+          "description": "Display name. Sanitised (path separators, control and Unicode-format characters removed) and truncated to 256 UTF-16 code units.",
+          "maxLength": 256
+        },
+        "caption": {
+          "type": "string",
+          "description": "Alt text. Truncated to 1024 UTF-16 code units.",
+          "maxLength": 1024
+        },
+        "data": {
+          "type": "string",
+          "description": "Base64-encoded bytes, for attachments small enough to fit the frame. Mutually exclusive with handle.",
+          "contentEncoding": "base64"
+        },
+        "handle": {
+          "type": "string",
+          "description": "Opaque Bridge-issued id for attachments transferred out of band. Single-use, expiring, and scoped to the issuing channel. Mutually exclusive with data.",
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "sizeBytes": {
+          "type": "integer",
+          "description": "Declared size. A HINT ONLY - the Bridge verifies the actual decoded length and never trusts this value.",
+          "minimum": 0
+        }
+      },
+      "oneOf": [
+        { "required": ["data"], "not": { "required": ["handle"] } },
+        { "required": ["handle"], "not": { "required": ["data"] } }
+      ],
+      "not": { "required": ["url"] }
+    },
+
+    "content": {
+      "type": "object",
+      "description": "Message content. Must carry text, attachments, or both.",
+      "properties": {
+        "text": {
+          "type": "string",
+          "description": "Message text. Length counted in UTF-16 code units against maxMessageLength."
+        },
+        "isMarkdown": {
+          "type": "boolean",
+          "default": false
+        },
+        "attachments": {
+          "type": "array",
+          "description": "Requires capabilities.media. More than maxAttachmentsPerMessage (default 4) is refused with too_many_attachments.",
+          "items": { "$ref": "#/$defs/attachment" },
+          "minItems": 1
+        }
+      },
+      "anyOf": [
+        { "required": ["text"] },
+        { "required": ["attachments"] }
+      ]
+    },
+
+    "helloFrame": {
+      "type": "object",
+      "description": "Connector -> Bridge. MUST be the first frame, within 10 seconds of connecting.",
+      "required": ["type", "payload"],
+      "properties": {
+        "type": { "const": "hello" },
+        "payload": {
+          "type": "object",
+          "required": ["key"],
+          "properties": {
+            "key": { "$ref": "#/$defs/connectorId" },
+            "instanceId": { "$ref": "#/$defs/connectorId" },
+            "displayName": {
+              "type": "string",
+              "description": "Shown in the Web UI. UNTRUSTED there - it is escaped on render. Truncated to 256 UTF-16 code units."
+            },
+            "version": {
+              "type": "string",
+              "description": "The CONNECTOR's own version, not the protocol version. Informational: the Bridge stores it for display and does not act on it. There is no protocol version negotiation."
+            },
+            "token": {
+              "type": "string",
+              "description": "The durable token from a previous paired frame. Omit on first connect to start the pairing flow."
+            },
+            "sinceCursor": {
+              "$ref": "#/$defs/isoTimestamp",
+              "description": "Replay from this point. Absent OR unparseable means NO replay - unparseable fails closed rather than replaying everything."
+            },
+            "capabilities": { "$ref": "#/$defs/capabilities" }
+          }
+        }
+      }
+    },
+
+    "inboundFrame": {
+      "type": "object",
+      "description": "Connector -> Bridge. A user message. Rate-limited to maxMessagesPerMinute (default 120).",
+      "required": ["type", "payload"],
+      "properties": {
+        "type": { "const": "inbound" },
+        "payload": {
+          "type": "object",
+          "required": ["content"],
+          "properties": {
+            "conversationId": {
+              "$ref": "#/$defs/entityId",
+              "description": "Opaque thread key chosen by the connector. Defaults to the channel id."
+            },
+            "messageId": {
+              "$ref": "#/$defs/entityId",
+              "description": "Auto-generated when absent. NOT deduplicated - a repeated id is treated as a new message."
+            },
+            "sender": {
+              "type": "object",
+              "properties": {
+                "id": { "$ref": "#/$defs/entityId" },
+                "displayName": {
+                  "type": "string",
+                  "description": "TRUNCATED at 256 UTF-16 code units rather than rejected."
+                }
+              }
+            },
+            "content": { "$ref": "#/$defs/content" }
+          }
+        }
+      }
+    },
+
+    "abortFrame": {
+      "type": "object",
+      "description": "Connector -> Bridge. Cancels an in-flight generation. Only conversations this session has previously sent an inbound for may be aborted; at most 256 are tracked.",
+      "required": ["type", "payload"],
+      "properties": {
+        "type": { "const": "abort" },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "conversationId": { "$ref": "#/$defs/entityId" }
+          }
+        }
+      }
+    },
+
+    "pongFrame": {
+      "type": "object",
+      "description": "Connector -> Bridge. Reply to ping. The session closes if no frame of any kind arrives within 90 seconds.",
+      "required": ["type"],
+      "properties": {
+        "type": { "const": "pong" },
+        "payload": { "type": "object" }
+      }
+    },
+
+    "pairingRequiredFrame": {
+      "type": "object",
+      "description": "Bridge -> Connector. Display the code and wait; there is no timeout on the connector side.",
+      "required": ["type", "payload"],
+      "properties": {
+        "type": { "const": "pairing_required" },
+        "payload": {
+          "type": "object",
+          "required": ["code", "expiresAt"],
+          "properties": {
+            "code": {
+              "type": "string",
+              "description": "Always 8 characters shaped XXXX-XXX, from an alphabet excluding 0, 1, I and O. The human compares it with the Web UI.",
+              "pattern": "^[2-9A-HJ-NP-Z]{4}-[2-9A-HJ-NP-Z]{3}$"
+            },
+            "expiresAt": { "$ref": "#/$defs/isoTimestamp" }
+          }
+        }
+      }
+    },
+
+    "pairedFrame": {
+      "type": "object",
+      "description": "Bridge -> Connector. Pairing approved. Persist the token; a ready frame follows.",
+      "required": ["type", "payload"],
+      "properties": {
+        "type": { "const": "paired" },
+        "payload": {
+          "type": "object",
+          "required": ["token", "channelId"],
+          "properties": {
+            "token": {
+              "type": "string",
+              "description": "Durable credential. Present it in hello.token, and as an Authorization: Bearer value on the attachment endpoints. Store it as securely as the platform allows."
+            },
+            "channelId": {
+              "type": "string",
+              "description": "Deterministically plugin:<key>:<instanceId>.",
+              "pattern": "^plugin:[a-z0-9_-]+:[a-z0-9_-]+$"
+            }
+          }
+        }
+      }
+    },
+
+    "pairingDeniedFrame": {
+      "type": "object",
+      "description": "Bridge -> Connector. FATAL - the socket closes. Do not reconnect immediately.",
+      "required": ["type", "payload"],
+      "properties": {
+        "type": { "const": "pairing_denied" },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "reason": {
+              "type": "string",
+              "description": "Known values: denied, pairing_expired, pairing_rate_limited, connector_disabled, shutting_down. Treat an unknown reason as a plain denial.",
+              "examples": ["denied", "pairing_expired", "pairing_rate_limited", "connector_disabled", "shutting_down"]
+            }
+          }
+        }
+      }
+    },
+
+    "readyFrame": {
+      "type": "object",
+      "description": "Bridge -> Connector. Steady state. Always arrives BEFORE any replay frames.",
+      "required": ["type", "payload"],
+      "properties": {
+        "type": { "const": "ready" },
+        "payload": {
+          "type": "object",
+          "required": ["channelId"],
+          "properties": {
+            "channelId": { "type": "string" },
+            "replayCount": {
+              "type": "integer",
+              "description": "How many outbound frames of replay to expect before live traffic.",
+              "minimum": 0
+            }
+          }
+        }
+      }
+    },
+
+    "typingFrame": {
+      "type": "object",
+      "description": "Bridge -> Connector. Only sent when capabilities.streaming is true.",
+      "required": ["type", "payload"],
+      "properties": {
+        "type": { "const": "typing" },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "conversationId": { "type": "string" }
+          }
+        }
+      }
+    },
+
+    "streamFrame": {
+      "type": "object",
+      "description": "Bridge -> Connector. A text delta. Only sent when capabilities.streaming is true. Concatenate deltas in arrival order; the outbound frame carries the final text.",
+      "required": ["type", "payload"],
+      "properties": {
+        "type": { "const": "stream" },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "conversationId": { "type": "string" },
+            "delta": { "type": "string" }
+          }
+        }
+      }
+    },
+
+    "outboundFrame": {
+      "type": "object",
+      "description": "Bridge -> Connector. The final agent response, or a replayed message. ALWAYS persist cursor and send it back as hello.sinceCursor.",
+      "required": ["type", "payload"],
+      "properties": {
+        "type": { "const": "outbound" },
+        "payload": {
+          "type": "object",
+          "required": ["messageId", "content"],
+          "properties": {
+            "conversationId": {
+              "type": "string",
+              "description": "On REPLAYED frames this is the channel id, not the original conversation id."
+            },
+            "messageId": { "type": "string" },
+            "content": {
+              "allOf": [{ "$ref": "#/$defs/content" }],
+              "description": "attachments is present only when capabilities.media was declared. An attachment arrives EITHER inline (data) OR as a handle - implement both, since the Bridge inlines what fits the frame and spills anything larger."
+            },
+            "isThinking": {
+              "type": "boolean",
+              "description": "True for pre-tool narration rather than the final answer.",
+              "default": false
+            },
+            "cursor": { "$ref": "#/$defs/isoTimestamp" }
+          }
+        }
+      }
+    },
+
+    "errorFrame": {
+      "type": "object",
+      "description": "Bridge -> Connector. Fatality depends on the code AND, for invalid_payload, on whether the session was established. See the error table in docs/connector-plugin-system.md.",
+      "required": ["type", "payload"],
+      "properties": {
+        "type": { "const": "error" },
+        "payload": {
+          "type": "object",
+          "required": ["code"],
+          "properties": {
+            "code": {
+              "type": "string",
+              "description": "Always fatal: malformed_frame, unknown_frame_type, protocol_violation, frame_too_large, connector_limit_reached, duplicate_connector, connectors_disabled. Never fatal: message_too_long, rate_limited, media_not_supported, too_many_attachments, attachment_too_large, attachment_type_not_allowed, attachment_not_found. Conditional: invalid_payload is FATAL before ready, recoverable after. Defined but never sent: not_paired. Treat an UNKNOWN code as non-fatal and back off.",
+              "examples": [
+                "malformed_frame",
+                "unknown_frame_type",
+                "invalid_payload",
+                "protocol_violation",
+                "frame_too_large",
+                "message_too_long",
+                "rate_limited",
+                "media_not_supported",
+                "too_many_attachments",
+                "attachment_too_large",
+                "attachment_type_not_allowed",
+                "attachment_not_found",
+                "connector_limit_reached",
+                "duplicate_connector",
+                "connectors_disabled"
+              ]
+            },
+            "message": { "type": "string" }
+          }
+        }
+      }
+    },
+
+    "pingFrame": {
+      "type": "object",
+      "description": "Bridge -> Connector. Sent every 30 seconds. Reply with pong.",
+      "required": ["type"],
+      "properties": {
+        "type": { "const": "ping" },
+        "payload": { "type": "object" }
+      }
+    }
+  }
+}

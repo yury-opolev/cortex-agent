@@ -1,4 +1,5 @@
 using System.Net;
+using Cortex.Contained.Bridge.Connectors.Media;
 using Cortex.Contained.Bridge.Connectors.Replay;
 using Cortex.Contained.Contracts.Config;
 using Microsoft.AspNetCore.Builder;
@@ -87,8 +88,20 @@ public static class ConnectorEndpoint
             var timeProvider = context.RequestServices.GetRequiredService<TimeProvider>();
             var abortDispatcher = context.RequestServices.GetRequiredService<IConnectorAbortDispatcher>();
             var replaySource = context.RequestServices.GetRequiredService<IConnectorReplaySource>();
+            var attachmentResolver = context.RequestServices.GetService<IConnectorAttachmentResolver>();
+            var attachmentIssuer = context.RequestServices.GetService<IConnectorAttachmentIssuer>();
 
-            var session = new ConnectorSession(transport, authenticator, settings, registry, loggerFactory, timeProvider, abortDispatcher, replaySource);
+            var session = new ConnectorSession(
+                transport,
+                authenticator,
+                settings,
+                registry,
+                loggerFactory,
+                timeProvider,
+                abortDispatcher,
+                replaySource,
+                attachmentResolver,
+                attachmentIssuer);
             await session.RunAsync(context.RequestAborted).ConfigureAwait(false);
         }).AllowAnonymous();
     }

@@ -91,6 +91,8 @@ tests/
 | [API Reference](docs/api-reference.md) | SignalR hub methods, REST endpoints, built-in tools |
 | [Security](docs/security.md) | Threat model, authentication, secret storage, content security |
 | [Setup Guide](docs/setup-guide.md) | Prerequisites, configuration, running, testing |
+| [Connector Plugin System](docs/connector-plugin-system.md) | **Build your own channel** in any language, out of tree — WebSocket + JSON protocol, pairing, replay, media attachments |
+| [MCP Plugin System](docs/mcp-plugin-system.md) | Host-side MCP servers as native agent tools |
 | [Design Reference](docs/design-reference.md) | Architecture decision records and design rationale |
 
 ## License

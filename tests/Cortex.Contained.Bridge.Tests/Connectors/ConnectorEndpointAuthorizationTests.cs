@@ -1,6 +1,8 @@
 using Cortex.Contained.Bridge.Channels;
 using Cortex.Contained.Bridge.Connectors;
+using Cortex.Contained.Bridge.Connectors.Media;
 using Cortex.Contained.Bridge.Connectors.Pairing;
+using Cortex.Contained.Bridge.Connectors.Security;
 using Cortex.Contained.Bridge.Endpoints;
 using Cortex.Contained.Contracts.Config;
 using Microsoft.AspNetCore.Authorization;
@@ -64,6 +66,54 @@ public sealed class ConnectorEndpointAuthorizationTests
         Assert.NotNull(endpoint.Metadata.GetMetadata<IAllowAnonymous>());
     }
 
+    [Fact]
+    public void MapConnectorAttachmentEndpoints_StayAnonymous_BecauseConnectorsHaveNoSession()
+    {
+        // These endpoints carry their own bearer-token authentication against the DPAPI-backed
+        // registry. Requiring the Web UI session instead would make them unusable by the very
+        // processes they exist for.
+        var endpoints = MapAndCollect(app => app.MapConnectorAttachmentEndpoints());
+
+        Assert.NotEmpty(endpoints);
+
+        foreach (var endpoint in endpoints)
+        {
+            Assert.NotNull(endpoint.Metadata.GetMetadata<IAllowAnonymous>());
+        }
+    }
+
+    [Fact]
+    public void MapConnectorAttachmentEndpoints_CoversTheTransferSurface()
+    {
+        var patterns = MapAndCollect(app => app.MapConnectorAttachmentEndpoints())
+            .OfType<RouteEndpoint>()
+            .Select(e => e.RoutePattern.RawText)
+            .ToList();
+
+        Assert.Contains("/api/connectors/attachments", patterns);
+        Assert.Contains("/api/connectors/attachments/{handle}", patterns);
+    }
+
+    [Fact]
+    public void StatusCodeFor_NotFound_IsNotDistinguishableFromForbidden()
+    {
+        // A 403 would confirm the handle exists, letting one connector probe for another's
+        // attachments. Both the unknown and the wrong-owner case must look identical.
+        Assert.Equal(404, ConnectorAttachmentEndpoints.StatusCodeFor(ConnectorAttachmentAccessError.NotFound));
+        Assert.NotEqual(403, ConnectorAttachmentEndpoints.StatusCodeFor(ConnectorAttachmentAccessError.NotFound));
+    }
+
+    [Theory]
+    [InlineData(ConnectorAttachmentAccessError.Unauthorized, 401)]
+    [InlineData(ConnectorAttachmentAccessError.RateLimited, 429)]
+    [InlineData(ConnectorAttachmentAccessError.ContentRejected, 415)]
+    [InlineData(ConnectorAttachmentAccessError.QuotaExceeded, 507)]
+    [InlineData(ConnectorAttachmentAccessError.MediaDisabled, 404)]
+    public void StatusCodeFor_MapsEachError(ConnectorAttachmentAccessError error, int expected)
+    {
+        Assert.Equal(expected, ConnectorAttachmentEndpoints.StatusCodeFor(error));
+    }
+
     private static IReadOnlyList<Endpoint> MapAndCollect(Action<WebApplication> map)
     {
         var builder = WebApplication.CreateBuilder();
@@ -84,6 +134,21 @@ public sealed class ConnectorEndpointAuthorizationTests
             new ChannelManager(NullLogger<ChannelManager>.Instance),
             bridgeConfig,
             NullLogger<ConnectorHost>.Instance));
+
+        var policy = ConnectorMediaPolicy.From(
+            bridgeConfig.Connectors.Media,
+            bridgeConfig.Connectors.Limits.MaxFrameBytes);
+        var attachmentStore = new ConnectorAttachmentStore(
+            policy,
+            TimeProvider.System,
+            NullLogger<ConnectorAttachmentStore>.Instance);
+        builder.Services.AddSingleton(new ConnectorAttachmentService(
+            new ConnectorTokenStore(new FakeConnectorSecretStore(), NullLogger<ConnectorTokenStore>.Instance),
+            attachmentStore,
+            new ConnectorUploadRateLimiter(policy.MaxUploadsPerMinute, TimeProvider.System),
+            policy,
+            TimeProvider.System,
+            NullLogger<ConnectorAttachmentService>.Instance));
 
         var app = builder.Build();
         map(app);

@@ -17,4 +17,7 @@ public sealed class ConnectorSettingsConfig
 
     /// <summary>Per-connector frame and rate limits.</summary>
     public ConnectorLimitsConfig Limits { get; set; } = new();
+
+    /// <summary>Media-attachment policy applied to connector messages in both directions.</summary>
+    public ConnectorMediaConfig Media { get; set; } = new();
 }

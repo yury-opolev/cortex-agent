@@ -40,10 +40,26 @@ public sealed class WebSocketConnectorTransport : IConnectorTransport
     /// <remarks>
     /// Concurrent sends on a <see cref="WebSocket"/> corrupt the stream; this
     /// method serialises them with a <see cref="SemaphoreSlim"/>.
+    /// <para>
+    /// The frame cap is enforced on the way OUT as well as the way in. Every other size
+    /// invariant in the connector surface is validated at its boundary, and an oversized
+    /// outbound frame has no defined behaviour — a third-party WebSocket library may accept it,
+    /// reject it, or hard-close the socket. Failing here turns an upstream budgeting mistake
+    /// into a loud, local, testable error instead of a mystery disconnect in someone else's
+    /// process.
+    /// </para>
     /// </remarks>
+    /// <exception cref="ConnectorFrameTooLargeException">
+    /// The encoded frame exceeds the configured maximum.
+    /// </exception>
     public async Task SendAsync(string json, CancellationToken ct)
     {
         var bytes = Encoding.UTF8.GetBytes(json);
+        if (bytes.Length > this.maxFrameBytes)
+        {
+            throw new ConnectorFrameTooLargeException(this.maxFrameBytes);
+        }
+
         await this.sendLock.WaitAsync(ct).ConfigureAwait(false);
         try
         {

@@ -5,7 +5,14 @@ with no fork — by connecting over a documented **WebSocket + JSON protocol**, 
 through a pairing flow, and behaving like any first-party channel from that point on.
 
 - Spec: [`docs/superpowers/specs/2026-08-07-connector-plugin-system-design.md`](superpowers/specs/2026-08-07-connector-plugin-system-design.md)
+- **Machine-readable schema**: [`docs/connector-protocol.schema.json`](connector-protocol.schema.json) — JSON Schema for every frame. Generate types from it, or validate against it in tests. Kept in lockstep with the implementation by `ConnectorProtocolSchemaTests`, which fails the build on drift.
+- Reference implementation: [`examples/connectors/echo`](../examples/connectors/echo) — single-file, zero-dependency Node.js
 - Shipped: (unreleased)
+
+> **Stability.** The protocol is additive: new optional fields and new error codes may appear, but
+> existing field names, semantics and frame types will not change or be removed without a
+> deprecation period. Build defensively — ignore unknown fields, and treat an unrecognised
+> non-fatal error code as "back off and continue" — and your connector will keep working.
 
 ## The one principle: the Bridge is the connector host *and* the credential boundary
 
@@ -65,6 +72,32 @@ Every message on the wire is a JSON object with exactly two top-level fields:
 
 `payload` is always an object; for frames with no payload (e.g. `ping`) it is an empty object `{}`.
 The serialiser uses **camelCase** field names and omits null fields.
+
+### Transport
+
+| Property | Value |
+|---|---|
+| Endpoint | `ws://127.0.0.1:5080/connector` — loopback only, port follows `webUi.port` |
+| WebSocket message type | **Text**. A binary message closes the session. |
+| Encoding | UTF-8 |
+| Framing | **One WebSocket message = exactly one JSON frame.** Never split a frame across messages or pack two into one. |
+| Fragmentation | Continuation frames are reassembled by the Bridge before parsing, so you may fragment a single large message. |
+| Max message size | 1 MiB accumulated across continuations. Exceeding it is fatal. |
+| Field handling | Unknown fields are ignored. Field names are matched case-insensitively. |
+| Ordering | The Bridge processes your frames strictly in order, one at a time. You may send while a generation is in flight — that is how `abort` works. |
+| Concurrency | Do not open two sockets with the same `key`+`instanceId`; the second is refused with `duplicate_connector`. |
+| Duplicate `messageId` | Not deduplicated. The Bridge treats a repeated id as a new message, so do not retry a send after a timeout unless you intend it to be processed twice. |
+
+### Protocol versioning
+
+There is currently **no protocol version negotiation**. `hello.version` is your *connector's* own
+version string — it is stored for display and the Bridge does not act on it. The protocol evolves
+additively: new optional fields may appear on Bridge→Connector frames, and new error codes may be
+introduced. Implement accordingly:
+
+- Ignore fields you do not recognise.
+- Treat an unknown non-fatal error code as "back off and continue".
+- Do not depend on field ordering or on the absence of a field.
 
 ### Frame type summary
 
@@ -127,10 +160,24 @@ being opened, or the Bridge sends `protocol_violation` and closes.
 | `capabilities` | object | No | See sub-fields below. |
 | `capabilities.streaming` | bool | No | Set `true` to receive `stream` and `typing` frames. Default `false`. |
 | `capabilities.richText` | bool | No | `true` if the connector renders Markdown. |
-| `capabilities.media` | bool | No | Accepted but **not honoured in v1** — `SupportsMedia` is always `false`. |
+| `capabilities.media` | bool | No | Set `true` to send and receive attachments. Default `false`. See [Media attachments](#media-attachments). |
 | `capabilities.maxMessageLength` | int | No | Max chars the connector accepts. Clamped to [1, 100 000]. Default 100 000. |
 
 The **channel id** is derived deterministically: `plugin:<key>:<instanceId>`.
+
+### Conversations
+
+`conversationId` is **yours to choose**. The Bridge does not interpret it — it is an opaque routing
+key that identifies a thread within your channel. Rules that matter:
+
+- Omit it and it defaults to your channel id. Most connectors with a single conversation (a
+  terminal, a CLI) can simply never send it.
+- The agent keeps separate context per conversation, so distinct ids give you distinct threads.
+- You may only `abort` a conversation you have previously sent an `inbound` for in the **current**
+  session. A reconnect resets that set.
+- At most **256** distinct ids are tracked per session; beyond that, further conversations cannot be
+  aborted (fail-closed).
+- Replayed `outbound` frames carry your **channel id**, not the original conversation id.
 
 ---
 
@@ -158,12 +205,17 @@ A user message from the connector's channel.
 
 | Field | Type | Required? | Meaning |
 |---|---|---|---|
-| `conversationId` | string | No | Identifies the thread. Max 128 chars. Defaults to the channel id. |
-| `messageId` | string | No | Connector-assigned id. Max 128 chars. Auto-generated if absent. |
-| `sender.id` | string | No | Sender identifier. Max 128 chars. Defaults to `"connector"`. |
-| `sender.displayName` | string | No | Sender name. Truncated at 256 chars. |
-| `content.text` | string | **Yes** | Message text. Must be non-empty. |
+| `conversationId` | string | No | Identifies the thread. Max 128 chars — **rejected**, not truncated, if longer. Defaults to the channel id. |
+| `messageId` | string | No | Connector-assigned id. Max 128 chars — **rejected** if longer. Auto-generated if absent. |
+| `sender.id` | string | No | Sender identifier. Max 128 chars — **rejected** if longer. Defaults to `"connector"`. |
+| `sender.displayName` | string | No | Sender name. **Truncated** at 256 chars. |
+| `content.text` | string | Conditional | Message text. Required **unless** `content.attachments` is non-empty — an attachment-only message is legal. |
 | `content.isMarkdown` | bool | No | `true` when text contains Markdown. |
+| `content.attachments` | array | No | Media attachments. Requires `capabilities.media: true`. See [Media attachments](#media-attachments). |
+
+> **Lengths are UTF-16 code units, not characters.** `maxMessageLength` and every "max N chars"
+> limit counts .NET `string` length. A non-BMP character (most emoji) counts as **2**. Truncation
+> never splits a surrogate pair.
 
 Rate-limited: see [Limits and error handling](#limits-and-error-handling).
 
@@ -210,7 +262,7 @@ wait; a human must approve in the Web UI before the session continues.
 {
   "type": "pairing_required",
   "payload": {
-    "code": "A3F7",
+    "code": "A3F7-2QT",
     "expiresAt": "2026-08-07T14:05:00.0000000+00:00"
   }
 }
@@ -218,7 +270,7 @@ wait; a human must approve in the Web UI before the session continues.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `code` | string | Short code to display; human compares it against the code shown in the Web UI. |
+| `code` | string | Pairing code to display, always **8 characters** in the shape `XXXX-XXX`. Drawn from an alphabet that excludes `0`, `1`, `I` and `O` so it cannot be misread aloud. The human compares it against the code shown in the Web UI. Size your UI for 8 characters. |
 | `expiresAt` | string (ISO-8601) | UTC timestamp when the code expires. Codes expire after **5 minutes**. |
 
 ---
@@ -359,8 +411,14 @@ as `sinceCursor` on your next `hello` to receive missed messages.
 | `messageId` | string | Agent-assigned message id. |
 | `content.text` | string | Response text. |
 | `content.isMarkdown` | bool | Whether the text should be rendered as Markdown. The agent does not currently flag its responses, so this is `false` today for both live and replayed messages; treat agent text as Markdown if your surface can render it. |
+| `content.attachments` | array | Media attachments. Present only when you negotiated `capabilities.media: true` and the message carries media. Identical shape to the inbound direction — see [Media attachments](#media-attachments). |
 | `isThinking` | bool | `true` for pre-tool narration (thinking aloud), `false` for the final answer. |
 | `cursor` | string | ISO-8601 timestamp for replay. Omitted rather than sent as `null` if unset, since the serialiser drops null fields. |
+
+> **`conversationId` on replayed frames is the CHANNEL id, not the original conversation.** Replay
+> is reconstructed from the agent's message history, which records the channel a message was
+> delivered to rather than the connector's own thread id. If you route by `conversationId`, expect
+> replayed messages to arrive on your channel-level default thread.
 
 ---
 
@@ -448,7 +506,7 @@ Pairing is a one-time human-approval step that binds a connector to a channel id
 the Bridge issues a DPAPI-encrypted token that the connector presents on every subsequent connect.
 
 **What the user sees:** when a new connector connects the Web UI shows a pairing request with the
-connector's display name, channel id, and a short code (e.g. `A3F7`). The connector displays the
+connector's display name, channel id, and an 8-character code in the shape `XXXX-XXX` (e.g. `A3F7-2QT`). The connector displays the
 same code. The user verifies they match and clicks **Approve** in
 **Global Settings → Connectors**. This out-of-band code comparison prevents a rogue process from
 silently claiming a channel.
@@ -498,8 +556,135 @@ Capabilities are declared in the `hello` frame and affect what the Bridge sends 
 |---|---|
 | `streaming: true` | Bridge sends `typing` and `stream` frames during generation. Without this, the connector only ever receives `outbound`. |
 | `richText: true` | Declares that your surface can render Markdown. See the note on `outbound.content.isMarkdown` — the agent does not currently set that flag. |
-| `media: true` | Accepted but **not honoured in v1** — the Bridge always sets `SupportsMedia = false` internally. |
+| `media: true` | Send and receive `content.attachments`. See [Media attachments](#media-attachments). Without it, inbound attachments are refused with `media_not_supported` and outbound frames omit the field entirely. |
 | `maxMessageLength` | Bridge enforces this limit on `inbound` frames; messages exceeding it receive `message_too_long`. Clamped to [1, 100 000]. |
+
+## Media attachments
+
+Requires `capabilities.media: true` in your `hello`. A connector that does not declare it behaves
+exactly as it did before media existed: outbound frames carry no `attachments` field at all (not an
+empty array), and sending attachments is refused with a non-fatal `media_not_supported`.
+
+The **same shape** is used in both directions, so you parse attachments identically on `inbound`
+and `outbound`.
+
+```json
+{
+  "type": "inbound",
+  "payload": {
+    "conversationId": "terminal-default",
+    "content": {
+      "text": "what's in this screenshot?",
+      "attachments": [
+        {
+          "mimeType": "image/png",
+          "fileName": "screenshot.png",
+          "caption": "the failing dialog",
+          "sizeBytes": 20481,
+          "data": "iVBORw0KGgoAAAANSUhEUg…"
+        }
+      ]
+    }
+  }
+}
+```
+
+| Field | Type | Required? | Meaning |
+|---|---|---|---|
+| `mimeType` | string | **Yes** | Must be in the allow-list. **Verified against the content's magic bytes** — a mismatch is rejected. |
+| `fileName` | string | No | Display name. Sanitised (path separators, control and Unicode-format characters stripped) and truncated to 256 chars. |
+| `caption` | string | No | Alt text. Truncated to 1024 chars. |
+| `data` | string | One of | Base64 bytes, for small attachments. Mutually exclusive with `handle`. |
+| `handle` | string | One of | Opaque Bridge-issued id, for large attachments. Mutually exclusive with `data`. |
+| `sizeBytes` | int | No | Declared size. A **hint only** — the Bridge verifies the actual decoded length and never trusts this value. |
+
+> **There is no `url` field, and there never will be.** A frame containing `url` on an attachment
+> is rejected with `invalid_payload`. The Bridge will not dereference a location supplied by a
+> connector — doing so would hand an untrusted local process a fetch primitive inside the
+> credential boundary. See [Security model](#security-model).
+
+### Two carrying modes
+
+A WebSocket frame is capped at **1 MiB** and exceeding it is **fatal**. Base64 inflates payloads by
+about a third, so large images cannot travel inside a frame at all.
+
+| Mode | Use when | How |
+|---|---|---|
+| **Inline** (`data`) | The image is small — a screenshot, a chart. | Base64 it straight into the frame. |
+| **Handle** (`handle`) | Anything larger. | Transfer the bytes over the REST endpoints below, then reference the returned handle in a frame. |
+
+The Bridge decides the outbound mode for you and will spill to a handle whenever inlining would not
+fit. **Both modes must be implemented** to receive media reliably — you cannot assume `data` will
+always be present.
+
+Inbound, prefer `data` for anything comfortably under ~256 KB and a handle above that. If you inline
+something too large you get a non-fatal `attachment_too_large` telling you to upload it instead.
+
+### Uploading (connector → agent)
+
+```http
+POST /api/connectors/attachments HTTP/1.1
+Host: 127.0.0.1:5080
+Authorization: Bearer <your pairing token>
+Content-Type: multipart/form-data; boundary=…
+
+(a "file" part containing the image; optional "caption" field)
+```
+
+A raw body works too — send the bytes with the image `Content-Type` and optional
+`X-Attachment-Filename` / `X-Attachment-Caption` headers.
+
+```json
+{ "handle": "att_9f2c14e0d3b74a15", "expiresAt": "2026-08-09T12:10:00Z" }
+```
+
+Reference `handle` in an `inbound` frame before it expires.
+
+### Fetching (agent → connector)
+
+When an `outbound` frame carries `handle` instead of `data`:
+
+```http
+GET /api/connectors/attachments/att_9f2c14e0d3b74a15 HTTP/1.1
+Host: 127.0.0.1:5080
+Authorization: Bearer <your pairing token>
+```
+
+The response body is the raw image with its `Content-Type`.
+
+**Authenticate with the same pairing token from your `paired` frame**, as a bearer token. These two
+endpoints are the only `/api/connectors/*` routes that accept it; every other route on that prefix
+requires the Web UI session and is not for connectors. Both are **loopback-only**, like the
+WebSocket endpoint.
+
+### Rules that will bite you
+
+- **A handle is single-use.** Fetching consumes it. Fetch once and keep the bytes.
+- **A handle expires** (10 minutes by default). After that it is simply gone.
+- **A handle is scoped to your channel.** Another connector's handle returns `404`, indistinguishable
+  from one that never existed.
+- **Handles do not survive a Bridge restart.** Storage is in memory by design; media is a staging
+  area, not a store. A restart surfaces as `attachment_not_found`.
+- **Replay is text-only.** Messages replayed after reconnect never carry attachments: history keeps
+  text, and any handle would have expired long before the 24-hour replay window. Do not expect media
+  to reappear on reconnect.
+- **Uploads have their own rate limit**, separate from the inbound message limit.
+- **Attachment errors are never fatal.** A refused attachment leaves the session open; back off and
+  carry on.
+
+### Defaults
+
+| Limit | Default | Config key under `connectors.media` |
+|---|---|---|
+| Attachments per message | 4 | `maxAttachmentsPerMessage` |
+| Max size per attachment | 8 MB | `maxAttachmentBytes` |
+| Max inline size | 256 KB | `maxInlineBytes` |
+| Handle lifetime | 10 minutes | `handleTtl` |
+| Storage held per connector | 64 MB | `maxStoredBytesPerConnector` |
+| Uploads per minute | 30 (0 = unlimited) | `maxUploadsPerMinute` |
+| Allowed types | `image/png`, `image/jpeg`, `image/gif`, `image/webp` | `allowedMimeTypes` |
+
+`connectors.media.enabled: false` disables media entirely, regardless of what a connector declares.
 
 ## Limits and error handling
 
@@ -509,15 +694,29 @@ Capabilities are declared in the `hello` frame and affect what the Bridge sends 
 |---|---|---|
 | `malformed_frame` | **Yes** | Frame is not valid JSON, not an object, or `type` is missing/not a string. |
 | `unknown_frame_type` | **Yes** | `type` string is not one of the four connector-sent frame types. |
-| `invalid_payload` | No | Frame parses, but payload validation fails (missing required field, id too long, etc.). |
+| `invalid_payload` | **Depends** | See the note below — this code is fatal during the handshake and at the parser level, non-fatal afterwards. |
 | `protocol_violation` | **Yes** | State machine violation (e.g. non-`hello` first frame, handshake timeout, heartbeat timeout). Every `protocol_violation` the Bridge sends is fatal. |
 | `frame_too_large` | **Yes** | WebSocket frame exceeds `MaxFrameBytes` (default **1 048 576** bytes). |
 | `message_too_long` | No | `inbound.content.text` length exceeds `capabilities.maxMessageLength`. |
 | `rate_limited` | No | Connector sent more than `MaxMessagesPerMinute` (default **120**) inbound messages in a rolling minute. Back off; session stays open. |
-| `not_paired` | **Yes** | Connector attempted an operation that requires a paired session. |
+| `media_not_supported` | No | Attachments were sent without declaring `capabilities.media`, or media is disabled by policy. |
+| `too_many_attachments` | No | More than `maxAttachmentsPerMessage` (default **4**) attachments on one message. |
+| `attachment_too_large` | No | An attachment exceeds `maxAttachmentBytes`, or exceeds `maxInlineBytes` when sent inline. Upload it and send a handle instead. |
+| `attachment_type_not_allowed` | No | MIME type is not in the allow-list, **or the content does not match the declared type**. |
+| `attachment_not_found` | No | Handle is unknown, expired, already consumed, or was issued to another channel. These four are deliberately indistinguishable. |
+| `not_paired` | — | Defined but **never sent**. The state machine makes the situation unreachable: the read loop only starts after pairing completes. Safe to ignore. |
 | `connector_limit_reached` | **Yes** | `MaxConnectors` (default **16**) are already attached. |
 | `duplicate_connector` | **Yes** | A connector with the same `key`+`instanceId` is already attached. |
-| `connectors_disabled` | **Yes** | The connector subsystem is disabled (`connectors.enabled: false`). |
+| `connectors_disabled` | **Yes** | The connector subsystem is disabled (`connectors.enabled: false`). Note you will usually not see this frame at all — the endpoint refuses the upgrade with HTTP **503** before a socket exists. |
+
+> **`invalid_payload` is not uniformly recoverable.** It is **fatal** when it arrives
+> (a) before the session is established — a `hello` that fails to deserialise, or whose `key` or
+> `instanceId` is missing or malformed; or (b) from the frame parser — a frame with a missing,
+> empty, or non-string `type`, or a `payload` that is not an object. It is **non-fatal** for
+> post-handshake validation: an `inbound` that fails to deserialise, has neither text nor
+> attachments, carries an over-long id, has a bad attachment, or an `abort` for a conversation you
+> do not own. Practically: if you receive `invalid_payload` before your `ready` frame, expect the
+> socket to close.
 
 **Fatal** means the Bridge closes the WebSocket immediately after sending the `error` frame.
 **Not fatal (No)** means the error frame is sent but the session remains open; the connector
@@ -548,9 +747,31 @@ connectors:
   limits:
     maxFrameBytes: 1048576   # maximum WebSocket frame size in bytes (1 MiB)
     maxMessagesPerMinute: 120  # inbound rate limit per connector
+  media:
+    enabled: true                     # master switch for connector attachments
+    maxAttachmentsPerMessage: 4       # attachments carried on one message
+    maxAttachmentBytes: 8388608       # per-attachment cap (8 MB)
+    maxInlineBytes: 262144            # largest attachment carried inline as base64 (256 KB)
+    handleTtl: "00:10:00"             # how long an issued handle resolves
+    maxStoredBytesPerConnector: 67108864  # live handle bytes held per connector (64 MB)
+    maxUploadsPerMinute: 30           # upload rate limit per connector; 0 = unlimited
+    allowedMimeTypes:                 # omit entirely to use the four defaults
+      - image/png
+      - image/jpeg
+      - image/gif
+      - image/webp
 ```
 
 All values shown are the **defaults from the source** — omitting a key uses that default.
+
+> **`allowedMimeTypes` replaces the defaults, it does not add to them.** Listing only
+> `image/png` means PNG only. Omit the key entirely to get all four. Do not use it to disable
+> media — set `media.enabled: false` instead.
+
+> **`maxInlineBytes` is capped by `maxFrameBytes`.** Configuring it larger than a frame can carry
+> has no effect: the effective value is clamped so base64-encoded attachments always fit, with
+> room reserved for the message text and JSON envelope. A whole-message inline budget applies too,
+> so four individually-legal attachments cannot overflow the frame in aggregate.
 
 **Web UI** — **Global Settings → Connectors** exposes:
 
@@ -577,11 +798,22 @@ Tokens are never surfaced in the UI or API responses.
   conversations for which it previously sent an `inbound` frame in the current session (or its own
   channel id). The Bridge tracks up to **256** conversation ids per session; the 257th and beyond
   cannot be aborted (fail-closed).
+- **No connector-supplied URLs, ever.** Attachments carry bytes or a Bridge-issued handle, never a
+  location. If the Bridge fetched a connector-supplied URL it would gain a fetch primitive inside
+  the credential boundary: `file:///C:/Users/<user>/AppData/Local/Cortex/secrets/secrets.json`
+  would exfiltrate DPAPI-protected secrets, and `http://169.254.169.254/…` is textbook SSRF. A
+  frame containing `url` on an attachment is rejected outright rather than having the field
+  ignored.
+- **Attachment content is verified, not trusted.** The declared `mimeType` is checked against the
+  content's magic bytes, and `sizeBytes` is ignored in favour of the actual decoded length.
+- **Attachment handles are capabilities:** ≥128 bits of entropy, bound to the issuing channel,
+  single-use, and expiring. Presenting another channel's handle returns `404` — not `403`, which
+  would confirm it exists. Handle values are never written to logs.
 - **What a connector can do:** send user messages, receive agent responses, abort its own
-  in-flight turns, reconnect after disconnect.
-- **What a connector cannot do:** reach the container directly, see other connectors' messages,
-  abort another connector's or channel's turn, read or write DPAPI secrets, or access any Cortex
-  REST endpoint without the Web UI auth cookie.
+  in-flight turns, reconnect after disconnect, and (with `media`) exchange images.
+- **What a connector cannot do:** reach the container directly, see other connectors' messages or
+  attachments, abort another connector's or channel's turn, read or write DPAPI secrets, or access
+  any Cortex REST endpoint other than the two attachment routes without the Web UI auth cookie.
 
 ## Writing a connector
 
@@ -595,9 +827,38 @@ Tokens are never surfaced in the UI or API responses.
 - [ ] On `ready` — log channel id and replay count; process replay `outbound` frames
 - [ ] On every `outbound` — save the `cursor`; use it as `sinceCursor` next connect
 - [ ] Reply to `ping` with `pong`
-- [ ] On `rate_limited` / `message_too_long` / `invalid_payload` — back off, do not close
+- [ ] On `rate_limited` / `message_too_long` / attachment errors — back off, do not close
 - [ ] On fatal `error` or `pairing_denied` — close cleanly, do not reconnect immediately
+- [ ] Treat `invalid_payload` received **before** `ready` as fatal
 - [ ] Reconnect with exponential backoff on socket close (except after `pairing_denied`)
+- [ ] If you declared `media`: handle **both** `data` and `handle` attachments on `outbound`
+- [ ] If you declared `media`: upload anything over ~256 KB rather than inlining it
+- [ ] Ignore fields you do not recognise, so future protocol additions do not break you
+
+### Conformance checklist
+
+Worth exercising before you ship. Every row is behaviour the Bridge actually enforces:
+
+| Scenario | Expected |
+|---|---|
+| Connect and send `hello` within 10 s | `pairing_required` or `ready` |
+| Do not send `hello` for 15 s | `protocol_violation`, socket closes |
+| Send `inbound` as the first frame | `protocol_violation`, socket closes |
+| Send `{"type":"nonsense"}` | `unknown_frame_type`, socket closes |
+| Send `not json` | `malformed_frame`, socket closes |
+| Send a message longer than `maxMessageLength` | `message_too_long`, **session stays open** |
+| Send 200 messages in a minute | `rate_limited`, session stays open |
+| Ignore `ping` for 90 s | `protocol_violation: heartbeat_timeout`, socket closes |
+| Abort a `conversationId` you never sent | `invalid_payload`, session stays open |
+| Reconnect with a saved token | straight to `ready`, no pairing |
+| Reconnect with `sinceCursor` from your last `outbound` | replayed `outbound` frames, `ready.replayCount` matches |
+| Send an attachment without declaring `media` | `media_not_supported`, session stays open |
+| Send 5 attachments | `too_many_attachments` |
+| Send a `.exe` labelled `image/png` | `attachment_type_not_allowed` |
+| Send `url` on an attachment | `invalid_payload` |
+| Reference a handle twice | second attempt gets `attachment_not_found` |
+| Fetch an attachment with no `Authorization` header | HTTP 401 |
+| Fetch a handle you did not receive | HTTP 404 |
 
 ### Walkthrough
 
@@ -610,6 +871,26 @@ node examples/connectors/echo/connector.mjs
 ```
 
 See `examples/connectors/echo/README.md` for first-run and subsequent-run behaviour.
+
+### Building a client in another language
+
+The example is JavaScript, but nothing about the protocol is. Everything you need is a WebSocket
+client and a JSON parser.
+
+[`docs/connector-protocol.schema.json`](connector-protocol.schema.json) describes every frame as
+JSON Schema (draft 2020-12), so you can generate types rather than hand-writing them:
+
+| Language | Tool |
+|---|---|
+| TypeScript | `json-schema-to-typescript` |
+| Python | `datamodel-code-generator` |
+| Go | `go-jsonschema` |
+| Rust | `typify` / `schemars` |
+| C#/Java | `quicktype`, or NSwag/jsonschema2pojo |
+
+The schema also carries the semantics that are easy to get wrong — which fields are truncated
+versus rejected, which error codes are fatal, why there is no `url` field — in its `description`
+fields, so they survive code generation as comments.
 
 ## Troubleshooting
 
@@ -627,5 +908,15 @@ See `examples/connectors/echo/README.md` for first-run and subsequent-run behavi
 | `rate_limited` | More than 120 inbound messages per minute. Implement a send queue with backoff; session stays open. |
 | `message_too_long` | Message text exceeds `maxMessageLength`. Truncate or split before sending. |
 | `frame_too_large` | The raw WebSocket frame exceeds 1 MiB. Chunk large content. |
+| `media_not_supported` | You sent attachments without `capabilities.media: true` in `hello`, or the operator set `connectors.media.enabled: false`. |
+| `attachment_too_large` | The image exceeds `maxAttachmentBytes`, or exceeds `maxInlineBytes` when inlined. Upload it and send a handle instead. |
+| `attachment_type_not_allowed` | The type is outside `allowedMimeTypes`, or the bytes are not actually the type you declared. The Bridge sniffs magic bytes; renaming a file does not work. |
+| `attachment_not_found` | The handle is unknown, expired (10 min), already consumed (handles are single-use), or the Bridge restarted. Re-upload. |
+| HTTP 401 on the attachment endpoints | Missing or wrong `Authorization: Bearer <token>`. Use the token from your `paired` frame, not the pairing code. |
+| HTTP 404 on `GET /api/connectors/attachments/{handle}` | Unknown, expired, consumed, or another connector's handle — deliberately indistinguishable. |
+| HTTP 429 on upload | Upload rate limit (`maxUploadsPerMinute`, default 30). |
+| HTTP 507 on upload | Your channel's storage quota is full. Wait for handles to expire or be consumed. |
 | No `stream` frames arriving | `capabilities.streaming` was `false` or absent in `hello`. Reconnect with `streaming: true`. |
+| No attachments arriving on `outbound` | `capabilities.media` was `false` or absent in `hello`. Note the agent only attaches media on proactive sends, not on every reply. |
+| Replayed messages have no attachments | Expected. Replay is text-only — see [Media attachments](#media-attachments). |
 | No replay despite sending `sinceCursor` | Cursor is unparseable (must be ISO-8601), older than `MaxAge` (24 h), or the hub client is not connected. Check logs for `Connector replay:` warnings. |
