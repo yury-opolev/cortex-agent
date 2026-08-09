@@ -46,6 +46,37 @@ public sealed class ConnectorRateLimiter
     public int MaxMessagesPerMinute => this.maxMessagesPerMinute;
 
     /// <summary>
+    /// True when no acquisition inside the current window is still being counted, so the limiter
+    /// is indistinguishable from a freshly created one. Used to decide when a per-key limiter can
+    /// be discarded without granting its owner extra budget.
+    /// </summary>
+    public bool HasFullHeadroom
+    {
+        get
+        {
+            if (this.timestamps is null)
+            {
+                return true;
+            }
+
+            var nowTicks = this.timeProvider.GetUtcNow().UtcTicks;
+            var windowTicks = Window.Ticks;
+
+            lock (this.syncLock)
+            {
+                if (this.count == 0)
+                {
+                    return true;
+                }
+
+                // The newest entry sits immediately behind writePos.
+                var newest = this.timestamps[(this.writePos - 1 + this.maxMessagesPerMinute) % this.maxMessagesPerMinute];
+                return nowTicks - newest >= windowTicks;
+            }
+        }
+    }
+
+    /// <summary>
     /// Attempts to acquire a slot for one inbound message.
     /// </summary>
     /// <returns>

@@ -4,6 +4,7 @@ using Cortex.Contained.Bridge;
 using Cortex.Contained.Bridge.Auth;
 using Cortex.Contained.Bridge.Channels;
 using Cortex.Contained.Bridge.Connectors;
+using Cortex.Contained.Bridge.Connectors.Media;
 using Cortex.Contained.Bridge.Connectors.Pairing;
 using Cortex.Contained.Bridge.Connectors.Security;
 using Cortex.Contained.Bridge.Hub;
@@ -437,6 +438,29 @@ builder.Services.AddSingleton<Cortex.Contained.Bridge.Connectors.Replay.IConnect
         sp.GetRequiredService<BridgeConfig>(),
         sp.GetRequiredService<ILoggerFactory>().CreateLogger<Cortex.Contained.Bridge.Connectors.Replay.HubHistoryConnectorReplaySource>()));
 // TimeProvider is already registered below (line ~762); do not add a second instance.
+builder.Services.AddSingleton(sp =>
+    ConnectorMediaPolicy.From(
+        sp.GetRequiredService<BridgeConfig>().Connectors.Media,
+        sp.GetRequiredService<BridgeConfig>().Connectors.Limits.MaxFrameBytes));
+builder.Services.AddSingleton(sp =>
+    new ConnectorAttachmentStore(
+        sp.GetRequiredService<ConnectorMediaPolicy>(),
+        sp.GetRequiredService<TimeProvider>(),
+        sp.GetRequiredService<ILogger<ConnectorAttachmentStore>>()));
+builder.Services.AddSingleton<IConnectorAttachmentResolver>(sp => sp.GetRequiredService<ConnectorAttachmentStore>());
+builder.Services.AddSingleton<IConnectorAttachmentIssuer>(sp => sp.GetRequiredService<ConnectorAttachmentStore>());
+builder.Services.AddSingleton(sp =>
+    new ConnectorUploadRateLimiter(
+        sp.GetRequiredService<ConnectorMediaPolicy>().MaxUploadsPerMinute,
+        sp.GetRequiredService<TimeProvider>()));
+builder.Services.AddSingleton(sp =>
+    new ConnectorAttachmentService(
+        sp.GetRequiredService<ConnectorTokenStore>(),
+        sp.GetRequiredService<ConnectorAttachmentStore>(),
+        sp.GetRequiredService<ConnectorUploadRateLimiter>(),
+        sp.GetRequiredService<ConnectorMediaPolicy>(),
+        sp.GetRequiredService<TimeProvider>(),
+        sp.GetRequiredService<ILogger<ConnectorAttachmentService>>()));
 builder.Services.AddSingleton(sp =>
     new HubMessageDispatcher(
         sp.GetRequiredService<ChannelManager>(),
@@ -1157,6 +1181,9 @@ app.MapConnectorEndpoint();
 
 // --- Connector management API (list/approve/deny/enable/revoke/master toggle) ---
 app.MapConnectorEndpoints();
+
+// --- Connector attachment transfer (loopback-only, connector-token auth, not session auth) ---
+app.MapConnectorAttachmentEndpoints();
 
 // --- MCP server management API ---
 app.MapMcpEndpoints();
