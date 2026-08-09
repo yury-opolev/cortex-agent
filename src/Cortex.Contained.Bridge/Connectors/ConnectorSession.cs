@@ -54,6 +54,7 @@ public sealed partial class ConnectorSession : IAsyncDisposable
     private readonly ConnectorRateLimiter rateLimiter;
     private readonly ConnectorMediaPolicy mediaPolicy;
     private readonly ConnectorAttachmentValidator attachmentValidator;
+    private readonly ConnectorOutboundAttachmentProjector outboundAttachmentProjector;
     private readonly IConnectorAttachmentResolver? attachmentResolver;
     private readonly Lock teardownLock = new();
     private readonly Lock conversationLock = new();
@@ -87,6 +88,10 @@ public sealed partial class ConnectorSession : IAsyncDisposable
     /// Resolves attachment handles to bytes. Null means the Bridge is holding no uploaded
     /// content, so every handle a connector presents is treated as unknown.
     /// </param>
+    /// <param name="attachmentIssuer">
+    /// Issues handles for outbound attachments too large to inline. Null means oversized
+    /// outbound attachments are dropped rather than carried.
+    /// </param>
     public ConnectorSession(
         IConnectorTransport transport,
         IConnectorAuthenticator authenticator,
@@ -96,7 +101,8 @@ public sealed partial class ConnectorSession : IAsyncDisposable
         TimeProvider timeProvider,
         IConnectorAbortDispatcher abortDispatcher,
         IConnectorReplaySource replaySource,
-        IConnectorAttachmentResolver? attachmentResolver = null)
+        IConnectorAttachmentResolver? attachmentResolver = null,
+        IConnectorAttachmentIssuer? attachmentIssuer = null)
     {
         this.transport = transport;
         this.authenticator = authenticator;
@@ -111,6 +117,7 @@ public sealed partial class ConnectorSession : IAsyncDisposable
         this.rateLimiter = new ConnectorRateLimiter(settings.Limits.MaxMessagesPerMinute, timeProvider);
         this.mediaPolicy = ConnectorMediaPolicy.From(settings.Media, settings.Limits.MaxFrameBytes);
         this.attachmentValidator = new ConnectorAttachmentValidator(this.mediaPolicy);
+        this.outboundAttachmentProjector = new ConnectorOutboundAttachmentProjector(this.mediaPolicy, attachmentIssuer);
     }
 
     /// <summary>
@@ -739,6 +746,19 @@ public sealed partial class ConnectorSession : IAsyncDisposable
 
         try
         {
+            var attachmentProjection = this.outboundAttachmentProjector.Project(
+                message.Content.Attachments,
+                this.ChannelId ?? string.Empty,
+                this.Channel?.Capabilities.SupportsMedia ?? false);
+
+            if (attachmentProjection.DroppedCount > 0)
+            {
+                this.LogOutboundAttachmentsDropped(
+                    this.ChannelId ?? "?",
+                    attachmentProjection.DroppedCount,
+                    message.MessageId);
+            }
+
             var payload = new ConnectorOutboundPayload
             {
                 MessageId = message.MessageId,
@@ -747,6 +767,7 @@ public sealed partial class ConnectorSession : IAsyncDisposable
                 {
                     Text = message.Content.Text,
                     IsMarkdown = message.Content.IsMarkdown,
+                    Attachments = attachmentProjection.Attachments,
                 },
                 IsThinking = message.IsThinking,
 
@@ -1005,6 +1026,14 @@ public sealed partial class ConnectorSession : IAsyncDisposable
     /// </summary>
     [LoggerMessage(Level = LogLevel.Warning, Message = "Connector {ChannelId} referenced stored attachment content that is not allowed by the current media policy; message rejected.")]
     private partial void LogAttachmentHandleContentRejected(string channelId);
+
+    /// <summary>
+    /// Fires when the agent sent attachments that could not be delivered — the connector does not
+    /// support media, the type is not allowed, or the content is too large to inline with no
+    /// out-of-band channel available. The message itself is still delivered, minus the media.
+    /// </summary>
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Connector {ChannelId}: {DroppedCount} outbound attachment(s) on message {MessageId} could not be delivered and were dropped.")]
+    private partial void LogOutboundAttachmentsDropped(string channelId, int droppedCount, string messageId);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Frame sink: transport is closed, dropping frame.")]
     private partial void LogFrameSinkTransportClosed();

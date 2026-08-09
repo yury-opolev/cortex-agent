@@ -46,7 +46,8 @@ public sealed class ConnectorSessionTests
         TimeProvider? timeProvider = null,
         IConnectorAbortDispatcher? abortDispatcher = null,
         IConnectorReplaySource? replaySource = null,
-        IConnectorAttachmentResolver? attachmentResolver = null)
+        IConnectorAttachmentResolver? attachmentResolver = null,
+        IConnectorAttachmentIssuer? attachmentIssuer = null)
     {
         if (authenticator is null)
         {
@@ -83,7 +84,8 @@ public sealed class ConnectorSessionTests
             timeProvider ?? TimeProvider.System,
             abortDispatcher,
             replaySource,
-            attachmentResolver);
+            attachmentResolver,
+            attachmentIssuer);
     }
 
     // ── 1. Peer closes without hello ─────────────────────────────────
@@ -671,6 +673,141 @@ public sealed class ConnectorSessionTests
 
         Assert.Empty(received);
         Assert.Contains(transport.Sent, f => f.Contains("attachment_not_found"));
+    }
+
+    // ── 7c. Outbound attachments ─────────────────────────────────────
+
+    private static async Task<List<string>> SendOutboundAsync(
+        MessageContent content,
+        bool declareMedia = true,
+        IConnectorAttachmentIssuer? issuer = null)
+    {
+        var transport = new FakeConnectorTransport();
+        transport.QueueIncoming(ConnectorFrame.Serialize("hello", new ConnectorHelloPayload
+        {
+            Key = "terminal",
+            Capabilities = new ConnectorCapabilitiesPayload { Media = declareMedia },
+        }));
+
+        var registry = Substitute.For<IConnectorRegistry>();
+        PluginChannel? channel = null;
+        registry.TryAttachAsync(Arg.Do<PluginChannel>(ch => channel = ch), Arg.Any<CancellationToken>())
+            .Returns(_ => ValueTask.FromResult(ConnectorAttachResult.Ok()));
+        registry.DetachAsync(Arg.Any<PluginChannel>()).Returns(_ => ValueTask.CompletedTask);
+
+        var session = BuildSession(transport, registry: registry, attachmentIssuer: issuer);
+        var run = session.RunAsync(CancellationToken.None);
+
+        // Wait for the handshake to attach the channel, then push a message through it.
+        while (channel is null)
+        {
+            await Task.Delay(5);
+        }
+
+        await channel.SendMessageAsync(new OutboundMessage
+        {
+            MessageId = "m1",
+            ConversationId = "conv-1",
+            ChannelId = channel.ChannelId,
+            Content = content,
+        });
+
+        transport.CompleteIncoming();
+        await run;
+
+        return transport.Sent.Where(f => f.Contains("\"outbound\"")).ToList();
+    }
+
+    private static MediaAttachment OutboundPng(int totalBytes = 16)
+    {
+        var data = new byte[totalBytes];
+        new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A }.CopyTo(data, 0);
+        return new MediaAttachment { MimeType = "image/png", FileName = "chart.png", Data = data };
+    }
+
+    [Fact]
+    public async Task OutboundSink_MediaConnector_ReceivesInlineAttachment()
+    {
+        var frames = await SendOutboundAsync(new MessageContent
+        {
+            Text = "here you go",
+            Attachments = [OutboundPng()],
+        });
+
+        var frame = Assert.Single(frames);
+        using var doc = JsonDocument.Parse(frame);
+        var attachments = doc.RootElement.GetProperty("payload").GetProperty("content").GetProperty("attachments");
+
+        Assert.Equal(1, attachments.GetArrayLength());
+        Assert.Equal("image/png", attachments[0].GetProperty("mimeType").GetString());
+        Assert.Equal("chart.png", attachments[0].GetProperty("fileName").GetString());
+        Assert.False(attachments[0].TryGetProperty("url", out _));
+
+        var data = Convert.FromBase64String(attachments[0].GetProperty("data").GetString()!);
+        Assert.Equal(16, data.Length);
+    }
+
+    [Fact]
+    public async Task OutboundSink_NonMediaConnector_NeverSeesTheAttachmentsField()
+    {
+        // Byte-for-byte compatibility: the field must be absent, not an empty array.
+        var frames = await SendOutboundAsync(
+            new MessageContent { Text = "here you go", Attachments = [OutboundPng()] },
+            declareMedia: false);
+
+        var frame = Assert.Single(frames);
+        using var doc = JsonDocument.Parse(frame);
+        var content = doc.RootElement.GetProperty("payload").GetProperty("content");
+
+        Assert.False(content.TryGetProperty("attachments", out _));
+    }
+
+    [Fact]
+    public async Task OutboundSink_TextOnlyMessage_OmitsTheAttachmentsField()
+    {
+        var frames = await SendOutboundAsync(new MessageContent { Text = "just text" });
+
+        var frame = Assert.Single(frames);
+        using var doc = JsonDocument.Parse(frame);
+
+        Assert.False(doc.RootElement.GetProperty("payload").GetProperty("content")
+            .TryGetProperty("attachments", out _));
+    }
+
+    [Fact]
+    public async Task OutboundSink_LargeAttachmentWithIssuer_IsCarriedAsAHandle()
+    {
+        var issuer = Substitute.For<IConnectorAttachmentIssuer>();
+        issuer.Issue(Arg.Any<string>(), Arg.Any<ConnectorAttachmentContent>()).Returns("att_deadbeef");
+
+        var frames = await SendOutboundAsync(
+            new MessageContent { Attachments = [OutboundPng(512 * 1024)] },
+            issuer: issuer);
+
+        var frame = Assert.Single(frames);
+        using var doc = JsonDocument.Parse(frame);
+        var attachments = doc.RootElement.GetProperty("payload").GetProperty("content").GetProperty("attachments");
+
+        Assert.Equal("att_deadbeef", attachments[0].GetProperty("handle").GetString());
+        Assert.False(attachments[0].TryGetProperty("data", out _));
+    }
+
+    [Fact]
+    public async Task OutboundSink_LargeAttachmentWithoutIssuer_IsDroppedRatherThanOverflowingTheFrame()
+    {
+        var frames = await SendOutboundAsync(new MessageContent
+        {
+            Text = "the message still arrives",
+            Attachments = [OutboundPng(512 * 1024)],
+        });
+
+        var frame = Assert.Single(frames);
+        using var doc = JsonDocument.Parse(frame);
+        var content = doc.RootElement.GetProperty("payload").GetProperty("content");
+
+        Assert.Equal("the message still arrives", content.GetProperty("text").GetString());
+        Assert.False(content.TryGetProperty("attachments", out _));
+        Assert.True(frame.Length < 1_048_576, "frame must stay well inside the fatal frame cap");
     }
 
     [Fact]
