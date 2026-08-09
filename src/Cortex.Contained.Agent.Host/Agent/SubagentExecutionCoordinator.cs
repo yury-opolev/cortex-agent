@@ -347,12 +347,13 @@ public sealed partial class SubagentExecutionCoordinator : IHostedService, IDisp
     private void DispatchReadyWork(CancellationToken stopping)
     {
         // Recovered/queued work is dispatched ONLY after Bridge + credentials + MCP are ready.
-        if (!this.IsReady || stopping.IsCancellationRequested)
-        {
-            return;
-        }
-
-        while (!stopping.IsCancellationRequested && this.registry.HasAvailableSlot)
+        //
+        // Readiness is re-checked on EVERY iteration, not just on entry. A dispatch pass drains
+        // the queue in a loop, and the Bridge can disconnect part-way through it — sampling the
+        // gate once would let the rest of the pass keep claiming work that was queued AFTER the
+        // gate closed, which is exactly the state the gate exists to prevent. Work already
+        // claimed in this pass still runs to completion; only new claims stop.
+        while (!stopping.IsCancellationRequested && this.IsReady && this.registry.HasAvailableSlot)
         {
             var task = this.store.TryClaimOldestQueued();
             if (task is null)
