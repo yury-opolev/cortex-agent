@@ -274,16 +274,59 @@ public sealed class ConnectorSessionTests
         Assert.True(pairedIdx < readyIdx, "paired must come before ready");
     }
 
-    // ── 7. Capabilities clamped / media never enabled ────────────────
+    // ── 7. Capabilities clamped / media honoured ─────────────────────
 
     [Fact]
-    public async Task RunAsync_MediaCapabilityRequested_NeverEnabled()
+    public async Task RunAsync_MediaCapabilityRequested_IsHonoured()
+    {
+        var captured = await AttachAndCaptureChannelAsync(
+            new ConnectorCapabilitiesPayload { Media = true, MaxMessageLength = 200_000 });
+
+        Assert.True(captured.Capabilities.SupportsMedia);
+        Assert.Equal(100_000, captured.Capabilities.MaxMessageLength); // clamped
+    }
+
+    [Fact]
+    public async Task RunAsync_MediaCapabilityNotRequested_StaysDisabled()
+    {
+        var captured = await AttachAndCaptureChannelAsync(
+            new ConnectorCapabilitiesPayload { Media = false });
+
+        Assert.False(captured.Capabilities.SupportsMedia);
+    }
+
+    [Fact]
+    public async Task RunAsync_CapabilitiesAbsent_MediaStaysDisabled()
+    {
+        var captured = await AttachAndCaptureChannelAsync(capabilities: null);
+
+        Assert.False(captured.Capabilities.SupportsMedia);
+    }
+
+    [Fact]
+    public async Task RunAsync_MediaRequestedButDisabledByConfig_StaysDisabled()
+    {
+        // The operator kill-switch must beat a connector's own declaration, otherwise
+        // `connectors.media.enabled: false` would not actually turn anything off.
+        var settings = DefaultSettings();
+        settings.Media = new ConnectorMediaConfig { Enabled = false };
+
+        var captured = await AttachAndCaptureChannelAsync(
+            new ConnectorCapabilitiesPayload { Media = true },
+            settings);
+
+        Assert.False(captured.Capabilities.SupportsMedia);
+    }
+
+    private static async Task<PluginChannel> AttachAndCaptureChannelAsync(
+        ConnectorCapabilitiesPayload? capabilities,
+        ConnectorSettingsConfig? settings = null)
     {
         var transport = new FakeConnectorTransport();
         transport.QueueIncoming(ConnectorFrame.Serialize("hello", new ConnectorHelloPayload
         {
             Key = "terminal",
-            Capabilities = new ConnectorCapabilitiesPayload { Media = true, MaxMessageLength = 200_000 },
+            Capabilities = capabilities,
         }));
         transport.CompleteIncoming();
 
@@ -294,12 +337,11 @@ public sealed class ConnectorSessionTests
         registry.DetachAsync(Arg.Any<PluginChannel>())
             .Returns(_ => ValueTask.CompletedTask);
 
-        var session = BuildSession(transport, registry: registry);
+        var session = BuildSession(transport, registry: registry, settings: settings);
         await session.RunAsync(CancellationToken.None);
 
         Assert.NotNull(captured);
-        Assert.False(captured!.Capabilities.SupportsMedia);
-        Assert.Equal(100_000, captured.Capabilities.MaxMessageLength); // clamped
+        return captured!;
     }
 
     [Fact]

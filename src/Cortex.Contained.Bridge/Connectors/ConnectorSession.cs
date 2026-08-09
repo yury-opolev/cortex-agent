@@ -1,3 +1,4 @@
+using Cortex.Contained.Bridge.Connectors.Media;
 using Cortex.Contained.Bridge.Connectors.Protocol;
 using Cortex.Contained.Bridge.Connectors.Replay;
 using Cortex.Contained.Contracts.Channels;
@@ -51,6 +52,7 @@ public sealed partial class ConnectorSession : IAsyncDisposable
     private readonly IConnectorAbortDispatcher abortDispatcher;
     private readonly IConnectorReplaySource replaySource;
     private readonly ConnectorRateLimiter rateLimiter;
+    private readonly ConnectorMediaPolicy mediaPolicy;
     private readonly Lock teardownLock = new();
     private readonly Lock conversationLock = new();
     private readonly HashSet<string> ownedConversations = new(StringComparer.Ordinal);
@@ -91,6 +93,7 @@ public sealed partial class ConnectorSession : IAsyncDisposable
         this.abortDispatcher = abortDispatcher;
         this.replaySource = replaySource;
         this.rateLimiter = new ConnectorRateLimiter(settings.Limits.MaxMessagesPerMinute, timeProvider);
+        this.mediaPolicy = ConnectorMediaPolicy.From(settings.Media, settings.Limits.MaxFrameBytes);
     }
 
     /// <summary>
@@ -257,7 +260,10 @@ public sealed partial class ConnectorSession : IAsyncDisposable
         {
             SupportsStreaming = caps?.Streaming ?? false,
             SupportsRichText = caps?.RichText ?? false,
-            SupportsMedia = false,
+
+            // The operator kill-switch beats the connector's own declaration: a connector can
+            // only opt IN to media, never enable it when policy has turned it off.
+            SupportsMedia = this.mediaPolicy.Enabled && (caps?.Media ?? false),
             MaxMessageLength = Math.Clamp(caps?.MaxMessageLength ?? 100_000, 1, 100_000),
         };
 
