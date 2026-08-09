@@ -15,8 +15,9 @@ namespace Cortex.Contained.Bridge.Connectors.Media;
 /// <item>
 /// <see cref="MaxInlineBytes"/> is hard-capped by a ceiling derived from
 /// <c>ConnectorLimitsConfig.MaxFrameBytes</c>. Configuring it separately is convenient, but
-/// letting it drift above what a frame can carry would turn every inline attachment into a
-/// FATAL <c>frame_too_large</c> close.
+/// letting it drift above what a frame can carry would make every inline attachment overflow the
+/// frame — fatal inbound (<c>frame_too_large</c> closes the session), and a dropped message
+/// outbound.
 /// </item>
 /// <item>
 /// <see cref="MaxTotalInlineBytes"/> bounds the whole message rather than one attachment.

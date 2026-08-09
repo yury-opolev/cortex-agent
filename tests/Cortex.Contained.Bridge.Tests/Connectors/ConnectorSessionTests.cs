@@ -809,6 +809,20 @@ public sealed class ConnectorSessionTests
     }
 
     [Fact]
+    public async Task OutboundSink_MessageTextAloneExceedsTheFrame_IsDroppedWithoutKillingTheSession()
+    {
+        // The attachment budget cannot help here: the text overflows the cap before any
+        // attachment is considered. The transport backstop must catch it and the session
+        // must survive, losing only this message.
+        var frames = await SendOutboundAsync(new MessageContent
+        {
+            Text = new string('x', 2 * 1024 * 1024),
+        });
+
+        Assert.Empty(frames);
+    }
+
+    [Fact]
     public async Task RunAsync_NullCapabilities_DoesNotThrow()
     {
         var transport = new FakeConnectorTransport();

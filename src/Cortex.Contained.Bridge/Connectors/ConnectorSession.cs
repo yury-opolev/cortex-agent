@@ -46,6 +46,12 @@ public sealed partial class ConnectorSession : IAsyncDisposable
     /// Covers the JSON structure the attachment array itself adds (the field name, brackets and
     /// separators) plus slack for any estimate being marginally optimistic.
     /// </summary>
+    /// <remarks>
+    /// Exceeding the frame cap outbound is not fatal — <see cref="WebSocketConnectorTransport"/>
+    /// throws, the session survives, and the message is dropped with a logged error. That is
+    /// still a lost message, so the budget aims to make it unreachable rather than merely
+    /// survivable.
+    /// </remarks>
     internal const int OutboundFrameSafetyMarginBytes = 4096;
 
     private static readonly TimeSpan RateLimitLogSuppression = TimeSpan.FromMinutes(1);
@@ -817,6 +823,16 @@ public sealed partial class ConnectorSession : IAsyncDisposable
             await this.transport.SendAsync(json, ct).ConfigureAwait(false);
             return SendResult.Ok(message.MessageId);
         }
+        catch (ConnectorFrameTooLargeException ex)
+        {
+            // The attachment budget cannot prevent this on its own: a message whose TEXT alone
+            // exceeds the frame cap is already too large before any attachment is considered.
+            // The transport backstop caught it, so the session survives and only this message is
+            // lost — but it is lost silently from the connector's point of view, so say so
+            // clearly here rather than letting it look like a network fault.
+            this.LogOutboundFrameTooLarge(this.ChannelId ?? "?", message.MessageId, ex.MaxFrameBytes);
+            return SendResult.Error($"outbound frame exceeds the {ex.MaxFrameBytes}-byte limit");
+        }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             this.LogOutboundSendFailed(message.MessageId, ex);
@@ -1070,6 +1086,13 @@ public sealed partial class ConnectorSession : IAsyncDisposable
     /// </summary>
     [LoggerMessage(Level = LogLevel.Warning, Message = "Connector {ChannelId}: {DroppedCount} outbound attachment(s) on message {MessageId} could not be delivered and were dropped.")]
     private partial void LogOutboundAttachmentsDropped(string channelId, int droppedCount, string messageId);
+
+    /// <summary>
+    /// Fires when a whole outbound message is too large for a frame, which after attachment
+    /// budgeting means its text alone overflows the cap. The session survives; the message does not.
+    /// </summary>
+    [LoggerMessage(Level = LogLevel.Error, Message = "Connector {ChannelId}: outbound message {MessageId} exceeds the {MaxFrameBytes}-byte frame limit and was NOT delivered. The session remains open.")]
+    private partial void LogOutboundFrameTooLarge(string channelId, string messageId, int maxFrameBytes);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Frame sink: transport is closed, dropping frame.")]
     private partial void LogFrameSinkTransportClosed();

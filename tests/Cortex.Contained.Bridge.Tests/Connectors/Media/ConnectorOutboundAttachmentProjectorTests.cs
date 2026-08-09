@@ -440,6 +440,27 @@ public sealed class ConnectorOutboundAttachmentProjectorTests
         }
     }
 
+    [Fact]
+    public void EstimateHandleWireCost_IsNeverBelowTheActualSerialisedCost()
+    {
+        var payload = new ConnectorAttachmentPayload
+        {
+            MimeType = "image/png",
+            FileName = "chart.png",
+            Caption = "a caption",
+            SizeBytes = 512 * 1024,
+            Handle = "att_9f2c14e0d3b74a15aabb",
+        };
+
+        var actual = Encoding.UTF8.GetByteCount(JsonSerializer.Serialize(payload, ConnectorJson.Options));
+        var estimate = ConnectorOutboundAttachmentProjector.EstimateHandleWireCost(
+            payload.Handle,
+            payload.FileName,
+            payload.Caption);
+
+        Assert.True(estimate >= actual, $"estimate {estimate} understated actual {actual}");
+    }
+
     private static byte[] PngBytes(int totalBytes)
     {
         var data = new byte[totalBytes];

@@ -355,14 +355,18 @@ function isFatalError(code, isEstablished = true) {
     "unknown_frame_type",
     "protocol_violation",
     "frame_too_large",
-    "not_paired",
     "connector_limit_reached",
     "duplicate_connector",
     "connectors_disabled",
   ]);
   if (fatal.has(code)) return true;
 
-  // Pre-handshake, invalid_payload also closes the socket.
+  // invalid_payload is the one code whose fatality depends on WHERE you are: the Bridge closes
+  // the socket for a bad hello or an unparseable frame, but keeps the session open for a bad
+  // inbound. Having received `ready` is the signal.
+  //
+  // Note there is deliberately no "not_paired" above: it is defined in the protocol but the
+  // state machine makes it unreachable, so the Bridge never sends it.
   return code === "invalid_payload" && !isEstablished;
 }
 
@@ -490,7 +494,8 @@ async function uploadAttachment(filePath, state) {
   return handle;
 }
 
-/** Schedule a reconnect attempt with exponential backoff. */function scheduleReconnect() {
+/** Schedule a reconnect attempt with exponential backoff. */
+function scheduleReconnect() {
   const delay = backoffMs;
   backoffMs = Math.min(backoffMs * 2, BACKOFF_MAX_MS);
   console.log(`[echo] Reconnecting in ${delay / 1000} s …`);

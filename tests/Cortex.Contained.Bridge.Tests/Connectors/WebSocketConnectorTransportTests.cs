@@ -1,3 +1,4 @@
+using System.Net.WebSockets;
 using System.Text;
 using Cortex.Contained.Bridge.Connectors;
 
@@ -69,6 +70,96 @@ public sealed class WebSocketConnectorTransportTests
         var ex = new ConnectorFrameTooLargeException(65536);
         Assert.Equal(65536, ex.MaxFrameBytes);
         Assert.Contains("65536", ex.Message);
+    }
+
+    // ── Outbound frame cap ───────────────────────────────────────────
+
+    [Fact]
+    public async Task SendAsync_FrameWithinTheLimit_IsSent()
+    {
+        var (transport, socket) = BuildTransport(maxFrameBytes: 1024);
+
+        await transport.SendAsync(new string('a', 512), CancellationToken.None);
+
+        Assert.Single(socket.Sent);
+    }
+
+    [Fact]
+    public async Task SendAsync_FrameExceedingTheLimit_ThrowsInsteadOfSending()
+    {
+        // The frame cap used to be enforced only on RECEIVE. An oversized outbound frame has no
+        // defined behaviour in a third-party WebSocket library, so this backstop turns an
+        // upstream budgeting bug into a loud local failure instead of a mystery disconnect.
+        var (transport, socket) = BuildTransport(maxFrameBytes: 1024);
+
+        var ex = await Assert.ThrowsAsync<ConnectorFrameTooLargeException>(
+            () => transport.SendAsync(new string('a', 2048), CancellationToken.None));
+
+        Assert.Equal(1024, ex.MaxFrameBytes);
+        Assert.Empty(socket.Sent);
+    }
+
+    [Fact]
+    public async Task SendAsync_CountsUtf8BytesNotCharacters()
+    {
+        // 400 euro signs is 400 UTF-16 units but 1200 UTF-8 bytes. Counting characters would
+        // let a frame through that is comfortably over the wire limit.
+        var (transport, socket) = BuildTransport(maxFrameBytes: 1024);
+
+        await Assert.ThrowsAsync<ConnectorFrameTooLargeException>(
+            () => transport.SendAsync(new string('€', 400), CancellationToken.None));
+
+        Assert.Empty(socket.Sent);
+    }
+
+    private static (WebSocketConnectorTransport Transport, RecordingWebSocket Socket) BuildTransport(int maxFrameBytes)
+    {
+        var socket = new RecordingWebSocket();
+        return (new WebSocketConnectorTransport(socket, "127.0.0.1", maxFrameBytes), socket);
+    }
+
+    /// <summary>
+    /// Minimal <see cref="WebSocket"/> that records what was sent. Only the members the
+    /// transport's send path touches are implemented.
+    /// </summary>
+    private sealed class RecordingWebSocket : WebSocket
+    {
+        public List<byte[]> Sent { get; } = [];
+
+        public override WebSocketState State => WebSocketState.Open;
+
+        public override WebSocketCloseStatus? CloseStatus => null;
+
+        public override string? CloseStatusDescription => null;
+
+        public override string? SubProtocol => null;
+
+        public override Task SendAsync(
+            ArraySegment<byte> buffer,
+            WebSocketMessageType messageType,
+            bool endOfMessage,
+            CancellationToken cancellationToken)
+        {
+            this.Sent.Add(buffer.ToArray());
+            return Task.CompletedTask;
+        }
+
+        public override void Abort()
+        {
+        }
+
+        public override void Dispose()
+        {
+        }
+
+        public override Task CloseAsync(WebSocketCloseStatus closeStatus, string? statusDescription, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
+        public override Task CloseOutputAsync(WebSocketCloseStatus closeStatus, string? statusDescription, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
+        public override Task<WebSocketReceiveResult> ReceiveAsync(ArraySegment<byte> buffer, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
     }
 
     // Note: Integration tests with real WebSocket pairs require a live HTTP server.

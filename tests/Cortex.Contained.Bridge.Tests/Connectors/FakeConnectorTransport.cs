@@ -26,6 +26,16 @@ internal sealed class FakeConnectorTransport : IConnectorTransport
     /// <summary>Exception thrown when <see cref="Faulted"/> is true.</summary>
     public Exception FaultException { get; set; } = new InvalidOperationException("transport faulted");
 
+    /// <summary>
+    /// Outbound frame cap, mirroring the real transport's backstop. Zero means unlimited.
+    /// </summary>
+    /// <remarks>
+    /// Modelled here because a fake that silently accepts an oversized frame would let a session
+    /// test "pass" on behaviour the real transport rejects — exactly the gap that let an
+    /// over-budget outbound frame reach review undetected.
+    /// </remarks>
+    public int MaxFrameBytes { get; set; } = 1_048_576;
+
     /// <summary>Queue a JSON frame that will be returned by the next <see cref="ReceiveAsync"/> call.</summary>
     public void QueueIncoming(string json) => this.incoming.Writer.TryWrite(json);
 
@@ -46,6 +56,11 @@ internal sealed class FakeConnectorTransport : IConnectorTransport
     /// <inheritdoc/>
     public Task SendAsync(string json, CancellationToken ct)
     {
+        if (this.MaxFrameBytes > 0 && System.Text.Encoding.UTF8.GetByteCount(json) > this.MaxFrameBytes)
+        {
+            throw new ConnectorFrameTooLargeException(this.MaxFrameBytes);
+        }
+
         this.Sent.Add(json);
         return Task.CompletedTask;
     }

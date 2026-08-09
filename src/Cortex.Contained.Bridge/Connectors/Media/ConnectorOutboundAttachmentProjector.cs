@@ -27,10 +27,15 @@ public sealed record ConnectorOutboundAttachmentProjection
 /// Bridge-issued handle the connector fetches out of band.
 /// </summary>
 /// <remarks>
-/// Dropping is always preferred to sending something unsafe. An attachment that cannot be
+/// Dropping is always preferred to sending something oversized. An attachment that cannot be
 /// carried is omitted and counted, never squeezed into a frame that would exceed
-/// <c>MaxFrameBytes</c> — that is a FATAL <c>frame_too_large</c> close, so one oversized image
-/// would take the whole session down with it.
+/// <c>MaxFrameBytes</c>.
+/// <para>
+/// The consequence differs by direction, which is worth being precise about: an oversized
+/// INBOUND frame is fatal — the Bridge sends <c>frame_too_large</c> and closes. Outbound, the
+/// transport's own cap check throws, the session survives, and only that one message is lost.
+/// Neither is acceptable, but the outbound failure mode is the recoverable one.
+/// </para>
 /// <para>
 /// The inline budget is supplied per message rather than read from policy, because the frame
 /// also has to hold the message text, which can run to <c>maxMessageLength</c> characters. Any
@@ -238,6 +243,10 @@ public sealed class ConnectorOutboundAttachmentProjector
             return null;
         }
 
+        // A handle payload is small but not free — it still carries the metadata. Charging it to
+        // the same budget keeps the accounting complete rather than merely almost complete.
+        remainingInlineBudget -= EstimateHandleWireCost(handle, fileName, caption);
+
         return new ConnectorAttachmentPayload
         {
             MimeType = mimeType,
@@ -246,5 +255,21 @@ public sealed class ConnectorOutboundAttachmentProjector
             SizeBytes = data.LongLength,
             Handle = handle,
         };
+    }
+
+    /// <summary>
+    /// Upper bound on the wire bytes a handle-carried attachment payload costs. Far smaller than
+    /// the inline case — the bytes travel out of band — but the metadata still rides the frame.
+    /// </summary>
+    /// <param name="handle">The issued handle.</param>
+    /// <param name="fileName">The sanitised file name, or null.</param>
+    /// <param name="caption">The truncated caption, or null.</param>
+    internal static long EstimateHandleWireCost(string handle, string? fileName, string? caption)
+    {
+        var metadata = handle.Length
+            + (fileName is null ? 0 : Encoding.UTF8.GetByteCount(fileName))
+            + (caption is null ? 0 : Encoding.UTF8.GetByteCount(caption));
+
+        return (metadata * JsonStringEscapeWorstCase) + PerAttachmentJsonOverheadBytes;
     }
 }
