@@ -5,6 +5,7 @@ with no fork — by connecting over a documented **WebSocket + JSON protocol**, 
 through a pairing flow, and behaving like any first-party channel from that point on.
 
 - Spec: [`docs/superpowers/specs/2026-08-07-connector-plugin-system-design.md`](superpowers/specs/2026-08-07-connector-plugin-system-design.md)
+- **Machine-readable schema**: [`docs/connector-protocol.schema.json`](connector-protocol.schema.json) — JSON Schema for every frame. Generate types from it, or validate against it in tests. Kept in lockstep with the implementation by `ConnectorProtocolSchemaTests`, which fails the build on drift.
 - Reference implementation: [`examples/connectors/echo`](../examples/connectors/echo) — single-file, zero-dependency Node.js
 - Shipped: (unreleased)
 
@@ -870,6 +871,26 @@ node examples/connectors/echo/connector.mjs
 ```
 
 See `examples/connectors/echo/README.md` for first-run and subsequent-run behaviour.
+
+### Building a client in another language
+
+The example is JavaScript, but nothing about the protocol is. Everything you need is a WebSocket
+client and a JSON parser.
+
+[`docs/connector-protocol.schema.json`](connector-protocol.schema.json) describes every frame as
+JSON Schema (draft 2020-12), so you can generate types rather than hand-writing them:
+
+| Language | Tool |
+|---|---|
+| TypeScript | `json-schema-to-typescript` |
+| Python | `datamodel-code-generator` |
+| Go | `go-jsonschema` |
+| Rust | `typify` / `schemars` |
+| C#/Java | `quicktype`, or NSwag/jsonschema2pojo |
+
+The schema also carries the semantics that are easy to get wrong — which fields are truncated
+versus rejected, which error codes are fatal, why there is no `url` field — in its `description`
+fields, so they survive code generation as comments.
 
 ## Troubleshooting
 
