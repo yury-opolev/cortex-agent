@@ -221,19 +221,17 @@ public sealed class ConnectorAttachmentRoundTripTests
             Capabilities = new ConnectorCapabilitiesPayload { Media = true },
         }));
 
-        PluginChannel? channel = null;
+        var attachTcs = new TaskCompletionSource<PluginChannel>(TaskCreationOptions.RunContinuationsAsynchronously);
         var registry = Substitute.For<IConnectorRegistry>();
-        registry.TryAttachAsync(Arg.Do<PluginChannel>(ch => channel = ch), Arg.Any<CancellationToken>())
+        registry.TryAttachAsync(Arg.Do<PluginChannel>(ch => attachTcs.TrySetResult(ch)), Arg.Any<CancellationToken>())
             .Returns(_ => ValueTask.FromResult(ConnectorAttachResult.Ok()));
         registry.DetachAsync(Arg.Any<PluginChannel>()).Returns(_ => ValueTask.CompletedTask);
 
         var session = NewSession(transport, h, registry, []);
         var run = session.RunAsync(CancellationToken.None);
 
-        while (channel is null)
-        {
-            await Task.Delay(5);
-        }
+        // Bounded wait so a broken handshake fails fast instead of hanging the suite.
+        var channel = await attachTcs.Task.WaitAsync(TimeSpan.FromSeconds(10));
 
         await channel.SendMessageAsync(new OutboundMessage
         {
@@ -286,19 +284,17 @@ public sealed class ConnectorAttachmentRoundTripTests
             Capabilities = new ConnectorCapabilitiesPayload { Media = true },
         }));
 
-        PluginChannel? channel = null;
+        var attachTcs = new TaskCompletionSource<PluginChannel>(TaskCreationOptions.RunContinuationsAsynchronously);
         var registry = Substitute.For<IConnectorRegistry>();
-        registry.TryAttachAsync(Arg.Do<PluginChannel>(ch => channel = ch), Arg.Any<CancellationToken>())
+        registry.TryAttachAsync(Arg.Do<PluginChannel>(ch => attachTcs.TrySetResult(ch)), Arg.Any<CancellationToken>())
             .Returns(_ => ValueTask.FromResult(ConnectorAttachResult.Ok()));
         registry.DetachAsync(Arg.Any<PluginChannel>()).Returns(_ => ValueTask.CompletedTask);
 
         var session = NewSession(transport, h, registry, []);
         var run = session.RunAsync(CancellationToken.None);
 
-        while (channel is null)
-        {
-            await Task.Delay(5);
-        }
+        // Bounded wait so a broken handshake fails fast instead of hanging the suite.
+        var channel = await attachTcs.Task.WaitAsync(TimeSpan.FromSeconds(10));
 
         await channel.SendMessageAsync(new OutboundMessage
         {

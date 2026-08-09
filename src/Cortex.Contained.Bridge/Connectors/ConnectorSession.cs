@@ -1,3 +1,4 @@
+using System.Text;
 using Cortex.Contained.Bridge.Connectors.Media;
 using Cortex.Contained.Bridge.Connectors.Protocol;
 using Cortex.Contained.Bridge.Connectors.Replay;
@@ -39,6 +40,13 @@ public sealed partial class ConnectorSession : IAsyncDisposable
     /// <summary>Maximum length of display-name fields (sender.displayName, hello.displayName).</summary>
     /// <remarks>Truncate on excess — display names are cosmetic and safe to shorten.</remarks>
     internal const int MaxDisplayNameLength = 256;
+
+    /// <summary>
+    /// Bytes held back from the outbound frame budget after the envelope has been measured.
+    /// Covers the JSON structure the attachment array itself adds (the field name, brackets and
+    /// separators) plus slack for any estimate being marginally optimistic.
+    /// </summary>
+    internal const int OutboundFrameSafetyMarginBytes = 4096;
 
     private static readonly TimeSpan RateLimitLogSuppression = TimeSpan.FromMinutes(1);
 
@@ -746,10 +754,38 @@ public sealed partial class ConnectorSession : IAsyncDisposable
 
         try
         {
+            var cursor = ConnectorCursor.Format(message.Timestamp ?? this.timeProvider.GetUtcNow());
+
+            // Measure the frame WITHOUT attachments first. A fixed reserve cannot work here:
+            // message text alone may be up to MaxMessageLength characters, which dwarfs any
+            // constant we could pick. Budgeting from the real envelope is what makes
+            // "attachments never overflow the frame" true rather than merely likely.
+            var skeleton = new ConnectorOutboundPayload
+            {
+                MessageId = message.MessageId,
+                ConversationId = message.ConversationId,
+                Content = new ConnectorContentPayload
+                {
+                    Text = message.Content.Text,
+                    IsMarkdown = message.Content.IsMarkdown,
+                },
+                IsThinking = message.IsThinking,
+                Cursor = cursor,
+            };
+
+            var envelopeBytes = Encoding.UTF8.GetByteCount(
+                ConnectorFrame.Serialize(ConnectorFrameTypes.Outbound, skeleton));
+
+            var inlineBudget = (int)Math.Clamp(
+                this.settings.Limits.MaxFrameBytes - envelopeBytes - OutboundFrameSafetyMarginBytes,
+                0,
+                int.MaxValue);
+
             var attachmentProjection = this.outboundAttachmentProjector.Project(
                 message.Content.Attachments,
                 this.ChannelId ?? string.Empty,
-                this.Channel?.Capabilities.SupportsMedia ?? false);
+                this.Channel?.Capabilities.SupportsMedia ?? false,
+                inlineBudget);
 
             if (attachmentProjection.DroppedCount > 0)
             {
@@ -775,7 +811,7 @@ public sealed partial class ConnectorSession : IAsyncDisposable
                 // clock: the connector sends it back as sinceCursor and replay compares it
                 // against stored timestamps. Using the send-time clock would silently skip
                 // any message persisted between the store write and this dispatch.
-                Cursor = ConnectorCursor.Format(message.Timestamp ?? this.timeProvider.GetUtcNow()),
+                Cursor = cursor,
             };
             var json = ConnectorFrame.Serialize(ConnectorFrameTypes.Outbound, payload);
             await this.transport.SendAsync(json, ct).ConfigureAwait(false);

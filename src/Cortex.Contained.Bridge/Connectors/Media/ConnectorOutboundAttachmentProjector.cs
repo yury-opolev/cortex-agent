@@ -1,3 +1,4 @@
+using System.Text;
 using Cortex.Contained.Bridge.Connectors.Protocol;
 using Cortex.Contained.Contracts.Messages;
 
@@ -31,11 +32,39 @@ public sealed record ConnectorOutboundAttachmentProjection
 /// <c>MaxFrameBytes</c> — that is a FATAL <c>frame_too_large</c> close, so one oversized image
 /// would take the whole session down with it.
 /// <para>
+/// The inline budget is supplied per message rather than read from policy, because the frame
+/// also has to hold the message text, which can run to <c>maxMessageLength</c> characters. Any
+/// fixed reserve large enough for that would be too small to allow useful inlining, and any
+/// reserve small enough to allow inlining would be overrun by a long message.
+/// </para>
+/// <para>
+/// NOTE ON REACH: only the proactive path currently carries attachments to a channel.
+/// <c>HubMessageDispatcher.OnAgentResponseCompleteAsync</c> builds its outbound message from
+/// <c>ResponseCompleteMessage</c>, which has no attachments field, so a normal agent reply never
+/// has media to project. Attachments reach a connector when the agent calls its
+/// <c>send_message</c> tool. This mirrors the existing Discord behaviour and is not specific to
+/// connectors.
+/// </para>
+/// <para>
 /// Pure apart from the optional issuer, so the carrying-mode decisions are directly testable.
 /// </para>
 /// </remarks>
 public sealed class ConnectorOutboundAttachmentProjector
 {
+    /// <summary>
+    /// Fixed JSON cost of one attachment object: field names, braces, quotes, commas, the MIME
+    /// type, and the digits of <c>sizeBytes</c>. Generous on purpose — being wrong in the
+    /// cautious direction costs a little inline headroom; being wrong the other way is a fatal
+    /// <c>frame_too_large</c> close.
+    /// </summary>
+    internal const int PerAttachmentJsonOverheadBytes = 256;
+
+    /// <summary>
+    /// Worst-case expansion of one metadata byte inside a JSON string, where every character
+    /// could require a six-character <c>\uXXXX</c> escape.
+    /// </summary>
+    internal const int JsonStringEscapeWorstCase = 6;
+
     private readonly ConnectorMediaPolicy policy;
     private readonly IConnectorAttachmentIssuer? issuer;
 
@@ -59,10 +88,16 @@ public sealed class ConnectorOutboundAttachmentProjector
     /// <param name="attachments">The agent's attachments; may be null or empty.</param>
     /// <param name="channelId">The receiving channel, used to scope any issued handle.</param>
     /// <param name="supportsMedia">Whether the receiving connector negotiated media support.</param>
+    /// <param name="inlineBudgetBytes">
+    /// Wire bytes still available in this specific frame for inline attachment payloads, after
+    /// the envelope and message text have been accounted for. Pass
+    /// <see cref="int.MaxValue"/> only when the frame budget genuinely does not apply.
+    /// </param>
     public ConnectorOutboundAttachmentProjection Project(
         IReadOnlyList<MediaAttachment>? attachments,
         string channelId,
-        bool supportsMedia)
+        bool supportsMedia,
+        int inlineBudgetBytes)
     {
         if (attachments is null || attachments.Count == 0)
         {
@@ -79,17 +114,18 @@ public sealed class ConnectorOutboundAttachmentProjector
         var projected = new List<ConnectorAttachmentPayload>(
             Math.Min(attachments.Count, this.policy.MaxAttachmentsPerMessage));
         var dropped = 0;
-        var totalInlineBytes = 0L;
+        var remainingInlineBudget = (long)Math.Min(inlineBudgetBytes, this.policy.MaxTotalInlineBytes);
 
-        foreach (var attachment in attachments)
+        for (var i = 0; i < attachments.Count; i++)
         {
             if (projected.Count == this.policy.MaxAttachmentsPerMessage)
             {
-                dropped++;
-                continue;
+                // Nothing after this point can be carried; do not walk the rest of the list.
+                dropped += attachments.Count - i;
+                break;
             }
 
-            var payload = this.ProjectOne(attachment, channelId, ref totalInlineBytes);
+            var payload = this.ProjectOne(attachments[i], channelId, ref remainingInlineBudget);
             if (payload is null)
             {
                 dropped++;
@@ -106,10 +142,30 @@ public sealed class ConnectorOutboundAttachmentProjector
         };
     }
 
+    /// <summary>
+    /// Upper bound on the wire bytes an inline attachment payload costs: the base64 body plus
+    /// its JSON field names, quoting, and the UTF-8 encoding of its metadata.
+    /// </summary>
+    /// <param name="rawByteCount">Decoded size of the attachment.</param>
+    /// <param name="fileName">The sanitised file name, or null.</param>
+    /// <param name="caption">The truncated caption, or null.</param>
+    internal static long EstimateInlineWireCost(long rawByteCount, string? fileName, string? caption)
+    {
+        // Base64 encodes 3 bytes as 4 characters, rounded up to a 4-character group.
+        var base64Length = ((rawByteCount + 2) / 3) * 4;
+
+        var metadata = (fileName is null ? 0 : Encoding.UTF8.GetByteCount(fileName))
+            + (caption is null ? 0 : Encoding.UTF8.GetByteCount(caption));
+
+        // Metadata is JSON string content, so every character could need a six-byte \uXXXX
+        // escape in the worst case. Assuming that is cheap and keeps the bound honest.
+        return base64Length + (metadata * JsonStringEscapeWorstCase) + PerAttachmentJsonOverheadBytes;
+    }
+
     private ConnectorAttachmentPayload? ProjectOne(
         MediaAttachment attachment,
         string channelId,
-        ref long totalInlineBytes)
+        ref long remainingInlineBudget)
     {
         // Only attachments the Bridge physically holds can be delivered. A MediaAttachment
         // carrying a Url instead of Data belongs to a channel that fetches its own media; the
@@ -138,17 +194,26 @@ public sealed class ConnectorOutboundAttachmentProjector
             return null;
         }
 
-        var fitsInline = data.Length <= this.policy.MaxInlineBytes
-            && totalInlineBytes + data.Length <= this.policy.MaxTotalInlineBytes;
-
         var fileName = ConnectorText.Truncate(
             ConnectorAttachmentValidator.SanitizeFileName(attachment.FileName),
             ConnectorAttachmentValidator.MaxFileNameLength);
         var caption = ConnectorText.Truncate(attachment.Caption, ConnectorAttachmentValidator.MaxCaptionLength);
 
+        // Metadata is priced into the decision, not just the payload: four maximum-length
+        // captions are several kilobytes on their own, and a budget that ignored them would
+        // authorise a frame it cannot actually fit.
+        var fitsInline = data.Length <= this.policy.MaxInlineBytes;
+        long inlineWireCost = 0;
+
         if (fitsInline)
         {
-            totalInlineBytes += data.Length;
+            inlineWireCost = EstimateInlineWireCost(data.LongLength, fileName, caption);
+            fitsInline = inlineWireCost <= remainingInlineBudget;
+        }
+
+        if (fitsInline)
+        {
+            remainingInlineBudget -= inlineWireCost;
 
             return new ConnectorAttachmentPayload
             {

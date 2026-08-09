@@ -690,19 +690,17 @@ public sealed class ConnectorSessionTests
         }));
 
         var registry = Substitute.For<IConnectorRegistry>();
-        PluginChannel? channel = null;
-        registry.TryAttachAsync(Arg.Do<PluginChannel>(ch => channel = ch), Arg.Any<CancellationToken>())
+        var attachTcs = new TaskCompletionSource<PluginChannel>(TaskCreationOptions.RunContinuationsAsynchronously);
+        registry.TryAttachAsync(Arg.Do<PluginChannel>(ch => attachTcs.TrySetResult(ch)), Arg.Any<CancellationToken>())
             .Returns(_ => ValueTask.FromResult(ConnectorAttachResult.Ok()));
         registry.DetachAsync(Arg.Any<PluginChannel>()).Returns(_ => ValueTask.CompletedTask);
 
         var session = BuildSession(transport, registry: registry, attachmentIssuer: issuer);
         var run = session.RunAsync(CancellationToken.None);
 
-        // Wait for the handshake to attach the channel, then push a message through it.
-        while (channel is null)
-        {
-            await Task.Delay(5);
-        }
+        // Bounded wait: a handshake that never completes should fail with a clear timeout rather
+        // than hang the suite until xUnit gives up.
+        var channel = await attachTcs.Task.WaitAsync(TimeSpan.FromSeconds(10));
 
         await channel.SendMessageAsync(new OutboundMessage
         {

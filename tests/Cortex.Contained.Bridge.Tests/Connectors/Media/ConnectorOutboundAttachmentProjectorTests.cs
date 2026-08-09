@@ -1,4 +1,8 @@
+using System.Text;
+using System.Text.Json;
+using Cortex.Contained.Bridge.Connectors;
 using Cortex.Contained.Bridge.Connectors.Media;
+using Cortex.Contained.Bridge.Connectors.Protocol;
 using Cortex.Contained.Contracts.Config;
 using Cortex.Contained.Contracts.Messages;
 
@@ -53,7 +57,7 @@ public sealed class ConnectorOutboundAttachmentProjectorTests
     [Fact]
     public void Project_NullAttachments_YieldsNoField()
     {
-        var projection = Build().Project(null, ChannelId, supportsMedia: true);
+        var projection = Build().Project(null, ChannelId, supportsMedia: true, int.MaxValue);
 
         Assert.Null(projection.Attachments);
         Assert.Equal(0, projection.DroppedCount);
@@ -62,7 +66,7 @@ public sealed class ConnectorOutboundAttachmentProjectorTests
     [Fact]
     public void Project_EmptyAttachments_YieldsNoField()
     {
-        var projection = Build().Project([], ChannelId, supportsMedia: true);
+        var projection = Build().Project([], ChannelId, supportsMedia: true, int.MaxValue);
 
         Assert.Null(projection.Attachments);
     }
@@ -74,7 +78,7 @@ public sealed class ConnectorOutboundAttachmentProjectorTests
     {
         // Null, not an empty array: the frame must be byte-for-byte what a pre-media connector
         // has always received.
-        var projection = Build().Project([Png()], ChannelId, supportsMedia: false);
+        var projection = Build().Project([Png()], ChannelId, supportsMedia: false, int.MaxValue);
 
         Assert.Null(projection.Attachments);
         Assert.Equal(1, projection.DroppedCount);
@@ -85,7 +89,7 @@ public sealed class ConnectorOutboundAttachmentProjectorTests
     {
         var projector = Build(c => c.Enabled = false);
 
-        var projection = projector.Project([Png()], ChannelId, supportsMedia: true);
+        var projection = projector.Project([Png()], ChannelId, supportsMedia: true, int.MaxValue);
 
         Assert.Null(projection.Attachments);
     }
@@ -97,7 +101,7 @@ public sealed class ConnectorOutboundAttachmentProjectorTests
     {
         var attachment = Png(caption: "the chart");
 
-        var projection = Build().Project([attachment], ChannelId, supportsMedia: true);
+        var projection = Build().Project([attachment], ChannelId, supportsMedia: true, int.MaxValue);
 
         var payload = Assert.Single(projection.Attachments!);
         Assert.Equal("image/png", payload.MimeType);
@@ -111,7 +115,7 @@ public sealed class ConnectorOutboundAttachmentProjectorTests
     [Fact]
     public void Project_NeverEmitsAUrlField()
     {
-        var projection = Build().Project([Png()], ChannelId, supportsMedia: true);
+        var projection = Build().Project([Png()], ChannelId, supportsMedia: true, int.MaxValue);
 
         Assert.Null(Assert.Single(projection.Attachments!).Url);
     }
@@ -119,7 +123,7 @@ public sealed class ConnectorOutboundAttachmentProjectorTests
     [Fact]
     public void Project_MultipleSmallAttachments_AreAllCarried()
     {
-        var projection = Build().Project([Png(), Png(), Png()], ChannelId, supportsMedia: true);
+        var projection = Build().Project([Png(), Png(), Png()], ChannelId, supportsMedia: true, int.MaxValue);
 
         Assert.Equal(3, projection.Attachments!.Count);
         Assert.Equal(0, projection.DroppedCount);
@@ -132,7 +136,7 @@ public sealed class ConnectorOutboundAttachmentProjectorTests
     {
         var projector = Build(c => c.MaxInlineBytes = 1024, issuer: StubIssuer());
 
-        var projection = projector.Project([Png(4096)], ChannelId, supportsMedia: true);
+        var projection = projector.Project([Png(4096)], ChannelId, supportsMedia: true, int.MaxValue);
 
         var payload = Assert.Single(projection.Attachments!);
         Assert.Equal("att_deadbeef", payload.Handle);
@@ -146,7 +150,7 @@ public sealed class ConnectorOutboundAttachmentProjectorTests
         var issuer = StubIssuer();
         var projector = Build(c => c.MaxInlineBytes = 1024, issuer: issuer);
 
-        projector.Project([Png(4096)], ChannelId, supportsMedia: true);
+        projector.Project([Png(4096)], ChannelId, supportsMedia: true, int.MaxValue);
 
         issuer.Received(1).Issue(ChannelId, Arg.Any<ConnectorAttachmentContent>());
     }
@@ -157,7 +161,7 @@ public sealed class ConnectorOutboundAttachmentProjectorTests
         // Sending it inline anyway would exceed MaxFrameBytes and fatally close the session.
         var projector = Build(c => c.MaxInlineBytes = 1024);
 
-        var projection = projector.Project([Png(4096)], ChannelId, supportsMedia: true);
+        var projection = projector.Project([Png(4096)], ChannelId, supportsMedia: true, int.MaxValue);
 
         Assert.Null(projection.Attachments);
         Assert.Equal(1, projection.DroppedCount);
@@ -168,7 +172,7 @@ public sealed class ConnectorOutboundAttachmentProjectorTests
     {
         var projector = Build(c => c.MaxInlineBytes = 1024, issuer: StubIssuer(handle: null));
 
-        var projection = projector.Project([Png(4096)], ChannelId, supportsMedia: true);
+        var projection = projector.Project([Png(4096)], ChannelId, supportsMedia: true, int.MaxValue);
 
         Assert.Null(projection.Attachments);
         Assert.Equal(1, projection.DroppedCount);
@@ -187,7 +191,7 @@ public sealed class ConnectorOutboundAttachmentProjectorTests
         var projection = projector.Project(
             [Png(4096), Png(4096), Png(4096), Png(4096)],
             ChannelId,
-            supportsMedia: true);
+            supportsMedia: true,            int.MaxValue);
 
         Assert.Equal(4, projection.Attachments!.Count);
         Assert.Equal(0, projection.DroppedCount);
@@ -206,7 +210,7 @@ public sealed class ConnectorOutboundAttachmentProjectorTests
         var projection = Build().Project(
             [Png(), Png(), Png(), Png(), Png(), Png()],
             ChannelId,
-            supportsMedia: true);
+            supportsMedia: true,            int.MaxValue);
 
         Assert.Equal(4, projection.Attachments!.Count);
         Assert.Equal(2, projection.DroppedCount);
@@ -217,7 +221,7 @@ public sealed class ConnectorOutboundAttachmentProjectorTests
     {
         var projector = Build(c => c.MaxAttachmentBytes = 2048, issuer: StubIssuer());
 
-        var projection = projector.Project([Png(8192)], ChannelId, supportsMedia: true);
+        var projection = projector.Project([Png(8192)], ChannelId, supportsMedia: true, int.MaxValue);
 
         Assert.Null(projection.Attachments);
         Assert.Equal(1, projection.DroppedCount);
@@ -228,7 +232,7 @@ public sealed class ConnectorOutboundAttachmentProjectorTests
     {
         var projector = Build(c => c.AllowedMimeTypes = ["image/jpeg"]);
 
-        var projection = projector.Project([Png()], ChannelId, supportsMedia: true);
+        var projection = projector.Project([Png()], ChannelId, supportsMedia: true, int.MaxValue);
 
         Assert.Null(projection.Attachments);
         Assert.Equal(1, projection.DroppedCount);
@@ -243,7 +247,7 @@ public sealed class ConnectorOutboundAttachmentProjectorTests
             Data = "<html>not an image</html>"u8.ToArray(),
         };
 
-        var projection = Build().Project([mislabelled], ChannelId, supportsMedia: true);
+        var projection = Build().Project([mislabelled], ChannelId, supportsMedia: true, int.MaxValue);
 
         Assert.Null(projection.Attachments);
         Assert.Equal(1, projection.DroppedCount);
@@ -259,7 +263,7 @@ public sealed class ConnectorOutboundAttachmentProjectorTests
             Url = "https://example.invalid/chart.png",
         };
 
-        var projection = Build().Project([urlOnly], ChannelId, supportsMedia: true);
+        var projection = Build().Project([urlOnly], ChannelId, supportsMedia: true, int.MaxValue);
 
         Assert.Null(projection.Attachments);
         Assert.Equal(1, projection.DroppedCount);
@@ -270,7 +274,7 @@ public sealed class ConnectorOutboundAttachmentProjectorTests
     {
         var empty = new MediaAttachment { MimeType = "image/png", Data = [] };
 
-        var projection = Build().Project([empty], ChannelId, supportsMedia: true);
+        var projection = Build().Project([empty], ChannelId, supportsMedia: true, int.MaxValue);
 
         Assert.Null(projection.Attachments);
     }
@@ -280,7 +284,7 @@ public sealed class ConnectorOutboundAttachmentProjectorTests
     {
         var bad = new MediaAttachment { MimeType = "image/png", Data = "nope"u8.ToArray() };
 
-        var projection = Build().Project([Png(), bad, Png()], ChannelId, supportsMedia: true);
+        var projection = Build().Project([Png(), bad, Png()], ChannelId, supportsMedia: true, int.MaxValue);
 
         Assert.Equal(2, projection.Attachments!.Count);
         Assert.Equal(1, projection.DroppedCount);
@@ -293,7 +297,7 @@ public sealed class ConnectorOutboundAttachmentProjectorTests
     {
         var attachment = Png(fileName: "../../etc/" + new string('n', 400) + ".png");
 
-        var projection = Build().Project([attachment], ChannelId, supportsMedia: true);
+        var projection = Build().Project([attachment], ChannelId, supportsMedia: true, int.MaxValue);
 
         var payload = Assert.Single(projection.Attachments!);
         Assert.DoesNotContain('/', payload.FileName!);
@@ -305,8 +309,172 @@ public sealed class ConnectorOutboundAttachmentProjectorTests
     {
         var attachment = Png() with { MimeType = "IMAGE/PNG" };
 
-        var projection = Build().Project([attachment], ChannelId, supportsMedia: true);
+        var projection = Build().Project([attachment], ChannelId, supportsMedia: true, int.MaxValue);
 
         Assert.Equal("image/png", Assert.Single(projection.Attachments!).MimeType);
+    }
+
+    // ── The invariant this class exists for ──────────────────────────
+
+    [Fact]
+    public void Project_UnderAFrameBudget_TheSerialisedFrameFitsEvenWithWorstCaseMetadata()
+    {
+        // This is the test that a fixed "envelope reserve" could not satisfy. Message text alone
+        // may run to MaxMessageLength characters, and four attachments can carry 4 x 256-char
+        // file names plus 4 x 1024-char captions. Budgeting has to come from the real envelope.
+        const int frameBytes = OneMebibyte;
+        var issuer = StubIssuer();
+        var projector = Build(issuer: issuer, maxFrameBytes: frameBytes);
+
+        var text = new string('t', 32 * 1024);
+        var caption = new string('C', ConnectorAttachmentValidator.MaxCaptionLength);
+        var fileName = new string('F', ConnectorAttachmentValidator.MaxFileNameLength - 4) + ".png";
+
+        MediaAttachment[] attachments =
+        [
+            .. Enumerable.Range(0, 4).Select(_ => new MediaAttachment
+            {
+                MimeType = "image/png",
+                FileName = fileName,
+                Caption = caption,
+                Data = PngBytes(256 * 1024),
+            }),
+        ];
+
+        var envelope = EnvelopeBytes(text);
+        var budget = frameBytes - envelope - 4096;
+
+        var projection = projector.Project(attachments, ChannelId, supportsMedia: true, budget);
+
+        AssertFrameFits(text, projection.Attachments, frameBytes);
+    }
+
+    [Fact]
+    public void Project_WithHugeMessageText_ShrinksTheInlineBudgetRatherThanOverflowing()
+    {
+        // A 100 000-character message plus four inline attachments is exactly the case the old
+        // fixed reserve got wrong.
+        const int frameBytes = OneMebibyte;
+        var projector = Build(issuer: StubIssuer(), maxFrameBytes: frameBytes);
+
+        var text = new string('t', 100_000);
+        var attachments = Enumerable.Range(0, 4).Select(_ => Png(256 * 1024)).ToList();
+
+        var budget = frameBytes - EnvelopeBytes(text) - 4096;
+        var projection = projector.Project(attachments, ChannelId, supportsMedia: true, budget);
+
+        AssertFrameFits(text, projection.Attachments, frameBytes);
+
+        // Nothing is lost: what cannot be inlined goes out of band.
+        Assert.Equal(4, projection.Attachments!.Count);
+        Assert.Contains(projection.Attachments, a => a.Handle is not null);
+    }
+
+    [Fact]
+    public void Project_MultiByteCaptions_AreCountedInUtf8NotCharacters()
+    {
+        // A caption of 1024 emoji is 1024 UTF-16 units but 4096 UTF-8 bytes. Counting characters
+        // instead of bytes under-reserves by a factor of four.
+        const int frameBytes = OneMebibyte;
+        var projector = Build(issuer: StubIssuer(), maxFrameBytes: frameBytes);
+
+        var caption = string.Concat(Enumerable.Repeat("\U0001F3AF", 512));
+        var attachments = Enumerable.Range(0, 4).Select(_ => new MediaAttachment
+        {
+            MimeType = "image/png",
+            FileName = "chart.png",
+            Caption = caption,
+            Data = PngBytes(256 * 1024),
+        }).ToList();
+
+        const string text = "here";
+        var budget = frameBytes - EnvelopeBytes(text) - 4096;
+        var projection = projector.Project(attachments, ChannelId, supportsMedia: true, budget);
+
+        AssertFrameFits(text, projection.Attachments, frameBytes);
+    }
+
+    [Fact]
+    public void Project_ZeroBudget_SpillsEverythingToHandles()
+    {
+        var projector = Build(issuer: StubIssuer());
+
+        var projection = projector.Project([Png()], ChannelId, supportsMedia: true, 0);
+
+        Assert.All(projection.Attachments!, a => Assert.NotNull(a.Handle));
+    }
+
+    [Fact]
+    public void Project_ZeroBudgetAndNoIssuer_DropsRatherThanInlining()
+    {
+        var projector = Build();
+
+        var projection = projector.Project([Png()], ChannelId, supportsMedia: true, 0);
+
+        Assert.Null(projection.Attachments);
+        Assert.Equal(1, projection.DroppedCount);
+    }
+
+    [Fact]
+    public void EstimateInlineWireCost_IsNeverBelowTheActualSerialisedCost()
+    {
+        foreach (var rawBytes in new[] { 1, 3, 4, 100, 1024, 65_536 })
+        {
+            var data = PngBytes(rawBytes);
+            var payload = new ConnectorAttachmentPayload
+            {
+                MimeType = "image/png",
+                FileName = "chart.png",
+                Caption = "a caption",
+                SizeBytes = data.LongLength,
+                Data = Convert.ToBase64String(data),
+            };
+
+            var actual = Encoding.UTF8.GetByteCount(JsonSerializer.Serialize(payload, ConnectorJson.Options));
+            var estimate = ConnectorOutboundAttachmentProjector.EstimateInlineWireCost(
+                rawBytes,
+                "chart.png",
+                "a caption");
+
+            Assert.True(estimate >= actual, $"estimate {estimate} understated actual {actual} for {rawBytes} raw bytes");
+        }
+    }
+
+    private static byte[] PngBytes(int totalBytes)
+    {
+        var data = new byte[totalBytes];
+        ImageContentSnifferTests.Png.AsSpan(0, Math.Min(8, totalBytes)).CopyTo(data);
+        return data;
+    }
+
+    /// <summary>Serialises the outbound envelope exactly as the session does, minus attachments.</summary>
+    private static int EnvelopeBytes(string text) => Encoding.UTF8.GetByteCount(
+        ConnectorFrame.Serialize(ConnectorFrameTypes.Outbound, new ConnectorOutboundPayload
+        {
+            MessageId = "00000000000000000000000000000000",
+            ConversationId = "plugin:terminal:default",
+            Content = new ConnectorContentPayload { Text = text },
+            Cursor = "2026-08-09T12:00:00.0000000Z",
+        }));
+
+    /// <summary>
+    /// Serialises the complete frame the session would send and asserts it fits the cap. This is
+    /// the only assertion that proves the invariant end to end rather than by arithmetic.
+    /// </summary>
+    private static void AssertFrameFits(
+        string text,
+        IReadOnlyList<ConnectorAttachmentPayload>? attachments,
+        int frameBytes)
+    {
+        var json = ConnectorFrame.Serialize(ConnectorFrameTypes.Outbound, new ConnectorOutboundPayload
+        {
+            MessageId = "00000000000000000000000000000000",
+            ConversationId = "plugin:terminal:default",
+            Content = new ConnectorContentPayload { Text = text, Attachments = attachments },
+            Cursor = "2026-08-09T12:00:00.0000000Z",
+        });
+
+        var actual = Encoding.UTF8.GetByteCount(json);
+        Assert.True(actual <= frameBytes, $"serialised frame is {actual} bytes; the cap is {frameBytes}");
     }
 }
