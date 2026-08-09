@@ -48,7 +48,16 @@ public sealed record SetGoalResultDto(
 /// <summary>Payload of the <c>event/turnComplete</c> notification.</summary>
 public sealed record TurnCompleteDto(
     [property: JsonPropertyName("stopReason")] string? StopReason,
-    [property: JsonPropertyName("interrupted")] bool Interrupted);
+    [property: JsonPropertyName("interrupted")] bool Interrupted)
+{
+    /// <inheritdoc cref="ToolCallDto.RootTurnId" />
+    [JsonPropertyName("rootTurnId")]
+    public string? RootTurnId { get; init; }
+
+    /// <inheritdoc cref="ToolCallDto.ActivityId" />
+    [JsonPropertyName("activityId")]
+    public string? ActivityId { get; init; }
+}
 
 /// <summary>Payload of the <c>event/error</c> notification.</summary>
 public sealed record ErrorDto(
@@ -69,12 +78,54 @@ public sealed record LimitReachedDto(
 /// <summary>Payload of the <c>event/toolCall</c> notification.</summary>
 public sealed record ToolCallDto(
     [property: JsonPropertyName("toolName")] string ToolName,
-    [property: JsonPropertyName("inputJson")] string InputJson);
+    [property: JsonPropertyName("inputJson")] string InputJson)
+{
+    /// <summary>Identifies the root turn this call belongs to. Absent on older coda builds.</summary>
+    [JsonPropertyName("rootTurnId")]
+    public string? RootTurnId { get; init; }
 
-/// <summary>Payload of the <c>event/toolResult</c> notification.</summary>
+    /// <summary>Identifies the activity (main agent or a subagent) that issued the call.</summary>
+    [JsonPropertyName("activityId")]
+    public string? ActivityId { get; init; }
+
+    /// <summary>Correlates this call with its <c>event/toolProgress</c> and <c>event/toolResult</c>.</summary>
+    [JsonPropertyName("callId")]
+    public string? CallId { get; init; }
+
+    /// <summary>Identifies the tool source (built-in, MCP server, plugin).</summary>
+    [JsonPropertyName("sourceId")]
+    public string? SourceId { get; init; }
+}
+
+/// <summary>
+/// Payload of the <c>event/toolResult</c> notification. coda names the result body
+/// <c>content</c> (not <c>outputJson</c>) and pairs it with an <c>isError</c> flag.
+/// </summary>
 public sealed record ToolResultDto(
     [property: JsonPropertyName("toolName")] string ToolName,
-    [property: JsonPropertyName("outputJson")] string? OutputJson);
+    [property: JsonPropertyName("content")] string? Content,
+    [property: JsonPropertyName("isError")] bool IsError = false)
+{
+    /// <inheritdoc cref="ToolCallDto.RootTurnId" />
+    [JsonPropertyName("rootTurnId")]
+    public string? RootTurnId { get; init; }
+
+    /// <inheritdoc cref="ToolCallDto.ActivityId" />
+    [JsonPropertyName("activityId")]
+    public string? ActivityId { get; init; }
+
+    /// <inheritdoc cref="ToolCallDto.CallId" />
+    [JsonPropertyName("callId")]
+    public string? CallId { get; init; }
+
+    /// <inheritdoc cref="ToolCallDto.SourceId" />
+    [JsonPropertyName("sourceId")]
+    public string? SourceId { get; init; }
+
+    /// <summary>Terminal status coda assigned the call (e.g. <c>Completed</c>, <c>Failed</c>).</summary>
+    [JsonPropertyName("status")]
+    public string? Status { get; init; }
+}
 
 /// <summary>Payload of the <c>event/assistantText</c> notification.</summary>
 public sealed record AssistantTextDto(
@@ -103,7 +154,24 @@ public sealed record StreamProgressDto(
 /// </summary>
 public sealed record ToolProgressDto(
     [property: JsonPropertyName("toolName")] string ToolName,
-    [property: JsonPropertyName("elapsedMs")] long ElapsedMs);
+    [property: JsonPropertyName("elapsedMs")] long ElapsedMs)
+{
+    /// <inheritdoc cref="ToolCallDto.RootTurnId" />
+    [JsonPropertyName("rootTurnId")]
+    public string? RootTurnId { get; init; }
+
+    /// <inheritdoc cref="ToolCallDto.ActivityId" />
+    [JsonPropertyName("activityId")]
+    public string? ActivityId { get; init; }
+
+    /// <inheritdoc cref="ToolCallDto.CallId" />
+    [JsonPropertyName("callId")]
+    public string? CallId { get; init; }
+
+    /// <inheritdoc cref="ToolCallDto.SourceId" />
+    [JsonPropertyName("sourceId")]
+    public string? SourceId { get; init; }
+}
 
 /// <summary>Server-initiated <c>request/permission</c> params.</summary>
 public sealed record PermissionDto(
@@ -146,9 +214,14 @@ public sealed record MessagesResultDto(
 /// Wire conventions (match coda exactly):
 /// <list type="bullet">
 ///   <item>Client→server requests: <c>initialize</c>, <c>session/prompt</c>, <c>session/interrupt</c>, <c>session/history</c>, <c>shutdown</c>.</item>
-///   <item>Server→client notifications: <c>event/assistantText</c>, <c>event/toolCall</c>, <c>event/toolResult</c>, <c>event/usage</c>, <c>event/streamProgress</c>, <c>event/turnComplete</c>, <c>event/error</c>.</item>
+///   <item>Server→client notifications: <c>event/assistantText</c>, <c>event/toolCall</c>, <c>event/toolResult</c>, <c>event/toolProgress</c>, <c>event/usage</c>, <c>event/streamProgress</c>, <c>event/turnComplete</c>, <c>event/limitReached</c>, <c>event/error</c>.</item>
 ///   <item>Server→client requests: <c>request/permission</c>, <c>request/question</c>, <c>request/planApproval</c>.</item>
 /// </list>
+/// <para>
+/// Inbound payloads are bound whole-object rather than parameter-by-parameter so coda can add
+/// fields without breaking dispatch — see <c>RegisterHandlers</c>. coda omits null fields
+/// (<c>WhenWritingNull</c>), so every optional DTO member must stay nullable/defaulted.
+/// </para>
 /// </remarks>
 public sealed class CodaJsonRpcConnection : IAsyncDisposable
 {
@@ -350,126 +423,124 @@ public sealed class CodaJsonRpcConnection : IAsyncDisposable
 
     private void RegisterHandlers()
     {
-        // Notifications: coda → Bridge (fire-and-forget, no reply needed).
-        // IMPORTANT: StreamJsonRpc dispatches named-param messages to handlers with matching
-        // individual parameter names. Using Func<JsonNode?,...> does NOT work for named params —
-        // the handler must declare each field as a separate parameter (same names as the JSON keys).
-        this.rpc.AddLocalRpcMethod(
-            "event/turnComplete",
-            new Func<string?, bool, Task>((stopReason, interrupted) =>
+        // Every inbound coda→Bridge message is bound with UseSingleObjectParameterDeserialization
+        // (see CodaInboundTarget) — the whole params object is deserialized into one DTO. This is
+        // deliberate and load-bearing, NOT a style choice.
+        //
+        // StreamJsonRpc's default named-parameter binding requires the params object to match the
+        // handler's parameter list EXACTLY: a member coda ADDS makes dispatch fail, and so does an
+        // optional one coda OMITS (it serializes with WhenWritingNull, so null fields vanish from
+        // the wire). For a notification that failure is completely SILENT — no error, no log.
+        //
+        // That is precisely how the tool-correlation fields coda added to event/toolCall,
+        // event/toolProgress and event/toolResult (rootTurnId/activityId/callId/sourceId) silently
+        // switched off the tool-execution liveness pulse: the Bridge stopped seeing any activity
+        // while a tool ran, so the idle watchdog reaped healthy sessions mid-tool-call and the
+        // resulting process kill surfaced as "the JSON-RPC connection was lost".
+        //
+        // Single-object deserialization ignores unknown members and leaves absent optional ones at
+        // their defaults, so coda can extend any payload without breaking the Bridge.
+        this.rpc.AddLocalRpcTarget(new CodaInboundTarget(this), null);
+    }
+
+    private void RaiseTurnComplete(TurnCompleteDto dto) => this.TurnComplete?.Invoke(dto);
+
+    private void RaiseErrorEvent(ErrorDto dto) => this.ErrorEvent?.Invoke(dto);
+
+    private void RaiseLimitReached(LimitReachedDto dto) => this.LimitReached?.Invoke(dto);
+
+    private void RaiseToolCall(ToolCallDto dto) => this.ToolCall?.Invoke(dto);
+
+    private void RaiseToolResult(ToolResultDto dto) => this.ToolResult?.Invoke(dto);
+
+    private void RaiseAssistantText(AssistantTextDto dto) => this.AssistantText?.Invoke(dto);
+
+    private void RaiseUsage(UsageDto dto) => this.Usage?.Invoke(dto);
+
+    private void RaiseStreamProgress(StreamProgressDto dto) => this.StreamProgress?.Invoke(dto);
+
+    private void RaiseToolProgress(ToolProgressDto dto) => this.ToolProgress?.Invoke(dto);
+
+    /// <summary>
+    /// The RPC target holding every coda→Bridge handler: notifications (fire-and-forget) and
+    /// server-initiated requests (Bridge replies). Each method takes a single DTO bound from the
+    /// whole params object — see <see cref="RegisterHandlers"/> for why that matters.
+    /// </summary>
+    /// <remarks>
+    /// Only attributed handler methods may be public here: <c>AddLocalRpcTarget</c> exposes every
+    /// public method on the target, so anything else added would become a callable RPC method.
+    /// </remarks>
+    private sealed class CodaInboundTarget
+    {
+        private readonly CodaJsonRpcConnection connection;
+
+        public CodaInboundTarget(CodaJsonRpcConnection connection)
+        {
+            this.connection = connection;
+        }
+
+        [JsonRpcMethod("event/turnComplete", UseSingleObjectParameterDeserialization = true)]
+        public void OnTurnComplete(TurnCompleteDto dto) => this.connection.RaiseTurnComplete(dto);
+
+        [JsonRpcMethod("event/error", UseSingleObjectParameterDeserialization = true)]
+        public void OnError(ErrorDto dto) => this.connection.RaiseErrorEvent(dto);
+
+        [JsonRpcMethod("event/limitReached", UseSingleObjectParameterDeserialization = true)]
+        public void OnLimitReached(LimitReachedDto dto) => this.connection.RaiseLimitReached(dto);
+
+        [JsonRpcMethod("event/toolCall", UseSingleObjectParameterDeserialization = true)]
+        public void OnToolCall(ToolCallDto dto) => this.connection.RaiseToolCall(dto);
+
+        [JsonRpcMethod("event/toolResult", UseSingleObjectParameterDeserialization = true)]
+        public void OnToolResult(ToolResultDto dto) => this.connection.RaiseToolResult(dto);
+
+        [JsonRpcMethod("event/assistantText", UseSingleObjectParameterDeserialization = true)]
+        public void OnAssistantText(AssistantTextDto dto) => this.connection.RaiseAssistantText(dto);
+
+        [JsonRpcMethod("event/usage", UseSingleObjectParameterDeserialization = true)]
+        public void OnUsage(UsageDto dto) => this.connection.RaiseUsage(dto);
+
+        [JsonRpcMethod("event/streamProgress", UseSingleObjectParameterDeserialization = true)]
+        public void OnStreamProgress(StreamProgressDto dto) => this.connection.RaiseStreamProgress(dto);
+
+        [JsonRpcMethod("event/toolProgress", UseSingleObjectParameterDeserialization = true)]
+        public void OnToolProgress(ToolProgressDto dto) => this.connection.RaiseToolProgress(dto);
+
+        [JsonRpcMethod("request/permission", UseSingleObjectParameterDeserialization = true)]
+        public async Task<JsonNode?> OnPermissionRequestAsync(PermissionDto dto)
+        {
+            var allow = false;
+            if (this.connection.OnPermission is not null)
             {
-                this.TurnComplete?.Invoke(new TurnCompleteDto(stopReason, interrupted));
-                return Task.CompletedTask;
-            }));
+                allow = await this.connection.OnPermission(dto).ConfigureAwait(false);
+            }
 
-        this.rpc.AddLocalRpcMethod(
-            "event/error",
-            new Func<string, Task>(message =>
+            return new JsonObject { ["allow"] = allow };
+        }
+
+        [JsonRpcMethod("request/question", UseSingleObjectParameterDeserialization = true)]
+        public async Task<JsonNode?> OnQuestionRequestAsync(QuestionDto dto)
+        {
+            var answer = string.Empty;
+            if (this.connection.OnQuestion is not null)
             {
-                this.ErrorEvent?.Invoke(new ErrorDto(message));
-                return Task.CompletedTask;
-            }));
+                answer = await this.connection.OnQuestion(dto).ConfigureAwait(false);
+            }
 
-        this.rpc.AddLocalRpcMethod(
-            "event/limitReached",
-            new Func<string, string, Task>((kind, message) =>
+            return new JsonObject { ["answer"] = answer };
+        }
+
+        [JsonRpcMethod("request/planApproval", UseSingleObjectParameterDeserialization = true)]
+        public async Task<JsonNode?> OnPlanApprovalRequestAsync(PlanDto dto)
+        {
+            var approve = false;
+            if (this.connection.OnPlanApproval is not null)
             {
-                this.LimitReached?.Invoke(new LimitReachedDto(kind, message));
-                return Task.CompletedTask;
-            }));
+                approve = await this.connection.OnPlanApproval(dto).ConfigureAwait(false);
+            }
 
-        this.rpc.AddLocalRpcMethod(
-            "event/toolCall",
-            new Func<string, string, Task>((toolName, inputJson) =>
-            {
-                this.ToolCall?.Invoke(new ToolCallDto(toolName, inputJson));
-                return Task.CompletedTask;
-            }));
-
-        this.rpc.AddLocalRpcMethod(
-            "event/toolResult",
-            new Func<string, string?, Task>((toolName, outputJson) =>
-            {
-                this.ToolResult?.Invoke(new ToolResultDto(toolName, outputJson));
-                return Task.CompletedTask;
-            }));
-
-        this.rpc.AddLocalRpcMethod(
-            "event/assistantText",
-            new Func<string, Task>(delta =>
-            {
-                this.AssistantText?.Invoke(new AssistantTextDto(delta));
-                return Task.CompletedTask;
-            }));
-
-        this.rpc.AddLocalRpcMethod(
-            "event/usage",
-            new Func<long, long, Task>((inputTokens, outputTokens) =>
-            {
-                this.Usage?.Invoke(new UsageDto(inputTokens, outputTokens));
-                return Task.CompletedTask;
-            }));
-
-        this.rpc.AddLocalRpcMethod(
-            "event/streamProgress",
-            new Func<string, int, int, long, Task>((phase, chunks, chars, elapsedMs) =>
-            {
-                this.StreamProgress?.Invoke(new StreamProgressDto(phase, chunks, chars, elapsedMs));
-                return Task.CompletedTask;
-            }));
-
-        this.rpc.AddLocalRpcMethod(
-            "event/toolProgress",
-            new Func<string, long, Task>((toolName, elapsedMs) =>
-            {
-                this.ToolProgress?.Invoke(new ToolProgressDto(toolName, elapsedMs));
-                return Task.CompletedTask;
-            }));
-
-        // Server-initiated requests: coda → Bridge, Bridge replies.
-        // Named params from InvokeWithParameterObjectAsync must match individual parameter names.
-        this.rpc.AddLocalRpcMethod(
-            "request/permission",
-            new Func<string, string, CancellationToken, Task<JsonNode?>>(async (toolName, inputPreview, ct) =>
-            {
-                var dto = new PermissionDto(toolName, inputPreview);
-                var allow = false;
-                if (this.OnPermission is not null)
-                {
-                    allow = await this.OnPermission(dto).ConfigureAwait(false);
-                }
-
-                return new JsonObject { ["allow"] = allow };
-            }));
-
-        this.rpc.AddLocalRpcMethod(
-            "request/question",
-            new Func<string, IReadOnlyList<string>, bool, CancellationToken, Task<JsonNode?>>(
-                async (question, options, multiSelect, ct) =>
-                {
-                    var dto = new QuestionDto(question, options, multiSelect);
-                    var answer = string.Empty;
-                    if (this.OnQuestion is not null)
-                    {
-                        answer = await this.OnQuestion(dto).ConfigureAwait(false);
-                    }
-
-                    return new JsonObject { ["answer"] = answer };
-                }));
-
-        this.rpc.AddLocalRpcMethod(
-            "request/planApproval",
-            new Func<string, CancellationToken, Task<JsonNode?>>(async (plan, ct) =>
-            {
-                var dto = new PlanDto(plan);
-                var approve = false;
-                if (this.OnPlanApproval is not null)
-                {
-                    approve = await this.OnPlanApproval(dto).ConfigureAwait(false);
-                }
-
-                return new JsonObject { ["approve"] = approve };
-            }));
+            return new JsonObject { ["approve"] = approve };
+        }
     }
 
     private static T? Deserialize<T>(JsonNode? node)

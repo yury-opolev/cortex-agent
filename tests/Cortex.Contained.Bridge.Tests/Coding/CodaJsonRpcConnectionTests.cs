@@ -146,6 +146,155 @@ public sealed class CodaJsonRpcConnectionTests
         serverRpc.Dispose();
     }
 
+    // The notifications below carry coda's REAL wire payloads — including the tool-correlation
+    // identity fields (rootTurnId/activityId/callId/sourceId) coda adds to every tool
+    // notification. The bare-payload tests above pass while production silently dropped these,
+    // which is exactly how the drift went unnoticed: no liveness during a long tool call, so the
+    // idle watchdog reaped a healthy session.
+    [Fact]
+    public async Task ToolProgress_Notification_WithIdentityFields_RaisesEvent()
+    {
+        var (clientStream, serverStream) = FullDuplexStream.CreatePair();
+
+        var formatter = new SystemTextJsonFormatter();
+        var serverRpc = new JsonRpc(new HeaderDelimitedMessageHandler(serverStream, serverStream, formatter));
+        serverRpc.StartListening();
+
+        await using var conn = new CodaJsonRpcConnection(clientStream, clientStream);
+
+        var got = new TaskCompletionSource<ToolProgressDto>(TaskCreationOptions.RunContinuationsAsynchronously);
+        conn.ToolProgress += dto => got.TrySetResult(dto);
+
+        conn.Start();
+
+        await serverRpc.NotifyWithParameterObjectAsync(
+            "event/toolProgress",
+            new
+            {
+                toolName = "grep",
+                elapsedMs = 42_000L,
+                rootTurnId = "turn-1",
+                activityId = "act-1",
+                callId = "call-1",
+                sourceId = "src-1",
+            });
+
+        var dto = await got.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal("grep", dto.ToolName);
+        Assert.Equal(42_000L, dto.ElapsedMs);
+        serverRpc.Dispose();
+    }
+
+    [Fact]
+    public async Task ToolCall_Notification_WithIdentityFields_RaisesEvent()
+    {
+        var (clientStream, serverStream) = FullDuplexStream.CreatePair();
+
+        var formatter = new SystemTextJsonFormatter();
+        var serverRpc = new JsonRpc(new HeaderDelimitedMessageHandler(serverStream, serverStream, formatter));
+        serverRpc.StartListening();
+
+        await using var conn = new CodaJsonRpcConnection(clientStream, clientStream);
+
+        var got = new TaskCompletionSource<ToolCallDto>(TaskCreationOptions.RunContinuationsAsynchronously);
+        conn.ToolCall += dto => got.TrySetResult(dto);
+
+        conn.Start();
+
+        await serverRpc.NotifyWithParameterObjectAsync(
+            "event/toolCall",
+            new
+            {
+                toolName = "grep",
+                inputJson = """{"pattern":"transfer_session"}""",
+                rootTurnId = "turn-1",
+                activityId = "act-1",
+                callId = "call-1",
+                sourceId = "src-1",
+            });
+
+        var dto = await got.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal("grep", dto.ToolName);
+        Assert.Equal("""{"pattern":"transfer_session"}""", dto.InputJson);
+        serverRpc.Dispose();
+    }
+
+    [Fact]
+    public async Task ToolResult_Notification_WithCodaWireShape_RaisesEvent()
+    {
+        var (clientStream, serverStream) = FullDuplexStream.CreatePair();
+
+        var formatter = new SystemTextJsonFormatter();
+        var serverRpc = new JsonRpc(new HeaderDelimitedMessageHandler(serverStream, serverStream, formatter));
+        serverRpc.StartListening();
+
+        await using var conn = new CodaJsonRpcConnection(clientStream, clientStream);
+
+        var got = new TaskCompletionSource<ToolResultDto>(TaskCreationOptions.RunContinuationsAsynchronously);
+        conn.ToolResult += dto => got.TrySetResult(dto);
+
+        conn.Start();
+
+        // coda sends the payload as {content, isError}, NOT {outputJson}.
+        await serverRpc.NotifyWithParameterObjectAsync(
+            "event/toolResult",
+            new
+            {
+                toolName = "grep",
+                content = "src/Foo.cs:12: transfer_session",
+                isError = false,
+                rootTurnId = "turn-1",
+                activityId = "act-1",
+                callId = "call-1",
+                sourceId = "src-1",
+                status = "Completed",
+            });
+
+        var dto = await got.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal("grep", dto.ToolName);
+        Assert.Equal("src/Foo.cs:12: transfer_session", dto.Content);
+        Assert.False(dto.IsError);
+        Assert.Equal("Completed", dto.Status);
+        Assert.Equal("call-1", dto.CallId);
+        serverRpc.Dispose();
+    }
+
+    [Fact]
+    public async Task TurnComplete_Notification_WithIdentityFields_RaisesEvent()
+    {
+        var (clientStream, serverStream) = FullDuplexStream.CreatePair();
+
+        var formatter = new SystemTextJsonFormatter();
+        var serverRpc = new JsonRpc(new HeaderDelimitedMessageHandler(serverStream, serverStream, formatter));
+        serverRpc.StartListening();
+
+        await using var conn = new CodaJsonRpcConnection(clientStream, clientStream);
+
+        var got = new TaskCompletionSource<TurnCompleteDto>(TaskCreationOptions.RunContinuationsAsynchronously);
+        conn.TurnComplete += dto => got.TrySetResult(dto);
+
+        conn.Start();
+
+        await serverRpc.NotifyWithParameterObjectAsync(
+            "event/turnComplete",
+            new
+            {
+                stopReason = "end_turn",
+                interrupted = false,
+                rootTurnId = "turn-1",
+                activityId = "act-1",
+            });
+
+        var dto = await got.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal("end_turn", dto.StopReason);
+        Assert.False(dto.Interrupted);
+        serverRpc.Dispose();
+    }
+
     [Fact]
     public async Task SetGoalAsync_returns_echoed_goal_config()
     {
