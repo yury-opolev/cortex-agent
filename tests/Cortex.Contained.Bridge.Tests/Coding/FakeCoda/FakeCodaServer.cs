@@ -205,7 +205,15 @@ public sealed class FakeCodaServer : IAsyncDisposable
 
         await this.serverRpc.NotifyWithParameterObjectAsync(
             "event/toolCall",
-            new { toolName = "Read", inputJson = "{\"path\":\"README.md\"}" });
+            new
+            {
+                toolName = "Read",
+                inputJson = "{\"path\":\"README.md\"}",
+                rootTurnId = "turn-1",
+                activityId = "act-1",
+                callId = "call-1",
+                sourceId = "builtin",
+            });
 
         await this.serverRpc.NotifyWithParameterObjectAsync(
             "event/usage",
@@ -213,7 +221,7 @@ public sealed class FakeCodaServer : IAsyncDisposable
 
         await this.serverRpc.NotifyWithParameterObjectAsync(
             "event/turnComplete",
-            new { stopReason = "end_turn", interrupted = false });
+            new { stopReason = "end_turn", interrupted = false, rootTurnId = "turn-1", activityId = "act-1" });
 
         return new JsonObject { ["ok"] = true, ["stopReason"] = "end_turn", ["interrupted"] = false };
     }
@@ -367,20 +375,43 @@ public sealed class FakeCodaServer : IAsyncDisposable
         // emitting event/toolProgress spaced wider than the idle window, with NO other events
         // until it finishes. This is exactly the stall the watchdog used to be blind to (a long
         // run_command between turns) — the incident this fix addresses.
+        //
+        // The payloads carry coda's tool-correlation identity fields, as real coda does. Emitting
+        // them BARE here is what let the wire-contract drift pass unnoticed: the Bridge silently
+        // dropped every real toolProgress, the watchdog went blind again, and this test still
+        // passed. Keep these fields.
         await this.serverRpc.NotifyWithParameterObjectAsync(
-            "event/toolCall", new { toolName = "run_command", inputJson = "{\"command\":\"dotnet build\"}" });
+            "event/toolCall",
+            new
+            {
+                toolName = "run_command",
+                inputJson = "{\"command\":\"dotnet build\"}",
+                rootTurnId = "turn-1",
+                activityId = "act-1",
+                callId = "call-1",
+                sourceId = "builtin",
+            });
 
         for (var i = 1; i <= 4; i++)
         {
             await Task.Delay(TimeSpan.FromMilliseconds(400), ct).ConfigureAwait(false);
             await this.serverRpc.NotifyWithParameterObjectAsync(
-                "event/toolProgress", new { toolName = "run_command", elapsedMs = (long)(i * 400) });
+                "event/toolProgress",
+                new
+                {
+                    toolName = "run_command",
+                    elapsedMs = (long)(i * 400),
+                    rootTurnId = "turn-1",
+                    activityId = "act-1",
+                    callId = "call-1",
+                    sourceId = "builtin",
+                });
         }
 
         await this.serverRpc.NotifyWithParameterObjectAsync(
             "event/assistantText", new { delta = this.AssistantText });
         await this.serverRpc.NotifyWithParameterObjectAsync(
-            "event/turnComplete", new { stopReason = "end_turn", interrupted = false });
+            "event/turnComplete", new { stopReason = "end_turn", interrupted = false, rootTurnId = "turn-1", activityId = "act-1" });
 
         return new JsonObject { ["ok"] = true, ["stopReason"] = "end_turn", ["interrupted"] = false };
     }
@@ -390,7 +421,16 @@ public sealed class FakeCodaServer : IAsyncDisposable
         // Emit a tool call, then go silent forever. The watchdog fires and its stall message
         // should salvage the recent tool call so the agent retains context after the reap.
         await this.serverRpc.NotifyWithParameterObjectAsync(
-            "event/toolCall", new { toolName = "run_command", inputJson = "{\"command\":\"git status\"}" });
+            "event/toolCall",
+            new
+            {
+                toolName = "run_command",
+                inputJson = "{\"command\":\"git status\"}",
+                rootTurnId = "turn-1",
+                activityId = "act-1",
+                callId = "call-1",
+                sourceId = "builtin",
+            });
         await Task.Delay(Timeout.Infinite, ct).ConfigureAwait(false);
         return null;
     }
