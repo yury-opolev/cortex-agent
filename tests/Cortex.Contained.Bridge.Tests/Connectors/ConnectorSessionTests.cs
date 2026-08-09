@@ -4,6 +4,7 @@
 #pragma warning disable CA2012
 using System.Text.Json;
 using Cortex.Contained.Bridge.Connectors;
+using Cortex.Contained.Bridge.Connectors.Media;
 using Cortex.Contained.Bridge.Connectors.Protocol;
 using Cortex.Contained.Bridge.Connectors.Replay;
 using Cortex.Contained.Contracts.Channels;
@@ -44,7 +45,8 @@ public sealed class ConnectorSessionTests
         ConnectorSettingsConfig? settings = null,
         TimeProvider? timeProvider = null,
         IConnectorAbortDispatcher? abortDispatcher = null,
-        IConnectorReplaySource? replaySource = null)
+        IConnectorReplaySource? replaySource = null,
+        IConnectorAttachmentResolver? attachmentResolver = null)
     {
         if (authenticator is null)
         {
@@ -80,7 +82,8 @@ public sealed class ConnectorSessionTests
             NullLoggerFactory.Instance,
             timeProvider ?? TimeProvider.System,
             abortDispatcher,
-            replaySource);
+            replaySource,
+            attachmentResolver);
     }
 
     // ── 1. Peer closes without hello ─────────────────────────────────
@@ -342,6 +345,332 @@ public sealed class ConnectorSessionTests
 
         Assert.NotNull(captured);
         return captured!;
+    }
+
+    // ── 7b. Inbound attachments ──────────────────────────────────────
+
+    private static async Task<(List<InboundMessage> Received, FakeConnectorTransport Transport)> SendInboundAsync(
+        ConnectorContentPayload content,
+        bool declareMedia = true,
+        ConnectorSettingsConfig? settings = null,
+        IConnectorAttachmentResolver? resolver = null)
+    {
+        var transport = new FakeConnectorTransport();
+        transport.QueueIncoming(ConnectorFrame.Serialize("hello", new ConnectorHelloPayload
+        {
+            Key = "terminal",
+            Capabilities = new ConnectorCapabilitiesPayload { Media = declareMedia },
+        }));
+        transport.QueueIncoming(ConnectorFrame.Serialize("inbound", new ConnectorInboundPayload
+        {
+            ConversationId = "conv-1",
+            Content = content,
+        }));
+        transport.CompleteIncoming();
+
+        List<InboundMessage> received = [];
+        var registry = Substitute.For<IConnectorRegistry>();
+        registry.TryAttachAsync(
+                Arg.Do<PluginChannel>(ch => ch.MessageReceived += m =>
+                {
+                    received.Add(m);
+                    return Task.CompletedTask;
+                }),
+                Arg.Any<CancellationToken>())
+            .Returns(_ => ValueTask.FromResult(ConnectorAttachResult.Ok()));
+        registry.DetachAsync(Arg.Any<PluginChannel>()).Returns(_ => ValueTask.CompletedTask);
+
+        var session = BuildSession(transport, registry: registry, settings: settings, attachmentResolver: resolver);
+        await session.RunAsync(CancellationToken.None);
+
+        return (received, transport);
+    }
+
+    private static string InlinePngBase64() => Convert.ToBase64String(
+        [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x01]);
+
+    [Fact]
+    public async Task RunAsync_InboundInlineAttachment_ReachesTheAgentAsMediaAttachment()
+    {
+        var (received, _) = await SendInboundAsync(new ConnectorContentPayload
+        {
+            Text = "what's in this screenshot?",
+            Attachments =
+            [
+                new ConnectorAttachmentPayload
+                {
+                    MimeType = "image/png",
+                    FileName = "screenshot.png",
+                    Caption = "the failing dialog",
+                    Data = InlinePngBase64(),
+                },
+            ],
+        });
+
+        var message = Assert.Single(received);
+        var attachment = Assert.Single(message.Content.Attachments!);
+        Assert.Equal("image/png", attachment.MimeType);
+        Assert.Equal("screenshot.png", attachment.FileName);
+        Assert.Equal("the failing dialog", attachment.Caption);
+        Assert.Equal(10, attachment.Data!.Length);
+        Assert.Equal(10, attachment.SizeBytes);
+        Assert.Null(attachment.Url);
+    }
+
+    [Fact]
+    public async Task RunAsync_InboundAttachmentOnlyMessage_IsAccepted()
+    {
+        var (received, _) = await SendInboundAsync(new ConnectorContentPayload
+        {
+            Attachments =
+            [
+                new ConnectorAttachmentPayload { MimeType = "image/png", Data = InlinePngBase64() },
+            ],
+        });
+
+        var message = Assert.Single(received);
+        Assert.Equal(string.Empty, message.Content.Text);
+        Assert.Single(message.Content.Attachments!);
+    }
+
+    [Fact]
+    public async Task RunAsync_InboundWithoutTextOrAttachments_IsRejected()
+    {
+        var (received, transport) = await SendInboundAsync(new ConnectorContentPayload());
+
+        Assert.Empty(received);
+        Assert.Contains(transport.Sent, f => f.Contains("invalid_payload"));
+    }
+
+    [Fact]
+    public async Task RunAsync_InboundWithoutAttachments_LeavesAttachmentsNull()
+    {
+        // A connector that never sends attachments must project exactly as it did before.
+        var (received, _) = await SendInboundAsync(new ConnectorContentPayload { Text = "hi" });
+
+        var message = Assert.Single(received);
+        Assert.Null(message.Content.Attachments);
+    }
+
+    [Fact]
+    public async Task RunAsync_InboundAttachmentsWithoutMediaCapability_SendsNonFatalMediaNotSupported()
+    {
+        var (received, transport) = await SendInboundAsync(
+            new ConnectorContentPayload
+            {
+                Text = "hi",
+                Attachments = [new ConnectorAttachmentPayload { MimeType = "image/png", Data = InlinePngBase64() }],
+            },
+            declareMedia: false);
+
+        Assert.Empty(received);
+        Assert.Contains(transport.Sent, f => f.Contains("media_not_supported"));
+
+        // Non-fatal: the session must still be running normally afterwards.
+        Assert.DoesNotContain(transport.Sent, f => f.Contains("protocol_violation"));
+    }
+
+    [Fact]
+    public async Task RunAsync_InboundAttachmentWithUrl_IsRejected()
+    {
+        var (received, transport) = await SendInboundAsync(new ConnectorContentPayload
+        {
+            Text = "hi",
+            Attachments =
+            [
+                new ConnectorAttachmentPayload
+                {
+                    MimeType = "image/png",
+                    Url = "file:///C:/Users/victim/AppData/Local/Cortex/secrets/secrets.json",
+                },
+            ],
+        });
+
+        Assert.Empty(received);
+        Assert.Contains(transport.Sent, f => f.Contains("invalid_payload"));
+    }
+
+    [Fact]
+    public async Task RunAsync_InboundAttachmentWithMismatchedContent_IsRejected()
+    {
+        var (received, transport) = await SendInboundAsync(new ConnectorContentPayload
+        {
+            Text = "hi",
+            Attachments =
+            [
+                new ConnectorAttachmentPayload
+                {
+                    MimeType = "image/png",
+                    Data = Convert.ToBase64String("<html>not an image</html>"u8.ToArray()),
+                },
+            ],
+        });
+
+        Assert.Empty(received);
+        Assert.Contains(transport.Sent, f => f.Contains("attachment_type_not_allowed"));
+    }
+
+    [Fact]
+    public async Task RunAsync_InboundHandleWithNoResolver_IsRejectedAsNotFound()
+    {
+        var (received, transport) = await SendInboundAsync(new ConnectorContentPayload
+        {
+            Text = "hi",
+            Attachments = [new ConnectorAttachmentPayload { MimeType = "image/png", Handle = "att_9f2c14e0" }],
+        });
+
+        Assert.Empty(received);
+        Assert.Contains(transport.Sent, f => f.Contains("attachment_not_found"));
+    }
+
+    [Fact]
+    public async Task RunAsync_InboundHandleResolved_ReachesTheAgentWithStoredBytes()
+    {
+        var stored = new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0xAA, 0xBB, 0xCC };
+        var resolver = Substitute.For<IConnectorAttachmentResolver>();
+        resolver.Resolve("att_9f2c14e0", "plugin:terminal:default")
+            .Returns(new ConnectorAttachmentContent
+            {
+                MimeType = "image/png",
+                Data = stored,
+                FileName = "uploaded.png",
+            });
+
+        var (received, _) = await SendInboundAsync(
+            new ConnectorContentPayload
+            {
+                Text = "look",
+                Attachments = [new ConnectorAttachmentPayload { MimeType = "image/png", Handle = "att_9f2c14e0" }],
+            },
+            resolver: resolver);
+
+        var message = Assert.Single(received);
+        var attachment = Assert.Single(message.Content.Attachments!);
+        Assert.Equal(stored, attachment.Data);
+        Assert.Equal("uploaded.png", attachment.FileName);
+        Assert.Equal(stored.LongLength, attachment.SizeBytes);
+    }
+
+    [Fact]
+    public async Task RunAsync_InboundHandleForAnotherChannel_IsRejectedAsNotFound()
+    {
+        // The resolver is channel-scoped and returns null for a handle it did not issue to this
+        // channel; the session must surface that as a plain not-found, never as a distinct code.
+        var resolver = Substitute.For<IConnectorAttachmentResolver>();
+        resolver.Resolve(Arg.Any<string>(), Arg.Any<string>()).Returns((ConnectorAttachmentContent?)null);
+
+        var (received, transport) = await SendInboundAsync(
+            new ConnectorContentPayload
+            {
+                Text = "hi",
+                Attachments = [new ConnectorAttachmentPayload { MimeType = "image/png", Handle = "att_someoneelse" }],
+            },
+            resolver: resolver);
+
+        Assert.Empty(received);
+        Assert.Contains(transport.Sent, f => f.Contains("attachment_not_found"));
+    }
+
+    [Fact]
+    public async Task RunAsync_InboundTooManyAttachments_IsRejected()
+    {
+        ConnectorAttachmentPayload[] many =
+        [
+            .. Enumerable.Range(0, 5).Select(_ => new ConnectorAttachmentPayload
+            {
+                MimeType = "image/png",
+                Data = InlinePngBase64(),
+            }),
+        ];
+
+        var (received, transport) = await SendInboundAsync(new ConnectorContentPayload
+        {
+            Text = "hi",
+            Attachments = many,
+        });
+
+        Assert.Empty(received);
+        Assert.Contains(transport.Sent, f => f.Contains("too_many_attachments"));
+    }
+
+    [Fact]
+    public async Task RunAsync_BadAttachmentFrame_IsNonFatalAndTheSessionKeepsProcessing()
+    {
+        // The strongest statement of the non-fatal invariant: a rejected attachment must not
+        // stop the read loop, so a well-formed message queued behind it still arrives.
+        var transport = new FakeConnectorTransport();
+        transport.QueueIncoming(ConnectorFrame.Serialize("hello", new ConnectorHelloPayload
+        {
+            Key = "terminal",
+            Capabilities = new ConnectorCapabilitiesPayload { Media = true },
+        }));
+        transport.QueueIncoming(ConnectorFrame.Serialize("inbound", new ConnectorInboundPayload
+        {
+            ConversationId = "conv-1",
+            Content = new ConnectorContentPayload
+            {
+                Text = "rejected",
+                Attachments =
+                [
+                    new ConnectorAttachmentPayload
+                    {
+                        MimeType = "image/png",
+                        Data = Convert.ToBase64String("<html>not an image</html>"u8.ToArray()),
+                    },
+                ],
+            },
+        }));
+        transport.QueueIncoming(ConnectorFrame.Serialize("inbound", new ConnectorInboundPayload
+        {
+            ConversationId = "conv-1",
+            Content = new ConnectorContentPayload { Text = "accepted" },
+        }));
+        transport.CompleteIncoming();
+
+        List<InboundMessage> received = [];
+        var registry = Substitute.For<IConnectorRegistry>();
+        registry.TryAttachAsync(
+                Arg.Do<PluginChannel>(ch => ch.MessageReceived += m =>
+                {
+                    received.Add(m);
+                    return Task.CompletedTask;
+                }),
+                Arg.Any<CancellationToken>())
+            .Returns(_ => ValueTask.FromResult(ConnectorAttachResult.Ok()));
+        registry.DetachAsync(Arg.Any<PluginChannel>()).Returns(_ => ValueTask.CompletedTask);
+
+        var session = BuildSession(transport, registry: registry);
+        await session.RunAsync(CancellationToken.None);
+
+        Assert.Contains(transport.Sent, f => f.Contains("attachment_type_not_allowed"));
+
+        var message = Assert.Single(received);
+        Assert.Equal("accepted", message.Content.Text);
+    }
+
+    [Fact]
+    public async Task RunAsync_InboundHandleResolvingToDisallowedContent_IsRejected()
+    {
+        // Defence in depth: the store said image/png, but the bytes are not a PNG. Policy can
+        // also have been narrowed since the upload. Either way the message must not go through.
+        var resolver = Substitute.For<IConnectorAttachmentResolver>();
+        resolver.Resolve(Arg.Any<string>(), Arg.Any<string>())
+            .Returns(new ConnectorAttachmentContent
+            {
+                MimeType = "image/png",
+                Data = "<html>not an image</html>"u8.ToArray(),
+            });
+
+        var (received, transport) = await SendInboundAsync(
+            new ConnectorContentPayload
+            {
+                Text = "hi",
+                Attachments = [new ConnectorAttachmentPayload { MimeType = "image/png", Handle = "att_9f2c14e0" }],
+            },
+            resolver: resolver);
+
+        Assert.Empty(received);
+        Assert.Contains(transport.Sent, f => f.Contains("attachment_not_found"));
     }
 
     [Fact]

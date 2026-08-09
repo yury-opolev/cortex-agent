@@ -35,4 +35,25 @@ public static class ConnectorErrorCodes
 
     /// <summary>The connector subsystem is disabled by configuration.</summary>
     public const string Disabled = "connectors_disabled";
+
+    /// <summary>An attachment exceeds the configured size limit for its carrying mode.</summary>
+    public const string AttachmentTooLarge = "attachment_too_large";
+
+    /// <summary>
+    /// An attachment's MIME type is not allowed, or its content does not match the declared type.
+    /// </summary>
+    public const string AttachmentTypeNotAllowed = "attachment_type_not_allowed";
+
+    /// <summary>A message carries more attachments than the configured maximum.</summary>
+    public const string TooManyAttachments = "too_many_attachments";
+
+    /// <summary>
+    /// An attachment handle is unknown, expired, already consumed, or belongs to another channel.
+    /// The four cases are deliberately indistinguishable so the code cannot be used to probe for
+    /// the existence of another connector's attachments.
+    /// </summary>
+    public const string AttachmentNotFound = "attachment_not_found";
+
+    /// <summary>The connector sent attachments without negotiating <c>capabilities.media</c>.</summary>
+    public const string MediaNotSupported = "media_not_supported";
 }
