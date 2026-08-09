@@ -32,6 +32,28 @@ internal static class ConnectorConfigYamlWriter
         sb.AppendLine("  limits:");
         sb.AppendLine(CultureInfo.InvariantCulture, $"    maxFrameBytes: {connectors.Limits.MaxFrameBytes}");
         sb.AppendLine(CultureInfo.InvariantCulture, $"    maxMessagesPerMinute: {connectors.Limits.MaxMessagesPerMinute}");
+        sb.AppendLine("  media:");
+        sb.AppendLine(CultureInfo.InvariantCulture, $"    enabled: {Bool(connectors.Media.Enabled)}");
+        sb.AppendLine(CultureInfo.InvariantCulture, $"    maxAttachmentsPerMessage: {connectors.Media.MaxAttachmentsPerMessage}");
+        sb.AppendLine(CultureInfo.InvariantCulture, $"    maxAttachmentBytes: {connectors.Media.MaxAttachmentBytes}");
+        sb.AppendLine(CultureInfo.InvariantCulture, $"    maxInlineBytes: {connectors.Media.MaxInlineBytes}");
+        sb.AppendLine(CultureInfo.InvariantCulture, $"    handleTtl: \"{connectors.Media.HandleTtl.ToString("c", CultureInfo.InvariantCulture)}\"");
+        sb.AppendLine(CultureInfo.InvariantCulture, $"    maxStoredBytesPerConnector: {connectors.Media.MaxStoredBytesPerConnector}");
+        sb.AppendLine(CultureInfo.InvariantCulture, $"    maxUploadsPerMinute: {connectors.Media.MaxUploadsPerMinute}");
+
+        // Only emit the sequence when it is non-empty. An empty list means "use the built-in
+        // defaults", and writing a bare `allowedMimeTypes:` key would round-trip that intent
+        // just as well but reads as though someone deliberately allowed nothing.
+        if (connectors.Media.AllowedMimeTypes is { Count: > 0 })
+        {
+            sb.AppendLine("    allowedMimeTypes:");
+            foreach (var mimeType in connectors.Media.AllowedMimeTypes)
+            {
+                // MIME types are drawn from a closed allow-list of bare ASCII tokens, so they
+                // need no YAML quoting; emitting them raw keeps the file readable.
+                sb.AppendLine(CultureInfo.InvariantCulture, $"      - {mimeType}");
+            }
+        }
     }
 
     private static string Bool(bool value) => value ? "true" : "false";
