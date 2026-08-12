@@ -89,6 +89,61 @@ public sealed class ConnectorAttachmentRoundTripTests
 
     // ── Connector -> agent ───────────────────────────────────────────
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RawInboundFrame_WithInlineImage_ReachesTheAgentAsDecodedBytes(bool streaming)
+    {
+        // Every other test here builds the frame by serialising a DTO, which cannot prove that a
+        // hand-written frame off the wire binds to that DTO. This one is written exactly as a
+        // connector emits it. Streaming is parameterised because it selects a different channel
+        // type (StreamingPluginChannel), and a real connector declares both.
+        var h = Build();
+        var png = LargePng(65 * 1024);
+        var base64 = Convert.ToBase64String(png);
+
+        var transport = new FakeConnectorTransport();
+        transport.QueueIncoming(ConnectorFrame.Serialize("hello", new ConnectorHelloPayload
+        {
+            Key = "terminal",
+            Token = Token,
+            Capabilities = new ConnectorCapabilitiesPayload
+            {
+                Media = true,
+                Streaming = streaming,
+                RichText = true,
+                MaxMessageLength = 100_000,
+            },
+        }));
+
+        // Plain raw string + Replace: the JSON's own braces make an interpolated raw string
+        // fight the base64 hole, and the point of this test is that the frame text is literal.
+        const string frameTemplate = """
+            {"type":"inbound","payload":{
+              "conversationId":"c1","messageId":"m1",
+              "content":{
+                "text":"what is in this image?",
+                "isMarkdown":false,
+                "attachments":[{"mimeType":"image/png","fileName":"shot.png","data":"__DATA__"}]
+              }}}
+            """;
+
+        transport.QueueIncoming(frameTemplate.Replace("__DATA__", base64, StringComparison.Ordinal));
+        transport.CompleteIncoming();
+
+        List<InboundMessage> received = [];
+        var session = BuildSession(transport, h, received);
+        await session.RunAsync(CancellationToken.None);
+
+        var message = Assert.Single(received);
+        Assert.DoesNotContain(transport.Sent, f => f.Contains("\"error\"", StringComparison.Ordinal));
+
+        var attachment = Assert.Single(message.Content.Attachments!);
+        Assert.Equal("image/png", attachment.MimeType);
+        Assert.Equal("shot.png", attachment.FileName);
+        Assert.Equal(png, attachment.Data);
+    }
+
     [Fact]
     public async Task ConnectorUploadsThenReferencesHandle_AgentReceivesTheBytes()
     {

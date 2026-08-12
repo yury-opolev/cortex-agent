@@ -1194,6 +1194,34 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
     /// Downloads image URLs and converts to base64. Returns null if there are
     /// no image attachments (text-only message).
     /// </summary>
+    /// <summary>
+    /// Splits attachments into those usable as vision input and the MIME types that were
+    /// rejected. Extracted as a pure function so the classification — the step that silently
+    /// decided an image was not an image — is directly testable, and so the caller can say
+    /// what it dropped instead of returning null with no trace.
+    /// </summary>
+    /// <param name="attachments">Attachments as they arrived with the message.</param>
+    internal static (List<Contracts.Messages.MediaAttachment> Usable, List<string> RejectedMimeTypes)
+        ClassifyImageAttachments(IReadOnlyList<Contracts.Messages.MediaAttachment> attachments)
+    {
+        var usable = new List<Contracts.Messages.MediaAttachment>(attachments.Count);
+        var rejected = new List<string>();
+
+        foreach (var attachment in attachments)
+        {
+            if (SupportedImageTypes.Contains(attachment.MimeType))
+            {
+                usable.Add(attachment);
+            }
+            else
+            {
+                rejected.Add(attachment.MimeType);
+            }
+        }
+
+        return (usable, rejected);
+    }
+
     private async Task<IReadOnlyList<LlmContentBlock>?> BuildContentBlocksAsync(
         string text,
         IReadOnlyList<Contracts.Messages.MediaAttachment>? attachments,
@@ -1205,7 +1233,14 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
         }
 
         // Filter to supported image types only
-        var images = attachments.Where(a => SupportedImageTypes.Contains(a.MimeType)).ToList();
+        var (images, rejectedMimeTypes) = ClassifyImageAttachments(attachments);
+        if (rejectedMimeTypes.Count > 0)
+        {
+            // Cold path: building the list is only paid for when something is actually dropped.
+            var rejectedList = string.Join(", ", rejectedMimeTypes);
+            this.LogAttachmentsNotUsableAsImages(rejectedMimeTypes.Count, rejectedList);
+        }
+
         if (images.Count == 0)
         {
             return null;
@@ -1232,6 +1267,7 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
                 }
                 else
                 {
+                    this.LogAttachmentWithoutContent(image.FileName ?? "unknown", image.MimeType);
                     continue;
                 }
 
@@ -1255,6 +1291,10 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
 
         if (blocks.Count == 0)
         {
+            // Every image failed individually. Each failure logged its own reason; this line is
+            // what says the MESSAGE ends up carrying no media at all, which is the fact the user
+            // experiences ("it says it cannot see the image").
+            this.LogNoImageBlocksBuilt(images.Count);
             return null;
         }
 
@@ -2114,6 +2154,25 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to download image {ImageRef}: {ErrorMessage}")]
     private partial void LogImageDownloadFailed(string imageRef, string errorMessage);
+
+    /// <summary>
+    /// Fires when attachments arrived but their MIME types are not usable as vision input. The
+    /// message is still delivered — as text only — so without this line the media simply vanishes:
+    /// no error reaches the sender and the model answers as though it had never been sent an image.
+    /// </summary>
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Dropped {Count} attachment(s) not usable as images: {MimeTypes}")]
+    private partial void LogAttachmentsNotUsableAsImages(int count, string mimeTypes);
+
+    /// <summary>Fires when an attachment claims an image type but carries neither bytes nor a URL.</summary>
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Attachment {FileName} ({MimeType}) has neither data nor url; skipping")]
+    private partial void LogAttachmentWithoutContent(string fileName, string mimeType);
+
+    /// <summary>
+    /// Fires when every candidate image failed, so the message reaches the model with no media at
+    /// all. The per-image reasons are logged above; this states the user-visible outcome.
+    /// </summary>
+    [LoggerMessage(Level = LogLevel.Warning, Message = "No image blocks built from {Count} candidate image attachment(s); message sent as text only")]
+    private partial void LogNoImageBlocksBuilt(int count);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "[tokens] {ConversationId} round={Round} promptTokens={PromptTokens} completionTokens={CompletionTokens} totalTokens={TotalTokens} sessionMessages={SessionMessages} cacheWrite={CacheWrite} cacheRead={CacheRead}")]
     private partial void LogTokenUsage(string conversationId, int round, int promptTokens, int completionTokens, int totalTokens, int sessionMessages, int cacheWrite, int cacheRead);
