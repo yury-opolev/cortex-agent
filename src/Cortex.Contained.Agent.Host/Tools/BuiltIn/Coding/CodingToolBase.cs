@@ -100,6 +100,8 @@ internal static class CodingToolBase
             streamedChunks = status.StreamedChunks,
             lastStreamActivityAt = status.LastStreamActivityAt,
             currentActivity = status.CurrentActivity,
+            pendingRequest = PendingRequestPayload(status.PendingRequest),
+            lastPromptExpiry = status.LastPromptExpiry,
             goalStatus = status.GoalStatus is null ? null : new
             {
                 outcome = status.GoalStatus.Outcome,
@@ -116,6 +118,26 @@ internal static class CodingToolBase
                 status = c.Status,
                 timestampUtc = c.TimestampUtc,
             }),
+        };
+    }
+
+    /// <summary>
+    /// Renders the parked prompt for a tool result. Answering it needs the request id, so
+    /// <c>coding_session_status</c> must carry what <c>coding_session_respond</c> demands —
+    /// otherwise an <c>Awaiting*</c> session is only clearable by a human at the host.
+    /// </summary>
+    internal static object? PendingRequestPayload(PendingCodingRequest? pending)
+    {
+        return pending is null ? null : new
+        {
+            requestId = pending.RequestId,
+            kind = pending.Kind.ToString(),
+            toolName = pending.ToolName,
+            inputPreview = pending.InputPreview,
+            question = pending.Question,
+            options = pending.Options,
+            plan = pending.Plan,
+            requestedAt = pending.RequestedAt,
         };
     }
 
@@ -136,6 +158,7 @@ internal static class CodingToolBase
             LastToolCallsJson = status.LastToolCalls.Count > 0
                 ? CodingAgentSessionStore.SerializeToolCalls(status.LastToolCalls)
                 : null,
+            PendingRequestJson = CodingAgentSessionStore.SerializePendingRequest(status.PendingRequest),
         };
     }
 }

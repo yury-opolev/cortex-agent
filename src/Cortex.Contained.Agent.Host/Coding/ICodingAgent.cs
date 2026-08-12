@@ -15,7 +15,7 @@ public interface ICodingAgent
 
     Task<CodingSendResponse> SendMessageAsync(CodingSendRequest request, CancellationToken cancellationToken);
 
-    Task RespondAsync(CodingRespondRequest request, CancellationToken cancellationToken);
+    Task<CodingRespondResponse> RespondAsync(CodingRespondRequest request, CancellationToken cancellationToken);
 
     Task<CodingSetGoalResponse> SetGoalAsync(CodingSetGoalRequest request, CancellationToken cancellationToken);
 

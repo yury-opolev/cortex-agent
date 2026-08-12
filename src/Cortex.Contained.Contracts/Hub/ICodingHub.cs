@@ -48,4 +48,11 @@ public interface ICodingHub
     /// tool-iteration backstop). Not a crash — the session is idle and the run can be continued.
     /// </summary>
     Task NotifyCodingLimitReached(CodingLimitReachedEvent evt);
+
+    /// <summary>
+    /// Bridge → Agent. A parked permission/question/plan prompt was resolved by the Bridge itself
+    /// (unanswered past the timeout, or the session died). Permission and plan resolve as a
+    /// refusal, so the agent must surface this rather than let coda's denial look unexplained.
+    /// </summary>
+    Task NotifyCodingPromptExpired(CodingPromptExpiredEvent evt);
 }

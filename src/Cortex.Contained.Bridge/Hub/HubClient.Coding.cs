@@ -7,8 +7,8 @@ namespace Cortex.Contained.Bridge.Hub;
 /// <summary>
 /// External-agent (Claude Code) extensions for <see cref="HubClient"/>.
 /// Provides:
-///   - Inbound callback registration for the 8 <see cref="IAgentHubClient"/> session-management methods.
-///   - Outbound calls to the 4 <see cref="IAgentHub"/> push-back methods.
+///   - Inbound callback registration for the <see cref="IAgentHubClient"/> session-management methods.
+///   - Outbound calls to the <see cref="IAgentHub"/> push-back methods.
 /// </summary>
 public sealed partial class HubClient
 {
@@ -22,7 +22,7 @@ public sealed partial class HubClient
     public event Func<CodingSendRequest, Task<CodingSendResponse>>? OnSendCodingMessage;
 
     /// <summary>Agent → Bridge: respond to a permission/clarification ask.</summary>
-    public event Func<CodingRespondRequest, Task>? OnRespondCodingPrompt;
+    public event Func<CodingRespondRequest, Task<CodingRespondResponse>>? OnRespondCodingPrompt;
 
     /// <summary>Agent → Bridge: set/update/clear a session's autonomous goal.</summary>
     public event Func<CodingSetGoalRequest, Task<CodingSetGoalResponse>>? OnSetCodingGoal;
@@ -97,6 +97,13 @@ public sealed partial class HubClient
         await this.connection!.InvokeAsync(nameof(IAgentHub.NotifyCodingLimitReached), evt, cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>Bridge → Agent: notify that a parked prompt was auto-resolved (timeout or dead session).</summary>
+    public async Task NotifyCodingPromptExpiredAsync(CodingPromptExpiredEvent evt, CancellationToken cancellationToken)
+    {
+        EnsureConnected();
+        await this.connection!.InvokeAsync(nameof(IAgentHub.NotifyCodingPromptExpired), evt, cancellationToken).ConfigureAwait(false);
+    }
+
     private void RegisterCodingCallbacks(HubConnection connection)
     {
         connection.On<CodingStartRequest, CodingStatus>(
@@ -114,9 +121,10 @@ public sealed partial class HubClient
             req => this.OnSendCodingMessage?.Invoke(req)
                 ?? Task.FromException<CodingSendResponse>(new InvalidOperationException("No coding agent handler registered.")));
 
-        connection.On<CodingRespondRequest>(
+        connection.On<CodingRespondRequest, CodingRespondResponse>(
             nameof(IAgentHubClient.RespondCodingPrompt),
-            req => this.OnRespondCodingPrompt?.Invoke(req) ?? Task.CompletedTask);
+            req => this.OnRespondCodingPrompt?.Invoke(req)
+                ?? Task.FromException<CodingRespondResponse>(new InvalidOperationException("No coding agent handler registered.")));
 
         connection.On<CodingSetGoalRequest, CodingSetGoalResponse>(
             nameof(IAgentHubClient.SetCodingGoal),

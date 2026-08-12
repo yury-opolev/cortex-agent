@@ -26,6 +26,17 @@ public sealed class CodaOptions
     public int PromptIdleTimeoutSeconds { get; set; } = 300;
 
     /// <summary>
+    /// Seconds an unanswered permission / question / plan prompt may stay parked before the Bridge
+    /// resolves it itself (permission and plan as a refusal). Default 900; 0 disables the bound.
+    /// <para>
+    /// The idle watchdog only inspects <see cref="CodingSessionState.Working"/>, so a parked prompt
+    /// is the one state nothing ever resolves — without this bound an unanswered prompt blocks
+    /// coda's JSON-RPC call forever and only a human at the host can clear it.
+    /// </para>
+    /// </summary>
+    public int PendingRequestTimeoutSeconds { get; set; } = 900;
+
+    /// <summary>
     /// How a spawned coda session sources its MCP servers. Default <see cref="CodaMcpPolicy.Host"/>
     /// (coda uses the host's own <c>~/.coda/.mcp.json</c>). See <see cref="CuratedMcpDir"/> for
     /// <see cref="CodaMcpPolicy.Curated"/>.
@@ -54,6 +65,7 @@ public sealed class CodaOptions
         StartTimeoutSeconds = this.StartTimeoutSeconds,
         ControlTimeoutSeconds = this.ControlTimeoutSeconds,
         PromptIdleTimeoutSeconds = this.PromptIdleTimeoutSeconds,
+        PendingRequestTimeoutSeconds = this.PendingRequestTimeoutSeconds,
         Mcp = this.Mcp,
         CuratedMcpDir = this.CuratedMcpDir,
         Source = this.Source,

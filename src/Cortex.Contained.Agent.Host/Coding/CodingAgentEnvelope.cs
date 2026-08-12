@@ -99,6 +99,23 @@ public static class CodingAgentEnvelope
         return sb.ToString();
     }
 
+    public static string BuildPromptExpired(CodingPromptExpiredEvent evt)
+    {
+        var sb = new StringBuilder();
+        sb.Append("[coding session=").Append(evt.SessionId)
+            .Append(" status=prompt-expired requestId=").Append(evt.RequestId)
+            .Append(" kind=").Append(evt.Kind).AppendLine("]");
+        sb.Append("Message: ").AppendLine(evt.Message);
+        sb.AppendLine(evt.Resolution == CodingPromptResolution.Abandoned
+            ? "The session went away while this prompt was still open, so it was refused on the way out. "
+                + "requestId is DEAD. A crashed/stalled/ended envelope for this session follows — act on that; "
+                + "do NOT resend the instruction to this session."
+            : "Nobody answered this prompt in time, so the Bridge resolved it for you — permission and "
+                + "plan asks are refused by default. requestId is now DEAD: calling coding_session_respond "
+                + "with it will fail. Tell the user what was refused and offer to send the instruction again.");
+        return sb.ToString();
+    }
+
     public static string BuildError(CodingErrorEvent evt)
     {
         var sb = new StringBuilder();

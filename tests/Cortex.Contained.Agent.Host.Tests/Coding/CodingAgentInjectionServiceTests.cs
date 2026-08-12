@@ -156,6 +156,175 @@ public class CodingAgentInjectionServiceTests : IDisposable
         Assert.False(this.queue.TryRead(out _));
     }
 
+    [Fact]
+    public void PermissionRequest_PersistsPendingRequest_SoStatusCanNameIt()
+    {
+        var sessionId = Guid.NewGuid().ToString();
+        this.store.Upsert(MakeRecord(sessionId, "ch-1"));
+
+        this.bus.RaisePermissionRequest(new CodingPermissionRequestEvent
+        {
+            SessionId = sessionId,
+            RequestId = "r-persist",
+            ToolName = "Bash",
+            InputPreview = "git push",
+        });
+
+        var pending = CodingAgentSessionStore.DeserializePendingRequest(
+            this.store.GetById(sessionId)!.PendingRequestJson);
+
+        Assert.NotNull(pending);
+        Assert.Equal("r-persist", pending!.RequestId);
+        Assert.Equal(PendingCodingRequestKind.Permission, pending.Kind);
+        Assert.Equal("Bash", pending.ToolName);
+    }
+
+    [Fact]
+    public void Question_PersistsPendingRequest_WithQuestionAndOptions()
+    {
+        var sessionId = Guid.NewGuid().ToString();
+        this.store.Upsert(MakeRecord(sessionId, "ch-1"));
+
+        this.bus.RaiseQuestion(new CodingQuestionRequestEvent
+        {
+            SessionId = sessionId,
+            RequestId = "q-1",
+            Question = "Which approach?",
+            Options = ["A", "B"],
+            MultiSelect = false,
+        });
+
+        var pending = CodingAgentSessionStore.DeserializePendingRequest(
+            this.store.GetById(sessionId)!.PendingRequestJson);
+
+        Assert.NotNull(pending);
+        Assert.Equal(PendingCodingRequestKind.Question, pending!.Kind);
+        Assert.Equal("Which approach?", pending.Question);
+        Assert.Equal(["A", "B"], pending.Options);
+    }
+
+    [Fact]
+    public void PlanApproval_PersistsPendingRequest_WithPlanText()
+    {
+        var sessionId = Guid.NewGuid().ToString();
+        this.store.Upsert(MakeRecord(sessionId, "ch-1"));
+
+        this.bus.RaisePlanApproval(new CodingPlanApprovalRequestEvent
+        {
+            SessionId = sessionId,
+            RequestId = "p-1",
+            Plan = "Step 1: do X",
+        });
+
+        var pending = CodingAgentSessionStore.DeserializePendingRequest(
+            this.store.GetById(sessionId)!.PendingRequestJson);
+
+        Assert.NotNull(pending);
+        Assert.Equal(PendingCodingRequestKind.Plan, pending!.Kind);
+        Assert.Equal("Step 1: do X", pending.Plan);
+    }
+
+    [Fact]
+    public void FinalResult_ClearsPendingRequest()
+    {
+        var sessionId = Guid.NewGuid().ToString();
+        this.store.Upsert(MakeRecord(sessionId, "ch-1"));
+
+        this.bus.RaisePermissionRequest(new CodingPermissionRequestEvent
+        {
+            SessionId = sessionId,
+            RequestId = "r-cleared",
+            ToolName = "Bash",
+            InputPreview = "git push",
+        });
+
+        this.bus.RaiseFinalResult(new CodingFinalResultEvent
+        {
+            SessionId = sessionId,
+            TaskId = "t1",
+            FinalText = "Pushed.",
+        });
+
+        Assert.Null(this.store.GetById(sessionId)!.PendingRequestJson);
+    }
+
+    [Fact]
+    public void PromptExpired_ClearsPendingRequestAndWarnsTheAgent()
+    {
+        var sessionId = Guid.NewGuid().ToString();
+        this.store.Upsert(MakeRecord(sessionId, "ch-1"));
+
+        this.bus.RaisePermissionRequest(new CodingPermissionRequestEvent
+        {
+            SessionId = sessionId,
+            RequestId = "r-expired",
+            ToolName = "Bash",
+            InputPreview = "git push",
+        });
+        Assert.True(this.queue.TryRead(out _));
+
+        this.bus.RaisePromptExpired(new CodingPromptExpiredEvent
+        {
+            SessionId = sessionId,
+            RequestId = "r-expired",
+            Kind = PendingCodingRequestKind.Permission,
+            Resolution = CodingPromptResolution.Expired,
+            Message = "permission for Bash was auto-denied after 900s with no response",
+        });
+
+        // Leaving it stored would keep the offline fallback advertising a dead requestId.
+        var stored = this.store.GetById(sessionId)!;
+        Assert.Null(stored.PendingRequestJson);
+
+        // …and an Awaiting* state with nothing to name is the dead end this fix removes.
+        Assert.Equal(CodingSessionState.Working, stored.State);
+
+        Assert.True(this.queue.TryRead(out var message));
+        Assert.Contains("status=prompt-expired", message!.Text);
+        Assert.Contains("r-expired", message.Text);
+        Assert.Contains("offer to send the instruction again", message.Text);
+    }
+
+    [Fact]
+    public void PromptExpired_Abandoned_DoesNotTellTheAgentToResend()
+    {
+        // The session is gone — "try again" would point at a session that no longer exists.
+        var sessionId = Guid.NewGuid().ToString();
+        this.store.Upsert(MakeRecord(sessionId, "ch-1"));
+
+        this.bus.RaisePromptExpired(new CodingPromptExpiredEvent
+        {
+            SessionId = sessionId,
+            RequestId = "r-abandoned",
+            Kind = PendingCodingRequestKind.Permission,
+            Resolution = CodingPromptResolution.Abandoned,
+            Message = "permission for Bash was abandoned unanswered: coda exited",
+        });
+
+        Assert.True(this.queue.TryRead(out var message));
+        Assert.Contains("do NOT resend", message!.Text);
+    }
+
+    [Fact]
+    public void PromptExpired_AfterACrash_LeavesTheTerminalStateAlone()
+    {
+        var sessionId = Guid.NewGuid().ToString();
+        this.store.Upsert(MakeRecord(sessionId, "ch-1"));
+
+        this.bus.RaiseError(new CodingErrorEvent { SessionId = sessionId, Message = "coda exited" });
+        this.bus.RaisePromptExpired(new CodingPromptExpiredEvent
+        {
+            SessionId = sessionId,
+            RequestId = "r-abandoned",
+            Kind = PendingCodingRequestKind.Permission,
+            Resolution = CodingPromptResolution.Abandoned,
+            Message = "permission for Bash was abandoned unanswered: coda exited",
+        });
+
+        // Un-crashing the record would be worse than the bug being fixed.
+        Assert.Equal(CodingSessionState.Crashed, this.store.GetById(sessionId)!.State);
+    }
+
     private static CodingAgentSessionRecord MakeRecord(string id, string channel)
     {
         var now = DateTimeOffset.UtcNow;

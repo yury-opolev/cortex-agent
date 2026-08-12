@@ -19,7 +19,9 @@ internal sealed class CodingSessionStatusTool : IAgentTool
     public string Description =>
         "Get the current status of an external coding-agent session, including its state, " +
         "working folder, last user message, last assistant summary, and last 5 tool calls. " +
-        "Use this to answer the user's questions like 'what did claude change?'.";
+        "Use this to answer the user's questions like 'what did claude change?'. " +
+        "When the session is in an Awaiting* state, pendingRequest carries the requestId and " +
+        "details of the prompt to pass to coding_session_respond.";
 
     public string ParametersSchema => """
         {
@@ -73,6 +75,8 @@ internal sealed class CodingSessionStatusTool : IAgentTool
                     lastActivityAt = record.LastActivityAt,
                     lastUserMessage = record.LastUserMessage,
                     lastAssistantSummary = record.LastAssistantSummary,
+                    pendingRequest = CodingToolBase.PendingRequestPayload(
+                        CodingAgentSessionStore.DeserializePendingRequest(record.PendingRequestJson)),
                     lastToolCalls = CodingAgentSessionStore.DeserializeToolCalls(record.LastToolCallsJson),
                 });
             }

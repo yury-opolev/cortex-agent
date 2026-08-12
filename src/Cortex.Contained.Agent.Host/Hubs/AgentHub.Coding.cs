@@ -50,4 +50,10 @@ public sealed partial class AgentHub
         this.externalAgentBus.RaiseLimitReached(evt);
         return Task.CompletedTask;
     }
+
+    public Task NotifyCodingPromptExpired(CodingPromptExpiredEvent evt)
+    {
+        this.externalAgentBus.RaisePromptExpired(evt);
+        return Task.CompletedTask;
+    }
 }

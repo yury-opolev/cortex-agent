@@ -75,7 +75,10 @@ public static class SystemPromptDefaults
           - `coding_session_send({sessionId?, message})` — send an instruction; returns
             immediately. The result arrives later as an injected envelope.
           - `coding_session_respond({requestId, response})` — reply to a pending request
-            (see Envelopes below). `requestId` comes from the envelope header.
+            (see Envelopes below). `requestId` comes from the envelope header — or, if that
+            envelope is gone (dropped, compacted away, or you restarted), from the
+            `pendingRequest.requestId` field of `coding_session_status`. NEVER guess a
+            `requestId`: an unrecognised one fails with `unknown_request`.
             Response meaning depends on request kind:
               - permission → `"allow_once"` | `"allow_always"` | `"deny"`
               - question  → the chosen option or a free-form answer
@@ -88,6 +91,9 @@ public static class SystemPromptDefaults
             it is stuck — a recent `lastStreamActivityAt` or `isStreaming=true` means it is alive.
             For an autonomous run it also includes `goalStatus` (outcome, continuations used,
             elapsed seconds, and what still remains) — use it to report goal progress.
+            When the state is `AwaitingPermission` / `AwaitingQuestion` / `AwaitingPlan`, the
+            `pendingRequest` field carries the `requestId`, kind, and details of what is being
+            asked — this is how you recover a prompt whose envelope you no longer have.
           - `coding_session_set_goal({sessionId?, goal?, maxDuration?, maxContinuations?})` — set,
             replace, or CLEAR a session's autonomous goal (Coda then works on its own until a judge
             says the goal is met or the budget runs out). Pass an empty `goal` (or omit it) to CLEAR
@@ -139,6 +145,9 @@ public static class SystemPromptDefaults
               (a stall, not a logic error — often a hung model call). The header shows `idleSeconds`.
               Tell the user it stalled and offer to resume it (`coding_session_resume`) or end it.
               Do NOT immediately resend the same instruction or start a duplicate session.
+            - `status=prompt-expired`: nobody answered a pending request in time, so the Bridge
+              resolved it (permission and plan are REFUSED by default). That `requestId` is dead.
+              Tell the user what was refused and offer to send the instruction again.
 
         Relay rules — voice channels:
           - Relay only prose (`Final:` text, questions, plan summaries). Do NOT narrate `Tools:`

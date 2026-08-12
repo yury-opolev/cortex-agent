@@ -29,8 +29,14 @@ public interface ICodingHubClient
 
     /// <summary>
     /// Agent → Bridge. Reply to a pending permission ask or clarifying question.
+    /// <para>
+    /// Returns a result (rather than <c>Task</c>) deliberately: SignalR only performs a real
+    /// invocation for a <c>Task&lt;T&gt;</c>-returning client method, so a void return would make
+    /// this fire-and-forget and discard the <c>unknown_request</c> / <c>session_unknown</c>
+    /// failures the Bridge raises for a stale or invented request id.
+    /// </para>
     /// </summary>
-    Task RespondCodingPrompt(CodingRespondRequest request);
+    Task<CodingRespondResponse> RespondCodingPrompt(CodingRespondRequest request);
 
     /// <summary>
     /// Agent → Bridge. Set, update, or clear a session's autonomous goal and budget in-place.

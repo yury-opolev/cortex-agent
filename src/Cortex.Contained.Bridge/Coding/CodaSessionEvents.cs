@@ -25,3 +25,16 @@ public sealed record CodaPermissionRequestEvent(string SessionId, string Request
 public sealed record CodaQuestionEvent(string SessionId, string RequestId, string Question, IReadOnlyList<string> Options, bool MultiSelect);
 
 public sealed record CodaPlanApprovalEvent(string SessionId, string RequestId, string Plan);
+
+/// <summary>
+/// Raised when the Bridge resolved a parked prompt on the caller's behalf — it went unanswered
+/// past <c>CodaOptions.PendingRequestTimeoutSeconds</c>, or the session died while it was parked.
+/// Permission and plan are resolved as a refusal, so the agent must be told: otherwise coda's
+/// "permission denied" output has no explanation and the request id lingers as answerable.
+/// </summary>
+public sealed record CodaPromptExpiredEvent(
+    string SessionId,
+    string RequestId,
+    PendingCodingRequestKind Kind,
+    CodingPromptResolution Resolution,
+    string Message);

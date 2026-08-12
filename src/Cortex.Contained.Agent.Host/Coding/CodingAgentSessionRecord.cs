@@ -29,5 +29,12 @@ public sealed record CodingAgentSessionRecord
 
     public string? LastToolCallsJson { get; init; }
 
+    /// <summary>
+    /// Serialized <see cref="PendingCodingRequest"/> the session is blocked on, or null when
+    /// nothing is awaited. Persisted so the request id survives an agent-host restart and the
+    /// local-store fallback can still name what needs answering.
+    /// </summary>
+    public string? PendingRequestJson { get; init; }
+
     public DateTimeOffset? EndedAt { get; init; }
 }

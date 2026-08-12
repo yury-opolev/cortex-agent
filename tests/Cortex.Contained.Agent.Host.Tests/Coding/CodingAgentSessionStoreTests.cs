@@ -1,5 +1,6 @@
 ﻿using Cortex.Contained.Agent.Host.Coding;
 using Cortex.Contained.Contracts.Coding;
+using Microsoft.Data.Sqlite;
 
 namespace Cortex.Contained.Agent.Host.Tests.Coding;
 
@@ -134,6 +135,145 @@ public class CodingAgentSessionStoreTests : IDisposable
         Assert.Equal(2, active.Count);
         Assert.Equal("s2", active[0].SessionId); // newest first
         Assert.Equal("s1", active[1].SessionId);
+    }
+
+    [Fact]
+    public void Upsert_PendingRequest_RoundTripsThroughStorage()
+    {
+        using var store = new CodingAgentSessionStore(this.tempRoot);
+        var id = Guid.NewGuid().ToString();
+
+        var pending = new PendingCodingRequest
+        {
+            RequestId = "req-99",
+            Kind = PendingCodingRequestKind.Permission,
+            ToolName = "Bash",
+            InputPreview = "git push origin main",
+            RequestedAt = DateTimeOffset.UtcNow,
+        };
+
+        store.Upsert(MakeRecord(id, "ch-1", "C:\\repo") with
+        {
+            State = CodingSessionState.AwaitingPermission,
+            PendingRequestJson = CodingAgentSessionStore.SerializePendingRequest(pending),
+        });
+
+        var restored = CodingAgentSessionStore.DeserializePendingRequest(store.GetById(id)!.PendingRequestJson);
+
+        Assert.NotNull(restored);
+        Assert.Equal("req-99", restored!.RequestId);
+        Assert.Equal(PendingCodingRequestKind.Permission, restored.Kind);
+        Assert.Equal("Bash", restored.ToolName);
+    }
+
+    [Fact]
+    public void Upsert_NullPendingRequest_ClearsTheStoredPrompt()
+    {
+        using var store = new CodingAgentSessionStore(this.tempRoot);
+        var id = Guid.NewGuid().ToString();
+
+        store.Upsert(MakeRecord(id, "ch-1", "C:\\repo") with
+        {
+            State = CodingSessionState.AwaitingPermission,
+            PendingRequestJson = CodingAgentSessionStore.SerializePendingRequest(new PendingCodingRequest
+            {
+                RequestId = "req-99",
+                Kind = PendingCodingRequestKind.Permission,
+                ToolName = "Bash",
+                RequestedAt = DateTimeOffset.UtcNow,
+            }),
+        });
+
+        // Answered: the prompt is gone. A COALESCE-style merge would wrongly keep the stale id.
+        store.Upsert(MakeRecord(id, "ch-1", "C:\\repo") with
+        {
+            State = CodingSessionState.Idle,
+            PendingRequestJson = null,
+        });
+
+        Assert.Null(store.GetById(id)!.PendingRequestJson);
+    }
+
+    [Fact]
+    public void Constructor_LegacyDatabaseWithoutPendingRequestColumn_MigratesAndIsIdempotent()
+    {
+        // Every existing install has a database created before parked prompts were persisted,
+        // so the ALTER path — not the CREATE path — is what actually runs in production.
+        var dbPath = Path.Combine(this.tempRoot, "external-agent", "sessions.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+
+        using (var legacy = new SqliteConnection($"Data Source={dbPath}"))
+        {
+            legacy.Open();
+            using var cmd = legacy.CreateCommand();
+            cmd.CommandText = """
+                CREATE TABLE external_agent_sessions (
+                    session_id              TEXT PRIMARY KEY,
+                    channel_id              TEXT NOT NULL,
+                    working_folder          TEXT NOT NULL,
+                    policy                  INTEGER NOT NULL,
+                    session_name            TEXT,
+                    state                   INTEGER NOT NULL,
+                    created_at              TEXT NOT NULL,
+                    last_activity_at        TEXT NOT NULL,
+                    last_user_message       TEXT,
+                    last_assistant_summary  TEXT,
+                    last_tool_calls         TEXT,
+                    ended_at                TEXT
+                );
+                """;
+            cmd.ExecuteNonQuery();
+        }
+
+        SqliteConnection.ClearAllPools();
+
+        var id = Guid.NewGuid().ToString();
+        using (var migrated = new CodingAgentSessionStore(this.tempRoot))
+        {
+            migrated.Upsert(MakeRecord(id, "ch-1", "C:\\repo") with
+            {
+                PendingRequestJson = CodingAgentSessionStore.SerializePendingRequest(new PendingCodingRequest
+                {
+                    RequestId = "req-legacy",
+                    Kind = PendingCodingRequestKind.Plan,
+                    Plan = "Step 1",
+                    RequestedAt = DateTimeOffset.UtcNow,
+                }),
+            });
+        }
+
+        // Re-opening must not attempt the ALTER a second time.
+        using var reopened = new CodingAgentSessionStore(this.tempRoot);
+        var restored = CodingAgentSessionStore.DeserializePendingRequest(reopened.GetById(id)!.PendingRequestJson);
+
+        Assert.NotNull(restored);
+        Assert.Equal("req-legacy", restored!.RequestId);
+    }
+
+    [Fact]
+    public void Upsert_ReadModifyWrite_PreservesAnExistingPendingRequest()
+    {
+        // Tools that update one field do `record with { … }` off a fresh read; the parked prompt
+        // must survive, otherwise a send would silently strand the session it just unblocked.
+        using var store = new CodingAgentSessionStore(this.tempRoot);
+        var id = Guid.NewGuid().ToString();
+
+        store.Upsert(MakeRecord(id, "ch-1", "C:\\repo") with
+        {
+            State = CodingSessionState.AwaitingPermission,
+            PendingRequestJson = CodingAgentSessionStore.SerializePendingRequest(new PendingCodingRequest
+            {
+                RequestId = "req-keep",
+                Kind = PendingCodingRequestKind.Permission,
+                ToolName = "Bash",
+                RequestedAt = DateTimeOffset.UtcNow,
+            }),
+        });
+
+        var reread = store.GetById(id)!;
+        store.Upsert(reread with { LastUserMessage = "another instruction" });
+
+        Assert.Equal(reread.PendingRequestJson, store.GetById(id)!.PendingRequestJson);
     }
 
     private static CodingAgentSessionRecord MakeRecord(string id, string channel, string folder)

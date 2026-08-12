@@ -426,13 +426,34 @@ public class CodingAgentSessionToolsTests : IDisposable
     [Fact]
     public async Task SessionRespond_DelegatesToAgent()
     {
+        this.agent.RespondAsync(Arg.Any<CodingRespondRequest>(), Arg.Any<CancellationToken>())
+            .Returns(new CodingRespondResponse { RequestId = "r1", Accepted = true });
+
         var tool = new CodingSessionRespondTool(this.agent);
         var args = JsonSerializer.Serialize(new { requestId = "r1", response = "allow_once" });
         var result = await tool.ExecuteAsync(args, Ctx(), CancellationToken.None);
 
         Assert.True(result.Success);
+        Assert.Contains("\"accepted\":true", result.Content);
         await this.agent.Received().RespondAsync(
             Arg.Is<CodingRespondRequest>(r => r.RequestId == "r1" && r.Response == "allow_once"),
             Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task SessionRespond_UnknownRequestId_ReportsFailureNotAcceptance()
+    {
+        // The whole point of the requestId fix: a stale/guessed id must not come back as accepted.
+        this.agent.RespondAsync(Arg.Any<CodingRespondRequest>(), Arg.Any<CancellationToken>())
+            .Returns<CodingRespondResponse>(_ => throw CodingInvokeException.FromWire(
+                CodingBridgeErrorCodes.UnknownRequest, "No prompt is awaiting requestId 'r-bogus'."));
+
+        var tool = new CodingSessionRespondTool(this.agent);
+        var args = JsonSerializer.Serialize(new { requestId = "r-bogus", response = "allow_once" });
+        var result = await tool.ExecuteAsync(args, Ctx(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Contains("unknown_request", result.Content);
+        Assert.DoesNotContain("\"accepted\":true", result.Content);
     }
 }

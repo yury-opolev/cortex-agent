@@ -43,6 +43,19 @@ public sealed class FakeCodaServer : IAsyncDisposable
     /// <summary>Steering comments received via <c>session/steer</c>, in arrival order.</summary>
     public List<string> SteerComments { get; } = [];
 
+    /// <summary>
+    /// The reply coda received for the last <c>request/permission</c> — the actual allow/deny
+    /// decision, as opposed to merely "a reply arrived". Tests asserting an auto-refusal must
+    /// check this, or a bug that auto-ALLOWED would pass unnoticed.
+    /// </summary>
+    public JsonNode? LastPermissionReply { get; private set; }
+
+    /// <summary>The reply coda received for the last <c>request/question</c>.</summary>
+    public JsonNode? LastQuestionReply { get; private set; }
+
+    /// <summary>The reply coda received for the last <c>request/planApproval</c>.</summary>
+    public JsonNode? LastPlanReply { get; private set; }
+
     /// <summary>Text to accumulate and include in the final <c>event/assistantText</c> notification.</summary>
     public string AssistantText { get; set; } = "Hello from fake coda.";
 
@@ -192,6 +205,7 @@ public sealed class FakeCodaServer : IAsyncDisposable
             FakeCodaScenario.SlowStream => await this.RunSlowStreamAsync(ct),
             FakeCodaScenario.SlowToolProgress => await this.RunSlowToolProgressAsync(ct),
             FakeCodaScenario.ToolCallThenStall => await this.RunToolCallThenStallAsync(ct),
+            FakeCodaScenario.PermissionThenStall => await this.RunPermissionThenStallAsync(ct),
             FakeCodaScenario.Goal => await this.RunGoalAsync(ct),
             _ => await this.RunHappyAsync(ct),
         };
@@ -233,6 +247,7 @@ public sealed class FakeCodaServer : IAsyncDisposable
             "request/permission",
             new { toolName = "Bash", inputPreview = "rm -rf /tmp/x" },
             ct);
+        this.LastPermissionReply = reply;
 
         await this.serverRpc.NotifyWithParameterObjectAsync(
             "event/turnComplete",
@@ -241,12 +256,29 @@ public sealed class FakeCodaServer : IAsyncDisposable
         return new JsonObject { ["ok"] = true, ["stopReason"] = "end_turn", ["interrupted"] = false };
     }
 
+    /// <summary>
+    /// Asks for permission, records the reply, then goes silent forever WITHOUT sending
+    /// turnComplete — the shape of a coda that hangs after its prompt is answered. Exercises
+    /// whether the session leaves the Awaiting* state, since the idle watchdog only inspects
+    /// <c>Working</c> and would otherwise never cover the rest of the turn.
+    /// </summary>
+    private async Task<JsonNode?> RunPermissionThenStallAsync(CancellationToken ct)
+    {
+        this.LastPermissionReply = await this.serverRpc.InvokeWithParameterObjectAsync<JsonNode>(
+            "request/permission",
+            new { toolName = "Bash", inputPreview = "rm -rf /tmp/x" },
+            ct);
+
+        return await new TaskCompletionSource<JsonNode?>().Task.WaitAsync(ct);
+    }
+
     private async Task<JsonNode?> RunQuestionAsync(CancellationToken ct)
     {
         var reply = await this.serverRpc.InvokeWithParameterObjectAsync<JsonNode>(
             "request/question",
             new { question = "Which approach?", options = questionOptions, multiSelect = false },
             ct);
+        this.LastQuestionReply = reply;
 
         await this.serverRpc.NotifyWithParameterObjectAsync(
             "event/turnComplete",
@@ -261,6 +293,7 @@ public sealed class FakeCodaServer : IAsyncDisposable
             "request/planApproval",
             new { plan = "Step 1: do X\nStep 2: do Y" },
             ct);
+        this.LastPlanReply = reply;
 
         await this.serverRpc.NotifyWithParameterObjectAsync(
             "event/turnComplete",
@@ -488,5 +521,6 @@ public enum FakeCodaScenario
     SlowStream,
     SlowToolProgress,
     ToolCallThenStall,
+    PermissionThenStall,
     Goal,
 }

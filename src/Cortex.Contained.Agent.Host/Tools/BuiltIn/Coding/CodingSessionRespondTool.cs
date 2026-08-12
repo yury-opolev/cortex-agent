@@ -17,10 +17,12 @@ internal sealed class CodingSessionRespondTool : IAgentTool
 
     public string Description =>
         "Reply to a pending permission ask, question, or plan-approval request from the coding agent. " +
-        "Pass the requestId from the [coding ...] envelope and the response: " +
+        "Pass the requestId from the [coding ...] envelope — or, if that envelope is gone, from the " +
+        "pendingRequest field of coding_session_status — and the response: " +
         "'allow_once', 'allow_always', or 'deny' for permission; " +
         "the chosen option or free-form text for questions; " +
-        "'approve' or 'reject' for plan approvals.";
+        "'approve' or 'reject' for plan approvals. " +
+        "An unrecognised requestId fails with unknown_request rather than reporting success.";
 
     public string ParametersSchema => """
         {
@@ -52,11 +54,11 @@ internal sealed class CodingSessionRespondTool : IAgentTool
                 return CodingToolBase.Error("invalid_params", "requestId and response (strings) are required.");
             }
 
-            await this.agent.RespondAsync(
+            var result = await this.agent.RespondAsync(
                 new CodingRespondRequest { RequestId = ridEl.GetString()!, Response = respEl.GetString()! },
                 cancellationToken).ConfigureAwait(false);
 
-            return CodingToolBase.Ok(new { requestId = ridEl.GetString(), accepted = true });
+            return CodingToolBase.Ok(new { requestId = result.RequestId, accepted = result.Accepted });
         }
         catch (JsonException ex)
         {
