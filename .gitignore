@@ -16,11 +16,13 @@
 # Superpowers local workflow artifacts (specs under docs/superpowers/ are tracked)
 .superpowers/
 
-# Eval results (SQLite databases, transcripts)
-**/eval-results/*.db
-**/eval-results/*.db-shm
-**/eval-results/*.db-wal
-**/eval-results/*.transcript.json
+# Eval run artifacts: run reports, LLM transcripts and SQLite state, all written by
+# EvalRecorder on every `dotnet test` of an eval project and recreated on demand.
+# None of it is source, and the reports embed conversation transcripts, so the whole
+# directory is ignored — the .gitkeep placeholders are kept so a clean checkout still
+# has the directory.
+**/eval-results/*
+!**/eval-results/.gitkeep
 
 # Local settings overrides (may contain secrets)
 appsettings.*.local.json
