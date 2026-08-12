@@ -21,6 +21,13 @@ public static class CodingAgentErrorCodes
     public const string StartFailed = "coda_start_failed";
     public const string SessionNotReady = "session_not_ready";
     public const string CodaTimeout = "coda_timeout";
+
+    /// <summary>
+    /// The requestId passed to a respond call matches no parked prompt — stale, already answered,
+    /// expired, or invented. Distinguishes "no such prompt" from a genuine approval so a caller
+    /// is never told a guessed id succeeded.
+    /// </summary>
+    public const string UnknownRequest = "unknown_request";
 }
 
 /// <summary>

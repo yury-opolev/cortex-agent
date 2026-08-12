@@ -23,4 +23,7 @@ internal static class CodingBridgeErrorCodes
     public const string CodaUnreachable = "coda_unreachable";
     public const string CodaInvalidModel = "coda_invalid_model";
     public const string SessionNotReady = "session_not_ready";
+
+    /// <summary>No parked prompt matches the requestId passed to <c>coding_session_respond</c>.</summary>
+    public const string UnknownRequest = "unknown_request";
 }

@@ -85,6 +85,7 @@ public sealed partial class CodingHubBinder
             this.manager.PermissionRequested += this.OnSessionPermissionRequested;
             this.manager.Question += this.OnSessionQuestion;
             this.manager.PlanApproval += this.OnSessionPlanApproval;
+            this.manager.PromptExpired += this.OnSessionPromptExpired;
             this.eventsWired = true;
         }
     }
@@ -92,7 +93,7 @@ public sealed partial class CodingHubBinder
     private Task<CodingSendResponse> HandleSend(CodingSendRequest req) =>
         Guard(() => this.manager.SendMessageAsync(req, CancellationToken.None));
 
-    private Task HandleRespond(CodingRespondRequest req) =>
+    private Task<CodingRespondResponse> HandleRespond(CodingRespondRequest req) =>
         Guard(() => this.manager.RespondAsync(req, CancellationToken.None));
 
     private Task<CodingSetGoalResponse> HandleSetGoal(CodingSetGoalRequest req) =>
@@ -294,6 +295,24 @@ public sealed partial class CodingHubBinder
         }
     }
 
+    private void OnSessionPromptExpired(CodaPromptExpiredEvent evt)
+    {
+        this.LogCodingPromptExpired(evt.SessionId, evt.RequestId, evt.Message);
+        var tenantId = this.ResolveSessionTenant(evt.SessionId);
+        var payload = new CodingPromptExpiredEvent
+        {
+            SessionId = evt.SessionId,
+            RequestId = evt.RequestId,
+            Kind = evt.Kind,
+            Resolution = evt.Resolution,
+            Message = evt.Message,
+        };
+        foreach (var client in SelectTargets(this.wiredClients, tenantId))
+        {
+            _ = this.SafePushAsync(() => client.NotifyCodingPromptExpiredAsync(payload, CancellationToken.None));
+        }
+    }
+
     /// <summary>
     /// Resolves the owning tenant for <paramref name="sessionId"/> via the manager lookup.
     /// Logs a warning and returns <c>null</c> when the session is unknown (stale/ended without
@@ -341,4 +360,8 @@ public sealed partial class CodingHubBinder
     [LoggerMessage(EventId = 9114, Level = LogLevel.Information,
         Message = "Coding session {sessionId} hit a recoverable limit ({kind}) relayed to agent: {message}")]
     private partial void LogCodingLimitReached(string sessionId, string kind, string message);
+
+    [LoggerMessage(EventId = 9115, Level = LogLevel.Warning,
+        Message = "Coding session {sessionId} prompt {requestId} auto-resolved, relayed to agent: {message}")]
+    private partial void LogCodingPromptExpired(string sessionId, string requestId, string message);
 }

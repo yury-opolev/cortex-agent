@@ -33,11 +33,11 @@ public sealed partial class CodingAgentSessionStore : SqliteStoreBase
                 INSERT INTO external_agent_sessions
                     (session_id, channel_id, working_folder, policy, session_name, state,
                      created_at, last_activity_at, last_user_message, last_assistant_summary,
-                     last_tool_calls, ended_at)
+                     last_tool_calls, pending_request, ended_at)
                 VALUES
                     ($id, $channel, $folder, $policy, $name, $state,
                      $created, $activity, $userMsg, $assistantSummary,
-                     $toolCalls, $ended)
+                     $toolCalls, $pending, $ended)
                 ON CONFLICT(session_id) DO UPDATE SET
                     channel_id = excluded.channel_id,
                     working_folder = excluded.working_folder,
@@ -48,6 +48,7 @@ public sealed partial class CodingAgentSessionStore : SqliteStoreBase
                     last_user_message = COALESCE(excluded.last_user_message, last_user_message),
                     last_assistant_summary = COALESCE(excluded.last_assistant_summary, last_assistant_summary),
                     last_tool_calls = COALESCE(excluded.last_tool_calls, last_tool_calls),
+                    pending_request = excluded.pending_request,
                     ended_at = excluded.ended_at;
                 """;
             cmd.Parameters.AddWithValue("$id", record.SessionId);
@@ -61,6 +62,7 @@ public sealed partial class CodingAgentSessionStore : SqliteStoreBase
             cmd.Parameters.AddWithValue("$userMsg", (object?)record.LastUserMessage ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$assistantSummary", (object?)record.LastAssistantSummary ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$toolCalls", (object?)record.LastToolCallsJson ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$pending", (object?)record.PendingRequestJson ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$ended", (object?)record.EndedAt?.UtcDateTime.ToString("O", CultureInfo.InvariantCulture) ?? DBNull.Value);
             cmd.ExecuteNonQuery();
         }
@@ -173,6 +175,7 @@ public sealed partial class CodingAgentSessionStore : SqliteStoreBase
                 last_user_message       TEXT,
                 last_assistant_summary  TEXT,
                 last_tool_calls         TEXT,
+                pending_request         TEXT,
                 ended_at                TEXT
             );
 
@@ -181,6 +184,39 @@ public sealed partial class CodingAgentSessionStore : SqliteStoreBase
             CREATE INDEX IF NOT EXISTS ix_external_agent_sessions_idle
                 ON external_agent_sessions(last_activity_at) WHERE ended_at IS NULL;
             """);
+
+        this.EnsurePendingRequestColumn();
+    }
+
+    /// <summary>
+    /// Adds <c>pending_request</c> to databases created before parked prompts were persisted.
+    /// Checked by introspection rather than a version counter, because this store shipped without
+    /// ever setting <c>PRAGMA user_version</c>.
+    /// </summary>
+    private void EnsurePendingRequestColumn()
+    {
+        using var cmd = this.Connection.CreateCommand();
+        cmd.CommandText = "PRAGMA table_info(external_agent_sessions)";
+        using (var reader = cmd.ExecuteReader())
+        {
+            var nameOrdinal = reader.GetOrdinal("name");
+            while (reader.Read())
+            {
+                if (string.Equals(reader.GetString(nameOrdinal), "pending_request", StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+            }
+        }
+
+        try
+        {
+            this.ExecuteNonQuery("ALTER TABLE external_agent_sessions ADD COLUMN pending_request TEXT");
+        }
+        catch (SqliteException ex) when (ex.Message.Contains("duplicate column", StringComparison.OrdinalIgnoreCase))
+        {
+            // Another instance won the race against the same database file — the column exists.
+        }
     }
 
     private static CodingAgentSessionRecord Map(SqliteDataReader reader)
@@ -198,6 +234,7 @@ public sealed partial class CodingAgentSessionStore : SqliteStoreBase
             LastUserMessage = ReadNullableString(reader, "last_user_message"),
             LastAssistantSummary = ReadNullableString(reader, "last_assistant_summary"),
             LastToolCallsJson = ReadNullableString(reader, "last_tool_calls"),
+            PendingRequestJson = ReadNullableString(reader, "pending_request"),
             EndedAt = ReadNullableDate(reader, "ended_at"),
         };
     }
@@ -233,6 +270,30 @@ public sealed partial class CodingAgentSessionStore : SqliteStoreBase
         catch (JsonException)
         {
             return [];
+        }
+    }
+
+    /// <summary>Serializes the parked prompt for storage, or returns null when nothing is awaited.</summary>
+    public static string? SerializePendingRequest(PendingCodingRequest? pending)
+    {
+        return pending is null ? null : JsonSerializer.Serialize(pending);
+    }
+
+    /// <summary>Reads a stored parked prompt back, tolerating absent or corrupt JSON.</summary>
+    public static PendingCodingRequest? DeserializePendingRequest(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return null;
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<PendingCodingRequest>(json);
+        }
+        catch (JsonException)
+        {
+            return null;
         }
     }
 }

@@ -58,6 +58,7 @@ public sealed partial class CodaSessionManager : IAsyncDisposable
     public event Action<CodaPermissionRequestEvent>? PermissionRequested;
     public event Action<CodaQuestionEvent>? Question;
     public event Action<CodaPlanApprovalEvent>? PlanApproval;
+    public event Action<CodaPromptExpiredEvent>? PromptExpired;
 
     public CodaOptions Options => this.codaOptions.CurrentValue;
 
@@ -477,41 +478,56 @@ public sealed partial class CodaSessionManager : IAsyncDisposable
     // RespondAsync — routes to the owning session, handles allow_always
     // -----------------------------------------------------------------------
 
-    public async Task RespondAsync(CodingRespondRequest request, CancellationToken cancellationToken)
+    public async Task<CodingRespondResponse> RespondAsync(CodingRespondRequest request, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
 
         if (!this.requestToSession.TryGetValue(request.RequestId, out var sessionId))
         {
-            // Stale or unknown request — ignore gracefully.
+            // Reporting success here would tell a caller that guessed, mistyped or reused an id
+            // that the session was unblocked while it stays parked. Say so explicitly instead.
             this.LogRespondUnknownRequest(request.RequestId);
-            return;
+            throw new CodingAgentException(
+                CodingAgentErrorCodes.UnknownRequest,
+                $"No prompt is awaiting requestId '{request.RequestId}' — it is stale, already answered, or was never issued. "
+                + "Call coding_session_status to read the session's pendingRequest before responding.");
         }
 
         if (!this.sessions.TryGetValue(sessionId, out var session))
         {
             this.LogRespondSessionGone(request.RequestId, sessionId);
-            return;
+            this.requestToSession.TryRemove(request.RequestId, out _);
+            this.requestToolNames.TryRemove(request.RequestId, out _);
+            throw new CodingAgentException(
+                CodingAgentErrorCodes.SessionUnknown,
+                $"Session {sessionId}, which asked requestId '{request.RequestId}', is no longer running.");
         }
 
-        // For allow_always: record in the cache so the next identical permission auto-approves.
-        // We need the tool name; since we don't store it separately in the requestToSession map
-        // we derive it from the session's pending requests indirectly — however CodaSession
-        // exposes RespondAsync(requestId, response) and fires the result.  The allow-always
-        // recording is done BEFORE resolving so we can also look up the toolName.
-        // Because CodaSession hides PendingRequests, we store toolName per-request in our own map.
-        if (request.Response == "allow_always"
-            && this.requestToolNames.TryGetValue(request.RequestId, out var toolName))
+        // For allow_always the tool name must be read BEFORE the routing maps are cleared, but the
+        // cache entry must only be written AFTER the prompt is known to have actually resolved:
+        // granting a permanent session-wide auto-approval off a stale id would let a guessed or
+        // expired requestId silently disarm the permission gate for that tool.
+        this.requestToSession.TryRemove(request.RequestId, out _);
+        this.requestToolNames.TryRemove(request.RequestId, out var toolName);
+
+        var resolved = await session.RespondAsync(request.RequestId, request.Response).ConfigureAwait(false);
+        if (!resolved)
+        {
+            // Routed but nothing was parked — the prompt expired or was answered in the meantime.
+            this.LogRespondUnknownRequest(request.RequestId);
+            throw new CodingAgentException(
+                CodingAgentErrorCodes.UnknownRequest,
+                $"The prompt for requestId '{request.RequestId}' is no longer awaiting a response — "
+                + "it expired or was already answered. Call coding_session_status to re-read the session state.");
+        }
+
+        if (request.Response == "allow_always" && toolName is not null)
         {
             this.allowAlwaysCache.Add(sessionId, toolName);
             this.LogAllowAlways(sessionId, toolName);
         }
 
-        // Clean up the routing maps.
-        this.requestToSession.TryRemove(request.RequestId, out _);
-        this.requestToolNames.TryRemove(request.RequestId, out _);
-
-        await session.RespondAsync(request.RequestId, request.Response).ConfigureAwait(false);
+        return new CodingRespondResponse { RequestId = request.RequestId, Accepted = true };
     }
 
     // -----------------------------------------------------------------------
@@ -805,6 +821,14 @@ public sealed partial class CodaSessionManager : IAsyncDisposable
             this.requestToSession[evt.RequestId] = evt.SessionId;
             this.PlanApproval?.Invoke(evt);
         };
+        session.PromptExpired += evt =>
+        {
+            // The prompt is gone: drop the routing entry so the maps do not grow without bound,
+            // and so a later respond for it fails fast as unknown_request.
+            this.requestToSession.TryRemove(evt.RequestId, out _);
+            this.requestToolNames.TryRemove(evt.RequestId, out _);
+            this.PromptExpired?.Invoke(evt);
+        };
     }
 
     private CodingStatus SnapshotSession(CodaSession session)
@@ -832,6 +856,8 @@ public sealed partial class CodaSessionManager : IAsyncDisposable
             StreamedChunks = session.StreamedChunks,
             LastStreamActivityAt = session.LastStreamActivityAt,
             CurrentActivity = session.CurrentActivity,
+            PendingRequest = session.PendingRequest,
+            LastPromptExpiry = session.LastPromptExpiry,
             GoalStatus = session.GoalStatus,
         };
     }

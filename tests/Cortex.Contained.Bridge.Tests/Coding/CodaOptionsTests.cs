@@ -14,6 +14,9 @@ public sealed class CodaOptionsTests
         Assert.Equal(15, coda.ControlTimeoutSeconds);
         Assert.Equal(300, coda.PromptIdleTimeoutSeconds);
 
+        // A parked prompt is the one state nothing else resolves, so it must be bounded by default.
+        Assert.Equal(900, coda.PendingRequestTimeoutSeconds);
+
         // Invariant: the Bridge's start timeout must stay strictly below the Agent→Bridge invoke
         // ceiling (45s, asserted in CodingAgentOptionsTests) so the Bridge's specific failure is
         // delivered before the agent's blunt timeout.
@@ -50,6 +53,7 @@ public sealed class CodaOptionsTests
             StartTimeoutSeconds = 11,
             ControlTimeoutSeconds = 12,
             PromptIdleTimeoutSeconds = 13,
+            PendingRequestTimeoutSeconds = 14,
             Mcp = CodaMcpPolicy.Curated,
             CuratedMcpDir = "C:\\curated",
             Source = CodaSource.Bundled,
@@ -64,6 +68,7 @@ public sealed class CodaOptionsTests
         Assert.Equal(11, copy.StartTimeoutSeconds);
         Assert.Equal(12, copy.ControlTimeoutSeconds);
         Assert.Equal(13, copy.PromptIdleTimeoutSeconds);
+        Assert.Equal(14, copy.PendingRequestTimeoutSeconds);
         Assert.Equal(CodaMcpPolicy.Curated, copy.Mcp);
         Assert.Equal("C:\\curated", copy.CuratedMcpDir);
         Assert.Equal(CodaSource.Bundled, copy.Source);

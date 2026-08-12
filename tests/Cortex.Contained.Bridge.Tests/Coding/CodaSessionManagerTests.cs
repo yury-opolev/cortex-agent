@@ -69,6 +69,108 @@ public sealed class CodaSessionManagerEffectiveOptionsTests : IDisposable
 }
 
 /// <summary>
+/// Covers <see cref="CodaSessionManager.RespondAsync"/> routing for a requestId the manager has
+/// never parked. It used to return silently, so <c>coding_session_respond</c> reported success for
+/// a stale, mistyped or invented id while the session stayed blocked — a model that guessed an id
+/// was told it worked. It must now raise the stable <c>unknown_request</c> code instead.
+/// </summary>
+public sealed class CodaSessionManagerRespondTests : IDisposable
+{
+    private readonly string tempRoot = Path.Combine(Path.GetTempPath(), "cortex-respond-" + Guid.NewGuid().ToString("N"));
+
+    private CodaSessionManager NewManager()
+    {
+        Directory.CreateDirectory(this.tempRoot);
+        Directory.CreateDirectory(Path.Combine(this.tempRoot, "wf"));
+
+        var options = Substitute.For<IOptionsMonitor<CodaOptions>>();
+        options.CurrentValue.Returns(new CodaOptions());
+
+        return new CodaSessionManager(
+            NullLoggerFactory.Instance,
+            options,
+            new CodingFoldersStore(Path.Combine(this.tempRoot, "coding-folders.json")),
+            new CodaMcpSettingsStore(Path.Combine(this.tempRoot, "coda-mcp.json")));
+    }
+
+    [Fact]
+    public async Task RespondAsync_UnknownRequestId_ThrowsUnknownRequest()
+    {
+        var manager = this.NewManager();
+
+        var ex = await Assert.ThrowsAsync<CodingAgentException>(() => manager.RespondAsync(
+            new CodingRespondRequest { RequestId = "never-minted", Response = "allow_once" },
+            CancellationToken.None));
+
+        Assert.Equal(CodingAgentErrorCodes.UnknownRequest, ex.ErrorCode);
+        Assert.Contains("never-minted", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RespondAsync_AllowAlwaysOnAResolvedRequest_DoesNotDisarmThePermissionGate()
+    {
+        // The dangerous window: the id is still in the routing map but its prompt is gone (raced,
+        // auto-allowed, or expired). Arming the allow-always cache before confirming the resolve
+        // would grant a permanent session-wide auto-approval off a dead id — the gate would never
+        // ask again for that tool.
+        var (server, clientStream) = FakeCoda.FakeCodaServer.Create();
+        await using var _ = server;
+        server.Scenario = FakeCoda.FakeCodaScenario.Permission;
+
+        var connection = new CodaJsonRpcConnection(clientStream, clientStream);
+        var workingFolder = Path.Combine(this.tempRoot, "wf");
+        var session = new CodaSession(
+            "gate-1", "c1", workingFolder, CodingPolicy.Prompt, connection,
+            NullLogger<CodaSession>.Instance, new CodaOptions());
+        await using var __ = session;
+
+        var manager = this.NewManager();
+        manager.RegisterStartedSessionForTesting(
+            session, channelId: "c1", workingFolder: workingFolder, policy: CodingPolicy.Prompt, tenantId: "tenant-1");
+        await session.StartAsync(isResume: false, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+
+        var firstAsk = new TaskCompletionSource<CodaPermissionRequestEvent>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondAsk = new TaskCompletionSource<CodaPermissionRequestEvent>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        manager.PermissionRequested += e =>
+        {
+            if (!firstAsk.TrySetResult(e))
+            {
+                secondAsk.TrySetResult(e);
+            }
+        };
+
+        var firstTurnDone = new TaskCompletionSource<CodaFinalResultEvent>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        manager.FinalResult += e => firstTurnDone.TrySetResult(e);
+
+        await session.WriteUserMessageAsync("Run a command.", CancellationToken.None);
+        var asked = await firstAsk.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        // Resolve it behind the manager's back, exactly as the auto-allow path does — the routing
+        // map still holds the id, but nothing is parked any more.
+        Assert.True(await session.RespondAsync(asked.RequestId, "allow_once"));
+        await firstTurnDone.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        var ex = await Assert.ThrowsAsync<CodingAgentException>(() => manager.RespondAsync(
+            new CodingRespondRequest { RequestId = asked.RequestId, Response = "allow_always" },
+            CancellationToken.None));
+        Assert.Equal(CodingAgentErrorCodes.UnknownRequest, ex.ErrorCode);
+
+        // The gate must still be armed: the next Bash permission has to be asked, not auto-allowed.
+        await session.WriteUserMessageAsync("Run another command.", CancellationToken.None);
+        var reAsked = await secondAsk.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal("Bash", reAsked.ToolName);
+    }
+
+    public void Dispose()
+    {
+        try { Directory.Delete(this.tempRoot, recursive: true); } catch { }
+    }
+}
+
+/// <summary>
 /// Tests for the pure policy-resolution helper extracted from <see cref="CodaSessionManager"/>.
 /// The manager itself spawns real processes so its lifecycle tests live in the FakeCoda
 /// integration suite (Task 6).  Here we test the testable seam directly.

@@ -3,7 +3,7 @@
 namespace Cortex.Contained.Agent.Host.Coding;
 
 /// <summary>
-/// Process-wide multiplexer for the four push-back events that arrive from the Bridge
+/// Process-wide multiplexer for the push-back events that arrive from the Bridge
 /// via the SignalR hub. The hub raises events here; the injection service subscribes.
 /// </summary>
 public sealed class CodingAgentEventBus
@@ -15,6 +15,7 @@ public sealed class CodingAgentEventBus
     public event Action<CodingErrorEvent>? Error;
     public event Action<CodingStalledEvent>? Stalled;
     public event Action<CodingLimitReachedEvent>? LimitReached;
+    public event Action<CodingPromptExpiredEvent>? PromptExpired;
 
     public void RaiseFinalResult(CodingFinalResultEvent evt) => this.FinalResult?.Invoke(evt);
 
@@ -29,4 +30,6 @@ public sealed class CodingAgentEventBus
     public void RaiseStalled(CodingStalledEvent evt) => this.Stalled?.Invoke(evt);
 
     public void RaiseLimitReached(CodingLimitReachedEvent evt) => this.LimitReached?.Invoke(evt);
+
+    public void RaisePromptExpired(CodingPromptExpiredEvent evt) => this.PromptExpired?.Invoke(evt);
 }

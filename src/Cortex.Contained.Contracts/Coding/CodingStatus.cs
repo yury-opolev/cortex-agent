@@ -57,6 +57,20 @@ public sealed record CodingStatus
     public string? CurrentActivity { get; init; }
 
     /// <summary>
+    /// The permission / question / plan prompt this session is blocked on, or null when nothing is
+    /// awaited. This is what makes <see cref="CodingSessionState.AwaitingPermission"/> and friends
+    /// recoverable: without it the state says something is pending but nothing can name it, and
+    /// <c>coding_session_respond</c> — which requires the request id — cannot be called.
+    /// </summary>
+    public PendingCodingRequest? PendingRequest { get; init; }
+
+    /// <summary>
+    /// Describes the most recent prompt the Bridge auto-resolved because nobody answered it in
+    /// time, or null if none has expired. Explains an otherwise mysterious "permission denied".
+    /// </summary>
+    public string? LastPromptExpiry { get; init; }
+
+    /// <summary>
     /// Latest autonomous-goal run status (outcome, continuations, elapsed, what remains), or null
     /// if the session has no goal / no goal run has completed yet.
     /// </summary>

@@ -33,7 +33,7 @@ public sealed class SignalRCodingAgent : ICodingAgent
     public Task<CodingSendResponse> SendMessageAsync(CodingSendRequest request, CancellationToken cancellationToken) =>
         this.InvokeAsync(c => c.SendCodingMessage(request), cancellationToken);
 
-    public Task RespondAsync(CodingRespondRequest request, CancellationToken cancellationToken) =>
+    public Task<CodingRespondResponse> RespondAsync(CodingRespondRequest request, CancellationToken cancellationToken) =>
         this.InvokeAsync(c => c.RespondCodingPrompt(request), cancellationToken);
 
     public Task<CodingSetGoalResponse> SetGoalAsync(CodingSetGoalRequest request, CancellationToken cancellationToken) =>
@@ -75,25 +75,6 @@ public sealed class SignalRCodingAgent : ICodingAgent
         try
         {
             return await call(client).WaitAsync(timeoutCts.Token).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-        {
-            throw CodingInvokeException.Unreachable((int)this.invokeTimeout.TotalSeconds);
-        }
-        catch (Exception ex) when (CodingErrorWire.TryDecode(ex.Message, out var code, out var message))
-        {
-            throw CodingInvokeException.FromWire(code, message);
-        }
-    }
-
-    private async Task InvokeAsync(Func<IAgentHubClient, Task> call, CancellationToken cancellationToken)
-    {
-        var client = this.Client;
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutCts.CancelAfter(this.invokeTimeout);
-        try
-        {
-            await call(client).WaitAsync(timeoutCts.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {

@@ -38,6 +38,7 @@ public sealed partial class CodingAgentInjectionService : IHostedService
         this.bus.Error += this.OnError;
         this.bus.Stalled += this.OnStalled;
         this.bus.LimitReached += this.OnLimitReached;
+        this.bus.PromptExpired += this.OnPromptExpired;
         return Task.CompletedTask;
     }
 
@@ -50,6 +51,7 @@ public sealed partial class CodingAgentInjectionService : IHostedService
         this.bus.Error -= this.OnError;
         this.bus.Stalled -= this.OnStalled;
         this.bus.LimitReached -= this.OnLimitReached;
+        this.bus.PromptExpired -= this.OnPromptExpired;
         return Task.CompletedTask;
     }
 
@@ -70,6 +72,7 @@ public sealed partial class CodingAgentInjectionService : IHostedService
             LastActivityAt = DateTimeOffset.UtcNow,
             LastAssistantSummary = summary,
             LastToolCallsJson = toolCallsJson,
+            PendingRequestJson = null,
         });
 
         this.Enqueue(record.ChannelId, CodingAgentEnvelope.BuildFinalResult(evt));
@@ -88,6 +91,14 @@ public sealed partial class CodingAgentInjectionService : IHostedService
         {
             State = CodingSessionState.AwaitingPermission,
             LastActivityAt = DateTimeOffset.UtcNow,
+            PendingRequestJson = CodingAgentSessionStore.SerializePendingRequest(new PendingCodingRequest
+            {
+                RequestId = evt.RequestId,
+                Kind = PendingCodingRequestKind.Permission,
+                ToolName = evt.ToolName,
+                InputPreview = evt.InputPreview,
+                RequestedAt = DateTimeOffset.UtcNow,
+            }),
         });
 
         this.Enqueue(record.ChannelId, CodingAgentEnvelope.BuildPermissionRequest(evt));
@@ -106,6 +117,14 @@ public sealed partial class CodingAgentInjectionService : IHostedService
         {
             State = CodingSessionState.AwaitingQuestion,
             LastActivityAt = DateTimeOffset.UtcNow,
+            PendingRequestJson = CodingAgentSessionStore.SerializePendingRequest(new PendingCodingRequest
+            {
+                RequestId = evt.RequestId,
+                Kind = PendingCodingRequestKind.Question,
+                Question = evt.Question,
+                Options = evt.Options,
+                RequestedAt = DateTimeOffset.UtcNow,
+            }),
         });
 
         this.Enqueue(record.ChannelId, CodingAgentEnvelope.BuildQuestion(evt));
@@ -124,6 +143,13 @@ public sealed partial class CodingAgentInjectionService : IHostedService
         {
             State = CodingSessionState.AwaitingPlan,
             LastActivityAt = DateTimeOffset.UtcNow,
+            PendingRequestJson = CodingAgentSessionStore.SerializePendingRequest(new PendingCodingRequest
+            {
+                RequestId = evt.RequestId,
+                Kind = PendingCodingRequestKind.Plan,
+                Plan = evt.Plan,
+                RequestedAt = DateTimeOffset.UtcNow,
+            }),
         });
 
         this.Enqueue(record.ChannelId, CodingAgentEnvelope.BuildPlanApproval(evt));
@@ -142,6 +168,7 @@ public sealed partial class CodingAgentInjectionService : IHostedService
         {
             State = CodingSessionState.Crashed,
             LastActivityAt = DateTimeOffset.UtcNow,
+            PendingRequestJson = null,
         });
 
         this.Enqueue(record.ChannelId, CodingAgentEnvelope.BuildError(evt));
@@ -160,6 +187,7 @@ public sealed partial class CodingAgentInjectionService : IHostedService
         {
             State = CodingSessionState.Crashed,
             LastActivityAt = DateTimeOffset.UtcNow,
+            PendingRequestJson = null,
         });
 
         this.Enqueue(record.ChannelId, CodingAgentEnvelope.BuildStalled(evt));
@@ -178,6 +206,34 @@ public sealed partial class CodingAgentInjectionService : IHostedService
         // back to Idle and the final summary — we deliberately do NOT rewrite the record here, to avoid
         // clobbering that freshly-set summary in the concurrent turn-end window. We only surface the advisory.
         this.Enqueue(record.ChannelId, CodingAgentEnvelope.BuildLimitReached(evt));
+    }
+
+    private void OnPromptExpired(CodingPromptExpiredEvent evt)
+    {
+        var record = this.store.GetById(evt.SessionId);
+        if (record is null)
+        {
+            this.LogUnknownSession(evt.SessionId);
+            return;
+        }
+
+        // The stored prompt is what the offline fallback would hand back, so it must be cleared —
+        // otherwise status keeps advertising a requestId that is guaranteed to fail. The state
+        // must move off Awaiting* too, mirroring the Bridge: a record reading "awaiting" with no
+        // prompt to name is the exact dead end this fix exists to remove. A terminal state (set by
+        // a crash/stall that arrives first) is left alone.
+        this.store.Upsert(record with
+        {
+            State = record.State is CodingSessionState.AwaitingPermission
+                or CodingSessionState.AwaitingQuestion
+                or CodingSessionState.AwaitingPlan
+                    ? CodingSessionState.Working
+                    : record.State,
+            LastActivityAt = DateTimeOffset.UtcNow,
+            PendingRequestJson = null,
+        });
+
+        this.Enqueue(record.ChannelId, CodingAgentEnvelope.BuildPromptExpired(evt));
     }
 
     private void Enqueue(string channelId, string envelope)

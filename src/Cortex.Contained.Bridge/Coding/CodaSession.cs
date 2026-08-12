@@ -31,7 +31,7 @@ public sealed partial class CodaSession : IAsyncDisposable
     private readonly ConcurrentQueue<CodingToolCall> recentToolCallHistory = new();
 
     // Parked server-request TaskCompletionSources, keyed by requestId.
-    private readonly ConcurrentDictionary<string, PendingRequest> pendingRequests = new();
+    private readonly ConcurrentDictionary<string, ParkedRequest> pendingRequests = new();
 
     // Null only during production construction, before StartAsync creates it from stdio.
     private CodaJsonRpcConnection? connection;
@@ -43,6 +43,7 @@ public sealed partial class CodaSession : IAsyncDisposable
     private string? currentTaskId;
     private string assistantBuffer = string.Empty;
     private string? currentActivity;
+    private string? lastPromptExpiry;
     private CodingGoalStatus? goalStatus;
 
     // Live LLM-stream snapshot, fed by event/streamProgress. Cross-thread → Interlocked.
@@ -126,6 +127,13 @@ public sealed partial class CodaSession : IAsyncDisposable
     public event Action<CodaPermissionRequestEvent>? PermissionRequested;
     public event Action<CodaQuestionEvent>? Question;
     public event Action<CodaPlanApprovalEvent>? PlanApproval;
+
+    /// <summary>
+    /// Raised when the Bridge resolved a parked prompt itself — it went unanswered past the
+    /// timeout, or the session died while it was parked. Lets the manager drop its routing entry
+    /// and the agent learn that a refusal was issued on the user's behalf.
+    /// </summary>
+    public event Action<CodaPromptExpiredEvent>? PromptExpired;
 
     // -----------------------------------------------------------------------
     // Public snapshot surface (read by the manager)
@@ -233,6 +241,48 @@ public sealed partial class CodaSession : IAsyncDisposable
     /// <summary>The most recent error message raised for this session (null if none).</summary>
     public string? LastError { get; private set; }
 
+    /// <summary>
+    /// The permission / question / plan prompt currently parked awaiting a response, or null when
+    /// nothing is pending. The request id reaches the model exactly once (as injected envelope
+    /// text) and can be lost — a full injection queue, a context compaction or an agent-host
+    /// restart all drop it — so this is the queryable source of truth that keeps the session
+    /// answerable.
+    /// <para>
+    /// coda asks one thing at a time within a turn, so at most one prompt is normally parked. If
+    /// several ever were, the OLDEST is reported — the one that has been blocking longest, and the
+    /// one the expiry bound will reach first.
+    /// </para>
+    /// </summary>
+    public PendingCodingRequest? PendingRequest =>
+        this.pendingRequests.Values
+            .Select(parked => parked.Descriptor)
+            .OrderBy(descriptor => descriptor.RequestedAt)
+            .FirstOrDefault();
+
+    /// <summary>
+    /// Describes the most recent prompt the Bridge resolved on the caller's behalf — because it
+    /// went unanswered past the timeout, or because the session died underneath it — or null if
+    /// none has. Surfaced on the status snapshot so an auto-refusal is never silent.
+    /// </summary>
+    public string? LastPromptExpiry
+    {
+        get
+        {
+            lock (this.stateLock)
+            {
+                return this.lastPromptExpiry;
+            }
+        }
+
+        private set
+        {
+            lock (this.stateLock)
+            {
+                this.lastPromptExpiry = value;
+            }
+        }
+    }
+
     private long inputTokens = -1;
     private long outputTokens = -1;
 
@@ -315,7 +365,12 @@ public sealed partial class CodaSession : IAsyncDisposable
     private void StartWatchdog()
     {
         var idleSeconds = Math.Max(1, this.options.PromptIdleTimeoutSeconds);
-        var tickSeconds = Math.Min(idleSeconds / 4.0, 30);
+        var promptSeconds = Math.Max(0, this.options.PendingRequestTimeoutSeconds);
+
+        // Tick fast enough to serve whichever bound is tighter — a short prompt timeout must not
+        // be rounded up to a quarter of the (much longer) idle timeout.
+        var tickBasis = promptSeconds > 0 ? Math.Min(idleSeconds, promptSeconds) : idleSeconds;
+        var tickSeconds = Math.Min(tickBasis / 4.0, 30);
         var tick = TimeSpan.FromSeconds(tickSeconds);
         if (tick < TimeSpan.FromMilliseconds(50))
         {
@@ -323,16 +378,31 @@ public sealed partial class CodaSession : IAsyncDisposable
         }
 
         this.watchdogTimer = new PeriodicTimer(tick);
-        this.watchdogTask = Task.Run(() => this.WatchdogLoopAsync(idleSeconds));
+        this.watchdogTask = Task.Run(() => this.WatchdogLoopAsync(idleSeconds, promptSeconds));
     }
 
-    private async Task WatchdogLoopAsync(int idleSeconds)
+    private async Task WatchdogLoopAsync(int idleSeconds, int promptSeconds)
     {
         var timer = this.watchdogTimer!;
         try
         {
             while (await timer.WaitForNextTickAsync().ConfigureAwait(false))
             {
+                if (promptSeconds > 0)
+                {
+                    // Guarded: this runs every tick, and the loop's only other catch is for
+                    // cancellation — an escaping exception would silently decommission the
+                    // watchdog, losing idle-stall detection too.
+                    try
+                    {
+                        this.ExpireStalePrompts(promptSeconds);
+                    }
+                    catch (Exception ex)
+                    {
+                        this.LogPromptDrainFailed(ex);
+                    }
+                }
+
                 bool working;
                 lock (this.stateLock)
                 {
@@ -526,6 +596,10 @@ public sealed partial class CodaSession : IAsyncDisposable
             this.LastUserMessage = Truncate(text, 500);
             this.assistantBuffer = string.Empty;
             this.currentActivity = null;
+
+            // A new turn: an auto-refusal from a previous turn must not be reported alongside
+            // this turn's status as though it just happened.
+            this.lastPromptExpiry = null;
             this.currentTaskToolCalls.Clear();
         }
 
@@ -671,6 +745,8 @@ public sealed partial class CodaSession : IAsyncDisposable
             this.State = CodingSessionState.Ended;
         }
 
+        this.AbandonPendingPrompts("the session was ended");
+
         if (this.connection is not null)
         {
             try
@@ -763,34 +839,176 @@ public sealed partial class CodaSession : IAsyncDisposable
     /// </para>
     /// The allow-always cache lives on the manager (Task 4); this method only resolves the TCS.
     /// </summary>
-    public Task RespondAsync(string requestId, string response)
+    /// <returns>
+    /// <c>true</c> when a parked request was found and resolved; <c>false</c> when
+    /// <paramref name="requestId"/> is unknown — stale, already answered, expired, or never issued.
+    /// Callers must not report an unresolved response as an accepted one.
+    /// </returns>
+    public Task<bool> RespondAsync(string requestId, string response)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(requestId);
 
         if (!this.pendingRequests.TryRemove(requestId, out var pending))
         {
-            return Task.CompletedTask;
+            return Task.FromResult(false);
         }
 
+        Resolve(pending, response);
+        this.ResumeAfterPrompt();
+        return Task.FromResult(true);
+    }
+
+    /// <summary>
+    /// Returns the session to <see cref="CodingSessionState.Working"/> once a parked prompt is
+    /// resolved and a turn is still in flight. Without this the session sits in an
+    /// <c>Awaiting*</c> state until coda sends <c>turnComplete</c> — and since the idle watchdog
+    /// only inspects <see cref="CodingSessionState.Working"/>, a coda that hangs after being
+    /// answered would be covered by no bound at all.
+    /// </summary>
+    private void ResumeAfterPrompt()
+    {
+        lock (this.stateLock)
+        {
+            if (this.currentTaskId is not null && IsAwaitingPrompt(this.State))
+            {
+                this.State = CodingSessionState.Working;
+            }
+        }
+
+        this.LastActivityAt = DateTimeOffset.UtcNow;
+    }
+
+    private static bool IsAwaitingPrompt(CodingSessionState state) =>
+        state is CodingSessionState.AwaitingPermission
+            or CodingSessionState.AwaitingQuestion
+            or CodingSessionState.AwaitingPlan;
+
+    /// <summary>Completes a parked request's TCS, unblocking coda's server-request RPC.</summary>
+    private static void Resolve(ParkedRequest pending, string response)
+    {
         switch (pending)
         {
-            case PendingRequest.Permission perm:
+            case ParkedRequest.Permission perm:
                 var allow = response is "allow_once" or "allow_always";
                 perm.Tcs.TrySetResult(allow);
                 break;
 
-            case PendingRequest.Plan plan:
+            case ParkedRequest.Plan plan:
                 var approve = response == "approve";
                 plan.Tcs.TrySetResult(approve);
                 break;
 
-            case PendingRequest.Question question:
+            case ParkedRequest.Question question:
                 question.Tcs.TrySetResult(response);
                 break;
-        }
 
-        return Task.CompletedTask;
+            default:
+                throw new InvalidOperationException(
+                    $"Unhandled parked request type {pending.GetType().Name} — it would block coda forever.");
+        }
     }
+
+    /// <summary>
+    /// Resolves every prompt parked for longer than <paramref name="timeoutSeconds"/>, so an
+    /// unanswered ask cannot block coda's JSON-RPC call forever. Permission and plan expire as a
+    /// refusal — the safe default when nobody consented; a question expires with an explanatory
+    /// answer so coda can decide for itself.
+    /// </summary>
+    private void ExpireStalePrompts(int timeoutSeconds)
+    {
+        var cutoff = DateTimeOffset.UtcNow - TimeSpan.FromSeconds(timeoutSeconds);
+
+        foreach (var requestId in this.pendingRequests
+            .Where(entry => entry.Value.Descriptor.RequestedAt <= cutoff)
+            .Select(entry => entry.Key)
+            .ToList())
+        {
+            // A real answer arriving in this gap wins: it already removed the entry.
+            if (!this.pendingRequests.TryRemove(requestId, out var expired))
+            {
+                continue;
+            }
+
+            var description = DescribeExpiry(expired.Descriptor, timeoutSeconds);
+            this.LastPromptExpiry = description;
+            this.LogPromptExpired(this.SessionId, requestId, expired.Descriptor.Kind.ToString(), timeoutSeconds);
+
+            Resolve(expired, ExpiryResponse(expired.Descriptor.Kind, timeoutSeconds));
+            this.ResumeAfterPrompt();
+            this.RaisePromptExpired(expired.Descriptor, CodingPromptResolution.Expired, description);
+        }
+    }
+
+    /// <summary>
+    /// Refuses every prompt still parked when the session goes away, so a caller is never told a
+    /// response was accepted by a session that is dead, and coda's blocked RPC (if the process is
+    /// somehow still alive) is released.
+    /// </summary>
+    private void AbandonPendingPrompts(string reason)
+    {
+        foreach (var requestId in this.pendingRequests.Keys.ToList())
+        {
+            if (!this.pendingRequests.TryRemove(requestId, out var abandoned))
+            {
+                continue;
+            }
+
+            var description = $"{DescribeKind(abandoned.Descriptor)} was abandoned unanswered: {reason}";
+            this.LastPromptExpiry = description;
+            this.LogPromptAbandoned(this.SessionId, requestId, abandoned.Descriptor.Kind.ToString(), reason);
+
+            Resolve(abandoned, AbandonResponse(abandoned.Descriptor.Kind));
+            this.RaisePromptExpired(abandoned.Descriptor, CodingPromptResolution.Abandoned, description);
+        }
+    }
+
+    private void RaisePromptExpired(
+        PendingCodingRequest descriptor, CodingPromptResolution resolution, string message)
+    {
+        this.PromptExpired?.Invoke(new CodaPromptExpiredEvent(
+            this.SessionId,
+            descriptor.RequestId,
+            descriptor.Kind,
+            resolution,
+            message));
+    }
+
+    /// <summary>The response an expired prompt is resolved with. Refusal is the safe default.</summary>
+    private static string ExpiryResponse(PendingCodingRequestKind kind, int timeoutSeconds) => kind switch
+    {
+        PendingCodingRequestKind.Permission => "deny",
+        PendingCodingRequestKind.Plan => "reject",
+        PendingCodingRequestKind.Question =>
+            $"No answer arrived within {timeoutSeconds}s. Proceed with your best judgement, "
+            + "or stop and report what you needed to know.",
+        _ => "deny",
+    };
+
+    /// <summary>The response a prompt abandoned with its session is resolved with.</summary>
+    private static string AbandonResponse(PendingCodingRequestKind kind) => kind switch
+    {
+        PendingCodingRequestKind.Permission => "deny",
+        PendingCodingRequestKind.Plan => "reject",
+        PendingCodingRequestKind.Question => "The session ended before this could be answered.",
+        _ => "deny",
+    };
+
+    private static string DescribeKind(PendingCodingRequest descriptor) => descriptor.Kind switch
+    {
+        PendingCodingRequestKind.Permission => $"permission for {descriptor.ToolName}",
+        PendingCodingRequestKind.Plan => "plan approval",
+        PendingCodingRequestKind.Question => $"question \"{Truncate(descriptor.Question, 120)}\"",
+        _ => "prompt",
+    };
+
+    private static string DescribeExpiry(PendingCodingRequest descriptor, int timeoutSeconds) => descriptor.Kind switch
+    {
+        PendingCodingRequestKind.Permission =>
+            $"permission for {descriptor.ToolName} was auto-denied after {timeoutSeconds}s with no response",
+        PendingCodingRequestKind.Plan =>
+            $"plan approval was auto-rejected after {timeoutSeconds}s with no response",
+        _ => $"{DescribeKind(descriptor)} went unanswered for {timeoutSeconds}s",
+    };
 
     // -----------------------------------------------------------------------
     // Private: wire connection events
@@ -960,7 +1178,16 @@ public sealed partial class CodaSession : IAsyncDisposable
     {
         var requestId = Guid.NewGuid().ToString("N");
         var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        this.pendingRequests[requestId] = new PendingRequest.Permission(tcs);
+        this.pendingRequests[requestId] = new ParkedRequest.Permission(
+            new PendingCodingRequest
+            {
+                RequestId = requestId,
+                Kind = PendingCodingRequestKind.Permission,
+                ToolName = dto.ToolName,
+                InputPreview = dto.InputPreview,
+                RequestedAt = DateTimeOffset.UtcNow,
+            },
+            tcs);
 
         lock (this.stateLock)
         {
@@ -981,7 +1208,16 @@ public sealed partial class CodaSession : IAsyncDisposable
     {
         var requestId = Guid.NewGuid().ToString("N");
         var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-        this.pendingRequests[requestId] = new PendingRequest.Question(tcs);
+        this.pendingRequests[requestId] = new ParkedRequest.Question(
+            new PendingCodingRequest
+            {
+                RequestId = requestId,
+                Kind = PendingCodingRequestKind.Question,
+                Question = dto.Question,
+                Options = dto.Options,
+                RequestedAt = DateTimeOffset.UtcNow,
+            },
+            tcs);
 
         lock (this.stateLock)
         {
@@ -1003,7 +1239,15 @@ public sealed partial class CodaSession : IAsyncDisposable
     {
         var requestId = Guid.NewGuid().ToString("N");
         var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        this.pendingRequests[requestId] = new PendingRequest.Plan(tcs);
+        this.pendingRequests[requestId] = new ParkedRequest.Plan(
+            new PendingCodingRequest
+            {
+                RequestId = requestId,
+                Kind = PendingCodingRequestKind.Plan,
+                Plan = dto.Plan,
+                RequestedAt = DateTimeOffset.UtcNow,
+            },
+            tcs);
 
         lock (this.stateLock)
         {
@@ -1037,6 +1281,19 @@ public sealed partial class CodaSession : IAsyncDisposable
         }
 
         this.LastError = message;
+
+        // A prompt parked when the process died must not stay parked: the status snapshot would
+        // advertise a requestId that can never be answered, and a respond call would report
+        // success against a dead session. Guarded: a throwing subscriber must not skip the reap
+        // below and orphan the process tree.
+        try
+        {
+            this.AbandonPendingPrompts(message);
+        }
+        catch (Exception ex)
+        {
+            this.LogPromptDrainFailed(ex);
+        }
 
         // Reap the coda process: on a fatal error coda serve does NOT self-exit (it stays in serve
         // mode awaiting RPC), so without this the OS process orphans. Kill the whole tree. Done
@@ -1222,13 +1479,16 @@ public sealed partial class CodaSession : IAsyncDisposable
     // Pending-request discriminated union
     // -----------------------------------------------------------------------
 
-    private abstract record PendingRequest
+    private abstract record ParkedRequest(PendingCodingRequest Descriptor)
     {
-        public sealed record Permission(TaskCompletionSource<bool> Tcs) : PendingRequest;
+        public sealed record Permission(PendingCodingRequest Descriptor, TaskCompletionSource<bool> Tcs)
+            : ParkedRequest(Descriptor);
 
-        public sealed record Question(TaskCompletionSource<string> Tcs) : PendingRequest;
+        public sealed record Question(PendingCodingRequest Descriptor, TaskCompletionSource<string> Tcs)
+            : ParkedRequest(Descriptor);
 
-        public sealed record Plan(TaskCompletionSource<bool> Tcs) : PendingRequest;
+        public sealed record Plan(PendingCodingRequest Descriptor, TaskCompletionSource<bool> Tcs)
+            : ParkedRequest(Descriptor);
     }
 
     // -----------------------------------------------------------------------
@@ -1278,4 +1538,16 @@ public sealed partial class CodaSession : IAsyncDisposable
     [LoggerMessage(EventId = 9210, Level = LogLevel.Information,
         Message = "Coda session {sessionId}: reaped coda process tree on crash")]
     private partial void LogReapedProcess(string sessionId);
+
+    [LoggerMessage(EventId = 9211, Level = LogLevel.Warning,
+        Message = "Coda session {sessionId}: parked {kind} request {requestId} went unanswered for {timeoutSeconds}s — auto-resolved so coda is not blocked forever")]
+    private partial void LogPromptExpired(string sessionId, string requestId, string kind, int timeoutSeconds);
+
+    [LoggerMessage(EventId = 9212, Level = LogLevel.Warning,
+        Message = "Coda session {sessionId}: parked {kind} request {requestId} abandoned — {reason}")]
+    private partial void LogPromptAbandoned(string sessionId, string requestId, string kind, string reason);
+
+    [LoggerMessage(EventId = 9213, Level = LogLevel.Warning,
+        Message = "Coda session: resolving parked prompts failed")]
+    private partial void LogPromptDrainFailed(Exception ex);
 }

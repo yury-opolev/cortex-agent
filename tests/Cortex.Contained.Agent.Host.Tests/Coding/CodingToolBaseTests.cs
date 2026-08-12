@@ -8,6 +8,132 @@ namespace Cortex.Contained.Agent.Host.Tests.Coding;
 public class CodingToolBaseTests
 {
     [Fact]
+    public void SnapshotPayload_IncludesPendingRequest_SoRespondCanBeCalled()
+    {
+        var status = new CodingStatus
+        {
+            SessionId = "s1",
+            ChannelId = "ch-1",
+            WorkingFolder = "C:\\repo",
+            State = CodingSessionState.AwaitingPermission,
+            Policy = CodingPolicy.YoloSafe,
+            PendingRequest = new PendingCodingRequest
+            {
+                RequestId = "req-42",
+                Kind = PendingCodingRequestKind.Permission,
+                ToolName = "Bash",
+                InputPreview = "git push origin main",
+                RequestedAt = DateTimeOffset.UtcNow,
+            },
+        };
+
+        var payload = CodingToolBase.SnapshotPayload(status);
+        var json = JsonSerializer.Serialize(payload, CodingToolBase.JsonOptions);
+
+        using var doc = JsonDocument.Parse(json);
+        var pending = doc.RootElement.GetProperty("pendingRequest");
+
+        Assert.Equal("req-42", pending.GetProperty("requestId").GetString());
+        Assert.Equal("Permission", pending.GetProperty("kind").GetString());
+        Assert.Equal("Bash", pending.GetProperty("toolName").GetString());
+        Assert.Equal("git push origin main", pending.GetProperty("inputPreview").GetString());
+    }
+
+    [Fact]
+    public void SnapshotPayload_PendingRequestIsNull_WhenNothingIsAwaited()
+    {
+        var status = new CodingStatus
+        {
+            SessionId = "s1",
+            ChannelId = "ch-1",
+            WorkingFolder = "C:\\repo",
+            State = CodingSessionState.Idle,
+            Policy = CodingPolicy.Prompt,
+        };
+
+        var payload = CodingToolBase.SnapshotPayload(status);
+        var json = JsonSerializer.Serialize(payload, CodingToolBase.JsonOptions);
+
+        using var doc = JsonDocument.Parse(json);
+
+        Assert.Equal(JsonValueKind.Null, doc.RootElement.GetProperty("pendingRequest").ValueKind);
+    }
+
+    [Fact]
+    public void ToRecord_CarriesPendingRequest_SoItSurvivesAnAgentHostRestart()
+    {
+        var status = new CodingStatus
+        {
+            SessionId = "s1",
+            ChannelId = "ch-1",
+            WorkingFolder = "C:\\repo",
+            State = CodingSessionState.AwaitingQuestion,
+            Policy = CodingPolicy.Prompt,
+            PendingRequest = new PendingCodingRequest
+            {
+                RequestId = "req-7",
+                Kind = PendingCodingRequestKind.Question,
+                Question = "Which approach?",
+                Options = ["A", "B"],
+                RequestedAt = DateTimeOffset.UtcNow,
+            },
+        };
+
+        var record = CodingToolBase.ToRecord(status);
+        var restored = CodingAgentSessionStore.DeserializePendingRequest(record.PendingRequestJson);
+
+        Assert.NotNull(restored);
+        Assert.Equal("req-7", restored!.RequestId);
+        Assert.Equal(PendingCodingRequestKind.Question, restored.Kind);
+        Assert.Equal("Which approach?", restored.Question);
+        Assert.Equal(["A", "B"], restored.Options);
+    }
+
+    [Fact]
+    public void SnapshotPayload_IncludesLastPromptExpiry_SoAnAutoRefusalIsExplained()
+    {
+        var status = new CodingStatus
+        {
+            SessionId = "s1",
+            ChannelId = "ch-1",
+            WorkingFolder = "C:\\repo",
+            State = CodingSessionState.Idle,
+            Policy = CodingPolicy.Prompt,
+            LastPromptExpiry = "permission for Bash was auto-denied after 900s with no response",
+        };
+
+        var payload = CodingToolBase.SnapshotPayload(status);
+        var json = JsonSerializer.Serialize(payload, CodingToolBase.JsonOptions);
+
+        using var doc = JsonDocument.Parse(json);
+
+        Assert.Equal(
+            "permission for Bash was auto-denied after 900s with no response",
+            doc.RootElement.GetProperty("lastPromptExpiry").GetString());
+    }
+
+    [Fact]
+    public void FromWire_UnknownRequest_DoesNotReportTheSessionTerminated()
+    {
+        // "No such prompt" says nothing about the session — it is alive and still answerable
+        // once the real requestId is read back from coding_session_status.
+        var ex = CodingInvokeException.FromWire(CodingBridgeErrorCodes.UnknownRequest, "no such prompt");
+
+        Assert.Equal("unknown_request", ex.Code);
+        Assert.False(ex.SessionTerminated);
+    }
+
+    [Fact]
+    public void FromException_UnknownRequest_SurfacesTheStableCodeAsAFailure()
+    {
+        var result = CodingToolBase.FromException(
+            CodingInvokeException.FromWire(CodingBridgeErrorCodes.UnknownRequest, "no such prompt"));
+
+        Assert.False(result.Success);
+        Assert.Contains("unknown_request", result.Content);
+    }
+
+    [Fact]
     public void FromException_CodingInvokeException_PreservesStableCode()
     {
         var result = CodingToolBase.FromException(CodingInvokeException.Unreachable(45));
