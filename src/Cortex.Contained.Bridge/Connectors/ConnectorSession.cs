@@ -698,6 +698,7 @@ public sealed partial class ConnectorSession : IAsyncDisposable
         }
 
         var materialised = new List<MediaAttachment>(validated.Count);
+        var totalBytes = 0L;
 
         foreach (var attachment in validated)
         {
@@ -745,9 +746,12 @@ public sealed partial class ConnectorSession : IAsyncDisposable
                 Data = data,
                 SizeBytes = data.LongLength,
             });
+
+            totalBytes += data.LongLength;
         }
 
         attachments = materialised;
+        this.LogInboundAttachmentsAccepted(channelId, materialised.Count, totalBytes);
         return true;
     }
 
@@ -1078,6 +1082,17 @@ public sealed partial class ConnectorSession : IAsyncDisposable
     /// </summary>
     [LoggerMessage(Level = LogLevel.Warning, Message = "Connector {ChannelId} referenced stored attachment content that is not allowed by the current media policy; message rejected.")]
     private partial void LogAttachmentHandleContentRejected(string channelId);
+
+    /// <summary>
+    /// Fires when inbound attachments have been validated and materialised, immediately before the
+    /// message is handed to the agent. Until this existed the media path was observable only by its
+    /// FAILURES: a silently attachment-less delivery produced no line anywhere on the Bridge, and
+    /// the first and only evidence was a MISSING <c>Image attached</c> line in the Agent Host, much
+    /// further downstream. One positive line here localises "did the Bridge accept the bytes?" to a
+    /// single grep.
+    /// </summary>
+    [LoggerMessage(Level = LogLevel.Information, Message = "Connector {ChannelId}: accepted {Count} inbound attachment(s), {TotalBytes} bytes.")]
+    private partial void LogInboundAttachmentsAccepted(string channelId, int count, long totalBytes);
 
     /// <summary>
     /// Fires when the agent sent attachments that could not be delivered — the connector does not
