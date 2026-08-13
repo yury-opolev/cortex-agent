@@ -189,7 +189,19 @@ public sealed partial class SubagentExecutionCoordinator : IHostedService, IDisp
 
     public async Task StopAsync(CancellationToken cancellationToken)
     {
-        this.stoppingCts?.Cancel();
+        // Stop and disposal are not ordered, and neither is guaranteed to run once: the container
+        // can dispose this singleton while the host is still stopping it. Cancel() on an already
+        // disposed source throws, and that exception propagates out of Host.StopAsync and ABORTS
+        // the remaining shutdown steps below — leaving runners uncancelled and in-flight work
+        // un-drained. Treat an already-disposed source as "already stopping".
+        try
+        {
+            this.stoppingCts?.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // Disposed underneath us; the token is moot and the loops are already unwinding.
+        }
 
         // Stop the backstop tick: disposing the timer makes an in-flight WaitForNextTickAsync return
         // false (and the cancelled token throws OCE), so the loop unwinds cleanly either way.
