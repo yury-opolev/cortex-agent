@@ -16,7 +16,7 @@ namespace Cortex.Contained.Integration.Tests;
 /// (validation → slicer → session seed → MessageStore breadcrumbs) works against the
 /// actual production wiring rather than a hand-rolled fixture.
 /// </summary>
-public sealed class TransferSessionIntegrationTests : IClassFixture<AgentHostFactory>, IAsyncDisposable
+public sealed class TransferSessionIntegrationTests : IClassFixture<AgentHostFactory>, IAsyncLifetime
 {
     private readonly WebApplicationFactory<Cortex.Contained.Agent.Host.Hubs.AgentHub> factory;
     private readonly StubLlmClient stubLlm = new();
@@ -41,10 +41,19 @@ public sealed class TransferSessionIntegrationTests : IClassFixture<AgentHostFac
         });
     }
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    /// <summary>
+    /// Disposes this test's derived factory. xUnit v2 invokes <see cref="IAsyncLifetime"/> but
+    /// NOT <see cref="IAsyncDisposable"/> on a test class, so implementing the latter left every
+    /// derived factory — one whole Agent Host per test, since it is built in the constructor —
+    /// alive until the class fixture tore them all down at once. That produced file contention on
+    /// the session snapshot and an ObjectDisposedException at class cleanup, which failed the run
+    /// with a non-zero exit code while still reporting every test as passed.
+    /// </summary>
+    public async Task DisposeAsync()
     {
         await this.factory.DisposeAsync();
-        GC.SuppressFinalize(this);
     }
 
     [Fact]
