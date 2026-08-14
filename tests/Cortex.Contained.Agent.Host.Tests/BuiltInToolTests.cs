@@ -584,6 +584,28 @@ public class BuiltInToolTests : IDisposable
     }
 
     [Fact]
+    public async Task RunCommand_Timeout_LeavesNoProcessHoldingTheWorkdir()
+    {
+        // Kill() only REQUESTS termination. Returning without waiting left the tree briefly alive
+        // with the sandbox as its working directory, so cleaning up straight after a timeout failed
+        // intermittently on Windows with "being used by another process" — which surfaced as a
+        // flaky test failing in Dispose rather than in the assertion.
+        var workdir = Path.Combine(Path.GetTempPath(), "tool_timeout_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(workdir);
+
+        var tool = new RunCommandTool(workdir);
+        var command = OperatingSystem.IsWindows() ? "ping -n 30 127.0.0.1" : "sleep 30";
+
+        var result = await tool.ExecuteAsync(Args(new { command, timeout = 1 }), _context, CancellationToken.None);
+
+        Assert.False(result.Success);
+
+        // The real assertion: the directory the process was running in is free immediately.
+        Directory.Delete(workdir, recursive: true);
+        Assert.False(Directory.Exists(workdir));
+    }
+
+    [Fact]
     public async Task RunCommand_InvalidWorkdir_ReturnsError()
     {
         var tool = new RunCommandTool(_sandbox);

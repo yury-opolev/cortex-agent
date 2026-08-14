@@ -16,6 +16,13 @@ internal sealed class RunCommandTool : IAgentTool
     private const int MaxTimeoutSeconds = 600; // 10 minutes hard cap (package installs can be slow)
     private const int MaxOutputBytes = 512 * 1024; // 512 KB max output
 
+    /// <summary>
+    /// How long to wait for a killed process tree to actually exit before giving up. Kill() only
+    /// requests termination, so without this the tool can return while the tree still holds its
+    /// working directory open.
+    /// </summary>
+    private static readonly TimeSpan ProcessExitGrace = TimeSpan.FromSeconds(5);
+
     public RunCommandTool(string sandboxRoot)
     {
         this.sandboxRoot = sandboxRoot;
@@ -172,10 +179,23 @@ internal sealed class RunCommandTool : IAgentTool
                 try
                 {
                     process.Kill(entireProcessTree: true);
+
+                    // Kill only REQUESTS termination. Returning here without waiting leaves the
+                    // tree briefly alive, still holding its working directory and its pipes open —
+                    // so a caller that cleans up the workdir immediately after a timeout can fail
+                    // on Windows with "being used by another process". Bounded so a process that
+                    // refuses to die cannot hang the tool.
+                    await process.WaitForExitAsync(CancellationToken.None)
+                        .WaitAsync(ProcessExitGrace, CancellationToken.None)
+                        .ConfigureAwait(false);
                 }
                 catch (InvalidOperationException)
                 {
                     // Process already exited
+                }
+                catch (TimeoutException)
+                {
+                    // Did not die within the grace period; report the timeout regardless.
                 }
 
                 return new AgentToolResult
