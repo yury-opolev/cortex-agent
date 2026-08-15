@@ -168,7 +168,11 @@ public class LlmStreamIdleGuardTests
     [Fact]
     public void Default_AllowsASlowFirstTokenButBoundsMidStreamSilence()
     {
-        Assert.True(LlmStreamTimeouts.Default.FirstChunk > LlmStreamTimeouts.Default.BetweenChunks);
+        // The idle budget was raised from 120s to 300s after the 2026-08-15 incident, so the
+        // two budgets are now equal rather than the first-chunk one being strictly larger. The
+        // invariant that still matters is that the first-chunk budget is never the TIGHTER of
+        // the two, since time-to-first-token grows with prompt size.
+        Assert.True(LlmStreamTimeouts.Default.FirstChunk >= LlmStreamTimeouts.Default.BetweenChunks);
         Assert.True(LlmStreamTimeouts.Default.FirstChunk >= TimeSpan.FromMinutes(4));
         Assert.True(LlmStreamTimeouts.Default.BetweenChunks >= TimeSpan.FromSeconds(60));
     }

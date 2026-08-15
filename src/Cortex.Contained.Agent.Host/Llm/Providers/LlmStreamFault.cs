@@ -53,6 +53,20 @@ internal static class LlmStreamFault
         return false;
     }
 
+    /// <summary>
+    /// True when an error-chunk message was produced by <see cref="Guard"/> and classified as a
+    /// transient transport blip — i.e. the same request is worth issuing again.
+    /// <para>
+    /// This is the supported way for a consumer to read the verdict already baked into the
+    /// message, instead of re-deriving it or string-matching the prefix itself. It is
+    /// deliberately strict: a message without the prefix did not come from the stream guard
+    /// (an HTTP error, an exhausted failover chain) and has already had its own retry.
+    /// </para>
+    /// </summary>
+    internal static bool IsTransientFaultMessage(string? errorMessage)
+        => errorMessage is not null
+            && errorMessage.StartsWith(TransientPrefix, StringComparison.Ordinal);
+
     /// <summary>Formats an exception into a prefixed error-chunk message.</summary>
     internal static string Format(Exception exception)
         => (IsTransient(exception) ? TransientPrefix : TerminalPrefix) + exception.Message;

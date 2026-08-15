@@ -42,4 +42,7 @@ public sealed record AgentMetricsSnapshot(
     double E2eAvgMs = 0,
     long E2eP50Ms = 0,
     long E2eP95Ms = 0,
-    SubagentAggregateSnapshot? Subagents = null);
+    SubagentAggregateSnapshot? Subagents = null,
+    int StreamFirstChunkStalls = 0,
+    int StreamIdleStalls = 0,
+    int StreamMaxDurationStalls = 0);
