@@ -17,8 +17,17 @@ public sealed class SubagentRunner : IDisposable
     /// <summary>Default safety-net round limit when none is configured.</summary>
     internal const int DefaultMaxRounds = 200;
 
+    /// <summary>
+    /// Default number of mid-stream transient-fault retries per round when none is configured.
+    /// The subagent runner is the one consumer allowed to opt in: SubagentCallbacks discards
+    /// content deltas, so re-issuing a round cannot duplicate anything a user has seen.
+    /// Mirrors <see cref="AgentLoopConfig.MaxTransientStreamRetries"/>'s own default.
+    /// </summary>
+    internal const int DefaultTransientStreamRetries = 2;
+
     private readonly AgentLoop agentLoop;
     private readonly int maxRounds;
+    private readonly int transientStreamRetries;
     private readonly IModelProvider? modelProvider;
     private readonly InMemoryTodoStore? todoStore;
     private readonly SubagentSessionStore? store;
@@ -52,11 +61,17 @@ public sealed class SubagentRunner : IDisposable
     private const int FallbackContextWindow = 128_000;
 
     /// <summary>Simple constructor for tests and backward compatibility.</summary>
-    public SubagentRunner(ILlmClient llmClient, Tools.ToolRegistry toolRegistry, int maxRounds, ILogger logger)
+    public SubagentRunner(
+        ILlmClient llmClient,
+        Tools.ToolRegistry toolRegistry,
+        int maxRounds,
+        ILogger logger,
+        int transientStreamRetries = DefaultTransientStreamRetries)
     {
         this.agentLoop = new AgentLoop(llmClient, toolRegistry,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<AgentLoop>.Instance);
         this.maxRounds = maxRounds > 0 ? maxRounds : DefaultMaxRounds;
+        this.transientStreamRetries = Math.Max(0, transientStreamRetries);
         this.llmClient = llmClient;
         this.logger = logger;
     }
@@ -76,8 +91,9 @@ public sealed class SubagentRunner : IDisposable
         IModelProvider modelProvider,
         InMemoryTodoStore? todoStore = null,
         IOptionsMonitor<ImageAgingConfig>? imageAgingOptions = null,
-        IImageDescriber? imageDescriber = null)
-        : this(llmClient, toolRegistry, maxRounds, logger)
+        IImageDescriber? imageDescriber = null,
+        int transientStreamRetries = DefaultTransientStreamRetries)
+        : this(llmClient, toolRegistry, maxRounds, logger, transientStreamRetries)
     {
         this.store = store;
         this.taskId = taskId;
@@ -98,10 +114,12 @@ public sealed class SubagentRunner : IDisposable
         IModelProvider modelProvider,
         InMemoryTodoStore? todoStore = null,
         IOptionsMonitor<ImageAgingConfig>? imageAgingOptions = null,
-        IImageDescriber? imageDescriber = null)
+        IImageDescriber? imageDescriber = null,
+        int transientStreamRetries = DefaultTransientStreamRetries)
     {
         this.agentLoop = agentLoop;
         this.maxRounds = maxRounds > 0 ? maxRounds : DefaultMaxRounds;
+        this.transientStreamRetries = Math.Max(0, transientStreamRetries);
         this.llmClient = llmClient;
         this.logger = logger;
         this.store = store;
@@ -191,6 +209,7 @@ public sealed class SubagentRunner : IDisposable
             MaxOutputTokens = maxOutputTokens,
             ContextWindow = contextWindow,
             ConversationId = conversationId,
+            MaxTransientStreamRetries = this.transientStreamRetries,
             // Each subagent gets its OWN channel (its unique conversationId,
             // "subagent-{taskId}") rather than a shared constant, so coda sessions
             // started by concurrent subagents don't collide in one channel namespace

@@ -2,6 +2,7 @@ using System.Collections.Frozen;
 using System.Diagnostics;
 using System.Globalization;
 using System.Text;
+using Cortex.Contained.Agent.Host.Llm.Providers;
 using Cortex.Contained.Agent.Host.Tools;
 using Cortex.Contained.Contracts.Llm;
 
@@ -43,6 +44,22 @@ public sealed record AgentLoopConfig
 
     /// <summary>Channel ID for tool execution context.</summary>
     public required string ChannelId { get; init; }
+
+    /// <summary>
+    /// How many times a round may be re-issued after the provider stream faulted with a
+    /// TRANSIENT fault (a dropped connection, or the inactivity watchdog firing) AFTER content
+    /// had already been streamed. <c>DirectLlmClient</c> cannot retry that case — its retry and
+    /// failover are both pre-content only — so the loop covers it by discarding the dead attempt
+    /// and re-sending the identical request.
+    /// <para>
+    /// Defaults to 0 - OFF. Re-issuing a round is only safe for a consumer that DISCARDS
+    /// content deltas, because a consumer that displayed them would show the text twice. That
+    /// invariant cannot be checked here, so the caller must opt in deliberately:
+    /// <see cref="SubagentRunner"/> does (subagent deltas go nowhere), and any future
+    /// user-facing consumer inherits the safe behaviour by saying nothing.
+    /// </para>
+    /// </summary>
+    public int MaxTransientStreamRetries { get; init; }
 }
 
 // ── Result ───────────────────────────────────────────────────────────
@@ -194,14 +211,13 @@ public sealed partial class AgentLoop
             // Build prepared messages for this round
             var prepared = await callbacks.PrepareMessagesAsync(round, cancellationToken).ConfigureAwait(false);
 
-            var requestId = Guid.NewGuid().ToString("N");
             var request = new LlmCompletionRequest
             {
                 Model = config.Model,
                 Messages = prepared,
                 Tools = toolDefinitions.Count > 0 ? toolDefinitions : null,
                 MaxTokens = config.MaxOutputTokens,
-                RequestId = requestId,
+                RequestId = Guid.NewGuid().ToString("N"),
                 ConversationId = config.ConversationId,
                 ReasoningEffort = config.ReasoningEffort,
             };
@@ -211,55 +227,113 @@ public sealed partial class AgentLoop
                 request = request with { Temperature = config.Temperature.Value };
             }
 
-            // Stream the response
+            // Stream the response.
+            //
+            // The inner attempt loop exists because DirectLlmClient's same-provider retry and
+            // its provider failover are BOTH gated on "nothing yielded yet" — it cannot
+            // un-stream, so a fault raised after the first chunk escapes as a terminal error.
+            // The most common such fault is LlmStreamIdleGuard's inactivity breach on a large
+            // context, and losing a whole subagent run to one stall is not acceptable. The loop
+            // CAN recover: no partial text has been committed to history, so it simply discards
+            // the dead attempt and re-issues the identical request.
+            //
+            // Safe only while every AgentLoop consumer discards content deltas (subagents do).
+            // A user-facing consumer must set MaxTransientStreamRetries = 0, because re-issuing
+            // after deltas have been shown would duplicate visible text.
             var fullResponse = new StringBuilder();
             var sequenceNumber = 0;
             var toolCallAccumulators = new Dictionary<int, ToolCallAccumulator>();
             string? finishReason = null;
             LlmTokenUsage? usage = null;
             var retryAfterRecovery = false;
+            AgentLoopResult? errorResult = null;
+            var transientRetries = 0;
 
-            await foreach (var chunk in this.llmClient.StreamCompleteAsync(request, cancellationToken).ConfigureAwait(false))
+            while (true)
             {
-                if (chunk.ErrorMessage is not null)
+                // Every attempt starts from a clean slate so a partial response can never be
+                // concatenated onto the retry's response.
+                // A retried attempt is a genuinely separate provider request, so it gets its own
+                // correlation id - otherwise every attempt (and every stall report raised by
+                // one) shares an id and the telemetry cannot tell them apart.
+                request = request with { RequestId = Guid.NewGuid().ToString("N") };
+
+                fullResponse.Clear();
+                sequenceNumber = 0;
+                toolCallAccumulators.Clear();
+                finishReason = null;
+                usage = null;
+                retryAfterRecovery = false;
+                errorResult = null;
+                var retryStream = false;
+                string? transientFault = null;
+
+                await foreach (var chunk in this.llmClient.StreamCompleteAsync(request, cancellationToken).ConfigureAwait(false))
                 {
-                    // Check for context overflow — give callbacks a chance to recover
-                    if (ContextManager.IsContextOverflow(chunk.ErrorMessage))
+                    if (chunk.ErrorMessage is not null)
                     {
-                        var recovered = await callbacks.OnContextOverflowAsync(
-                            chunk.ErrorMessage, cancellationToken).ConfigureAwait(false);
-                        if (recovered)
+                        // Check for context overflow — give callbacks a chance to recover
+                        if (ContextManager.IsContextOverflow(chunk.ErrorMessage))
                         {
-                            retryAfterRecovery = true;
+                            var recovered = await callbacks.OnContextOverflowAsync(
+                                chunk.ErrorMessage, cancellationToken).ConfigureAwait(false);
+                            if (recovered)
+                            {
+                                retryAfterRecovery = true;
+                                break;
+                            }
+                        }
+                        else if (transientRetries < config.MaxTransientStreamRetries
+                            && LlmStreamFault.IsTransientFaultMessage(chunk.ErrorMessage))
+                        {
+                            transientRetries++;
+                            retryStream = true;
+                            transientFault = chunk.ErrorMessage;
                             break;
                         }
+
+                        await callbacks.OnErrorAsync(chunk.ErrorMessage, cancellationToken).ConfigureAwait(false);
+                        errorResult = new AgentLoopResult
+                        {
+                            Outcome = AgentLoopOutcome.Error,
+                            ErrorMessage = chunk.ErrorMessage,
+                            RoundsExecuted = round + 1,
+                        };
+                        break;
                     }
 
-                    await callbacks.OnErrorAsync(chunk.ErrorMessage, cancellationToken).ConfigureAwait(false);
-                    var errorResult = new AgentLoopResult
+                    if (chunk.ContentDelta is not null)
                     {
-                        Outcome = AgentLoopOutcome.Error,
-                        ErrorMessage = chunk.ErrorMessage,
-                        RoundsExecuted = round + 1,
-                    };
-                    await callbacks.OnLoopCompleteAsync(errorResult, cancellationToken).ConfigureAwait(false);
-                    return errorResult;
+                        fullResponse.Append(chunk.ContentDelta);
+                        await callbacks.OnContentDeltaAsync(
+                            chunk.ContentDelta, sequenceNumber++, cancellationToken).ConfigureAwait(false);
+                    }
+
+                    AccumulateToolCallDeltas(chunk, toolCallAccumulators);
+
+                    if (chunk.IsComplete)
+                    {
+                        finishReason = chunk.FinishReason;
+                        usage = chunk.Usage;
+                    }
                 }
 
-                if (chunk.ContentDelta is not null)
+                if (!retryStream)
                 {
-                    fullResponse.Append(chunk.ContentDelta);
-                    await callbacks.OnContentDeltaAsync(
-                        chunk.ContentDelta, sequenceNumber++, cancellationToken).ConfigureAwait(false);
+                    break;
                 }
 
-                AccumulateToolCallDeltas(chunk, toolCallAccumulators);
+                this.LogTransientStreamRetry(
+                    config.ConversationId, round + 1, transientRetries,
+                    config.MaxTransientStreamRetries, transientFault ?? string.Empty);
+                await Task.Delay(TransientRetryBackoff(transientRetries), cancellationToken)
+                    .ConfigureAwait(false);
+            }
 
-                if (chunk.IsComplete)
-                {
-                    finishReason = chunk.FinishReason;
-                    usage = chunk.Usage;
-                }
+            if (errorResult is not null)
+            {
+                await callbacks.OnLoopCompleteAsync(errorResult, cancellationToken).ConfigureAwait(false);
+                return errorResult;
             }
 
             if (retryAfterRecovery)
@@ -413,6 +487,21 @@ public sealed partial class AgentLoop
     }
 
     // ── Logging ──────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Backoff before transient stream retry N: ~0.5s, then ~2s. Same sequence as
+    /// <c>DirectLlmClient.RetryBackoff</c>, which produces it from a 0-based attempt index
+    /// while this one is called with a 1-based retry count.
+    /// </summary>
+    private static TimeSpan TransientRetryBackoff(int retryNumber)
+        => TimeSpan.FromMilliseconds(500 * retryNumber * retryNumber);
+
+    [LoggerMessage(
+        Level = LogLevel.Warning,
+        Message = "[agent-loop] {ConversationId} round {Round}: transient stream fault, re-issuing "
+            + "({Attempt}/{MaxAttempts}): {Fault}")]
+    private partial void LogTransientStreamRetry(
+        string conversationId, int round, int attempt, int maxAttempts, string fault);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "[agent-loop] {ConversationId} round {Round}: {ToolCount} tool calls")]
     private partial void LogToolCalls(string conversationId, int round, int toolCount);
