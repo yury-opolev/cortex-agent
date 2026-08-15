@@ -11,9 +11,12 @@ public class VoiceOnlyToolGateTests
 
         var hidden = gate.GetHiddenTools("webchat-default");
 
-        Assert.Equal(8, hidden.Count);
-        Assert.Contains("speak_after_delay", hidden);
+        Assert.Equal(6, hidden.Count);
         Assert.Contains("start_voice_enrollment", hidden);
+
+        // session_timer is deliberately NOT voice-gated any more: a fired timer delivers through
+        // whatever the model chooses, so timers are useful in text conversations too.
+        Assert.DoesNotContain("session_timer", hidden);
     }
 
     [Fact]

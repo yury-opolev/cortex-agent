@@ -45,7 +45,7 @@ public sealed class SubagentRunner : IDisposable
             "sub_agent_start", "sub_agent_read", "sub_agent_send", // no recursion
             "send_message",    // subagent must not message user directly
             "schedule_task",   // subagent should not create scheduled tasks
-            "speak_after_delay", "cancel_delayed_speech", // voice-only; not for subagents
+            "session_timer",   // timers fire back into the parent conversation, not a subagent
         ], StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Default context window when model provider is not available.</summary>

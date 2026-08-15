@@ -341,10 +341,10 @@ builder.Services.AddSingleton<Cortex.Contained.Speech.SpeakerId.FbankExtractor>(
 }
 
 // These two are general tool infrastructure, NOT speaker-id-dependent: the voice-only
-// gate hides the unconditional speak_after_delay/cancel_delayed_speech tools from
-// non-voice conversations, and the conversation resolver is a hard dependency of the
-// unconditional TransferSessionTool. Registering them inside the embedder-gated block
-// broke any host without a voice-id backend (caught by the integration tests).
+// gate hides the voice-enrollment tools from non-voice conversations, and the conversation
+// resolver is a hard dependency of the unconditional TransferSessionTool. Registering them
+// inside the embedder-gated block broke any host without a voice-id backend (caught by the
+// integration tests).
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Tools.IConversationToolGate,
     Cortex.Contained.Agent.Host.Tools.VoiceOnlyToolGate>();
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Tools.IConversationToolGate,
@@ -355,15 +355,14 @@ builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Tools.IConversationToo
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Tools.IChannelConversationResolver,
     Cortex.Contained.Agent.Host.Tools.ChannelConversationResolver>();
 
-// --- Session reminders (voice-only in-session timers) ---
-builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Reminders.IVoiceCueDeliverer, Cortex.Contained.Agent.Host.Reminders.BridgeVoiceCueDeliverer>();
-builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Reminders.SessionReminderService>();
+// --- Session timers (in-session, intent-firing) ---
+builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Reminders.SessionTimerService>(sp =>
+    new Cortex.Contained.Agent.Host.Reminders.SessionTimerService(
+        sp.GetRequiredService<AgentMessageChannel>(),
+        sp.GetRequiredService<ILogger<Cortex.Contained.Agent.Host.Reminders.SessionTimerService>>()));
 builder.Services.AddSingleton<IAgentTool>(sp =>
-    new Cortex.Contained.Agent.Host.Tools.BuiltIn.SpeakAfterDelayTool(
-        sp.GetRequiredService<Cortex.Contained.Agent.Host.Reminders.SessionReminderService>()));
-builder.Services.AddSingleton<IAgentTool>(sp =>
-    new Cortex.Contained.Agent.Host.Tools.BuiltIn.CancelDelayedSpeechTool(
-        sp.GetRequiredService<Cortex.Contained.Agent.Host.Reminders.SessionReminderService>()));
+    new Cortex.Contained.Agent.Host.Tools.BuiltIn.SessionTimerTool(
+        sp.GetRequiredService<Cortex.Contained.Agent.Host.Reminders.SessionTimerService>()));
 
 // Shared proactive-message dispatch (used by SendMessageTool, TransferSessionTool,
 // and any future tool that needs to push an agent-initiated message to a channel).
