@@ -22,11 +22,11 @@ public sealed class AgentConfig
 
     /// <summary>
     /// Maximum silence, in seconds, before the FIRST token of a streamed response arrives.
-    /// Time-to-first-token grows with prompt size, so this is deliberately generous and separate
+    /// Time-to-first-token grows with prompt size, so this stays the more generous of the two
     /// from <see cref="LlmStreamIdleTimeoutSeconds"/>. 0 disables the guard.
     /// </summary>
     [Range(0, 3600)]
-    public int LlmFirstTokenTimeoutSeconds { get; set; } = 300;
+    public int LlmFirstTokenTimeoutSeconds { get; set; } = 600;
 
     /// <summary>
     /// Maximum silence, in seconds, BETWEEN streamed chunks once generation has started. Needed
@@ -34,7 +34,30 @@ public sealed class AgentConfig
     /// silent provider stream unbounded. 0 disables the guard.
     /// </summary>
     [Range(0, 3600)]
-    public int LlmStreamIdleTimeoutSeconds { get; set; } = 120;
+    public int LlmStreamIdleTimeoutSeconds { get; set; } = 300;
+
+    /// <summary>
+    /// How many times a subagent round is re-issued when the provider stream faults with a
+    /// transient fault AFTER content has already been streamed. <c>DirectLlmClient</c>'s retry
+    /// and failover are pre-content only, so without this a single mid-stream stall ends a
+    /// long-running subagent outright. 0 disables the behaviour.
+    /// </summary>
+    [Range(0, 10)]
+    public int SubagentTransientStreamRetries { get; set; } = 2;
+
+    /// <summary>
+    /// Absolute wall-clock ceiling on a single streamed LLM response, in seconds. Backstop for
+    /// a stream that stays technically alive but makes no progress: provider heartbeats re-arm
+    /// the idle budget, so without this a chatty-but-stuck stream would never terminate.
+    /// 0 uses the built-in default (30 minutes); a negative value disables the ceiling.
+    /// <para>
+    /// WORST CASE, deliberately: one round can spend up to
+    /// <see cref="LlmStreamIdleTimeoutSeconds"/> x (1 + <see cref="SubagentTransientStreamRetries"/>)
+    /// plus backoff in dead air before failing, bounded per attempt by this ceiling.
+    /// </para>
+    /// </summary>
+    [Range(-1, 21600)]
+    public int LlmStreamMaxDurationSeconds { get; set; }
 
     /// <summary>
     /// Requested reasoning effort for the agent's own turns

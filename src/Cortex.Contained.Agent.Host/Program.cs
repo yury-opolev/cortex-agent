@@ -115,7 +115,8 @@ builder.Services.AddSingleton(sp =>
         sp.GetRequiredService<ILogger<DirectLlmClient>>(),
         Cortex.Contained.Agent.Host.Llm.Providers.LlmStreamTimeouts.FromSeconds(
             agentConfig.LlmFirstTokenTimeoutSeconds,
-            agentConfig.LlmStreamIdleTimeoutSeconds),
+            agentConfig.LlmStreamIdleTimeoutSeconds,
+            agentConfig.LlmStreamMaxDurationSeconds),
         sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.AgentMetrics>());
 });
 builder.Services.AddSingleton<ILlmClient>(sp => sp.GetRequiredService<DirectLlmClient>());
@@ -537,7 +538,8 @@ builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Agent.SubagentExecutio
     // subagent is dispatched, the coordinator singleton is already fully built and cached.
     Func<SubagentTask, SubagentRunner> runnerFactory = task => new SubagentRunner(
         llmClient, sp.GetRequiredService<ToolRegistry>(), agentConfig.CurrentValue.MaxSubagentRounds,
-        runnerLogger, subagentStore, task.TaskId, modelProvider, todoStore);
+        runnerLogger, subagentStore, task.TaskId, modelProvider, todoStore,
+        transientStreamRetries: agentConfig.CurrentValue.SubagentTransientStreamRetries);
 
     return new Cortex.Contained.Agent.Host.Agent.SubagentExecutionCoordinator(
         subagentStore,

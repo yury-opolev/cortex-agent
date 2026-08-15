@@ -1,3 +1,4 @@
+using Cortex.Contained.Agent.Host.Llm.Providers;
 using Cortex.Contained.Contracts.Hub;
 
 namespace Cortex.Contained.Agent.Host.Agent;
@@ -25,6 +26,9 @@ public sealed class AgentMetrics
     private int extractionQueuePeak;
     private int tokenRefreshSuccesses;
     private int tokenRefreshFailures;
+    private int streamFirstChunkStalls;
+    private int streamIdleStalls;
+    private int streamMaxDurationStalls;
 
     private readonly LatencyStats ttftStats = new();
     private readonly LatencyStats e2eStats = new();
@@ -94,6 +98,27 @@ public sealed class AgentMetrics
     public void IncrementTokenRefreshFailure()
     {
         Interlocked.Increment(ref this.tokenRefreshFailures);
+    }
+
+    /// <summary>
+    /// Records that the provider-stream inactivity watchdog fired. Split by phase because the
+    /// two mean very different things: a first-chunk stall is a slow start the facade can still
+    /// retry, while a between-chunks stall is unrecoverable there and kills the turn.
+    /// </summary>
+    internal void RecordStreamStall(LlmStreamStallPhase phase)
+    {
+        switch (phase)
+        {
+            case LlmStreamStallPhase.BetweenChunks:
+                Interlocked.Increment(ref this.streamIdleStalls);
+                break;
+            case LlmStreamStallPhase.MaxDuration:
+                Interlocked.Increment(ref this.streamMaxDurationStalls);
+                break;
+            default:
+                Interlocked.Increment(ref this.streamFirstChunkStalls);
+                break;
+        }
     }
 
     /// <summary>
@@ -167,7 +192,10 @@ public sealed class AgentMetrics
             E2eAvgMs: e2e.AvgMs,
             E2eP50Ms: e2e.P50Ms,
             E2eP95Ms: e2e.P95Ms,
-            Subagents: subagents);
+            Subagents: subagents,
+            StreamFirstChunkStalls: Volatile.Read(ref this.streamFirstChunkStalls),
+            StreamIdleStalls: Volatile.Read(ref this.streamIdleStalls),
+            StreamMaxDurationStalls: Volatile.Read(ref this.streamMaxDurationStalls));
     }
 
     /// <summary>
