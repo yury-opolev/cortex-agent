@@ -62,6 +62,13 @@ public sealed partial class DirectLlmClient : ILlmClient, IDisposable
     /// </summary>
     private readonly Providers.LlmStreamTimeouts streamTimeouts;
 
+    /// <summary>
+    /// Where inactivity-watchdog breaches are reported. Kept behind
+    /// <see cref="Providers.ILlmStreamStallObserver"/> so the guard itself stays a pure stream
+    /// decorator with no logger or metrics dependency.
+    /// </summary>
+    private readonly Providers.ILlmStreamStallObserver stallObserver;
+
     public DirectLlmClient(
         IHttpClientFactory httpClientFactory,
         ILogger<DirectLlmClient> logger,
@@ -80,6 +87,7 @@ public sealed partial class DirectLlmClient : ILlmClient, IDisposable
         this.logger = logger;
         this.metrics = metrics;
         this.streamTimeouts = streamTimeouts;
+        this.stallObserver = new Providers.LlmStreamStallTelemetry(logger, metrics);
         this.tokenManager = new OAuthTokenManager(logger, metrics);
         this.openAiClient = new OpenAiCompatibleApiClient(httpClientFactory, this.tokenManager, logger);
         this.anthropicClient = new AnthropicApiClient(httpClientFactory, this.tokenManager, logger);
@@ -567,6 +575,14 @@ public sealed partial class DirectLlmClient : ILlmClient, IDisposable
                 // is swallowed and the next provider is attempted. Once we've
                 // yielded anything we are committed to this provider (cannot
                 // un-stream), so a later error is surfaced.
+                // Belt and braces: the idle guard already consumes keep-alives, but if one ever
+                // reached here it would set emittedAny and silently disable pre-content
+                // failover - the exact class of bug this change exists to prevent.
+                if (chunk.IsKeepAlive)
+                {
+                    continue;
+                }
+
                 var isTerminalError = chunk.IsComplete && chunk.ErrorMessage is not null;
 
                 // Pre-content failover: terminal error, nothing yielded yet,
@@ -635,8 +651,33 @@ public sealed partial class DirectLlmClient : ILlmClient, IDisposable
                     _ => ProviderClientHelpers.ErrorStream($"Unsupported API type '{provider.Credential.Api}'."),
                 },
                 this.streamTimeouts,
-                cancellationToken),
+                cancellationToken,
+                BuildStreamContext(provider, request),
+                this.stallObserver),
             cancellationToken);
+
+    /// <summary>
+    /// Attributes a stream to its conversation, model, provider and context size, so an
+    /// inactivity breach is diagnosable from the log instead of being an anonymous timeout.
+    /// </summary>
+    private static Providers.LlmStreamContext BuildStreamContext(
+        ProviderState provider, LlmCompletionRequest request)
+    {
+        var promptChars = 0;
+        foreach (var message in request.Messages)
+        {
+            promptChars += message.Content?.Length ?? 0;
+        }
+
+        return new Providers.LlmStreamContext
+        {
+            ConversationId = request.ConversationId,
+            RequestId = request.RequestId,
+            Model = request.Model,
+            Provider = provider.Credential.Name,
+            PromptChars = promptChars,
+        };
+    }
 
     /// <summary>
     /// Picks the wire client for a GitHub Copilot model from its live endpoint metadata:

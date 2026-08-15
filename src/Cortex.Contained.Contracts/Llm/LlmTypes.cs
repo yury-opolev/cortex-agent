@@ -227,6 +227,20 @@ public sealed record LlmStreamChunk
 
     /// <summary>Error if the stream failed.</summary>
     public string? ErrorMessage { get; init; }
+
+    /// <summary>
+    /// True when this chunk carries no model output and exists only to prove the stream is
+    /// still alive — a provider heartbeat (Anthropic <c>ping</c>/<c>message_start</c>) or a
+    /// phase that produces no consumable content (extended thinking).
+    /// <para>
+    /// It is the explicit contract between a provider client, which knows its own SSE
+    /// vocabulary, and the inactivity watchdog, which must not. A keep-alive re-arms the
+    /// watchdog but is NOT content: it never starts the tighter between-chunks budget, and it is
+    /// consumed by the watchdog rather than delivered to consumers — a keep-alive reaching the
+    /// facade would set its "already yielded" flag and silently disable pre-content failover.
+    /// </para>
+    /// </summary>
+    public bool IsKeepAlive { get; init; }
 }
 
 /// <summary>A partial tool call in a streaming chunk.</summary>

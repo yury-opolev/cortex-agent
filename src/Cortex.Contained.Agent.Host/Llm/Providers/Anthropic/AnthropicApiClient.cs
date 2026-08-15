@@ -18,6 +18,12 @@ internal sealed partial class AnthropicApiClient : IProviderApiClient
     private readonly OAuthTokenManager tokenManager;
     private readonly ILogger logger;
 
+    /// <summary>
+    /// The liveness signal emitted for provider events that carry no consumable content
+    /// (heartbeats, extended thinking). Immutable, so one instance serves every stream.
+    /// </summary>
+    private static readonly LlmStreamChunk KeepAlive = new() { IsKeepAlive = true };
+
     public AnthropicApiClient(
         IHttpClientFactory httpClientFactory,
         OAuthTokenManager tokenManager,
@@ -453,6 +459,12 @@ internal sealed partial class AnthropicApiClient : IProviderApiClient
                     inputTokens = evt.Message?.Usage?.InputTokens ?? 0;
                     cacheWriteTokens = evt.Message?.Usage?.CacheCreationInputTokens ?? 0;
                     cacheReadTokens = evt.Message?.Usage?.CacheReadInputTokens ?? 0;
+                    yield return KeepAlive;
+                    break;
+
+                // Anthropic's explicit heartbeat. Consumed by the inactivity guard.
+                case "ping":
+                    yield return KeepAlive;
                     break;
 
                 case "content_block_start":
@@ -486,6 +498,14 @@ internal sealed partial class AnthropicApiClient : IProviderApiClient
                         && evt.Delta.Text is not null)
                     {
                         yield return new LlmStreamChunk { ContentDelta = evt.Delta.Text };
+                    }
+                    else if (string.Equals(evt.Delta.Type, "thinking_delta", StringComparison.Ordinal)
+                        || string.Equals(evt.Delta.Type, "signature_delta", StringComparison.Ordinal))
+                    {
+                        // Extended thinking produces no consumable content but can run for
+                        // minutes. Before this signal existed the stream looked dead and the
+                        // inactivity watchdog killed healthy long-context turns.
+                        yield return KeepAlive;
                     }
                     else if (string.Equals(evt.Delta.Type, "input_json_delta", StringComparison.Ordinal)
                         && evt.Delta.PartialJson is not null)
