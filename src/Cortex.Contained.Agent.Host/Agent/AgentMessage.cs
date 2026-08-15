@@ -93,4 +93,11 @@ public enum AgentMessageSource
     /// </summary>
     CodingAgentInjection = 3,
 
+    /// <summary>
+    /// Intent injected when an in-session timer fires. Unlike <see cref="ScheduledTask"/> this
+    /// runs in the conversation that CREATED the timer rather than an ephemeral session, so the
+    /// model can act on the live situation — the whole point of scheduling an intent instead of a
+    /// frozen line of text.
+    /// </summary>
+    SessionTimer = 4,
 }

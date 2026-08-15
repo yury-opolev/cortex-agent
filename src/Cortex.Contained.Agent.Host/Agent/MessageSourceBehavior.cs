@@ -38,8 +38,20 @@ internal sealed record MessageSourceBehavior(
             RunsMemoryExtraction: false,
             PendingInjectionLabelPrefix: "[Scheduled Task] ",
             PendingInjectionMessageType: LlmMessageType.ScheduledTaskInstruction),
-        AgentMessageSource.SubagentCompletion => new(
+        // A fired timer runs in the conversation that created it — NOT ephemeral, unlike
+        // ScheduledTask — so the intent is evaluated against the live session state. Internal to
+        // history (the user sees whatever the model decides to say, not the instruction) and
+        // proactively delivered, because nobody is waiting on a turn when it fires.
+        AgentMessageSource.SessionTimer => new(
             RunInEphemeralSession: false,
+            IsInternalToHistory: true,
+            UseProactiveDelivery: true,
+            HandlesSlashCommands: false,
+            SetsConversationTitleFromText: false,
+            RunsMemoryExtraction: false,
+            PendingInjectionLabelPrefix: "[Timer] ",
+            PendingInjectionMessageType: LlmMessageType.ScheduledTaskInstruction),
+        AgentMessageSource.SubagentCompletion => new(            RunInEphemeralSession: false,
             IsInternalToHistory: true,
             UseProactiveDelivery: false,
             HandlesSlashCommands: false,

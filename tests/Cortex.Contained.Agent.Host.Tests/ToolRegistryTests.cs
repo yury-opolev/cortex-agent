@@ -124,7 +124,7 @@ public class ToolRegistryTests
     [Fact]
     public void GetDefinitionsForConversation_VoiceConversation_IncludesVoiceOnlyTools()
     {
-        var voiceTool = new FakeTool("speak_after_delay", "voice-only tool");
+        var voiceTool = new FakeTool("start_voice_enrollment", "voice-only tool");
         var normalTool = new FakeTool("file_read", "normal tool");
         var registry = new ToolRegistry(
             [voiceTool, normalTool],
@@ -134,15 +134,15 @@ public class ToolRegistryTests
 
         var defs = registry.GetDefinitionsForConversation("discord-voice-tenant-1");
 
-        Assert.Contains(defs, d => d.Name == "speak_after_delay");
+        Assert.Contains(defs, d => d.Name == "start_voice_enrollment");
         Assert.Contains(defs, d => d.Name == "file_read");
     }
 
     [Fact]
     public void GetDefinitionsForConversation_NonVoiceConversation_ExcludesVoiceOnlyTools()
     {
-        var setTool = new FakeTool("speak_after_delay", "voice-only tool");
-        var cancelTool = new FakeTool("cancel_delayed_speech", "voice-only tool");
+        var setTool = new FakeTool("start_voice_enrollment", "voice-only tool");
+        var cancelTool = new FakeTool("forget_voice_enrollment", "voice-only tool");
         var normalTool = new FakeTool("file_read", "normal tool");
         var registry = new ToolRegistry(
             [setTool, cancelTool, normalTool],
@@ -152,15 +152,15 @@ public class ToolRegistryTests
 
         var defs = registry.GetDefinitionsForConversation("webchat-default");
 
-        Assert.DoesNotContain(defs, d => d.Name == "speak_after_delay");
-        Assert.DoesNotContain(defs, d => d.Name == "cancel_delayed_speech");
+        Assert.DoesNotContain(defs, d => d.Name == "start_voice_enrollment");
+        Assert.DoesNotContain(defs, d => d.Name == "forget_voice_enrollment");
         Assert.Contains(defs, d => d.Name == "file_read");
     }
 
     [Fact]
     public void GetDefinitionsForConversation_EmptyOrNullConversationId_ExcludesVoiceOnlyTools()
     {
-        var voiceTool = new FakeTool("speak_after_delay", "voice-only tool");
+        var voiceTool = new FakeTool("start_voice_enrollment", "voice-only tool");
         var normalTool = new FakeTool("file_read", "normal tool");
         var registry = new ToolRegistry(
             [voiceTool, normalTool],
@@ -170,10 +170,10 @@ public class ToolRegistryTests
 
         var defs = registry.GetDefinitionsForConversation(string.Empty);
 
-        Assert.DoesNotContain(defs, d => d.Name == "speak_after_delay");
+        Assert.DoesNotContain(defs, d => d.Name == "start_voice_enrollment");
 
         var nullDefs = registry.GetDefinitionsForConversation(null);
-        Assert.DoesNotContain(nullDefs, d => d.Name == "speak_after_delay");
+        Assert.DoesNotContain(nullDefs, d => d.Name == "start_voice_enrollment");
     }
 
     private sealed class FakeTool : IAgentTool

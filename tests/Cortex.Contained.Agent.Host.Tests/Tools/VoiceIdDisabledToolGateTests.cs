@@ -21,6 +21,6 @@ public sealed class VoiceIdDisabledToolGateTests
 
         Assert.Contains("start_voice_enrollment", hidden);
         Assert.Contains("forget_voice_enrollment", hidden);
-        Assert.DoesNotContain("speak_after_delay", hidden); // TTS tool, not voice-id
+        Assert.DoesNotContain("session_timer", hidden); // timers are not voice-id related
     }
 }
