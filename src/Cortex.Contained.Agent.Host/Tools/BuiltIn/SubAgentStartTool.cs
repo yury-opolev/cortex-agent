@@ -31,7 +31,9 @@ public sealed partial class SubAgentStartTool : IAgentTool
     public string Description =>
         "Spawn an async subagent to perform a multi-step task in the background. " +
         "Returns a task_id immediately. When the task completes, you will receive a " +
-        "[Background task completed] message with the results to review. " +
+        "[Background task completed] message with the results to review, or a " +
+        "[Background task FAILED] / [Background task cancelled] message if it did not " +
+        "finish. " +
         "In the prompt, describe the task and tell to respond with results. " +
         "Never ask the subagent to send, deliver, or message the user. " +
         "Use this for complex, multi-step work that would require many tool calls " +
@@ -115,7 +117,10 @@ public sealed partial class SubAgentStartTool : IAgentTool
             $"Subagent accepted.\n" +
             $"Task ID: {taskId}\n\n" +
             $"It runs in the background and starts as soon as a concurrency slot is free. " +
-            $"You will receive a [Background task completed] message when it finishes. " +
+            $"You will receive a [Background task completed] message when it finishes, or " +
+            $"[Background task FAILED] / [Background task cancelled] if it does not. A failed " +
+            $"task keeps the work it already did - resume it with sub_agent_send('{taskId}', ...) " +
+            $"rather than starting it over. " +
             $"Use sub_agent_read('{taskId}') to check progress."));
     }
 

@@ -524,20 +524,12 @@ public sealed partial class SubagentExecutionCoordinator : IHostedService, IDisp
     }
 
     /// <summary>
-    /// The synthetic parent-turn instruction for a completed subagent task, built from the
-    /// DURABLE terminal record (whichever terminal write won).
+    /// The synthetic parent-turn instruction for a terminal subagent task, built from the
+    /// DURABLE terminal record (whichever terminal write won). Formatting -- and crucially the
+    /// success-vs-failure wording -- lives in <see cref="SubagentCompletionNotice"/>.
     /// </summary>
     private static string BuildCompletionTriggerText(SubagentTask task)
-    {
-        var result = task.Result ?? "[no result recorded]";
-        return
-            $"[Background task completed]\n" +
-            $"Task: \"{task.Description}\" ({task.TaskId})\n\n" +
-            $"Result:\n{result}\n\n" +
-            $"Review the result and respond to the user. " +
-            $"If there is a follow-up task to do, use sub_agent_start. " +
-            $"Use sub_agent_read('{task.TaskId}') if you need more details.";
-    }
+        => SubagentCompletionNotice.Build(task);
 
     private static string Sanitize(string message)
     {
