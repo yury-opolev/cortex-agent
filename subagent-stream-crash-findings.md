@@ -1,11 +1,15 @@
 # Sub-agent crash: "Stream transport fault: LLM stream produced no data for 120s."
 
-Investigation only — **no production behaviour was changed.** All code below is quoted as-is;
-the "Proposed fixes" section contains patches that are *not* applied.
+**Status: root cause confirmed; all four recommended fixes have since been implemented,
+reviewed, merged and deployed.** Sections 0-6 and 8 are the investigation as it stood *before*
+any code changed, and all line numbers in them refer to the pre-fix tree at commit `2354b2f`
+so they stay verifiable against the code that actually failed. Section 7 gives the ranked
+recommendations; section 9 records what was built and how it differs from the proposal;
+section 10 lists the residual risk that remains.
 
-Repo: `C:\Users\yurio\Documents\github\cortex-agent` · Logs: `docker logs cortex-agent`
-(the agent runs in the `cortex-agent` container; the host-side `%LOCALAPPDATA%\Cortex\logs\bridge-*.log`
-files do NOT contain this error).
+Investigation basis: `docker logs cortex-agent` (the agent runs in the `cortex-agent`
+container; the host-side `%LOCALAPPDATA%\Cortex\logs\bridge-*.log` files do **not** contain
+this error) plus the source at `C:\Users\yurio\Documents\github\cortex-agent`.
 
 ---
 
@@ -33,6 +37,8 @@ files do NOT contain this error).
 
 ## 1. Exact code locations
 
+Line numbers as of the failing tree (`2354b2f`).
+
 | What | File | Line |
 |---|---|---|
 | `"Stream transport fault: "` prefix | `src/Cortex.Contained.Agent.Host/Llm/Providers/LlmStreamFault.cs` | 25 |
@@ -52,6 +58,23 @@ files do NOT contain this error).
 | **State-blind** parent notification | `Agent/SubagentExecutionCoordinator.cs` | 529-540 |
 | Per-round history checkpoint | `Agent/SubagentCallbacks.cs` | 152, 208 |
 | Resume of a terminal task | `Tools/BuiltIn/SubAgentSendTool.cs` | 89, 123-132 |
+
+**The error path, end to end:**
+
+```
+AnthropicApiClient.ParseAnthropicSseAsync   (provider goes quiet; thinking emits no chunk)
+  -> LlmStreamIdleGuard.Apply               (WaitAsync(120s) expires -> throws TimeoutException)
+  -> LlmStreamFault.Guard                   (catches it; IsTransient(TimeoutException)=true
+                                             -> terminal chunk "Stream transport fault: ...")
+  -> DirectLlmClient.StreamWithRetryAsync   (retry SKIPPED: not a pre-content error)
+  -> DirectLlmClient.StreamCompleteAsync    (failover SKIPPED: emittedAny already true)
+  -> AgentLoop.ExecuteAsync                 (error chunk -> AgentLoopOutcome.Error, returns)
+  -> SubagentRunner.ToTerminalState         (Error -> SubagentTaskState.Failed)
+  -> SubagentSessionStore.TrySetTerminalResult   ("state changed to failed" - CORRECT)
+  -> SubagentExecutionCoordinator.BuildCompletionTriggerText
+                                            (state-blind -> "[Background task completed]")
+  -> parent agent reads a success envelope containing an error string
+```
 
 ---
 
@@ -78,6 +101,10 @@ since-request-start. Two budgets:
 enumeration completes and before the next request is issued (`AgentLoop.cs` 215-260 then the
 tool-round block). A 285-second `run_command` observed at 20:32 in the logs proves this —
 it did not trip the guard.
+
+It also exists because `HttpClient.Timeout` stops applying once response headers are read
+(every streaming call uses `HttpCompletionOption.ResponseHeadersRead`), so without the guard a
+silent provider would hang the turn forever. The guard was the *only* bound on a stream.
 
 Configurable: yes, `LlmFirstTokenTimeoutSeconds` / `LlmStreamIdleTimeoutSeconds` in
 `AgentConfig` (`[Range(0,3600)]`, 0 disables). Neither is overridden in
@@ -161,9 +188,13 @@ Supporting circumstantial evidence:
 * Reproducible on a fresh restart at the same stage of the same workload. A network blip
   does not reproduce on cue; a deterministic budget does.
 
+**Correlation with long tool calls: none.** The guard is not armed during tool execution
+(see §2), and the longest observed tool call in the same session — 285s — passed unharmed.
+Long tool calls are exonerated; large context is not.
+
 **Residual uncertainty:** we cannot see the SSE wire, so "silent thinking" vs. "provider
-genuinely stalled" is inferred, not proved. The remedy is the same either way, and
-§7 lists the telemetry that would settle it.
+genuinely stalled" is inferred, not proved. The remedy is the same either way, and the
+telemetry in P3 settles it for next time.
 
 ---
 
@@ -240,88 +271,135 @@ the highest-severity finding here: it is a one-line, zero-risk fix.
 The gap is purely informational: the notification hides the failure, so neither the parent
 agent nor the user was ever given the cue to resume.
 
+**So no checkpointing work was needed** — the checkpointing already existed and worked. What
+was missing was telling the orchestrator that resuming was possible.
+
 ---
 
-## 7. Proposed fixes — ranked, NOT APPLIED
+## 7. Recommended fixes, ranked
 
-### P0 — Make the completion notification state-aware (1 file, ~10 lines, zero risk)
+### P0 — Make the completion notification state-aware (highest value, lowest risk)
 
-`SubagentExecutionCoordinator.BuildCompletionTriggerText`:
-
-```csharp
-var header = task.State switch
-{
-    SubagentTaskState.Completed => "[Background task completed]",
-    SubagentTaskState.Failed    => "[Background task FAILED]",
-    SubagentTaskState.Cancelled => "[Background task cancelled]",
-    _                           => "[Background task finished]",
-};
-var guidance = task.State == SubagentTaskState.Failed
-    ? $"The task did NOT finish. Its work up to the failure is preserved. "
-    + $"Use sub_agent_send('{task.TaskId}', '<continue instruction>') to RESUME it "
-    + $"rather than starting a new task."
-    : "Review the result and respond to the user. ...";
-```
-
-This alone converts silent loss into an actionable, resumable event.
+Give Failed and Cancelled their own envelope, label the body as a failure rather than a
+result, and tell the parent to resume by task id. Converts silent loss into an actionable,
+resumable event. One file, no behavioural risk to the happy path.
 
 ### P1 — Let a post-content stall be retryable instead of terminal
 
 The "cannot un-stream" objection does not apply to a **sub-agent**: nothing has been shown to
-a user mid-stream; `AgentLoop` only accumulates into a `StringBuilder`. Options, cheapest first:
+a user mid-stream; `AgentLoop` only accumulates into a `StringBuilder`.
 
-* **(a) Resume-on-stall in `AgentLoop`.** On a terminal error chunk whose message starts with
-  `LlmStreamFault.TransientPrefix`, and where the round produced no complete tool call, discard
-  the partial `fullResponse` and re-issue the *same* request (bounded, e.g. 2 attempts with
-  0.5s/2s backoff — mirroring `DirectLlmClient.RetryBackoff`). This is exactly the pre-content
-  transport retry that coda already ships (see the coda `AgentLoop` mid-stream retry work) and
-  is the smallest correct change.
-* **(b) Auto-resume a Failed sub-agent once**, in the coordinator, when the failure message is
-  transient-prefixed — reusing the existing `TryQueueResume` machinery. Cheap, but retries a
-  whole round rather than a request.
+* **(a) Retry-on-stall in `AgentLoop`** — on a terminal error chunk carrying
+  `LlmStreamFault.TransientPrefix`, discard the dead attempt and re-issue the *same* request,
+  bounded (2 attempts, 0.5s/2s backoff). Smallest correct change; mirrors the pre-content
+  transport retry coda already ships.
+* **(b) Auto-resume a Failed sub-agent once** in the coordinator, reusing `TryQueueResume`.
+  Cheaper to write, but retries a whole round rather than one request.
 * Do **not** widen `DirectLlmClient` failover to post-content: switching providers mid-stream
   would corrupt the message.
 
 ### P2 — Stop the guard from mistaking "thinking" for "dead"
 
-* Feed Anthropic's liveness events to the guard. Today `message_start`, `ping`, and
-  `thinking_delta` all yield nothing, so a thinking model looks identical to a hung socket.
-  Emit a **no-op keep-alive chunk** (no content, no tool delta — `AgentLoop` already ignores
-  such a chunk: it only acts on `ContentDelta`, `ToolCallDeltas`, `IsComplete`, `ErrorMessage`)
-  for `ping` and `thinking_delta`. This is the most surgical true fix: it removes the false
-  positive without loosening any real hang detection.
-* Independently, raise `LlmStreamIdleTimeoutSeconds` from 120 → **300**, matching
-  `LlmFirstTokenTimeoutSeconds`. The 120s figure has no measured basis; the file's own comment
-  documents 135-183s legitimate quiet periods. This is a one-line config change and could be
-  applied immediately as mitigation while P2's keep-alive work is done.
-* Consider scaling the idle budget with prompt size (the failure correlates with context), but
-  only after telemetry justifies it.
+* Emit a **no-op keep-alive chunk** for `ping`, `message_start` and `thinking_delta` so a
+  thinking model can prove it is alive. The most surgical true fix: it removes the false
+  positive without loosening real hang detection.
+* Independently raise `LlmStreamIdleTimeoutSeconds` 120 → **300**. The 120s figure has no
+  measured basis; 135-183s of legitimate quiet is already on record.
+* Consider scaling the idle budget with prompt size, but only once telemetry justifies it.
 
 ### P3 — Telemetry to confirm and to catch regressions
 
-* Log every guard breach at **Warning** with: conversation/task id, provider, model, round,
-  estimated prompt tokens, elapsed since request start, chunks received so far, bytes received.
-  Right now the breach is indistinguishable from a network fault in the log.
-* Counter in `AgentMetrics` for guard breaches split by `first-token` vs `between-chunks`.
-* A log line when a stall retry is attempted/succeeds, so P1's effectiveness is measurable.
+* Log every breach at **Warning** with conversation/task id, provider, model, prompt size,
+  elapsed idle, whether content had been emitted, and chunks received. Today a breach is
+  indistinguishable from a network fault in the log.
+* `AgentMetrics` counters split by phase (first-token vs between-chunks).
+* A log line when a stall retry is attempted, so P1's effectiveness is measurable.
 
 ---
 
 ## 8. Answers to the seven questions, condensed
 
-1. **Where** — `LlmStreamIdleGuard.cs:116` (message) + `LlmStreamFault.cs:25` (prefix), wired
+1. **Where** - `LlmStreamIdleGuard.cs:116` (message) + `LlmStreamFault.cs:25` (prefix), wired
    at `DirectLlmClient.cs:625`. A client-side watchdog, not the SSE reader, not the provider.
-2. **The 120s watchdog** — idle time between consecutive stream chunks, re-armed per chunk;
+   Full call chain in section 1.
+2. **The 120s watchdog** - idle time between consecutive stream chunks, re-armed per chunk;
    `AgentConfig.LlmStreamIdleTimeoutSeconds`, default 120; sibling first-token budget 300s.
+   It exists because `HttpClient.Timeout` stops applying once headers are read.
 3. **Client-side.** The guard fabricated the `TimeoutException` and cancelled the read itself.
    No provider error, HTTP status, reset or context-limit error in the log at either failure.
-4. **Yes, context-correlated** — but the mechanism is a too-tight *between-chunks* budget after
+4. **Yes, context-correlated** - but the mechanism is a too-tight *between-chunks* budget after
    an early opening chunk, not a from-request-start measurement. Only the huge-context task
-   failed; it failed twice, at the same stage.
-5. **No.** The guard does not run during tool execution — a 285s `run_command` in the same
-   session passed unharmed.
+   failed; it failed twice, at the same stage; concurrent smaller-context sub-agents were fine.
+5. **No correlation with long tool calls.** The guard does not run during tool execution - a
+   285s `run_command` in the same session passed unharmed.
 6. **Two bugs**: post-content faults are structurally excluded from retry/failover
    (`!emittedAny` gate), and `BuildCompletionTriggerText` ignores `task.State` so a Failed task
    is announced as `[Background task completed]`.
 7. **Fully recoverable.** History is checkpointed every round and `sub_agent_send` resumes
-   terminal tasks; the parent was simply never told the task had failed.
+   terminal tasks; the parent was simply never told the task had failed. No new checkpointing
+   was needed - only a notification that admits failure.
+
+---
+## 9. What was actually implemented (post-investigation)
+
+All four were built test-first, code-reviewed, merged via PR #43 (`afadf21` on `main`) and
+deployed as agent image `0.2.328` / `sha256:52e2e77b3467`. **This changed production
+behaviour** — the running `cortex-agent` container was rebuilt and recreated. Full suite:
+4,904 tests passing, 0 failures; solution builds with 0 warnings.
+
+| Commit | Fix |
+|---|---|
+| `bf94b9e` | P0 — `SubagentCompletionNotice` (new pure formatter); Failed/Cancelled envelopes; body labelled `Failure:`/`Outcome:`; parent told to resume via `sub_agent_send`; `sub_agent_start` description corrected |
+| `a828107` | P1 — inner attempt loop in `AgentLoop`; `LlmStreamFault.IsTransientFaultMessage`; fresh request id per attempt; 0.5s/2s backoff |
+| `e823a2c` | P2 — `LlmStreamChunk.IsKeepAlive`; Anthropic emits it for `message_start`/`ping`/`thinking_delta`/`signature_delta`; guard consumes it; budgets retuned; `MaxDuration` ceiling |
+| `e59ea93` | P3 — `ILlmStreamStallObserver`, `LlmStreamContext`, `LlmStreamStallReport`, `LlmStreamStallPhase`, `LlmStreamStallTelemetry`, `AgentMetrics` counters |
+
+### Where the implementation deliberately departs from the proposal
+
+Three changes came out of code review and are **more conservative** than what §7 proposed:
+
+1. **P1 defaults to OFF, not on.** §7 treated "sub-agents discard deltas" as a safe standing
+   assumption. It is only safe *today*: `AgentLoop` is documented as the unified loop for the
+   main agent too, and a user-facing consumer that re-issued after showing deltas would
+   duplicate visible text. So `AgentLoopConfig.MaxTransientStreamRetries` defaults to `0` and
+   `SubagentRunner` opts in explicitly. A future main-agent adoption inherits safety by
+   saying nothing.
+
+2. **P2 needed an absolute ceiling that §7 missed.** Once keep-alives re-arm the idle budget,
+   *the idle budget stops bounding the stream at all*. A provider pinging every 30s, or a model
+   stuck emitting thinking deltas, would hold the request, connection and sub-agent slot open
+   **forever** — silent and non-terminating, strictly worse than the premature kill being
+   fixed. `LlmStreamTimeouts.MaxDuration` (30 min, own stall phase, `LlmStreamMaxDurationSeconds`)
+   is what now guarantees termination. **This must not be removed.**
+
+3. **First-token budget raised too.** §7 proposed idle 120 → 300 "matching" the 300s
+   first-token budget, which would have collapsed the deliberate two-budget design (TTFT must
+   never be bounded more tightly than mid-stream silence). First-token went 300 → **600s** to
+   preserve the ordering.
+
+### Configuration now in force
+
+| Setting | Was | Now |
+|---|---|---|
+| `LlmStreamIdleTimeoutSeconds` | 120 | **300** |
+| `LlmFirstTokenTimeoutSeconds` | 300 | **600** |
+| `LlmStreamMaxDurationSeconds` | — | **new**; 0 = built-in 30 min, negative = disabled |
+| `SubagentTransientStreamRetries` | — | **new**; 2 |
+
+---
+
+## 10. Residual risk, stated deliberately
+
+* **Worst-case dead air per round has grown**: 300s × (1 initial + 2 retries) + backoff ≈ 15.5
+  minutes before a round gives up, bounded per attempt by the 30-minute ceiling. This is the
+  intended trade against losing 25-minute runs to a budget with no measured basis, and it is
+  documented in `AgentConfig`.
+* **No per-sub-agent wall-clock deadline exists.** `MaxRounds` defaults to 200 with no total
+  time cap, so a pathological task can still run a very long time. `MaxDuration` bounds each
+  *stream*, not the task. Worth adding if this ever bites.
+* **`PromptChars` ignores multimodal parts**, so the context-size field under-reports for
+  attachment-heavy turns — precisely the largest contexts. Documented as a proxy.
+* **The "silent thinking" mechanism is still inferred, not observed on the wire.** The P3
+  telemetry (phase, idle elapsed, heartbeats seen, prompt size) will confirm or refute it the
+  next time a breach happens — and heartbeats-seen > 0 on a breach would prove the model was
+  alive and thinking.
