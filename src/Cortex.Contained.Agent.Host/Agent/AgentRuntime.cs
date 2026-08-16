@@ -92,6 +92,10 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
     private readonly PromptAssembler promptAssembler;
     private readonly CompactionOrchestrator compaction;
     private readonly SlashCommandHandler slashCommandHandler;
+    private readonly IntentComposer intentComposer;
+
+    /// <summary>Stateless; conversation keys are not always channel ids (voice adds a tenant).</summary>
+    private static readonly Tools.ChannelConversationResolver ConversationResolver = new();
 
     private CancellationTokenSource? consumerCts;
     private Task? consumerTask;
@@ -252,6 +256,12 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
             this.messageStore,
             modelProvider,
             this.compaction);
+        this.intentComposer = new IntentComposer(
+            sessionConfig.TimerComposerTailTurns,
+            imageAgingOptions,
+            imageDescriber,
+            loggerFactory?.CreateLogger<IntentComposer>()
+                ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<IntentComposer>.Instance);
 
         // Expose the live count of sessions currently generating a response so the
         // health snapshot reports active conversations without the metrics object
@@ -519,6 +529,8 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
         // Scheduled tasks run in isolated ephemeral sessions (D12):
         // fresh empty session, no history, discard after execution.
         // Subagent completions are NOT ephemeral — they run on the parent conversation.
+        // A session timer is neither: it runs against a THROWAWAY session seeded from the live
+        // conversation (see the composer swap below), so the live session is resolved here.
         var isEphemeral = behavior.RunInEphemeralSession;
         AgentSession session;
 
@@ -587,38 +599,67 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
         // are marked as internal — they appear in LLM context but not in the user's chat history.
         var isInternal = behavior.IsInternalToHistory;
 
-        // Build content blocks if the message has image attachments
-        var contentBlocks = await BuildContentBlocksAsync(
-            sanitizedText, message.Attachments, cancellationToken).ConfigureAwait(false);
-
-        session.AddMessage(new LlmMessage
+        // A focused-composer source (a fired timer) is NOT part of the conversation. Instead of
+        // appending an instruction that the model cannot tell apart from the user speaking, run it
+        // against a throwaway session holding a bounded, media-stripped tail plus the intent. The
+        // live conversation only ever receives whatever the agent decides to say.
+        AgentSession? liveConversation = null;
+        AgentSession? composerSession = null;
+        if (behavior.UsesFocusedComposer)
         {
-            Role = "user",
-            Content = sanitizedText,
-            ContentBlocks = contentBlocks,
-            MessageType = isInternal ? LlmMessageType.ScheduledTaskInstruction : LlmMessageType.Normal,
-        });
+            liveConversation = session;
+            session = composerSession = await this.intentComposer
+                .CreateSessionAsync(liveConversation, sanitizedText, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        else
+        {
+            // Build content blocks if the message has image attachments
+            var contentBlocks = await BuildContentBlocksAsync(
+                sanitizedText, message.Attachments, cancellationToken).ConfigureAwait(false);
 
-        // Persist inbound message to local MessageStore
-        var inboundCategory = isInternal
-            ? Contracts.Hub.MessageCategory.Internal
-            : Contracts.Hub.MessageCategory.Normal;
-        await this.messageStore.SaveMessageAsync(
-            userId: message.SenderIdHash ?? "unknown",
-            channelId: message.ChannelId,
-            role: "user",
-            content: AppendAttachmentPlaceholders(sanitizedText, message.Attachments),
-            timestamp: message.Timestamp,
-            category: inboundCategory,
-            cancellationToken: cancellationToken).ConfigureAwait(false);
+            session.AddMessage(new LlmMessage
+            {
+                Role = "user",
+                Content = sanitizedText,
+                ContentBlocks = contentBlocks,
+                MessageType = isInternal ? LlmMessageType.ScheduledTaskInstruction : LlmMessageType.Normal,
+            });
+
+            // Persist inbound message to local MessageStore. Skipped for composer sources: the
+            // intent was never a user message, so recording one would put words in the user's
+            // mouth in the stored history.
+            var inboundCategory = isInternal
+                ? Contracts.Hub.MessageCategory.Internal
+                : Contracts.Hub.MessageCategory.Normal;
+            await this.messageStore.SaveMessageAsync(
+                userId: message.SenderIdHash ?? "unknown",
+                channelId: message.ChannelId,
+                role: "user",
+                content: AppendAttachmentPlaceholders(sanitizedText, message.Attachments),
+                timestamp: message.Timestamp,
+                category: inboundCategory,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+        }
 
         // Reset compaction flag so it can trigger again in this new turn
         session.LastCompactionRound = -1;
 
-        // Trim if history is too long
-        session.TrimHistory(this.sessionConfig.MaxHistory);
+        // Trim the LIVE conversation — the composer session holds only a bounded tail, so trimming
+        // it would be a no-op and the real history would grow untrimmed on every timer.
+        (liveConversation ?? session).TrimHistory(this.sessionConfig.MaxHistory);
 
-        var generationToken = session.BeginGeneration(cancellationToken);
+        // Generation state stays on the LIVE session even for a composer run: it is what
+        // AbortGenerationAsync and the voice barge-in path resolve, so parking it on a throwaway
+        // would silently make a timer run unstoppable.
+        var turnOwner = liveConversation ?? session;
+        var generationToken = turnOwner.BeginGeneration(cancellationToken);
+
+        // Tells the barge-in path that this conversation's own history is NOT what is currently
+        // being produced. Safe to be a plain flag: SessionLoopAsync runs exactly one turn per
+        // conversation at a time, which is also what keeps BeginGeneration above from disposing a
+        // live CTS out from under another turn.
+        turnOwner.ForeignTurnInFlight = composerSession is not null;
 
         try
         {
@@ -632,8 +673,16 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
             // since clocks across processes aren't perfectly aligned.
             var queueWaitMs = (long)Math.Max(0, (DateTimeOffset.UtcNow - message.Timestamp).TotalMilliseconds);
 
-            await GenerateResponseAsync(session, message.ConversationId, message.ChannelId, message.CorrelationId, useProactiveDelivery, messageText, message.IsVoice, queueWaitMs, consumedSubagentTaskIds, generationToken)
+            var turn = await GenerateResponseAsync(session, message.ConversationId, message.ChannelId, message.CorrelationId, useProactiveDelivery, sanitizedText, message.IsVoice, queueWaitMs, consumedSubagentTaskIds, generationToken)
                 .ConfigureAwait(false);
+
+            // The composer session is discarded, so whatever the agent decided to say has to be
+            // written back explicitly — as AGENT content, glued onto a trailing assistant message
+            // so the provider never sees two assistant turns in a row.
+            if (behavior.RecordsOutcomeInConversation && liveConversation is not null)
+            {
+                this.RecordComposedOutcome(liveConversation, turn);
+            }
 
             // Memory extraction: append to the extraction buffer. The buffer
             // is only flushed to the extraction service on compaction — while
@@ -699,7 +748,12 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
         }
         finally
         {
-            session.EndGeneration();
+            turnOwner.ForeignTurnInFlight = false;
+            turnOwner.EndGeneration();
+
+            // Only ever the throwaway — never a live session out of the store, whose disposal
+            // would kill its pending-message semaphore for the rest of the process.
+            composerSession?.Dispose();
 
             // At-least-once: any completion notification consumed by this turn but NOT
             // confirmed delivered (LLM error, delivery failure, cancellation, shutdown)
@@ -708,7 +762,38 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
         }
     }
 
-    private async Task GenerateResponseAsync(
+    /// <summary>
+    /// What a turn actually produced, for callers that have to record it somewhere else.
+    /// </summary>
+    /// <param name="FinalText">
+    /// The text the turn finished on, or null if it never reached a clean text finish (LLM error,
+    /// tool-round budget exhausted, doom-loop halt, empty final response). Deliberately NOT the
+    /// last assistant message in history — that one is often pre-tool narration.
+    /// </param>
+    /// <param name="DeliveredToConversation">
+    /// True when the turn already put something into this conversation's history itself, via a
+    /// proactive send. Recording <paramref name="FinalText"/> as well would duplicate it.
+    /// </param>
+    private readonly record struct TurnOutcome(string? FinalText, bool DeliveredToConversation);
+
+    /// <summary>
+    /// Writes a composer run's outcome into the live conversation as agent content.
+    /// </summary>
+    private void RecordComposedOutcome(AgentSession liveConversation, TurnOutcome turn)
+    {
+        // A proactive send is how a timer actually reaches the user, and it has already been glued
+        // into this conversation. The final text is then just the model narrating what it did, so
+        // recording it too would leave a near-duplicate restatement in the chat.
+        if (turn.DeliveredToConversation || string.IsNullOrWhiteSpace(turn.FinalText))
+        {
+            return;
+        }
+
+        liveConversation.AppendOrGlueAssistantMessage(turn.FinalText);
+        this.LogComposedOutcomeRecorded(liveConversation.ConversationId, turn.FinalText.Length);
+    }
+
+    private async Task<TurnOutcome> GenerateResponseAsync(
         AgentSession session,
         string replyConversationId,
         string channelId,
@@ -742,6 +827,7 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
         // Self-notes (agent's operational knowledge) are read directly from the store.
 
         var doomLoopDetector = new DoomLoopDetector();
+        string? finalText = null;
 
         var delivery = new TurnResponseDelivery(
             client, this.messageStore, replyConversationId, channelId, correlationId, useProactiveDelivery, this.logger);
@@ -785,7 +871,10 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
 
             if (streamed.Outcome == StreamOutcome.Errored)
             {
-                return;
+                // Break, not return: the epilogue below still has to glue any send_message the
+                // turn already performed into history and report the conversation idle. finalText
+                // stays null, so nothing is recorded as the outcome.
+                break;
             }
 
             // Track actual prompt token usage from the API response
@@ -801,7 +890,8 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
                 var assistantContent = streamed.Text.Length > 0 ? streamed.Text : null;
                 if (await this.ExecuteToolRoundAsync(session, delivery, turnContext, streamed.ToolCalls, assistantContent, doomLoopDetector, round, replyConversationId, latency, consumedSubagentTaskIds, cancellationToken).ConfigureAwait(false) == ToolRoundOutcome.DoomHalted)
                 {
-                    return;
+                    // As above: leave finalText null but still run the epilogue.
+                    break;
                 }
 
                 continue;
@@ -824,19 +914,36 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
             // notification this turn consumed so none is ever re-announced.
             this.ConfirmSubagentNotificationsDelivered(consumedSubagentTaskIds);
 
+            // The text the turn actually finished on. Only set here, so every early return above
+            // reports "no clean finish" rather than leaving a caller to guess from history.
+            finalText = responseText.Length > 0 ? responseText : null;
+
             // Done -- exit the tool loop
             break;
         }
 
         // Inject proactive messages sent during this turn into target sessions.
         // Deferred until after the tool loop to avoid breaking tool_call → tool ordering.
+        var deliveredToConversation = false;
         if (turnContext.ProactiveMessages.Collected.Count > 0)
         {
+            // A proactive record carries a CHANNEL id, which is not always the conversation key —
+            // discord-voice maps to "discord-voice-{tenant}". Comparing the two directly both
+            // created a phantom session nobody reads and reported "not delivered here" for every
+            // voice conversation.
+            var (_, tenantId) = ConversationResolver.ParseConversationId(session.ConversationId);
+
             foreach (var proactive in turnContext.ProactiveMessages.Collected)
             {
-                var targetSession = this.sessions.GetOrCreateWithIdleCheck(proactive.ChannelId);
+                var targetConversationId = ConversationResolver.ResolveConversationId(
+                    proactive.ChannelId, tenantId ?? "default");
+
+                var targetSession = this.sessions.GetOrCreateWithIdleCheck(targetConversationId);
                 targetSession.AppendOrGlueAssistantMessage(FormatProactiveHistoryEntry(proactive));
                 this.LogProactiveMessageInjected(proactive.ChannelId, proactive.Text.Length);
+
+                deliveredToConversation |= string.Equals(
+                    targetConversationId, session.ConversationId, StringComparison.Ordinal);
             }
         }
 
@@ -856,6 +963,8 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
             CurrentModel = this.defaultModel,
             Uptime = DateTimeOffset.UtcNow,
         }).ConfigureAwait(false);
+
+        return new TurnOutcome(finalText, deliveredToConversation);
     }
 
     private async Task<StreamedTurn> StreamLlmTurnAsync(
@@ -1077,6 +1186,17 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
                 }
 
                 var pendingBehavior = MessageSourceBehavior.For(pending.Source);
+
+                // A focused-composer source (a fired timer) is not part of the conversation, so it
+                // must never be injected here as a user message. Hand it back to the session queue
+                // and let it have its own composer run once this turn finishes.
+                if (pendingBehavior.UsesFocusedComposer)
+                {
+                    session.EnqueuePending(pending);
+                    this.LogComposerMessageDeferred(session.ConversationId, pending.Source);
+                    continue;
+                }
+
                 var userText = pendingBehavior.PendingInjectionLabelPrefix is { } prefix
                     ? prefix + pending.Text
                     : pending.Text;
@@ -1137,8 +1257,13 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
     {
         var session = this.sessions.GetOrCreateWithIdleCheck(conversationId);
 
-        // In-memory LLM context: the agent should "remember" only what it said.
-        TruncateLastAssistantTurn(session, playedText);
+        // In-memory LLM context: the agent should "remember" only what it said. Skipped while a
+        // composer run owns the turn — this session's trailing assistant message then belongs to
+        // an earlier, finished turn, and rewriting it would destroy an unrelated reply.
+        if (!session.ForeignTurnInFlight)
+        {
+            TruncateLastAssistantTurn(session, playedText);
+        }
 
         // Durable history. Mark pending so the persist site writes playedText
         // (case 1: generation still running — the Greg case).
@@ -2289,6 +2414,12 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Proactive message injected into {ChannelId} session ({Length} chars)")]
     private partial void LogProactiveMessageInjected(string channelId, int length);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Composed timer outcome recorded on {ConversationId} ({Chars} chars)")]
+    private partial void LogComposedOutcomeRecorded(string conversationId, int chars);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Deferred {Source} on {ConversationId} to its own composer run instead of injecting it mid-turn")]
+    private partial void LogComposerMessageDeferred(string conversationId, AgentMessageSource source);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "voice: recorded barge-in truncation for {ConversationId} ({Chars} chars)")]
     private partial void LogTurnInterruptedRecorded(string conversationId, int chars);

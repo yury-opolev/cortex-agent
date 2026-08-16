@@ -222,10 +222,10 @@ internal sealed partial class TurnResponseDelivery
     {
         if (this.useProactiveDelivery)
         {
-            // Scheduled tasks: persist instruction + response to the scheduled-tasks
-            // channel via OnScheduledTaskComplete. The Bridge saves both to SQLite.
-            // The agent does NOT auto-deliver to user channels — the send_message
-            // tool is the sole mechanism for channel delivery.
+            // Scheduled tasks and timers: report the instruction + response on the scheduled-tasks
+            // channel via OnScheduledTaskComplete, as an operational record. The agent does NOT
+            // auto-deliver to user channels — the send_message tool is the sole mechanism for
+            // channel delivery.
             await this.client.OnScheduledTaskComplete(new ScheduledTaskCompleteMessage
             {
                 TaskId = this.replyConversationId,

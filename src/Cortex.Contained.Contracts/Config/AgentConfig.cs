@@ -136,6 +136,14 @@ public sealed class SessionConfig
 
     [Range(1, 1_440)]
     public int IdleResetMinutes { get; set; } = 360;
+
+    /// <summary>
+    /// How much recent conversation a fired session timer's composer run is given, counted in
+    /// turns (user and agent messages; tool traffic rides along with its turn). Enough to know
+    /// what is going on, not so much that a small, frequent call re-reads the whole chat.
+    /// </summary>
+    [Range(1, 200)]
+    public int TimerComposerTailTurns { get; set; } = 16;
 }
 
 /// <summary>Definition of an available LLM model.</summary>

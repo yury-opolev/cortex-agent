@@ -42,6 +42,24 @@ public sealed class AgentSession : IDisposable
     public string? Title { get; set; }
 
     /// <summary>
+    /// True while this conversation is hosting a turn whose HISTORY lives somewhere else — a
+    /// focused composer run. The barge-in path must not rewrite this session's trailing assistant
+    /// message in that window: it belongs to an earlier, completed turn, not to what is playing.
+    /// </summary>
+    public bool ForeignTurnInFlight { get; set; }
+
+    /// <summary>
+    /// Extra framing appended to the system prompt for this session only.
+    /// <para>
+    /// Used by a focused composer run to state plainly that the final message is the agent's own
+    /// fired intent rather than the user speaking. It has to reach the model as part of the SYSTEM
+    /// prompt: <see cref="LlmMessageType"/> is an internal routing hint that no provider client
+    /// serialises, so it cannot carry that distinction.
+    /// </para>
+    /// </summary>
+    public string? SystemPromptSuffix { get; set; }
+
+    /// <summary>
     /// <see langword="true"/> while the agent is actively producing a response for this
     /// session.
     /// </summary>
