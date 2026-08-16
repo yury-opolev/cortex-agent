@@ -51,7 +51,8 @@ internal sealed record MessageSourceBehavior(
             RunsMemoryExtraction: false,
             PendingInjectionLabelPrefix: "[Timer] ",
             PendingInjectionMessageType: LlmMessageType.ScheduledTaskInstruction),
-        AgentMessageSource.SubagentCompletion => new(            RunInEphemeralSession: false,
+        AgentMessageSource.SubagentCompletion => new(
+            RunInEphemeralSession: false,
             IsInternalToHistory: true,
             UseProactiveDelivery: false,
             HandlesSlashCommands: false,
