@@ -105,6 +105,11 @@ internal sealed partial class PromptAssembler
 
         var systemPrompt = SystemPromptRenderer.Render(config.MainTemplate, values);
 
+        if (!string.IsNullOrWhiteSpace(session.SystemPromptSuffix))
+        {
+            systemPrompt = systemPrompt + "\n\n" + session.SystemPromptSuffix;
+        }
+
         if (this.logger.IsEnabled(LogLevel.Debug))
         {
             var fingerprint = this.systemPromptStore?.Fingerprint() ?? "default";

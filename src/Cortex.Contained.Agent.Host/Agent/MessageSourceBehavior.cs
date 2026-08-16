@@ -15,7 +15,9 @@ internal sealed record MessageSourceBehavior(
     bool SetsConversationTitleFromText,
     bool RunsMemoryExtraction,
     string? PendingInjectionLabelPrefix,
-    LlmMessageType PendingInjectionMessageType)
+    LlmMessageType PendingInjectionMessageType,
+    bool UsesFocusedComposer = false,
+    bool RecordsOutcomeInConversation = false)
 {
     /// <summary>Resolves the behavior policy for a message source.</summary>
     public static MessageSourceBehavior For(AgentMessageSource source) => source switch
@@ -50,7 +52,15 @@ internal sealed record MessageSourceBehavior(
             SetsConversationTitleFromText: false,
             RunsMemoryExtraction: false,
             PendingInjectionLabelPrefix: "[Timer] ",
-            PendingInjectionMessageType: LlmMessageType.ScheduledTaskInstruction),
+            PendingInjectionMessageType: LlmMessageType.ScheduledTaskInstruction,
+
+            // A fired timer is answered by a focused run over a bounded tail of the conversation
+            // rather than by appending an instruction to it as though the user had typed one. That
+            // run uses a throwaway session of its own, so RunInEphemeralSession — which means
+            // "start from an EMPTY session" — stays false. The run is discarded, so whatever the
+            // agent decides to say is written back explicitly.
+            UsesFocusedComposer: true,
+            RecordsOutcomeInConversation: true),
         AgentMessageSource.SubagentCompletion => new(
             RunInEphemeralSession: false,
             IsInternalToHistory: true,
