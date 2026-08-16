@@ -7,18 +7,51 @@ using Microsoft.Extensions.Logging;
 
 namespace Cortex.Contained.Agent.Host.Reminders;
 
-/// <summary>A pending timer, as reported to the agent.</summary>
+/// <summary>Outcome of asking to cancel a timer.</summary>
+public enum SessionTimerCancelOutcome
+{
+    /// <summary>Cancelled before it fired.</summary>
+    Cancelled = 0,
+
+    /// <summary>No timer with that id (never existed, or fired long enough ago to be pruned).</summary>
+    NotFound = 1,
+
+    /// <summary>It already fired and the agent has it — too late to stop.</summary>
+    AlreadyFired = 2,
+}
+
+/// <summary>Lifecycle of a session timer, as reported to the agent.</summary>
+public enum SessionTimerStatus
+{
+    /// <summary>Waiting to fire. This is the only state in which it can be cancelled.</summary>
+    Pending = 0,
+
+    /// <summary>
+    /// Already fired and handed to the agent. Retained briefly so the agent can SEE that it went
+    /// off — and therefore why cancelling it now fails — rather than finding it silently absent.
+    /// </summary>
+    Fired = 1,
+}
+
+/// <summary>A timer, as reported to the agent.</summary>
 /// <param name="Id">Timer id, used to cancel it.</param>
 /// <param name="Intent">What the agent asked to happen when it fires.</param>
 /// <param name="Description">Optional short label.</param>
-/// <param name="FiresAtUtc">When it will fire.</param>
-/// <param name="SecondsRemaining">Seconds until it fires, floored at zero.</param>
-public sealed record PendingSessionTimer(
+/// <param name="Status">Whether it is still pending or has already fired.</param>
+/// <param name="FiresAtUtc">When it fires (or fired).</param>
+/// <param name="SecondsRemaining">Seconds until it fires, floored at zero. Zero once fired.</param>
+/// <param name="SecondsSinceFired">
+/// Seconds since it fired, zero while pending. "Fired two seconds ago" and "fired two minutes ago"
+/// call for very different behaviour, so the age is reported rather than just the fact.
+/// </param>
+public sealed record SessionTimerInfo(
     string Id,
     string Intent,
     string? Description,
+    SessionTimerStatus Status,
     DateTimeOffset FiresAtUtc,
-    int SecondsRemaining);
+    int SecondsRemaining,
+    int SecondsSinceFired);
 
 /// <summary>
 /// In-process, in-memory one-shot timers bound to a live conversation.
@@ -34,7 +67,7 @@ public sealed record PendingSessionTimer(
 /// agent restart. Calendar-style work belongs in <c>schedule_task</c>, which is persisted.
 /// </para>
 /// </summary>
-public sealed partial class SessionTimerService : IDisposable
+public sealed partial class SessionTimerService : IDisposable, IAsyncDisposable
 {
     /// <summary>Minimum allowed delay (seconds).</summary>
     public const int MinDelaySeconds = 1;
@@ -44,6 +77,13 @@ public sealed partial class SessionTimerService : IDisposable
 
     /// <summary>Maximum concurrent active timers per conversation.</summary>
     public const int PerConversationCap = 10;
+
+    /// <summary>
+    /// How long a fired timer stays visible in <see cref="List"/> before being pruned. It exists so
+    /// a failed cancel can say "it already fired" instead of "no such timer", which is the
+    /// difference between the agent understanding what happened and guessing.
+    /// </summary>
+    public static readonly TimeSpan FiredRetention = TimeSpan.FromMinutes(2);
 
     private readonly AgentMessageChannel queue;
     private readonly TimeProvider timeProvider;
@@ -93,6 +133,7 @@ public sealed partial class SessionTimerService : IDisposable
         }
 
         // Reserve a slot atomically against the per-conversation cap.
+        this.PruneFired(this.timeProvider.GetUtcNow());
         lock (this.countsLock)
         {
             ObjectDisposedException.ThrowIf(this.disposed, this);
@@ -109,7 +150,16 @@ public sealed partial class SessionTimerService : IDisposable
 
         var id = NewId();
         var firesAt = this.timeProvider.GetUtcNow().AddSeconds(delaySeconds);
-        var timer = new Timer(state => this.OnFire((string)state!), id, delaySeconds * 1000, Timeout.Infinite);
+
+        // Created disarmed and armed only after the entry is visible: an armed timer whose callback
+        // beat the TryAdd would find nothing and return silently, leaving a permanent zombie that
+        // never fires yet holds a cap slot.
+        var timer = this.timeProvider.CreateTimer(
+            state => this.OnFire((string)state!),
+            id,
+            Timeout.InfiniteTimeSpan,
+            Timeout.InfiniteTimeSpan);
+
         var entry = new TimerEntry
         {
             Id = id,
@@ -130,81 +180,227 @@ public sealed partial class SessionTimerService : IDisposable
             throw new InvalidOperationException("Timer id collision.");
         }
 
+        timer.Change(TimeSpan.FromSeconds(delaySeconds), Timeout.InfiniteTimeSpan);
+
+        // Re-check under the lock: the disposed check above happened before the entry existed, so a
+        // shutdown running concurrently would have swept the dictionary without seeing it, leaving
+        // an armed timer able to fire after DisposeAsync promised nothing more would.
+        bool disposedDuringSchedule;
+        lock (this.countsLock)
+        {
+            disposedDuringSchedule = this.disposed;
+        }
+
+        if (disposedDuringSchedule)
+        {
+            this.entries.TryRemove(id, out _);
+            timer.Dispose();
+            this.DecrementCount(conversationId);
+            throw new ObjectDisposedException(nameof(SessionTimerService));
+        }
+
         this.LogTimerScheduled(id, conversationId, delaySeconds, intent);
         return id;
     }
 
+    /// <summary>Live timers counted against <see cref="PerConversationCap"/>. Excludes fired ones.</summary>
+    internal int ActiveCount(string conversationId) =>
+        this.activeCountsByConversation.GetValueOrDefault(conversationId);
+
     /// <summary>
-    /// Pending timers for <paramref name="conversationId"/>, soonest first.
+    /// Timers for <paramref name="conversationId"/> — pending first, then recently fired, each
+    /// group soonest-first.
     /// <para>
     /// Without this the ids handed back by <c>create</c> were the only record a timer existed, so a
     /// context compaction left the agent unable to see — or cancel — its own timers.
     /// </para>
     /// </summary>
-    public IReadOnlyList<PendingSessionTimer> List(string conversationId)
+    public IReadOnlyList<SessionTimerInfo> List(string conversationId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(conversationId);
 
         var now = this.timeProvider.GetUtcNow();
+        this.PruneFired(now);
+
+        var listed = new List<(TimerEntry Entry, SessionTimerInfo Info)>();
+        foreach (var pair in this.entries)
+        {
+            var entry = pair.Value;
+            if (!string.Equals(entry.ConversationId, conversationId, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            // One snapshot per entry: reading the state repeatedly could report Pending alongside a
+            // fired timer's zeroed countdown.
+            var (state, firedAt) = entry.Lifecycle.Snapshot();
+            if (state == SessionTimerState.Cancelled)
+            {
+                continue;
+            }
+
+            var fired = state == SessionTimerState.Fired;
+            listed.Add((entry, new SessionTimerInfo(
+                entry.Id,
+                entry.Intent,
+                entry.Description,
+                fired ? SessionTimerStatus.Fired : SessionTimerStatus.Pending,
+                entry.FiresAtUtc,
+                fired ? 0 : (int)Math.Max(0, Math.Ceiling((entry.FiresAtUtc - now).TotalSeconds)),
+                fired && firedAt is { } at ? (int)Math.Max(0, Math.Floor((now - at).TotalSeconds)) : 0)));
+        }
+
         return
         [
-            .. this.entries.Values
-                .Where(e => string.Equals(e.ConversationId, conversationId, StringComparison.Ordinal))
-                .OrderBy(e => e.FiresAtUtc)
-                .Select(e => new PendingSessionTimer(
-                    e.Id,
-                    e.Intent,
-                    e.Description,
-                    e.FiresAtUtc,
-                    (int)Math.Max(0, Math.Ceiling((e.FiresAtUtc - now).TotalSeconds)))),
+            .. listed
+                .OrderBy(x => x.Info.Status)
+                .ThenBy(x => x.Entry.FiresAtUtc)
+                .Select(x => x.Info),
         ];
     }
 
-    /// <summary>Cancels a pending timer. Returns true if cancelled, false if unknown.</summary>
-    public bool Cancel(string timerId)
+    /// <summary>
+    /// Cancels a PENDING timer belonging to <paramref name="conversationId"/>. A timer that has
+    /// already fired cannot be cancelled — the agent has it and may already be acting on it — so
+    /// this reports failure rather than pretending.
+    /// </summary>
+    public SessionTimerCancelOutcome Cancel(string conversationId, string timerId)
     {
-        if (string.IsNullOrWhiteSpace(timerId) || !this.entries.TryRemove(timerId, out var entry))
+        ArgumentException.ThrowIfNullOrWhiteSpace(conversationId);
+
+        if (string.IsNullOrWhiteSpace(timerId))
         {
-            return false;
+            return SessionTimerCancelOutcome.NotFound;
         }
 
+        this.PruneFired(this.timeProvider.GetUtcNow());
+
+        // Scoped to the caller's conversation: the service is a process-wide singleton, so an id
+        // alone must not reach into a conversation the agent cannot even list.
+        if (!this.entries.TryGetValue(timerId, out var entry)
+            || !string.Equals(entry.ConversationId, conversationId, StringComparison.Ordinal))
+        {
+            return SessionTimerCancelOutcome.NotFound;
+        }
+
+        if (!entry.Lifecycle.TryClaimCancel())
+        {
+            // Terminal either way, so this read cannot go stale. A concurrent cancel that won is
+            // NOT "already fired" — claiming so would assert an intent was delivered when none was.
+            return entry.Lifecycle.Snapshot().State == SessionTimerState.Fired
+                ? SessionTimerCancelOutcome.AlreadyFired
+                : SessionTimerCancelOutcome.NotFound;
+        }
+
+        this.entries.TryRemove(timerId, out _);
         entry.Dispose();
         this.DecrementCount(entry.ConversationId);
         this.LogTimerCancelled(timerId, entry.ConversationId);
-        return true;
+        return SessionTimerCancelOutcome.Cancelled;
     }
 
-    public void Dispose()
+    private void PruneFired(DateTimeOffset now)
     {
-        lock (this.countsLock)
+        // Runs from every public entry point, so retention is a property of the timer rather than
+        // of whether the agent happened to call list — fired entries cannot pile up in a
+        // conversation that never lists.
+        foreach (var pair in this.entries)
         {
-            if (this.disposed)
+            var (state, firedAt) = pair.Value.Lifecycle.Snapshot();
+            if (state == SessionTimerState.Fired
+                && firedAt is { } at
+                && now - at > FiredRetention
+                && this.entries.TryRemove(pair.Key, out var stale))
             {
-                return;
+                stale.Dispose();
             }
+        }
+    }
 
-            this.disposed = true;
+    /// <summary>
+    /// Stops every timer, waiting for any callback already running so nothing can be enqueued after
+    /// this returns. Prefer this over <see cref="Dispose"/>, which cannot offer that guarantee.
+    /// </summary>
+    public async ValueTask DisposeAsync()
+    {
+        if (!this.TryBeginDispose())
+        {
+            return;
         }
 
-        // Timer.Dispose(WaitHandle) signals once the timer is fully disposed AND any pending
-        // callback has finished, so no OnFire can enqueue after Dispose returns.
-        using var doneHandle = new ManualResetEvent(false);
-        foreach (var entry in this.entries.Values)
+        foreach (var pair in this.entries)
         {
             try
             {
-                entry.Timer.Dispose(doneHandle);
-                doneHandle.WaitOne();
-                doneHandle.Reset();
+                // Unlike the synchronous Dispose, this waits for an in-flight callback to finish.
+                await pair.Value.Timer.DisposeAsync().ConfigureAwait(false);
             }
 #pragma warning disable CA1031 // Dispose must never throw
             catch (Exception ex)
 #pragma warning restore CA1031
             {
-                this.LogTimerFireFailed(entry.Id, ex.Message);
+                this.LogTimerDisposeFailed(ex, pair.Key);
             }
         }
 
+        this.ClearState();
+    }
+
+    /// <summary>
+    /// Synchronous shutdown, for containers that dispose synchronously — a singleton registered as
+    /// <see cref="IAsyncDisposable"/> only would make <c>ServiceProvider.Dispose()</c> throw. This
+    /// does NOT wait for a callback that is already running; use <see cref="DisposeAsync"/> when
+    /// that matters.
+    /// </summary>
+    public void Dispose()
+    {
+        if (!this.TryBeginDispose())
+        {
+            return;
+        }
+
+        foreach (var pair in this.entries)
+        {
+            try
+            {
+                pair.Value.Timer.Dispose();
+            }
+#pragma warning disable CA1031 // Dispose must never throw
+            catch (Exception ex)
+#pragma warning restore CA1031
+            {
+                this.LogTimerDisposeFailed(ex, pair.Key);
+            }
+        }
+
+        this.ClearState();
+    }
+
+    private bool TryBeginDispose()
+    {
+        lock (this.countsLock)
+        {
+            if (this.disposed)
+            {
+                return false;
+            }
+
+            this.disposed = true;
+        }
+
+        // Take every outstanding claim before disposing anything: a callback already past its
+        // dictionary lookup then loses its claim and stays silent, so neither disposal path can
+        // let a timer enqueue on the way out.
+        foreach (var pair in this.entries)
+        {
+            pair.Value.Lifecycle.TryClaimCancel();
+        }
+
+        return true;
+    }
+
+    private void ClearState()
+    {
         this.entries.Clear();
         this.activeCountsByConversation.Clear();
     }
@@ -238,16 +434,25 @@ public sealed partial class SessionTimerService : IDisposable
 
     private void OnFire(string timerId)
     {
-        if (!this.entries.TryRemove(timerId, out var entry))
+        if (!this.entries.TryGetValue(timerId, out var entry))
         {
             return;
         }
 
+        // Claim the transition before doing anything observable. Losing means Cancel got there
+        // first, so this callback must stay completely silent — no enqueue, no slot release —
+        // otherwise the agent is told "cancelled" and then handed the intent anyway.
+        if (!entry.Lifecycle.TryClaimFire(this.timeProvider.GetUtcNow()))
+        {
+            return;
+        }
+
+        // The slot is freed at the instant of firing: retention keeps the entry visible so the
+        // agent can see why a later cancel fails, but visibility is not a capacity reservation.
+        this.DecrementCount(entry.ConversationId);
+
         try
         {
-            entry.Timer.Dispose();
-            this.DecrementCount(entry.ConversationId);
-
             var message = new AgentMessage
             {
                 // The conversation that CREATED the timer, so the intent is evaluated against the
@@ -320,7 +525,10 @@ public sealed partial class SessionTimerService : IDisposable
 
         public required DateTimeOffset FiresAtUtc { get; init; }
 
-        public required Timer Timer { get; init; }
+        public required ITimer Timer { get; init; }
+
+        /// <summary>The one-shot claim arbitrating between firing and cancelling.</summary>
+        public SessionTimerLifecycle Lifecycle { get; } = new();
 
         public TimerEntryView ToView() => new(this.Id, this.DelaySeconds, this.Intent, this.Description);
 
@@ -341,4 +549,8 @@ public sealed partial class SessionTimerService : IDisposable
 
     [LoggerMessage(Level = LogLevel.Error, Message = "Timer {TimerId} fire failed: {ErrorMessage}")]
     private partial void LogTimerFireFailed(string timerId, string errorMessage);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Timer {TimerId} dispose failed")]
+    private partial void LogTimerDisposeFailed(Exception exception, string timerId);
 }
+
