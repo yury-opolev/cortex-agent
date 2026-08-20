@@ -199,19 +199,47 @@ internal sealed partial class DiscordVoiceHandler : IAsyncDisposable
     // re-speak the proactive message that was lost into the dead epoch.
 
     /// <summary>Window after a (re)join within which an MLS failure is attributed
-    /// to the join race and triggers a rejoin. Outside it, MLS proposals are
+    /// to the join race and arms recovery. Outside it, MLS proposals are
     /// treated as benign epoch churn.</summary>
     private static readonly TimeSpan DaveMlsJoinRaceWindow = TimeSpan.FromSeconds(20);
+
+    /// <summary>Grace period after an armed MLS failure during which the DAVE welcome
+    /// may still land and establish the group. Only if no
+    /// <see cref="DaveLifecycleEvent.SessionReady"/> arrives within it do we rejoin.
+    /// Every MLS failure observed in production healed within ~60&#160;ms; 5&#160;s is a
+    /// wide margin. See <see cref="DaveMlsRecoveryPolicy"/>.</summary>
+    private static readonly TimeSpan DaveMlsSettleWindow = TimeSpan.FromSeconds(5);
+
+    /// <summary>How long a DAVE handshake may sit unfinished, with the user present,
+    /// before the session is treated as wedged. A healthy handshake completes in under
+    /// ~100&#160;ms. See <see cref="DaveHandshakeStallPolicy"/>.</summary>
+    private static readonly TimeSpan DaveHandshakeStallWindow = TimeSpan.FromSeconds(30);
 
     /// <summary><see cref="TimeProvider.GetUtcNow"/> ticks of the last successful
     /// (re)join (0 = never joined). Used to scope MLS-failure recovery to the
     /// join-race window.</summary>
     private long lastJoinTicks;
 
-    /// <summary>Set when a join-race DAVE MLS failure is observed (via
-    /// <see cref="NotifyDaveSessionSuspect"/>); consumed by the watchdog to force
-    /// a clean rejoin even though the transport reports <c>Connected</c>.</summary>
-    private volatile bool daveSessionSuspect;
+    /// <summary><see cref="TimeProvider.GetUtcNow"/> ticks of an armed join-race DAVE
+    /// MLS failure (0 = not armed), set by <see cref="NotifyDaveSessionSuspect"/>.
+    /// The watchdog only acts on it when no <see cref="daveSessionReadyTicks"/> has
+    /// landed since — an MLS failure that heals itself must never force a rejoin.</summary>
+    private long daveMlsFailureTicks;
+
+    /// <summary><see cref="TimeProvider.GetUtcNow"/> ticks of the last DAVE handshake
+    /// start (0 = DAVE never initialised, e.g. encryption disabled).</summary>
+    private long daveHandshakeStartedTicks;
+
+    /// <summary><see cref="TimeProvider.GetUtcNow"/> ticks of the last DAVE
+    /// session-ready milestone (0 = never). Proves the MLS group is keyed in both
+    /// directions.</summary>
+    private long daveSessionReadyTicks;
+
+    /// <summary><see cref="TimeProvider.GetUtcNow"/> ticks of the first watchdog tick
+    /// that confirmed an unfinished DAVE handshake while the user was present
+    /// (0 = not currently stalling). Latched so an empty channel — where Discord
+    /// performs no protocol transition at all — can never trip the stall watchdog.</summary>
+    private long daveHandshakeStallSinceTicks;
 
     /// <summary>Text of the most recent proactive message, kept so it can be
     /// re-spoken after a DAVE-triggered rejoin (the original played into a wedged,
@@ -831,11 +859,16 @@ internal sealed partial class DiscordVoiceHandler : IAsyncDisposable
     /// <summary>
     /// Called by <see cref="DiscordChannel"/> when a DAVE <c>MLS Failure</c> log
     /// line is observed. When the failure lands inside the join-race window after
-    /// a (re)join, the encrypted group is likely wedged so the listener can't
-    /// decrypt our audio (the 2026-06-29 silent-voice outage) — flag the session
-    /// suspect so the next watchdog tick forces a clean rejoin. MLS proposals
-    /// outside that window are normal epoch churn and ignored. See
-    /// <see cref="DaveMlsRecoveryPolicy"/>.
+    /// a (re)join, the encrypted group may be wedged so the listener can't decrypt
+    /// our audio (the 2026-06-29 silent-voice outage) — arm recovery.
+    /// <para>
+    /// Arming is <em>not</em> a decision to rejoin. Discord usually follows the failure
+    /// with a welcome that establishes the group milliseconds later, and tearing down
+    /// that healthy session is what caused the 2026-08-19 100-minute outage. The
+    /// watchdog only acts if no <see cref="NotifyDaveSessionReady"/> arrives within
+    /// <see cref="DaveMlsSettleWindow"/>. MLS proposals outside the join-race window
+    /// are normal epoch churn and ignored. See <see cref="DaveMlsRecoveryPolicy"/>.
+    /// </para>
     /// </summary>
     public void NotifyDaveSessionSuspect()
     {
@@ -845,11 +878,46 @@ internal sealed partial class DiscordVoiceHandler : IAsyncDisposable
         }
 
         var joinTicks = Interlocked.Read(ref this.lastJoinTicks);
-        var sinceJoinTicks = this.timeProvider.GetUtcNow().UtcTicks - joinTicks;
-        if (DaveMlsRecoveryPolicy.ShouldRecover(joinTicks != 0, sinceJoinTicks, DaveMlsJoinRaceWindow.Ticks))
+        var nowTicks = this.timeProvider.GetUtcNow().UtcTicks;
+        if (DaveMlsRecoveryPolicy.ShouldArm(joinTicks != 0, nowTicks - joinTicks, DaveMlsJoinRaceWindow.Ticks))
         {
-            this.daveSessionSuspect = true;
+            Interlocked.Exchange(ref this.daveMlsFailureTicks, nowTicks);
         }
+    }
+
+    /// <summary>
+    /// Called by <see cref="DiscordChannel"/> when a DAVE/MLS session is initialised
+    /// and our key package is sent. Starts the handshake-stall clock and invalidates any
+    /// previous session-ready milestone, since a fresh handshake must prove itself again.
+    /// </summary>
+    public void NotifyDaveHandshakeStarted()
+    {
+        if (this.disposed)
+        {
+            return;
+        }
+
+        Interlocked.Exchange(ref this.daveHandshakeStartedTicks, this.timeProvider.GetUtcNow().UtcTicks);
+        Interlocked.Exchange(ref this.daveSessionReadyTicks, 0);
+        Interlocked.Exchange(ref this.daveHandshakeStallSinceTicks, 0);
+    }
+
+    /// <summary>
+    /// Called by <see cref="DiscordChannel"/> when the DAVE protocol transition is
+    /// prepared — the MLS group is established and both the per-sender decryptor
+    /// ratchets and our encryptor ratchet are installed. This is the authoritative
+    /// proof that the encrypted session is usable in both directions, and it both
+    /// disarms a transient MLS failure and clears the handshake-stall clock.
+    /// </summary>
+    public void NotifyDaveSessionReady()
+    {
+        if (this.disposed)
+        {
+            return;
+        }
+
+        Interlocked.Exchange(ref this.daveSessionReadyTicks, this.timeProvider.GetUtcNow().UtcTicks);
+        Interlocked.Exchange(ref this.daveHandshakeStallSinceTicks, 0);
     }
 
     /// <summary>
@@ -960,9 +1028,28 @@ internal sealed partial class DiscordVoiceHandler : IAsyncDisposable
 
         var isConnected = VoiceConnectionState.IsAlive(client.ConnectionState);
         var audioDeathSuspect = this.suspectDead;
-        var daveSuspect = this.daveSessionSuspect;
 
         var nowTicksForFlood = this.timeProvider.GetUtcNow().UtcTicks;
+
+        // An armed MLS failure only counts if the group never (re)established itself
+        // afterwards. Discord routinely follows the failure with a welcome that fixes
+        // it within milliseconds; acting on that is what wedged voice for 100 minutes
+        // on 2026-08-19.
+        var daveSuspect = DaveMlsRecoveryPolicy.ShouldRecover(
+            armedTicks: Interlocked.Read(ref this.daveMlsFailureTicks),
+            sessionReadyTicks: Interlocked.Read(ref this.daveSessionReadyTicks),
+            nowTicks: nowTicksForFlood,
+            settleWindowTicks: DaveMlsSettleWindow.Ticks);
+
+        // A DAVE handshake that started but never completed leaves the bot deaf while
+        // the transport still reports Connected and every failure counter stays at 0.
+        // Cheap local check here; the latch below only starts once the user is
+        // confirmed present, so an empty channel (no protocol transition by design)
+        // never trips it.
+        var handshakeUnhealed = isConnected && DaveHandshakeStallPolicy.IsUnhealed(
+            Interlocked.Read(ref this.daveHandshakeStartedTicks),
+            Interlocked.Read(ref this.daveSessionReadyTicks));
+
         var floodProbe = this.decryptBurstTracker.WorstActive(nowTicksForFlood);
         var floodCandidate = DaveDecryptFloodPolicy.ShouldRecover(
             userPresent: true, // real user-presence confirmed after the gate
@@ -971,9 +1058,9 @@ internal sealed partial class DiscordVoiceHandler : IAsyncDisposable
             floodThreshold: DecryptFloodThreshold,
             minWindowTicks: DecryptFloodMinWindow.Ticks);
 
-        var suspect = audioDeathSuspect || daveSuspect || floodCandidate;
+        var suspect = audioDeathSuspect || daveSuspect || floodCandidate || handshakeUnhealed;
 
-        // Healthy and no death/MLS/flood signal — the cheap steady-state path, no REST call.
+        // Healthy and no death/MLS/flood/handshake signal — the cheap steady-state path, no REST call.
         if (isConnected && !suspect)
         {
             return;
@@ -982,10 +1069,27 @@ internal sealed partial class DiscordVoiceHandler : IAsyncDisposable
         var userPresent = await IsUserInTargetChannelAsync(ct).ConfigureAwait(false);
         var floodSuspect = floodCandidate && userPresent;
         var nowTicks = this.timeProvider.GetUtcNow().UtcTicks;
+
+        // Latch the stall clock only while the user is actually present and the
+        // handshake is still unfinished; any completion or departure clears it.
+        if (handshakeUnhealed && userPresent)
+        {
+            Interlocked.CompareExchange(ref this.daveHandshakeStallSinceTicks, nowTicks, 0);
+        }
+        else
+        {
+            Interlocked.Exchange(ref this.daveHandshakeStallSinceTicks, 0);
+        }
+
+        var handshakeStallSuspect = DaveHandshakeStallPolicy.ShouldRecover(
+            Interlocked.Read(ref this.daveHandshakeStallSinceTicks),
+            nowTicks,
+            DaveHandshakeStallWindow.Ticks);
+
         var action = VoiceWatchdogDecision.Decide(
             userPresent,
             isConnected,
-            suspect,
+            audioDeathSuspect || daveSuspect || floodSuspect || handshakeStallSuspect,
             this.lastForcedReconnectTicks,
             nowTicks,
             WatchdogForceCooldown.Ticks);
@@ -995,18 +1099,28 @@ internal sealed partial class DiscordVoiceHandler : IAsyncDisposable
             case WatchdogAction.Reconnect:
                 await EnsureConnectedAsync("watchdog").ConfigureAwait(false);
                 this.suspectDead = false;
-                this.daveSessionSuspect = false;
+                Interlocked.Exchange(ref this.daveMlsFailureTicks, 0);
+                Interlocked.Exchange(ref this.daveHandshakeStallSinceTicks, 0);
                 break;
 
             case WatchdogAction.ForceReconnect:
                 this.lastForcedReconnectTicks = nowTicks;
+
+                if (handshakeStallSuspect)
+                {
+                    this.LogDaveHandshakeStall(
+                        (int)TimeSpan.FromTicks(nowTicks - Interlocked.Read(ref this.daveHandshakeStartedTicks)).TotalMilliseconds);
+                }
+
                 // A wedged MLS group reports a healthy transport, so it surfaces
                 // here as a force-reconnect just like a silent audio death. Label
                 // the trigger by cause, and — when the cause was an MLS failure —
                 // re-speak the proactive message that played into the dead epoch.
-                await ForceReconnectAsync(ForceReconnectTrigger.Resolve(daveSuspect, floodSuspect)).ConfigureAwait(false);
+                await ForceReconnectAsync(
+                    ForceReconnectTrigger.Resolve(daveSuspect, floodSuspect, handshakeStallSuspect)).ConfigureAwait(false);
                 this.suspectDead = false;
-                this.daveSessionSuspect = false;
+                Interlocked.Exchange(ref this.daveMlsFailureTicks, 0);
+                Interlocked.Exchange(ref this.daveHandshakeStallSinceTicks, 0);
 
                 // Log the shape of any run that was active *at* the forced
                 // reconnect — the exact scenario this watchdog targets — so the
@@ -1036,10 +1150,12 @@ internal sealed partial class DiscordVoiceHandler : IAsyncDisposable
                 }
 
                 this.suspectDead = false;
-                // NOTE: daveSessionSuspect is intentionally NOT cleared here. When a
-                // force is blocked only by the cooldown, the flag must persist so a
-                // later tick still heals the wedged MLS session; JoinVoiceChannelAsync
-                // clears it on the next successful (re)join.
+                // NOTE: daveMlsFailureTicks / daveHandshakeStallSinceTicks are
+                // intentionally NOT cleared here. When a force is blocked only by the
+                // cooldown, they must persist so a later tick still heals the wedged
+                // session; JoinVoiceChannelAsync clears the MLS arming on the next
+                // successful (re)join, and a DAVE session-ready milestone clears the
+                // stall latch.
                 break;
         }
     }
@@ -1460,8 +1576,15 @@ internal sealed partial class DiscordVoiceHandler : IAsyncDisposable
             // Fresh transport — clear any stale death/MLS suspicion so the watchdog
             // doesn't immediately force another reconnect, and stamp the join time
             // so a join-race MLS failure can be distinguished from later epoch churn.
+            //
+            // The DAVE handshake ticks are deliberately NOT reset here: Discord.Net
+            // logs "Init dave protocol session" while the audio client is connecting,
+            // i.e. *before* this bookkeeping runs. Clearing them would erase the record
+            // of the handshake that just started and blind the stall watchdog for the
+            // whole session. They are self-scoping instead — each new session emits its
+            // own init, which restamps the start and invalidates the previous ready.
             this.suspectDead = false;
-            this.daveSessionSuspect = false;
+            Interlocked.Exchange(ref this.daveMlsFailureTicks, 0);
             var joinNowTicks = this.timeProvider.GetUtcNow().UtcTicks;
             Interlocked.Exchange(ref this.lastJoinTicks, joinNowTicks);
 
@@ -2306,6 +2429,9 @@ internal sealed partial class DiscordVoiceHandler : IAsyncDisposable
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "voice-capture: tap failed for utt={UtteranceId}: {Error}")]
     private partial void LogVoiceCaptureFailed(string utteranceId, string error);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "voice-in: DAVE handshake never completed after {ElapsedMs}ms — session is wedged (deaf), forcing rejoin")]
+    private partial void LogDaveHandshakeStall(int elapsedMs);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "User {Username} joined voice channel {VoiceChannelId}")]
     private partial void LogUserJoinedVoice(string username, ulong voiceChannelId);

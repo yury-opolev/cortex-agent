@@ -904,6 +904,40 @@ public sealed partial class DiscordChannel : IChannelWithStreaming, IDiscordChan
             this.LogDaveMlsFailureSignal(handlers.Length);
         }
 
+        // DAVE handshake lifecycle. "Session ready" is the authoritative proof that the
+        // MLS group is established and keyed in both directions, so it both disarms a
+        // transient MLS failure (2026-08-19: acting on one that had already healed tore
+        // down a working session) and clears the handshake-stall clock. "Handshake
+        // started" arms that clock so a handshake that never completes — the wedged,
+        // permanently-deaf session — is detected instead of lasting until the user gives up.
+        //
+        // Like the MLS-failure signal above, these lines carry no tenant/user id (only a
+        // "Dave #N" client number, which Discord.Net keeps internal), so they broadcast to
+        // every handler. Harmless for the single-guild deployment; if this ever runs
+        // multi-tenant, a cross-tenant "ready" could mask another tenant's stall and the
+        // signal would need correlating by audio-client identity.
+        var lifecycle = DaveSessionLifecycleClassifier.Classify(logMsg.Source, logMsg.Message);
+        if (lifecycle is not DaveLifecycleEvent.None)
+        {
+            DiscordVoiceHandler[] handlers;
+            lock (this.voiceHandlersLock)
+            {
+                handlers = [.. this.voiceHandlers.Values];
+            }
+
+            foreach (var handler in handlers)
+            {
+                if (lifecycle is DaveLifecycleEvent.SessionReady)
+                {
+                    handler.NotifyDaveSessionReady();
+                }
+                else
+                {
+                    handler.NotifyDaveHandshakeStarted();
+                }
+            }
+        }
+
         // Inbound decrypt failures feed the per-handler flood tracker that drives
         // decrypt-flood recovery (2026-07-08 deaf-bot outage).
         if (kind is DaveEventKind.DecryptFailure)
