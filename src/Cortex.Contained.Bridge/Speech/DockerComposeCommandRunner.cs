@@ -85,6 +85,14 @@ public sealed partial class DockerComposeCommandRunner : IComposeCommandRunner, 
         => this.IsContainerRunningAsync(SttContainerName, cancellationToken);
 
     /// <inheritdoc />
+    public Task<bool> RestartSttAsync(CancellationToken cancellationToken)
+        => this.RunCommandAsync(
+            // Model reload on boot is slow, so reuse the generous start window.
+            $"compose -f \"{this.composeFilePath}\" --profile voice restart stt",
+            StartTimeout,
+            cancellationToken);
+
+    /// <inheritdoc />
     public Task<bool> StartEmbeddingsAsync(CancellationToken cancellationToken)
         => this.RunCommandAsync(
             $"compose -f \"{this.composeFilePath}\" --profile memory up -d embeddings",

@@ -34,20 +34,20 @@ public sealed class RemoteTtsProviderTests
             [new TtsVoiceInfo("af_heart", "en", VoiceGender.Female)]);
     }
 
-    private sealed class RecordingFaultListener : ITtsFaultListener
+    private sealed class RecordingFaultListener : ISpeechSidecarFaultListener
     {
-        public List<(string Engine, int StatusCode)> Faults { get; } = [];
+        public List<(SpeechSidecar Sidecar, string Detail, int StatusCode)> Faults { get; } = [];
 
-        public List<string> Successes { get; } = [];
+        public List<SpeechSidecar> Successes { get; } = [];
 
-        public void OnSynthesisFault(string engineName, int statusCode)
-            => this.Faults.Add((engineName, statusCode));
+        public void OnSidecarFault(SpeechSidecar sidecar, string detail, int statusCode)
+            => this.Faults.Add((sidecar, detail, statusCode));
 
-        public void OnSynthesisSuccess(string engineName) => this.Successes.Add(engineName);
+        public void OnSidecarSuccess(SpeechSidecar sidecar) => this.Successes.Add(sidecar);
     }
 
     private static RemoteTtsProvider Make(
-        StubHandler handler, ITtsFaultListener listener, string engine = "kokoro")
+        StubHandler handler, ISpeechSidecarFaultListener listener, string engine = "kokoro")
     {
         var http = new HttpClient(handler) { BaseAddress = new Uri("http://localhost:8000") };
         return new RemoteTtsProvider(engine, http, NullLoggerFactory.Instance,
@@ -63,19 +63,19 @@ public sealed class RemoteTtsProviderTests
     }
 
     [Fact]
-    public async Task SynthesizeStreaming_ServerError_ReportsFault()
+    public async Task SynthesizeStreaming_ServerError_ReportsTtsFault()
     {
         var listener = new RecordingFaultListener();
         var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.InternalServerError));
 
         await DrainAsync(Make(handler, listener));
 
-        Assert.Equal(("kokoro", 500), Assert.Single(listener.Faults));
+        Assert.Equal((SpeechSidecar.Tts, "kokoro", 500), Assert.Single(listener.Faults));
         Assert.Empty(listener.Successes);
     }
 
     [Fact]
-    public async Task SynthesizeStreaming_Success_ReportsSuccess()
+    public async Task SynthesizeStreaming_Success_ReportsTtsSuccess()
     {
         var listener = new RecordingFaultListener();
         var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
@@ -85,7 +85,7 @@ public sealed class RemoteTtsProviderTests
 
         await DrainAsync(Make(handler, listener));
 
-        Assert.Equal("kokoro", Assert.Single(listener.Successes));
+        Assert.Equal(SpeechSidecar.Tts, Assert.Single(listener.Successes));
         Assert.Empty(listener.Faults);
     }
 

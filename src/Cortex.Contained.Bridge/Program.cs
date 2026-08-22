@@ -230,7 +230,8 @@ if (speechNeeded)
     builder.Services.AddSingleton<ISpeechToText>(sp =>
         new Cortex.Contained.Speech.Stt.RemoteSpeechToText(
             sp.GetRequiredService<IHttpClientFactory>().CreateClient("stt-sidecar"),
-            sp.GetRequiredService<ILoggerFactory>()));
+            sp.GetRequiredService<ILoggerFactory>(),
+            sp.GetRequiredService<Cortex.Contained.Bridge.Speech.SpeechSidecarFaultRecovery>()));
 
     // Streaming STT wrapper. Wraps the batch ISpeechToText (now remote) — the
     // same instance the VAD-driven consumers (Discord voice handler, local voice
@@ -309,7 +310,7 @@ if (speechNeeded)
         var httpFactory = sp.GetRequiredService<IHttpClientFactory>();
         // Shared across engines: a poisoned CUDA context kills the whole sidecar
         // process, so every engine's failures count toward the same restart decision.
-        var faults = sp.GetRequiredService<Cortex.Contained.Bridge.Speech.UniVoicesFaultRecovery>();
+        var faults = sp.GetRequiredService<Cortex.Contained.Bridge.Speech.SpeechSidecarFaultRecovery>();
         HttpClient Client() => httpFactory.CreateClient("danish-tts");
         return new List<ITtsProvider>
         {
@@ -1087,9 +1088,9 @@ builder.Services.AddSingleton<Cortex.Contained.Bridge.Speech.IEmbeddingsComposeR
 builder.Services.AddSingleton<Cortex.Contained.Bridge.Speech.IVoiceIdComposeRunner>(
     sp => sp.GetRequiredService<Cortex.Contained.Bridge.Speech.DockerComposeCommandRunner>());
 builder.Services.AddSingleton<Cortex.Contained.Bridge.Speech.DanishTtsLifecycle>();
-// Restarts uni-voices when it reports healthy but fails every synthesis (poisoned
-// CUDA context) — otherwise voice stays dead until someone notices by ear.
-builder.Services.AddSingleton<Cortex.Contained.Bridge.Speech.UniVoicesFaultRecovery>();
+// Restarts uni-voices / whisper-stt when they report healthy but fail every request
+// (poisoned CUDA context) — otherwise voice stays dead until someone notices by ear.
+builder.Services.AddSingleton<Cortex.Contained.Bridge.Speech.SpeechSidecarFaultRecovery>();
 builder.Services.AddSingleton<Cortex.Contained.Bridge.Speech.SttSidecarLifecycle>();
 builder.Services.AddSingleton<Cortex.Contained.Bridge.Speech.EmbeddingsSidecarLifecycle>();
 builder.Services.AddSingleton<Cortex.Contained.Bridge.Speech.VoiceIdSidecarLifecycle>();

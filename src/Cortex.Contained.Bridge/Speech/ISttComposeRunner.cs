@@ -16,6 +16,13 @@ public interface ISttComposeRunner
     /// <summary>`docker compose --profile voice stop stt`. Returns true on exit 0.</summary>
     Task<bool> StopSttAsync(CancellationToken cancellationToken);
 
+    /// <summary>
+    /// `docker compose --profile voice restart stt`. Returns true on exit 0.
+    /// Used to recover a sidecar whose CUDA context has been poisoned — that fault is
+    /// sticky for the process lifetime, so only a fresh process fixes it.
+    /// </summary>
+    Task<bool> RestartSttAsync(CancellationToken cancellationToken);
+
     /// <summary>True if the `cortex-stt` container is currently running.</summary>
     Task<bool> IsSttRunningAsync(CancellationToken cancellationToken);
 }
