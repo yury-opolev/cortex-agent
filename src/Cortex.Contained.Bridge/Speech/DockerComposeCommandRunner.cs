@@ -57,6 +57,16 @@ public sealed partial class DockerComposeCommandRunner : IComposeCommandRunner, 
         => this.IsContainerRunningAsync(DanishContainerName, cancellationToken);
 
     /// <inheritdoc />
+    public async Task<bool> RestartDanishAsync(CancellationToken cancellationToken)
+    {
+        // Model reload on boot is slow, so reuse the generous start window.
+        return await this.RunCommandAsync(
+            $"compose -f \"{this.composeFilePath}\" --profile tts restart uni-voices",
+            StartTimeout,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
     public Task<bool> StartSttAsync(CancellationToken cancellationToken)
         => this.RunCommandAsync(
             $"compose -f \"{this.composeFilePath}\" --profile voice up -d stt",

@@ -307,6 +307,9 @@ if (speechNeeded)
     {
         var lf = sp.GetRequiredService<ILoggerFactory>();
         var httpFactory = sp.GetRequiredService<IHttpClientFactory>();
+        // Shared across engines: a poisoned CUDA context kills the whole sidecar
+        // process, so every engine's failures count toward the same restart decision.
+        var faults = sp.GetRequiredService<Cortex.Contained.Bridge.Speech.UniVoicesFaultRecovery>();
         HttpClient Client() => httpFactory.CreateClient("danish-tts");
         return new List<ITtsProvider>
         {
@@ -314,17 +317,17 @@ if (speechNeeded)
             [
                 new TtsVoiceInfo("af_heart", "en", VoiceGender.Female, "American — Heart"),
                 new TtsVoiceInfo("am_adam", "en", VoiceGender.Male, "American — Adam"),
-            ]),
+            ], faults),
             new Cortex.Contained.Speech.Tts.RemoteTtsProvider("roest-da", Client(), lf,
             [
                 new TtsVoiceInfo("nic", "da", VoiceGender.Female, "Røst-v3 Danish (female)"),
                 new TtsVoiceInfo("mic", "da", VoiceGender.Male, "Røst-v3 Danish (male)"),
-            ]),
+            ], faults),
             new Cortex.Contained.Speech.Tts.RemoteTtsProvider("silero-v5-russian", Client(), lf,
             [
                 new TtsVoiceInfo("kseniya", "ru", VoiceGender.Female, "Silero RU — Kseniya"),
                 new TtsVoiceInfo("aidar", "ru", VoiceGender.Male, "Silero RU — Aidar"),
-            ]),
+            ], faults),
         };
     });
 
@@ -1084,6 +1087,9 @@ builder.Services.AddSingleton<Cortex.Contained.Bridge.Speech.IEmbeddingsComposeR
 builder.Services.AddSingleton<Cortex.Contained.Bridge.Speech.IVoiceIdComposeRunner>(
     sp => sp.GetRequiredService<Cortex.Contained.Bridge.Speech.DockerComposeCommandRunner>());
 builder.Services.AddSingleton<Cortex.Contained.Bridge.Speech.DanishTtsLifecycle>();
+// Restarts uni-voices when it reports healthy but fails every synthesis (poisoned
+// CUDA context) — otherwise voice stays dead until someone notices by ear.
+builder.Services.AddSingleton<Cortex.Contained.Bridge.Speech.UniVoicesFaultRecovery>();
 builder.Services.AddSingleton<Cortex.Contained.Bridge.Speech.SttSidecarLifecycle>();
 builder.Services.AddSingleton<Cortex.Contained.Bridge.Speech.EmbeddingsSidecarLifecycle>();
 builder.Services.AddSingleton<Cortex.Contained.Bridge.Speech.VoiceIdSidecarLifecycle>();

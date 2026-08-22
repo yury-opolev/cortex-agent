@@ -34,6 +34,61 @@ public sealed class RemoteTtsProviderTests
             [new TtsVoiceInfo("af_heart", "en", VoiceGender.Female)]);
     }
 
+    private sealed class RecordingFaultListener : ITtsFaultListener
+    {
+        public List<(string Engine, int StatusCode)> Faults { get; } = [];
+
+        public List<string> Successes { get; } = [];
+
+        public void OnSynthesisFault(string engineName, int statusCode)
+            => this.Faults.Add((engineName, statusCode));
+
+        public void OnSynthesisSuccess(string engineName) => this.Successes.Add(engineName);
+    }
+
+    private static RemoteTtsProvider Make(
+        StubHandler handler, ITtsFaultListener listener, string engine = "kokoro")
+    {
+        var http = new HttpClient(handler) { BaseAddress = new Uri("http://localhost:8000") };
+        return new RemoteTtsProvider(engine, http, NullLoggerFactory.Instance,
+            [new TtsVoiceInfo("af_heart", "en", VoiceGender.Female)], listener);
+    }
+
+    private static async Task DrainAsync(RemoteTtsProvider provider)
+    {
+        await foreach (var _ in provider.SynthesizeStreamingAsync("hi", "af_heart"))
+        {
+            // Consume the stream so the request completes.
+        }
+    }
+
+    [Fact]
+    public async Task SynthesizeStreaming_ServerError_ReportsFault()
+    {
+        var listener = new RecordingFaultListener();
+        var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.InternalServerError));
+
+        await DrainAsync(Make(handler, listener));
+
+        Assert.Equal(("kokoro", 500), Assert.Single(listener.Faults));
+        Assert.Empty(listener.Successes);
+    }
+
+    [Fact]
+    public async Task SynthesizeStreaming_Success_ReportsSuccess()
+    {
+        var listener = new RecordingFaultListener();
+        var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new ByteArrayContent([1, 0, 2, 0]),
+        });
+
+        await DrainAsync(Make(handler, listener));
+
+        Assert.Equal("kokoro", Assert.Single(listener.Successes));
+        Assert.Empty(listener.Faults);
+    }
+
     [Fact]
     public async Task SynthesizeStreaming_SendsEngineAndReturnsPcm()
     {
