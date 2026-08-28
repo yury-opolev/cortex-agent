@@ -65,7 +65,7 @@ public sealed class TurnResponseDeliveryTests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task DeliverPreToolTextAsync_ProactiveMode_PersistsButDoesNotDeliver()
+    public async Task DeliverPreToolTextAsync_ProactiveMode_PersistsAsInternalAndDoesNotDeliver()
     {
         var delivery = this.NewDelivery(proactive: true);
 
@@ -74,8 +74,13 @@ public sealed class TurnResponseDeliveryTests : IAsyncDisposable
         Assert.NotNull(id);
         // Scheduled tasks never auto-deliver to user channels.
         await this.client.DidNotReceive().OnResponseComplete(Arg.Any<ResponseCompleteMessage>());
-        var saved = await this.store.GetMessagesAsync("chan-1");
-        Assert.Contains(saved, m => m.Content == "scheduled narration");
+
+        // Persisted for diagnostics, but Internal: the user never received this narration, so it
+        // must not appear in the chat UI or be seeded back as a message with no cause.
+        var visible = await this.store.GetMessagesAsync("chan-1");
+        Assert.DoesNotContain(visible, m => m.Content == "scheduled narration");
+        var all = await this.store.GetMessagesAsync("chan-1", visibility: MessageVisibility.All);
+        Assert.Contains(all, m => m.Content == "scheduled narration" && m.Category == MessageCategory.Internal);
     }
 
     [Fact]
@@ -204,8 +209,13 @@ public sealed class TurnResponseDeliveryTests : IAsyncDisposable
         await this.client.Received(1).OnScheduledTaskComplete(Arg.Is<ScheduledTaskCompleteMessage>(
             m => m.ResponseText == "task result" && m.InstructionText == "do the thing"));
         await this.client.DidNotReceive().OnResponseComplete(Arg.Any<ResponseCompleteMessage>());
-        var saved = await this.store.GetMessagesAsync("chan-1");
-        Assert.Contains(saved, m => m.Content == "task result");
+
+        // A proactive turn's own text reached nobody — only send_message does that — so it is
+        // persisted Internal rather than shown in the chat UI as something the user received.
+        var visible = await this.store.GetMessagesAsync("chan-1");
+        Assert.DoesNotContain(visible, m => m.Content == "task result");
+        var all = await this.store.GetMessagesAsync("chan-1", visibility: MessageVisibility.All);
+        Assert.Contains(all, m => m.Content == "task result" && m.Category == MessageCategory.Internal);
     }
 
     [Fact]

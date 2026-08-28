@@ -25,17 +25,38 @@ public sealed partial class RemoteSpeechToText : ISpeechToText
 {
     private readonly HttpClient http;
     private readonly ILogger<RemoteSpeechToText> logger;
+    private readonly ISpeechSidecarFaultListener? faultListener;
     // Optimistically ready (like RemoteTtsProvider) so voice consumers can wire up
     // without a blocking probe; CheckReadyAsync flips this to the live /health state.
     private volatile bool ready = true;
     private string language = "auto";
 
-    public RemoteSpeechToText(HttpClient http, ILoggerFactory loggerFactory)
+    public RemoteSpeechToText(
+        HttpClient http,
+        ILoggerFactory loggerFactory,
+        ISpeechSidecarFaultListener? faultListener = null)
     {
         ArgumentNullException.ThrowIfNull(http);
         ArgumentNullException.ThrowIfNull(loggerFactory);
         this.http = http;
         this.logger = loggerFactory.CreateLogger<RemoteSpeechToText>();
+        this.faultListener = faultListener;
+    }
+
+    /// <summary>
+    /// Records a sidecar response so a permanently-failing whisper-stt can be detected.
+    /// A 204 (no speech) is a healthy answer, so it counts as a success.
+    /// </summary>
+    private void ReportOutcome(string path, HttpResponseMessage response)
+    {
+        if (response.IsSuccessStatusCode)
+        {
+            this.faultListener?.OnSidecarSuccess(SpeechSidecar.Stt);
+        }
+        else
+        {
+            this.faultListener?.OnSidecarFault(SpeechSidecar.Stt, path, (int)response.StatusCode);
+        }
     }
 
     /// <inheritdoc />
@@ -61,6 +82,7 @@ public sealed partial class RemoteSpeechToText : ISpeechToText
 
         using var response = await this.PostPcmAsync("/v1/transcribe", pcmData, prompt: null, cancellationToken)
             .ConfigureAwait(false);
+        this.ReportOutcome("/v1/transcribe", response);
         if (response.StatusCode == HttpStatusCode.NoContent)
         {
             return null;
@@ -83,6 +105,7 @@ public sealed partial class RemoteSpeechToText : ISpeechToText
 
         using var response = await this.PostPcmAsync("/v1/transcribe/detailed", pcmData, prompt, cancellationToken)
             .ConfigureAwait(false);
+        this.ReportOutcome("/v1/transcribe/detailed", response);
         if (response.StatusCode == HttpStatusCode.NoContent)
         {
             return null;

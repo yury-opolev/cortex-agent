@@ -172,6 +172,14 @@ public sealed class AgentSession : IDisposable
         this.history.Add(message);
 
     /// <summary>
+    /// Append a group of messages atomically, without gluing onto the preceding assistant turn.
+    /// Used for proactive-delivery traces, which must stay structurally separate from whatever
+    /// the conversation was last saying.
+    /// </summary>
+    public void AppendMessageGroup(IReadOnlyList<LlmMessage> group) =>
+        this.history.AddGroup(group);
+
+    /// <summary>
     /// Appends an assistant message to the session history. If the last message is
     /// already an assistant message (without tool calls), glues the new content onto it
     /// with a separator. This prevents consecutive assistant messages which OpenAI and

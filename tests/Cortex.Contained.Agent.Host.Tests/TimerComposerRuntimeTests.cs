@@ -104,15 +104,17 @@ public sealed class TimerComposerRuntimeTests : IAsyncLifetime
 
     private static async Task<LlmMessage> WaitForComposedOutcomeAsync(AgentSession session, int timeoutMs = 10_000)
     {
-        // Must wait for a NEW agent message: the seeded conversation may already end on one, so
+        // Must wait for a NEW message: the seeded conversation may already end on an agent turn, so
         // "is there an assistant message?" would return before the timer had been processed at all.
+        // A run that sent nothing leaves the not-delivered trace, which is the outcome here.
         var deadline = Environment.TickCount64 + timeoutMs;
         while (Environment.TickCount64 < deadline)
         {
-            var assistant = session.GetHistory().LastOrDefault(m => m.Role == "assistant");
-            if (assistant?.Content?.Contains(ComposedReply, StringComparison.Ordinal) == true)
+            var trace = session.GetHistory().LastOrDefault(
+                m => m.MessageType == LlmMessageType.ProactiveDeliveryTrace && m.Role == "assistant");
+            if (trace is not null)
             {
-                return assistant;
+                return trace;
             }
 
             await Task.Delay(25);
@@ -136,21 +138,33 @@ public sealed class TimerComposerRuntimeTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task What_the_agent_decides_to_say_becomes_agent_content_in_the_conversation()
+    public async Task An_undelivered_timer_run_is_never_recorded_as_something_the_agent_said()
     {
+        // Telemetry 2026-08-24: a fired timer whose run produced only text (no send_message) had
+        // that text written back as an assistant turn. Nothing had actually reached the user, so
+        // the agent believed it had spoken and defended the phantom cue — "I spoke the cue each
+        // time" — against a user repeating "I have not heard this".
         var session = this.SeedConversation(("user", "we're on round 1"), ("assistant", "noted"));
 
         this.FireTimer("call the next round");
-        var assistant = await WaitForComposedOutcomeAsync(session);
+        var trace = await WaitForComposedOutcomeAsync(session);
 
-        Assert.Contains("Round 2 — guards up!", assistant.Content, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            session.GetHistory(),
+            m => m.MessageType != LlmMessageType.ProactiveDeliveryTrace
+                 && m.Content?.Contains(ComposedReply, StringComparison.Ordinal) == true);
+
+        // What IS recorded says plainly that nothing reached the user, and is internal so it can
+        // never surface in the chat UI as a message the user supposedly received.
+        Assert.Contains("nothing was delivered", trace.Content, StringComparison.OrdinalIgnoreCase);
+        Assert.True(trace.IsInternal);
     }
 
     [Fact]
     public async Task Consecutive_agent_messages_are_merged_so_the_provider_never_sees_two_in_a_row()
     {
-        // The conversation already ends on an agent turn, so the composed outcome must glue onto
-        // it rather than append a second assistant message.
+        // The conversation already ends on an agent turn, so the trace recorded for the fired timer
+        // must open on something that is not an assistant message.
         var session = this.SeedConversation(("user", "we're on round 1"), ("assistant", "noted"));
 
         this.FireTimer("call the next round");
@@ -297,7 +311,10 @@ public sealed class TimerComposerRuntimeTests : IAsyncLifetime
         Assert.DoesNotContain(
             session.GetHistory(),
             m => m.Content?.Contains("Let me check the score first.", StringComparison.Ordinal) == true);
-        Assert.Equal("noted", session.GetHistory()[^1].Content);
+
+        // The conversation gains only the internal not-delivered trace — no half-thought the model
+        // would later read back as its own prior utterance.
+        Assert.Equal("noted", session.GetHistory().Last(m => !m.IsInternal).Content);
     }
 
     private static async IAsyncEnumerable<LlmStreamChunk> ToolCallWithNarration(string narration)

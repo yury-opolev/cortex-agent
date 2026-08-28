@@ -89,6 +89,17 @@ public enum LlmMessageType
     /// In LLM context: yes. Seed: yes (also in SQLite).
     /// </summary>
     Proactive,
+
+    /// <summary>
+    /// Synthetic tool-call trace recording that a proactive delivery happened — the assistant
+    /// <c>send_message</c> call and its delivery receipt, reconstructed in the TARGET conversation.
+    /// The send itself is made from another session (an ephemeral scheduled-task run, or a fired
+    /// timer's focused run), so without this trace the delivered text appears in the target
+    /// conversation with no cause, and the model concludes it fabricated the message.
+    /// In LLM context: yes. Seed: no. Chat UI: no (the delivered text is a separate
+    /// <see cref="Proactive"/> message, which stays visible).
+    /// </summary>
+    ProactiveDeliveryTrace,
 }
 
 /// <summary>A message in an LLM conversation.</summary>

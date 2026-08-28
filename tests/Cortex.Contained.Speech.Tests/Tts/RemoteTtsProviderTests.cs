@@ -34,6 +34,61 @@ public sealed class RemoteTtsProviderTests
             [new TtsVoiceInfo("af_heart", "en", VoiceGender.Female)]);
     }
 
+    private sealed class RecordingFaultListener : ISpeechSidecarFaultListener
+    {
+        public List<(SpeechSidecar Sidecar, string Detail, int StatusCode)> Faults { get; } = [];
+
+        public List<SpeechSidecar> Successes { get; } = [];
+
+        public void OnSidecarFault(SpeechSidecar sidecar, string detail, int statusCode)
+            => this.Faults.Add((sidecar, detail, statusCode));
+
+        public void OnSidecarSuccess(SpeechSidecar sidecar) => this.Successes.Add(sidecar);
+    }
+
+    private static RemoteTtsProvider Make(
+        StubHandler handler, ISpeechSidecarFaultListener listener, string engine = "kokoro")
+    {
+        var http = new HttpClient(handler) { BaseAddress = new Uri("http://localhost:8000") };
+        return new RemoteTtsProvider(engine, http, NullLoggerFactory.Instance,
+            [new TtsVoiceInfo("af_heart", "en", VoiceGender.Female)], listener);
+    }
+
+    private static async Task DrainAsync(RemoteTtsProvider provider)
+    {
+        await foreach (var _ in provider.SynthesizeStreamingAsync("hi", "af_heart"))
+        {
+            // Consume the stream so the request completes.
+        }
+    }
+
+    [Fact]
+    public async Task SynthesizeStreaming_ServerError_ReportsTtsFault()
+    {
+        var listener = new RecordingFaultListener();
+        var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.InternalServerError));
+
+        await DrainAsync(Make(handler, listener));
+
+        Assert.Equal((SpeechSidecar.Tts, "kokoro", 500), Assert.Single(listener.Faults));
+        Assert.Empty(listener.Successes);
+    }
+
+    [Fact]
+    public async Task SynthesizeStreaming_Success_ReportsTtsSuccess()
+    {
+        var listener = new RecordingFaultListener();
+        var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new ByteArrayContent([1, 0, 2, 0]),
+        });
+
+        await DrainAsync(Make(handler, listener));
+
+        Assert.Equal(SpeechSidecar.Tts, Assert.Single(listener.Successes));
+        Assert.Empty(listener.Faults);
+    }
+
     [Fact]
     public async Task SynthesizeStreaming_SendsEngineAndReturnsPcm()
     {

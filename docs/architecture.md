@@ -152,6 +152,23 @@ When a proactive message targets a Discord voice channel and the user isn't pres
 
 This is reused by both `send_message` and `transfer_session`, so the user always gets a reasonable delivery path regardless of presence.
 
+### Proactive delivery trace (`AgentRuntime.BuildProactiveDeliveryGroup`)
+
+A proactive send is issued from a session the *target* conversation cannot see — an ephemeral `scheduled-{taskId}` run, or a fired timer's focused `IntentComposer` run. After the tool loop, the delivered text is injected into the target channel's session history. Injecting it as a bare assistant message left it with no cause: the model found no tool call behind its own words and concluded it had fabricated them, retracting true messages to the user ("those sleep numbers were not real; I made no tool call"). Gluing it onto the previous assistant turn made it worse, producing single messages that read *"…ninety seconds resting. / Rest is up."* — an in-context example the model then reproduced in one turn, announcing a timer the moment it set it.
+
+So a delivery is recorded as a complete, well-formed turn (never glued):
+
+| Role | Type | Content |
+|------|------|---------|
+| `user` | `ProactiveDeliveryTrace` | `[automated notice — the user did not say this]` + the trigger (`scheduled task …` / `timer …`) and the fact it ran in its own session |
+| `assistant` | `ProactiveDeliveryTrace` | tool call: `send_message(channel, text)` — the real tool name and argument shape |
+| `tool` | `ProactiveDeliveryTrace` | delivery receipt: where, when, "already received — do not retract" |
+| `assistant` | `Proactive` | the delivered text, verbatim — the only visible message |
+
+`ProactiveDeliveryTrace` is internal (hidden from the chat UI and from re-seeding), so the explanation never leaks into what the user sees — the constraint that ruled out annotating the text itself. The group opens on a `user` message because the target conversation usually ends on an assistant turn and consecutive assistant messages are rejected by OpenAI/Copilot. Receipts are exempt from `ContextManager.PruneToolResults`.
+
+A timer run that produces text but never calls `send_message` delivered *nothing*: only the trigger notice plus an internal `[nothing was delivered]` marker is recorded, and the undelivered wording is dropped rather than written back as agent speech. For the same reason a proactive turn's own narration is persisted as `MessageCategory.Internal` — the user never received it.
+
 ## Memory system
 
 ### Pre-fetch (before each LLM call)

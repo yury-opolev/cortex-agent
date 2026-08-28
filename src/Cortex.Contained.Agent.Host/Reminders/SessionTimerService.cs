@@ -432,6 +432,16 @@ public sealed partial class SessionTimerService : IDisposable, IAsyncDisposable
         return sb.ToString();
     }
 
+    /// <summary>
+    /// Names the timer as the cause of anything the fired run sends. The run happens in a
+    /// throwaway focused session, so the live conversation has no other record of why a cue
+    /// suddenly appeared in it.
+    /// </summary>
+    internal static string BuildTriggerLabel(TimerEntryView entry) =>
+        string.IsNullOrWhiteSpace(entry.Description)
+            ? $"timer {entry.Id}, set {entry.DelaySeconds}s earlier"
+            : $"timer {entry.Id} (\"{entry.Description}\"), set {entry.DelaySeconds}s earlier";
+
     private void OnFire(string timerId)
     {
         if (!this.entries.TryGetValue(timerId, out var entry))
@@ -463,6 +473,7 @@ public sealed partial class SessionTimerService : IDisposable, IAsyncDisposable
                 Source = AgentMessageSource.SessionTimer,
                 CorrelationId = Guid.NewGuid().ToString("N"),
                 Timestamp = this.timeProvider.GetUtcNow(),
+                TriggerLabel = BuildTriggerLabel(entry.ToView()),
             };
 
             if (!this.queue.TryEnqueue(message))

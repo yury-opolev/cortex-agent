@@ -47,6 +47,15 @@ public sealed record AgentMessage
     public DateTimeOffset Timestamp { get; init; } = DateTimeOffset.UtcNow;
 
     /// <summary>
+    /// Short description of what caused this message, for the delivery trace written into the
+    /// target conversation when the turn sends something (e.g.
+    /// <c>scheduled task 1bffa504 ("Daily next-day weather report")</c>). Null for user messages,
+    /// which need no explanation. Without it a scheduled or timer-driven send lands in the user's
+    /// conversation with no cause and the model reads that absence as proof it invented the text.
+    /// </summary>
+    public string? TriggerLabel { get; init; }
+
+    /// <summary>
     /// Whether this message originated from a voice channel (real-time STT).
     /// When true, the agent adjusts its response style for spoken output.
     /// </summary>

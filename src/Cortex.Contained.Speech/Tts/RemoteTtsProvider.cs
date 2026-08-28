@@ -26,6 +26,7 @@ public sealed partial class RemoteTtsProvider : ITtsProvider
     private readonly HttpClient http;
     private readonly ILogger<RemoteTtsProvider> logger;
     private readonly List<TtsVoiceInfo> voices;
+    private readonly ISpeechSidecarFaultListener? faultListener;
     // Optimistically ready so CompositeTtsEngine routes language→engine without a
     // separate probe; a failed/just-down sidecar simply yields no audio for that
     // sentence (no crash). CheckReadyAsync flips this to the live /health state
@@ -36,13 +37,15 @@ public sealed partial class RemoteTtsProvider : ITtsProvider
         string engineName,
         HttpClient http,
         ILoggerFactory loggerFactory,
-        IReadOnlyList<TtsVoiceInfo> voices)
+        IReadOnlyList<TtsVoiceInfo> voices,
+        ISpeechSidecarFaultListener? faultListener = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(engineName);
         this.engineName = engineName;
         this.http = http;
         this.logger = loggerFactory.CreateLogger<RemoteTtsProvider>();
         this.voices = [.. voices];
+        this.faultListener = faultListener;
     }
 
     /// <inheritdoc />
@@ -121,8 +124,11 @@ public sealed partial class RemoteTtsProvider : ITtsProvider
         if (!resp.IsSuccessStatusCode)
         {
             this.LogSynthFailed((int)resp.StatusCode, this.engineName, voiceName);
+            this.faultListener?.OnSidecarFault(SpeechSidecar.Tts, this.engineName, (int)resp.StatusCode);
             yield break;
         }
+
+        this.faultListener?.OnSidecarSuccess(SpeechSidecar.Tts);
 
         await using var stream = await resp.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
         var buffer = new byte[8192];

@@ -3,6 +3,8 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Threading.Channels;
 using Cortex.Contained.Agent.Host.Hubs;
 using Cortex.Contained.Agent.Host.Mcp;
@@ -673,15 +675,14 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
             // since clocks across processes aren't perfectly aligned.
             var queueWaitMs = (long)Math.Max(0, (DateTimeOffset.UtcNow - message.Timestamp).TotalMilliseconds);
 
-            var turn = await GenerateResponseAsync(session, message.ConversationId, message.ChannelId, message.CorrelationId, useProactiveDelivery, sanitizedText, message.IsVoice, queueWaitMs, consumedSubagentTaskIds, generationToken)
+            var turn = await GenerateResponseAsync(session, message.ConversationId, message.ChannelId, message.CorrelationId, useProactiveDelivery, sanitizedText, message.IsVoice, queueWaitMs, consumedSubagentTaskIds, message.TriggerLabel, generationToken)
                 .ConfigureAwait(false);
 
-            // The composer session is discarded, so whatever the agent decided to say has to be
-            // written back explicitly — as AGENT content, glued onto a trailing assistant message
-            // so the provider never sees two assistant turns in a row.
+            // The composer session is discarded. Anything it produced but did NOT send is recorded
+            // as an internal trace, never as agent speech — see RecordComposedOutcome.
             if (behavior.RecordsOutcomeInConversation && liveConversation is not null)
             {
-                this.RecordComposedOutcome(liveConversation, turn);
+                this.RecordComposedOutcome(liveConversation, turn, message.TriggerLabel);
             }
 
             // Memory extraction: append to the extraction buffer. The buffer
@@ -777,20 +778,45 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
     private readonly record struct TurnOutcome(string? FinalText, bool DeliveredToConversation);
 
     /// <summary>
-    /// Writes a composer run's outcome into the live conversation as agent content.
+    /// Records what a composer run (a fired timer) did, in the live conversation.
+    /// <para>
+    /// A run that sent something has already been recorded by the proactive delivery trace. A run
+    /// that produced only text sent NOTHING: the composer session is discarded and its final text
+    /// is never delivered anywhere. Writing that text back as an assistant turn — which is what
+    /// this used to do — told the agent it had spoken when the user heard nothing, and it then
+    /// defended the phantom cue ("I spoke the cue each time") against a user who kept saying "I
+    /// have not heard this". So the outcome is recorded as an internal trace stating plainly that
+    /// nothing was delivered, and the undelivered wording is dropped rather than preserved as
+    /// something the agent believes it said.
+    /// </para>
     /// </summary>
-    private void RecordComposedOutcome(AgentSession liveConversation, TurnOutcome turn)
+    private void RecordComposedOutcome(AgentSession liveConversation, TurnOutcome turn, string? trigger)
     {
-        // A proactive send is how a timer actually reaches the user, and it has already been glued
-        // into this conversation. The final text is then just the model narrating what it did, so
-        // recording it too would leave a near-duplicate restatement in the chat.
-        if (turn.DeliveredToConversation || string.IsNullOrWhiteSpace(turn.FinalText))
+        if (turn.DeliveredToConversation)
         {
             return;
         }
 
-        liveConversation.AppendOrGlueAssistantMessage(turn.FinalText);
-        this.LogComposedOutcomeRecorded(liveConversation.ConversationId, turn.FinalText.Length);
+        liveConversation.AppendMessageGroup(
+        [
+            new LlmMessage
+            {
+                Role = "user",
+                Content = AutomatedNotice(trigger),
+                MessageType = LlmMessageType.ProactiveDeliveryTrace,
+            },
+            new LlmMessage
+            {
+                Role = "assistant",
+                Content =
+                    "[nothing was delivered] You handled it without calling send_message, so the "
+                    + "user received no message and heard nothing. If the cue still matters, send "
+                    + "it now.",
+                MessageType = LlmMessageType.ProactiveDeliveryTrace,
+            },
+        ]);
+
+        this.LogComposedOutcomeRecorded(liveConversation.ConversationId, turn.FinalText?.Length ?? 0);
     }
 
     private async Task<TurnOutcome> GenerateResponseAsync(
@@ -803,6 +829,7 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
         bool isVoice,
         long queueWaitMs,
         HashSet<string> consumedSubagentTaskIds,
+        string? deliveryTrigger,
         CancellationToken cancellationToken)
     {
         var client = this.bridgeClientAccessor.Client;
@@ -939,7 +966,23 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
                     proactive.ChannelId, tenantId ?? "default");
 
                 var targetSession = this.sessions.GetOrCreateWithIdleCheck(targetConversationId);
-                targetSession.AppendOrGlueAssistantMessage(FormatProactiveHistoryEntry(proactive));
+
+                // When the send happened in THIS session, its real send_message call and result are
+                // already in this history — only the delivered text is missing, and gluing it keeps
+                // the provider from seeing two assistant messages in a row. Everywhere else the
+                // sending run is invisible here (an ephemeral scheduled-task session, a timer's
+                // throwaway composer session, or another channel's turn), so the text needs the
+                // trace that explains where it came from.
+                if (ReferenceEquals(targetSession, session))
+                {
+                    targetSession.AppendOrGlueAssistantMessage(FormatProactiveHistoryEntry(proactive));
+                }
+                else
+                {
+                    targetSession.AppendMessageGroup(
+                        BuildProactiveDeliveryGroup(proactive, deliveryTrigger, DateTimeOffset.UtcNow));
+                }
+
                 this.LogProactiveMessageInjected(proactive.ChannelId, proactive.Text.Length);
 
                 deliveredToConversation |= string.Equals(
@@ -1241,6 +1284,92 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
     /// </summary>
     internal static string FormatProactiveHistoryEntry(ProactiveMessageRecord proactive)
         => proactive.Text;
+
+    /// <summary>
+    /// Rebuilds a proactive delivery as a complete turn in the TARGET conversation: the automated
+    /// trigger notice, the <c>send_message</c> call, its delivery receipt, and the delivered text.
+    /// <para>
+    /// The send is issued from a session the target conversation cannot see — an ephemeral
+    /// scheduled-task run, or a fired timer's focused run — so previously the text simply
+    /// materialised there as a bare assistant message with no cause. Telemetry showed the model
+    /// reading that missing trace as proof of invention and retracting true messages to the user
+    /// ("those sleep numbers were not real; I made no tool call"). The explanation cannot go in the
+    /// text itself — that was tried and rejected on 2026-05-15 because the annotation leaked into
+    /// what the user saw — so it goes in the surrounding trace instead.
+    /// </para>
+    /// <para>
+    /// The group opens on a <c>user</c>-role notice so it is a well-formed turn wherever it lands:
+    /// the target conversation usually ends on an assistant message, and two assistant messages in
+    /// a row are rejected by the OpenAI and Copilot APIs.
+    /// </para>
+    /// </summary>
+    /// <param name="proactive">The delivered message.</param>
+    /// <param name="trigger">What caused the send, e.g. <c>scheduled task 1bffa504 ("…")</c>.</param>
+    /// <param name="deliveredAt">Delivery time, reported in the receipt.</param>
+    internal static IReadOnlyList<LlmMessage> BuildProactiveDeliveryGroup(
+        ProactiveMessageRecord proactive,
+        string? trigger,
+        DateTimeOffset deliveredAt)
+    {
+        var text = FormatProactiveHistoryEntry(proactive);
+        var toolCallId = "call_delivery_" + Guid.NewGuid().ToString("N")[..12];
+
+        // The real tool name and argument shape: this reconstructs a call that genuinely happened,
+        // and send_message is never hidden by a tool gate, so the model always recognises it.
+        var arguments = JsonSerializer.Serialize(new SendMessageArguments(proactive.ChannelId, text));
+
+        var receipt = string.Create(
+            CultureInfo.InvariantCulture,
+            $"Delivered to {proactive.ChannelId} at {deliveredAt:yyyy-MM-dd HH:mm:ss} UTC. The user "
+            + $"has already received this message. It is real — do not retract it, do not call it "
+            + $"fabricated, and do not send it again.");
+
+        return
+        [
+            new LlmMessage
+            {
+                Role = "user",
+                Content = AutomatedNotice(trigger),
+                MessageType = LlmMessageType.ProactiveDeliveryTrace,
+            },
+            new LlmMessage
+            {
+                Role = "assistant",
+                ToolCalls = [new LlmToolCall { Id = toolCallId, Name = "send_message", Arguments = arguments }],
+                MessageType = LlmMessageType.ProactiveDeliveryTrace,
+            },
+            new LlmMessage
+            {
+                Role = "tool",
+                ToolCallId = toolCallId,
+                Content = receipt,
+                MessageType = LlmMessageType.ProactiveDeliveryTrace,
+            },
+            new LlmMessage
+            {
+                Role = "assistant",
+                Content = text,
+                MessageType = LlmMessageType.Proactive,
+            },
+        ];
+    }
+
+    /// <summary>
+    /// The trigger notice that opens a delivery trace. Marked as automated because it occupies the
+    /// <c>user</c> slot without the user having said anything.
+    /// </summary>
+    internal static string AutomatedNotice(string? trigger) =>
+        "[automated notice — the user did not say this] "
+        + (string.IsNullOrWhiteSpace(trigger)
+            ? "You sent the message below from another conversation, which is why nothing here "
+              + "leads up to it."
+            : $"Your {trigger} fired and ran in its own session, which is why nothing here leads "
+              + "up to what follows.");
+
+    /// <summary>Argument shape of the <c>send_message</c> tool, for the reconstructed call.</summary>
+    private sealed record SendMessageArguments(
+        [property: JsonPropertyName("channel")] string Channel,
+        [property: JsonPropertyName("text")] string Text);
 
     /// <summary>
     /// Replace the session's trailing assistant message with the barge-in
