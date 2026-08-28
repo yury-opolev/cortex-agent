@@ -173,6 +173,7 @@ public sealed partial class SchedulerService : IDisposable
                         Source = AgentMessageSource.ScheduledTask,
                         CorrelationId = Guid.NewGuid().ToString("N"),
                         Timestamp = now,
+                        TriggerLabel = BuildTriggerLabel(task),
                     };
 
                     await this.messageQueue.EnqueueAsync(agentMessage).ConfigureAwait(false);
@@ -233,6 +234,16 @@ public sealed partial class SchedulerService : IDisposable
             Interlocked.Exchange(ref this.executing, 0);
         }
     }
+
+    /// <summary>
+    /// Names the task as the cause of anything it sends. This is what lets the TARGET
+    /// conversation — which never sees the task's own ephemeral session — explain where a
+    /// message it did not ask for came from.
+    /// </summary>
+    internal static string BuildTriggerLabel(ScheduledTask task) =>
+        string.IsNullOrWhiteSpace(task.Description)
+            ? $"scheduled task {task.Id}"
+            : $"scheduled task {task.Id} (\"{task.Description}\")";
 
     /// <summary>
     /// Builds an enriched message that includes task context (ID, description,

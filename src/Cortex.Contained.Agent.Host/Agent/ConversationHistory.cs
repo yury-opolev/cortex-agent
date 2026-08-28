@@ -47,6 +47,30 @@ internal sealed class ConversationHistory
     }
 
     /// <summary>
+    /// Appends a group of messages as one atomic unit, never gluing onto the preceding turn.
+    /// <para>
+    /// Used for the tool-call trace that records a proactive delivery. Gluing is exactly what must
+    /// not happen here: merging a fired timer's cue onto the assistant turn that started the timer
+    /// produces a single message reading "…ninety seconds resting. / Rest is up." — an in-context
+    /// example the model then reproduces in ONE turn, announcing the rest is over the moment it
+    /// begins.
+    /// </para>
+    /// </summary>
+    public void AddGroup(IReadOnlyList<LlmMessage> group)
+    {
+        if (group.Count == 0)
+        {
+            return;
+        }
+
+        lock (this.syncLock)
+        {
+            this.messages.AddRange(group);
+            this.LastMessageAt = DateTimeOffset.UtcNow;
+        }
+    }
+
+    /// <summary>
     /// Appends an assistant message to history. If the last message is already a
     /// plain assistant message (no tool calls), glues the new content onto it with a
     /// blank-line separator instead of adding a second consecutive assistant message.

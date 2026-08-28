@@ -134,7 +134,10 @@ internal sealed class SessionTimerTool : IAgentTool
 
             return Task.FromResult(AgentToolResult.Ok(string.Create(
                 CultureInfo.InvariantCulture,
-                $"Timer {id} set — fires in {delaySeconds}s. Cancel with session_timer(action='cancel', timer_id='{id}').")));
+                $"Timer {id} set — fires in {delaySeconds}s. It has NOT fired yet: do not say it is "
+                + $"up, do not announce the next step, and do not pre-write the cue. You will be "
+                + $"re-invoked with the intent when it actually fires, and only then should you act "
+                + $"on it. Cancel with session_timer(action='cancel', timer_id='{id}').")));
         }
         catch (ArgumentOutOfRangeException)
         {

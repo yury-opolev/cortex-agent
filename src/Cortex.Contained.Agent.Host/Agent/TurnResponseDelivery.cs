@@ -138,8 +138,19 @@ internal sealed partial class TurnResponseDelivery
             content: assistantContent,
             timestamp: DateTimeOffset.UtcNow,
             messageId: messageId,
+            category: this.PersistedAssistantCategory,
             cancellationToken: cancellationToken).ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// Category for assistant text persisted by this turn. A proactive turn (scheduled task or
+    /// fired timer) never streams its own text to a channel — only <c>send_message</c> reaches the
+    /// user — so its narration is internal. Persisting it as Normal put lines the user never
+    /// received into the chat UI and back into the agent's context on a re-seed, where they read
+    /// as messages with no cause.
+    /// </summary>
+    private MessageCategory PersistedAssistantCategory
+        => this.useProactiveDelivery ? MessageCategory.Internal : MessageCategory.Normal;
 
     public async Task NotifyToolStartedAsync(string toolName, string input)
     {
@@ -288,6 +299,7 @@ internal sealed partial class TurnResponseDelivery
             content: contentToPersist,
             timestamp: DateTimeOffset.UtcNow,
             messageId: messageId,
+            category: this.PersistedAssistantCategory,
             cancellationToken: cancellationToken).ConfigureAwait(false);
 
         session.SetLastAssistantRecordId(finalRecordId);

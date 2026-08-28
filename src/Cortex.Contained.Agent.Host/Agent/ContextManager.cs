@@ -167,6 +167,14 @@ internal static class ContextManager
                 continue;
             }
 
+            // A proactive delivery receipt is tiny and load-bearing: it is the only thing telling
+            // the model that a scheduled or timer-driven message it can see was really sent. Pruning
+            // it to a placeholder saves nothing and reopens the "I must have fabricated this" hole.
+            if (msg.MessageType == LlmMessageType.ProactiveDeliveryTrace)
+            {
+                continue;
+            }
+
             var estimate = TokenEstimator.EstimateTokens(msg);
             toolResultTokens += estimate;
 
