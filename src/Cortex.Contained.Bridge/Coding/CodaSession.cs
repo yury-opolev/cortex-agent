@@ -71,7 +71,6 @@ public sealed partial class CodaSession : IAsyncDisposable
         CodaOptions options,
         ILogger<CodaSession> logger,
         string? goal = null,
-        bool sessionMemory = false,
         ICodaProcessGroup? processGroup = null)
     {
         this.SessionId = sessionId;
@@ -85,7 +84,6 @@ public sealed partial class CodaSession : IAsyncDisposable
         this.CreatedAt = DateTimeOffset.UtcNow;
         this.LastActivityAt = this.CreatedAt;
         this.Goal = goal;
-        this.SessionMemory = sessionMemory;
     }
 
     // -----------------------------------------------------------------------
@@ -154,8 +152,6 @@ public sealed partial class CodaSession : IAsyncDisposable
     public CodingPolicy Policy { get; }
 
     public string? Goal { get; }
-
-    public bool SessionMemory { get; }
 
     public DateTimeOffset CreatedAt { get; }
 
@@ -518,12 +514,10 @@ public sealed partial class CodaSession : IAsyncDisposable
         }
 
         var args = CodaServeArgsBuilder.Build(
-            this.SessionId,
             this.WorkingFolder,
             this.Policy,
             isResume,
             this.Goal,
-            this.SessionMemory,
             this.options.Mcp);
 
         // Curated MCP policy exports CODA_USER_MCP_DIR so the spawned coda reads the curated

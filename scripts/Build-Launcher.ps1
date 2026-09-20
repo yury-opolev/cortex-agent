@@ -75,45 +75,31 @@ dotnet publish "$repoRoot\src\Cortex.Contained.Bridge\Cortex.Contained.Bridge.cs
 
 if ($LASTEXITCODE -ne 0) { throw "Bridge publish failed" }
 
-# Publish coda (the coding engine) self-contained into the Bridge payload so the
-# MSIX ships coda.exe alongside the Bridge (resolved at runtime via
+# Publish coda (the coding engine) into the Bridge payload so the MSIX ships
+# coda.exe alongside the Bridge (resolved at runtime via
 # CodaOptions.ResolveDefaultBinaryPath -> <BaseDir>\coda\coda.exe).
-Write-Host "`nPublishing coda (coding engine)..." -ForegroundColor Yellow
-$codaProject = "$repoRoot\lib\coda-cli\src\Coda.Tui\Coda.Tui.csproj"
-if (Test-Path $codaProject) {
-    # Regenerate the submodule's version.props from its version.json BEFORE
-    # publishing. version.props is a git-ignored generated file that can lag the
-    # pinned commit's version.json, which would otherwise bundle new Coda code
-    # while `coda --version` reports the stale version. build.ps1 -NoBump is
-    # Coda's supported, authoritative no-bump version-props regeneration path
-    # (it never touches version.json). Delegating avoids duplicating the version
-    # formatting here.
-    $codaBuild = "$repoRoot\lib\coda-cli\build.ps1"
-    Write-Host "Stamping bundled Coda version (build.ps1 -NoBump)..." -ForegroundColor Gray
-    & $codaBuild -NoBump -Configuration $Configuration
-    if ($LASTEXITCODE -ne 0) { throw "Coda version-props regeneration (build.ps1 -NoBump) failed" }
+# coda retired its C# implementation: the shipped binary is now a native Rust
+# build, so this compiles the Rust workspace rather than `dotnet publish`ing a
+# csproj. The result is a single self-contained exe with no .NET dependency.
+Write-Host "`nBuilding coda (coding engine, Rust)..." -ForegroundColor Yellow
+$codaRustBuild = "$repoRoot\lib\coda-cli\rust\build.ps1"
+if (Test-Path $codaRustBuild) {
+    # -NoBump: the submodule's version.json is the pinned commit's, and bumping
+    # it would dirty the submodule on every Cortex build. build.ps1 also
+    # verifies the produced binary reports the expected version, which catches
+    # a stale target/ directory being shipped.
+    & $codaRustBuild -NoBump -Configuration $Configuration
+    if ($LASTEXITCODE -ne 0) { throw "coda Rust build failed" }
+
+    $codaExe = "$repoRoot\lib\coda-cli\rust\target\$($Configuration.ToLowerInvariant())\coda.exe"
+    if (-not (Test-Path $codaExe)) { throw "Expected coda.exe not found at $codaExe" }
 
     $codaOut = "$OutputDir\Bridge\coda"
-    dotnet publish "$codaProject" `
-        -c $Configuration `
-        -r win-x64 `
-        --self-contained `
-        -o "$codaOut"
-    if ($LASTEXITCODE -ne 0) { throw "coda publish failed" }
-
-    # coda ships as coda.exe — rename the published Coda.Tui.exe (coda's own
-    # publish.ps1 does the same; AssemblyName is intentionally NOT overridden
-    # because it would propagate to referenced assemblies).
-    $codaSrc = Join-Path $codaOut "Coda.Tui.exe"
-    $codaDst = Join-Path $codaOut "coda.exe"
-    if (Test-Path $codaSrc) {
-        Move-Item -Force $codaSrc $codaDst
-        Write-Host "Bundled coda.exe -> $codaDst" -ForegroundColor Gray
-    } else {
-        throw "Expected published Coda.Tui.exe not found at $codaSrc"
-    }
+    New-Item -ItemType Directory -Path $codaOut -Force | Out-Null
+    Copy-Item $codaExe (Join-Path $codaOut "coda.exe") -Force
+    Write-Host "Bundled coda.exe -> $codaOut\coda.exe" -ForegroundColor Gray
 } else {
-    Write-Warning "coda project not found at $codaProject (submodule missing?); MSIX will rely on coda being on PATH."
+    Write-Warning "coda Rust build script not found at $codaRustBuild (submodule missing?); MSIX will rely on coda being on PATH."
 }
 
 # Copy docker-compose.yml

@@ -64,14 +64,13 @@ public static class SystemPromptDefaults
         the user's host — NOT for changes to your own behavior or this codebase.
 
         Tools:
-          - `coding_session_start({workingFolder, policy?, sessionName?, goal?, sessionMemory?})` — start a session.
+          - `coding_session_start({workingFolder, policy?, sessionName?, goal?})` — start a session.
             `workingFolder` is mandatory and must be an absolute path to an allowlisted folder OR a child of one.
             Use `coding_folders_list` first if you are unsure whether the folder is allowed.
             `policy` (optional string: "Prompt" | "YoloSafe" | "Yolo"): permission mode. Omit to use the folder's
             configured default policy. You may only request a MORE restrictive policy than the folder allows
             (e.g. "Prompt" when the folder ceiling is "YoloSafe"). Never request a more permissive policy than the ceiling.
             `goal` (string, off by default): autonomous objective — Coda keeps running until met; use only when the user explicitly asks.
-            `sessionMemory` (bool, off by default): enable Coda's session-memory feature; use only when the user explicitly asks.
           - `coding_session_send({sessionId?, message})` — send an instruction; returns
             immediately. The result arrives later as an injected envelope.
           - `coding_session_respond({requestId, response})` — reply to a pending request

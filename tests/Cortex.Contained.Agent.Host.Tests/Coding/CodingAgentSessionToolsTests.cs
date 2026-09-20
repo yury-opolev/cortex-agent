@@ -132,7 +132,7 @@ public class CodingAgentSessionToolsTests : IDisposable
     }
 
     [Fact]
-    public async Task SessionStart_GoalAndSessionMemory_ForwardedToRequest()
+    public async Task SessionStart_Goal_ForwardedToRequest()
     {
         var tool = new CodingSessionStartTool(this.agent, this.store);
 
@@ -148,14 +148,13 @@ public class CodingAgentSessionToolsTests : IDisposable
             });
 
         var result = await tool.ExecuteAsync(
-            JsonSerializer.Serialize(new { workingFolder = "C:\\repo", goal = "all tests pass", sessionMemory = true }),
+            JsonSerializer.Serialize(new { workingFolder = "C:\\repo", goal = "all tests pass" }),
             Ctx(),
             CancellationToken.None);
 
         Assert.True(result.Success);
         Assert.NotNull(captured);
         Assert.Equal("all tests pass", captured.Goal);
-        Assert.True(captured.SessionMemory);
     }
 
     [Fact]

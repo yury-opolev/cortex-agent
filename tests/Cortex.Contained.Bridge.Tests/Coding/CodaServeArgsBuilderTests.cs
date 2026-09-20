@@ -6,70 +6,98 @@ namespace Cortex.Contained.Bridge.Tests.Coding;
 public sealed class CodaServeArgsBuilderTests
 {
     [Fact]
-    public void Build_fresh_prompt_session_has_cwd_sessionId_and_default_mode()
+    public void Build_fresh_prompt_session_has_cwd_and_default_mode()
     {
-        var args = CodaServeArgsBuilder.Build("sess-1", "C:\\repos\\cortex", CodingPolicy.Prompt, isResume: false);
+        var args = CodaServeArgsBuilder.Build("C:\\repos\\cortex", CodingPolicy.Prompt, isResume: false);
 
         Assert.Contains("serve", args);
         Assert.Equal("C:\\repos\\cortex", ArgAfter(args, "--cwd"));
-        Assert.Equal("sess-1", ArgAfter(args, "--session-id"));
         Assert.Equal("default", ArgAfter(args, "--permission-mode"));
     }
 
     [Fact]
-    public void Build_yolo_safe_maps_to_yolo_safe_mode()
+    public void Build_never_passes_session_id_because_coda_retired_the_flag()
     {
-        var args = CodaServeArgsBuilder.Build("s", "C:\\x", CodingPolicy.YoloSafe, isResume: false);
-        Assert.Equal("yolo-safe", ArgAfter(args, "--permission-mode"));
+        // coda resumes via the `sessionId` param on `initialize`, not a CLI flag. Passing
+        // --session-id to a current coda is a hard clap failure ("unexpected argument"),
+        // which would take down every Cortex-spawned session.
+        var fresh = CodaServeArgsBuilder.Build("C:\\x", CodingPolicy.Prompt, isResume: false);
+        var resumed = CodaServeArgsBuilder.Build("C:\\x", CodingPolicy.Prompt, isResume: true);
+
+        Assert.DoesNotContain("--session-id", fresh);
+        Assert.DoesNotContain("--session-id", resumed);
     }
 
     [Fact]
-    public void Build_yolo_maps_to_yolo_mode()
+    public void Build_yolo_safe_maps_to_accept_edits()
     {
-        var args = CodaServeArgsBuilder.Build("s", "C:\\x", CodingPolicy.Yolo, isResume: false);
-        Assert.Equal("yolo", ArgAfter(args, "--permission-mode"));
+        // coda retired `yolo-safe` and rejects it at startup rather than downgrading it.
+        // acceptEdits is the nearest surviving meaning: edits apply silently, shell
+        // commands still prompt.
+        var args = CodaServeArgsBuilder.Build("C:\\x", CodingPolicy.YoloSafe, isResume: false);
+        Assert.Equal("acceptEdits", ArgAfter(args, "--permission-mode"));
     }
 
     [Fact]
-    public void Build_resume_passes_same_session_id()
+    public void Build_yolo_maps_to_bypass_permissions()
     {
-        var args = CodaServeArgsBuilder.Build("keep-me", "C:\\x", CodingPolicy.Prompt, isResume: true);
-        Assert.Equal("keep-me", ArgAfter(args, "--session-id"));
+        var args = CodaServeArgsBuilder.Build("C:\\x", CodingPolicy.Yolo, isResume: false);
+        Assert.Equal("bypassPermissions", ArgAfter(args, "--permission-mode"));
+    }
+
+    [Theory]
+    [InlineData(CodingPolicy.Prompt)]
+    [InlineData(CodingPolicy.YoloSafe)]
+    [InlineData(CodingPolicy.Yolo)]
+    public void Build_only_emits_permission_modes_coda_accepts(CodingPolicy policy)
+    {
+        // coda's accepted set. An unrecognised mode is a startup failure, so a new policy
+        // must never reach the CLI without a deliberate mapping.
+        string[] accepted = ["default", "acceptEdits", "plan", "bypassPermissions"];
+
+        var args = CodaServeArgsBuilder.Build("C:\\x", policy, isResume: false);
+
+        Assert.Contains(ArgAfter(args, "--permission-mode"), accepted);
     }
 
     [Fact]
-    public void Build_with_goal_and_session_memory_adds_flags()
+    public void Build_with_goal_adds_the_goal_flag()
     {
-        var args = CodaServeArgsBuilder.Build("s", "C:\\x", CodingPolicy.YoloSafe, isResume: false,
-            goal: "all green", sessionMemory: true);
+        var args = CodaServeArgsBuilder.Build("C:\\x", CodingPolicy.YoloSafe, isResume: false, goal: "all green");
         Assert.Equal("all green", ArgAfter(args, "--goal"));
-        Assert.Contains("--session-memory", args);
     }
 
     [Fact]
-    public void Build_always_forces_telemetry_and_never_pins_model()
+    public void Build_without_goal_omits_the_goal_flag()
     {
-        var args = CodaServeArgsBuilder.Build("s", "C:\\x", CodingPolicy.Prompt, isResume: false);
+        var args = CodaServeArgsBuilder.Build("C:\\x", CodingPolicy.Prompt, isResume: false);
+        Assert.DoesNotContain("--goal", args);
+    }
 
-        Assert.Contains("--telemetry", args);
+    [Fact]
+    public void Build_forces_diagnostics_and_never_pins_model_or_provider()
+    {
+        // Diagnostics replaces the retired --telemetry flag: it is what produces the
+        // per-run log coda reports back as `telemetryLogPath` from `initialize`.
+        var args = CodaServeArgsBuilder.Build("C:\\x", CodingPolicy.Prompt, isResume: false);
+
+        Assert.Equal("debug", ArgAfter(args, "--diagnostic-verbosity"));
+        Assert.DoesNotContain("--telemetry", args);
         Assert.DoesNotContain("--model", args);
+        Assert.DoesNotContain("--provider", args);
     }
 
     [Fact]
-    public void Build_never_emits_provider_flag_but_keeps_telemetry()
+    public void Build_never_passes_session_memory_because_coda_retired_it()
     {
-        // coda is single-provider and self-resolves its one connected provider — the Bridge
-        // never pins --provider.
-        var args = CodaServeArgsBuilder.Build("s", "C:\\x", CodingPolicy.Prompt, isResume: false);
-
-        Assert.DoesNotContain("--provider", args);
-        Assert.Contains("--telemetry", args);
+        var args = CodaServeArgsBuilder.Build("C:\\x", CodingPolicy.Prompt, isResume: false, goal: "g");
+        Assert.DoesNotContain("--session-memory", args);
     }
 
     [Fact]
     public void Build_mcp_off_adds_no_mcp_flag()
     {
-        var args = CodaServeArgsBuilder.Build("s", "C:\\x", CodingPolicy.Prompt, isResume: false, mcp: CodaMcpPolicy.Off);
+        var args = CodaServeArgsBuilder.Build("C:\\x", CodingPolicy.Prompt, isResume: false, mcp: CodaMcpPolicy.Off);
         Assert.Contains("--no-mcp", args);
     }
 
@@ -78,8 +106,8 @@ public sealed class CodaServeArgsBuilderTests
     {
         // Host uses the machine ~/.coda/.mcp.json; Curated redirects it via CODA_USER_MCP_DIR
         // (an env var, not a serve flag) — neither disables MCP, so no --no-mcp.
-        var host = CodaServeArgsBuilder.Build("s", "C:\\x", CodingPolicy.Prompt, isResume: false, mcp: CodaMcpPolicy.Host);
-        var curated = CodaServeArgsBuilder.Build("s", "C:\\x", CodingPolicy.Prompt, isResume: false, mcp: CodaMcpPolicy.Curated);
+        var host = CodaServeArgsBuilder.Build("C:\\x", CodingPolicy.Prompt, isResume: false, mcp: CodaMcpPolicy.Host);
+        var curated = CodaServeArgsBuilder.Build("C:\\x", CodingPolicy.Prompt, isResume: false, mcp: CodaMcpPolicy.Curated);
 
         Assert.DoesNotContain("--no-mcp", host);
         Assert.DoesNotContain("--no-mcp", curated);
@@ -89,7 +117,7 @@ public sealed class CodaServeArgsBuilderTests
     public void Build_mcp_curated_suppresses_project_layer()
     {
         // Curated = user (vetted) set only; the repo's <cwd>/.mcp.json must not override it.
-        var curated = CodaServeArgsBuilder.Build("s", "C:\\x", CodingPolicy.Prompt, isResume: false, mcp: CodaMcpPolicy.Curated);
+        var curated = CodaServeArgsBuilder.Build("C:\\x", CodingPolicy.Prompt, isResume: false, mcp: CodaMcpPolicy.Curated);
         Assert.Contains("--no-project-mcp", curated);
     }
 
@@ -97,7 +125,7 @@ public sealed class CodaServeArgsBuilderTests
     public void Build_mcp_host_keeps_full_host_visibility()
     {
         // Default policy: coda sees everything (user + project). No suppression flags.
-        var host = CodaServeArgsBuilder.Build("s", "C:\\x", CodingPolicy.Prompt, isResume: false, mcp: CodaMcpPolicy.Host);
+        var host = CodaServeArgsBuilder.Build("C:\\x", CodingPolicy.Prompt, isResume: false, mcp: CodaMcpPolicy.Host);
         Assert.DoesNotContain("--no-project-mcp", host);
         Assert.DoesNotContain("--no-mcp", host);
     }
@@ -105,7 +133,7 @@ public sealed class CodaServeArgsBuilderTests
     [Fact]
     public void Build_default_mcp_is_host_and_omits_no_mcp_flag()
     {
-        var args = CodaServeArgsBuilder.Build("s", "C:\\x", CodingPolicy.Prompt, isResume: false);
+        var args = CodaServeArgsBuilder.Build("C:\\x", CodingPolicy.Prompt, isResume: false);
         Assert.DoesNotContain("--no-mcp", args);
     }
 

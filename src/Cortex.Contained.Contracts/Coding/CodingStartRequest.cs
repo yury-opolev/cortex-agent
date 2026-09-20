@@ -24,6 +24,4 @@ public sealed record CodingStartRequest
     public string? SessionName { get; init; }
 
     public string? Goal { get; init; }
-
-    public bool SessionMemory { get; init; }
 }
