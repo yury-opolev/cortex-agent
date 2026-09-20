@@ -9,7 +9,7 @@ namespace Cortex.Contained.Contracts.Config;
 public static class SubagentConcurrencyLimits
 {
     public const int Minimum = 1;
-    public const int Default = 5;
+    public const int Default = 10;
     public const int Maximum = 50;
 
     /// <summary>True when <paramref name="value"/> is within [<see cref="Minimum"/>, <see cref="Maximum"/>].</summary>

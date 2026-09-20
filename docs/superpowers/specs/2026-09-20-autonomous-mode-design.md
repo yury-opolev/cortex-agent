@@ -377,10 +377,22 @@ unprompted progress note to the parent conversation.
 1. **Progress cadence** — are parent-visible todos plus `sub_agent_read` enough, or should a long
    run be able to push an unprompted progress note to the parent conversation? This is the one
    place where the "subagents cannot message the user" rule is genuinely inconvenient.
-2. **Concurrency** — long autonomous runs occupy `SubagentRunnerRegistry` slots (default 5) for
-   days. Should autonomous runs have their own pool, or a higher cap, so they cannot starve ordinary
-   short-lived subagents?
-3. **Nested delegation** — `sub_agent_start` is excluded from subagents, so an autonomous run cannot
+2. **Nested delegation** — `sub_agent_start` is excluded from subagents, so an autonomous run cannot
    subdivide its own work. Is that acceptable for multi-day goals?
-4. **Judge model** — same model as the run (simple, shares the provider), or a cheaper one, given it
+3. **Judge model** — same model as the run (simple, shares the provider), or a cheaper one, given it
    fires once per continuation?
+
+## Resolved
+
+**Concurrency: a subagent is a subagent.** An earlier draft asked whether autonomous runs should get
+their own pool so multi-day runs cannot starve short-lived ones. **Rejected** — there is one pool and
+one cap (`SubagentRunnerRegistry.MaxConcurrent`), and autonomy is a property of a run, not a class of
+subagent.
+
+The decisive argument is `sub_agent_set_goal`: it can turn a plain subagent into an autonomous one
+(and back) *mid-run*, so a two-pool design would have to migrate a running task between pools on a
+live mode change. That is a large amount of machinery — pool assignment, migration, priority,
+starvation rules — to express something the existing cap already expresses. If long runs do crowd
+out short ones, the answer is to raise the cap, which is already live-editable from the Bridge
+settings page with no restart (`SubagentRunnerRegistry.SetMaxConcurrent`). The default was raised
+from 5 to 10 for exactly this reason.
