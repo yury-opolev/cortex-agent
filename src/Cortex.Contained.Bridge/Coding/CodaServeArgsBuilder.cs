@@ -6,27 +6,29 @@ namespace Cortex.Contained.Bridge.Coding;
 public static class CodaServeArgsBuilder
 {
     public static List<string> Build(
-        string sessionId,
         string workingFolder,
         CodingPolicy policy,
         bool isResume,
         string? goal = null,
-        bool sessionMemory = false,
         CodaMcpPolicy mcp = CodaMcpPolicy.Host)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
         ArgumentException.ThrowIfNullOrWhiteSpace(workingFolder);
 
         var args = new List<string>
         {
             "serve",
             "--cwd", workingFolder,
-            "--session-id", sessionId,
             "--permission-mode", PermissionModeArg(policy),
-            // Always force telemetry on for Cortex-spawned coda so every run is observable,
-            // independent of the machine ~/.coda/settings.json (early-dev requirement).
-            "--telemetry",
+            // Always force diagnostics on for Cortex-spawned coda so every run is observable,
+            // independent of the machine ~/.coda/settings.json (early-dev requirement). This
+            // replaces the retired --telemetry flag: the per-run log that coda reports back as
+            // `telemetryLogPath` from `initialize` is produced by the diagnostics logger.
+            "--diagnostic-verbosity", "debug",
         };
+
+        // NOTE: the session id is NOT passed on the command line. coda retired --session-id;
+        // resuming is done by passing `sessionId` to the `initialize` request instead
+        // (see CodaJsonRpcConnection.InitializeAsync), which is what the Bridge already does.
 
         // NOTE: we intentionally do NOT pass --provider or --model. coda is single-provider and
         // self-resolves its one connected provider; the model comes from coda's own configured
@@ -35,11 +37,6 @@ public static class CodaServeArgsBuilder
         {
             args.Add("--goal");
             args.Add(goal);
-        }
-
-        if (sessionMemory)
-        {
-            args.Add("--session-memory");
         }
 
         // MCP policy: Off disables coda's MCP client outright. Curated selects an orchestrator set via
@@ -58,11 +55,24 @@ public static class CodaServeArgsBuilder
         return args;
     }
 
+    /// <summary>
+    /// Maps a Cortex policy onto a coda permission mode.
+    /// </summary>
+    /// <remarks>
+    /// coda's accepted set is <c>default</c>, <c>acceptEdits</c>, <c>plan</c> and
+    /// <c>bypassPermissions</c>; an unrecognised value is a hard startup failure, not a
+    /// silent downgrade. <see cref="CodingPolicy.YoloSafe"/> therefore maps to
+    /// <c>acceptEdits</c> — coda retired <c>yolo-safe</c>, and <c>acceptEdits</c> is its
+    /// nearest surviving meaning: file edits apply without prompting while genuinely risky
+    /// actions (shell commands) still raise <c>request/permission</c>. Mapping it to
+    /// <c>bypassPermissions</c> instead would silently widen a policy the operator chose
+    /// precisely because it was narrower than Yolo.
+    /// </remarks>
     private static string PermissionModeArg(CodingPolicy policy) => policy switch
     {
         CodingPolicy.Prompt => "default",
-        CodingPolicy.YoloSafe => "yolo-safe",
-        CodingPolicy.Yolo => "yolo",
+        CodingPolicy.YoloSafe => "acceptEdits",
+        CodingPolicy.Yolo => "bypassPermissions",
         _ => "default",
     };
 }

@@ -263,7 +263,6 @@ public sealed partial class CodaSessionManager : IAsyncDisposable
             effective,
             this.loggerFactory.CreateLogger<CodaSession>(),
             request.Goal,
-            request.SessionMemory,
             this.processGroup);
 
         session.TenantId = tenantId;

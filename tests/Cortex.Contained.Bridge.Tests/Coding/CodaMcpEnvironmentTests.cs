@@ -13,7 +13,7 @@ public sealed class CodaMcpEnvironmentTests
     [InlineData(CodaMcpPolicy.Off, true, false)]
     public void Policy_drives_args_and_env_consistently(CodaMcpPolicy policy, bool expectNoMcpFlag, bool expectEnv)
     {
-        var args = CodaServeArgsBuilder.Build("s", "C:\\x", CodingPolicy.Prompt, isResume: false, mcp: policy);
+        var args = CodaServeArgsBuilder.Build("C:\\x", CodingPolicy.Prompt, isResume: false, mcp: policy);
         var env = CodaMcpEnvironment.Resolve(policy, "C:\\curated");
 
         Assert.Equal(expectNoMcpFlag, args.Contains("--no-mcp"));

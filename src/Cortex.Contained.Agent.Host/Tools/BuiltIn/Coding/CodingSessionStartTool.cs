@@ -43,11 +43,6 @@ internal sealed class CodingSessionStartTool : IAgentTool
             "goal": {
               "type": "string",
               "description": "Optional autonomous goal: Coda keeps running until this objective is met. Only set when the user explicitly asks for autonomous/goal-driven execution."
-            },
-            "sessionMemory": {
-              "type": "boolean",
-              "description": "When true, enable Coda's session-memory feature. Only set when the user explicitly requests it.",
-              "default": false
             }
           },
           "required": ["workingFolder"]
@@ -92,7 +87,6 @@ internal sealed class CodingSessionStartTool : IAgentTool
             var goal = root.TryGetProperty("goal", out var goalEl) && goalEl.ValueKind == JsonValueKind.String
                 ? goalEl.GetString()
                 : null;
-            var sessionMemory = root.TryGetProperty("sessionMemory", out var smEl) && smEl.ValueKind == JsonValueKind.True;
 
             var channelId = CodingToolBase.ResolveChannelId(context, root);
             if (channelId is null)
@@ -108,7 +102,6 @@ internal sealed class CodingSessionStartTool : IAgentTool
                     RequestedPolicy = requestedPolicy,
                     SessionName = sessionName,
                     Goal = goal,
-                    SessionMemory = sessionMemory,
                 },
                 cancellationToken).ConfigureAwait(false);
 
