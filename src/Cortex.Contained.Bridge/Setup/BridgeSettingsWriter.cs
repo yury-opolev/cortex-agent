@@ -184,7 +184,7 @@ internal static class BridgeSettingsWriter
             sb.AppendLine(CultureInfo.InvariantCulture, $"maxSubagentRounds: {config.MaxSubagentRounds}");
         }
 
-        // Max concurrent subagents (always emitted — it has a real default of 5).
+        // Max concurrent subagents (always emitted — it has a real default).
         sb.AppendLine(CultureInfo.InvariantCulture, $"maxConcurrentSubagents: {config.MaxConcurrentSubagents}");
 
         // Memory settings section

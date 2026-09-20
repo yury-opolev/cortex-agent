@@ -141,8 +141,27 @@ function Register-DeployTask([string]$version) {
     # The Task Scheduler service owns the task's process — it is NOT in coda's / the Bridge's Job
     # Object — so it survives the shutdown the deploy triggers. This is what lets coda "schedule the
     # deploy and let itself be killed". The task re-verifies the manifest and rolls back on failure.
-    if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
-        throw "A deploy task '$TaskName' is already registered — refusing to stack. Remove it first."
+    # A ONE-SHOT task stays REGISTERED after it fires — the trigger is spent, but the
+    # registration lives on in 'Ready' with no NextRunTime (there is no -DeleteExpiredTaskAfter
+    # here, and adding one would need an EndBoundary, which would fight -StartWhenAvailable).
+    # So a *successful* deploy leaves its own task behind. Refusing on mere existence therefore
+    # broke every deploy after the first: v0.2.334 was blocked by the registration left by the
+    # v0.2.333 deploy three weeks earlier, and only at the very end, after a full build and the
+    # whole test gate had already run.
+    #
+    # Only a GENUINELY LIVE deploy is a reason to refuse. A spent registration is cleared and
+    # the deploy proceeds (Register-ScheduledTask below already passes -Force).
+    $existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    if ($existing) {
+        $info      = Get-ScheduledTaskInfo -TaskName $TaskName -ErrorAction SilentlyContinue
+        $isRunning = $existing.State -eq 'Running'
+        $isPending = $null -ne $info -and $null -ne $info.NextRunTime -and $info.NextRunTime -gt (Get-Date)
+        if ($isRunning -or $isPending) {
+            $when = if ($isRunning) { 'running now' } else { "pending at $($info.NextRunTime)" }
+            throw "A deploy task '$TaskName' is already $when — refusing to stack. Wait for it, or remove it first."
+        }
+        Say "clearing a spent '$TaskName' registration from a previous deploy" 'Yellow'
+        Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
     }
     $pwshExe = (Get-Process -Id $PID).Path
     # Pin the exact target into the detached task so it re-verifies the SAME version/file when it
