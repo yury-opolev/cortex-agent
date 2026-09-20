@@ -7,17 +7,15 @@ Date: 2026-09-20
 
 Give Cortex a user-controlled **autonomous mode**: the agent is handed a goal, works until that goal
 is genuinely met (or provably cannot be), and does not stop to ask the user things along the way.
-The user turns it on, can watch it, and can turn it off.
 
 The idea is borrowed from coda's `--goal` / autonomy supervisor
 ([coda #161](https://github.com/yury-opolev/coda-cli/pull/161), `coda-agent/src/autonomy/`), which
 solves the same problem for a coding engine. This spec adapts it to Cortex's very different shape —
 Cortex is not a coding agent, and most of coda's machinery turns out to be unnecessary here.
 
-Two homes, **one supervisor**:
-
-1. **Main agent** — a mode the user enters and exits. Wired first.
-2. **Subagents** — already structurally unattended; they gain the same judge and budget.
+**Autonomous runs live in subagents, never in the main agent.** The main agent stays conversational
+and responsive at all times; a long-running goal is always delegated. This is a deliberate decision
+(see below) and it removes a large amount of the machinery an in-main-agent design would need.
 
 ## What Cortex actually needs (and what it does not)
 
@@ -55,39 +53,70 @@ The corollary is worth stating plainly, because it inverts the usual intuition:
 - No change to coda's own autonomy. Cortex already passes `--goal` to `coda serve`; a coda goal run
   supervises itself and is out of scope here.
 - Autonomous mode is **not** the default for ordinary conversation, and never auto-enters.
-- No new channel, no new transport. Progress uses the existing proactive-message path.
+- No new channel and no new transport. Progress flows to the parent through mechanisms that already
+  exist (parent-visible todos, `sub_agent_read`, the terminal completion notice) — subagents
+  deliberately cannot message the user directly.
+
+## Why subagents only, and not the main agent
+
+The main agent must stay available for conversation **while** a long-running goal is in flight. If
+autonomy lived in `AgentRuntime`, an autonomous run would occupy the very turn loop the user talks
+to: chatting mid-run would either interrupt the run or be queued behind it.
+
+Delegating instead is a strictly better fit, and the machinery already exists:
+
+- `SubAgentStartTool` persists the task and returns a `task_id` **immediately** — the parent never
+  blocks. The main agent is free the instant it delegates.
+- Subagents are already structurally unattended: `SubagentRunner.s_excludedTools` removes
+  `send_message`, `sub_agent_*`, `schedule_task` and `session_timer`, so a subagent *cannot* stop
+  and ask the user even if it wanted to. `SystemPromptDefaults.SubagentInstructions` already says
+  *"Work autonomously — do not ask clarifying questions."*
+- Each subagent already gets **its own channel** (`subagent-{taskId}`, `SubagentRunner.cs:213-218`),
+  explicitly so that coda sessions started by concurrent subagents do not collide. Coda keys
+  sessions by channel, so the *ownership* is already modelled correctly — though delivery of coda's
+  requests into the running subagent is **not** yet wired (see the routing gap below).
+- Long-run durability already exists: `SubagentTask` is SQLite-persisted, in-flight tasks are
+  requeued on shutdown and crash recovery releases interrupted ones
+  (`SubagentExecutionCoordinator`, `SubagentSessionStore`), with `RunMode.Resume` replaying stored
+  messages. A multi-day run survives a container restart.
+- Concurrency is already governed by `SubagentRunnerRegistry.MaxConcurrent`.
+
+Consequences for this spec, all simplifications:
+
+- **No hook in `AgentRuntime` at all.** The end-of-turn interception, the
+  `AgentMessageSource.AutonomousContinuation` re-enqueue and the main-agent mode state are all
+  dropped. The supervisor attaches to the shared `AgentLoop` / `SubagentRunner` only.
+- **No barge-in semantics to decide.** The user is never competing with the run for the agent.
+- **No per-conversation vs per-agent scoping question.** A run is scoped to a subagent task.
+- The main agent's role becomes: *delegate, report, and answer questions about* the run — using the
+  existing `sub_agent_read` / `sub_agent_send` / `sub_agent_stop` tools.
 
 ## Design
 
-### The core loop: one hook, at the one seam
+### The core loop
 
-A new `AutonomySupervisor` (Agent Host, `Agent/Autonomy/`) wraps the end-of-turn decision.
+The supervisor wraps the point where a subagent's loop decides it is finished — `AgentLoop`
+returning `Completed` because the model produced final text with no tool calls.
 
-Today:
-
-```
-final text with no tool calls  ->  deliver  ->  break  ->  wait for a human
-```
-
-Under an active run:
+Today that is terminal. Under a goal:
 
 ```
-final text with no tool calls
-  -> supervisor.EvaluateTurnEndAsync(goal, transcript, ledger, budget)
-       -> Done(report)      -> deliver the report, exit the mode
-       -> Blocked(report)   -> deliver the report, exit the mode
-       -> Continue(remaining) -> enqueue a continuation, do NOT return to the user
+loop completes with final text
+  -> supervisor.EvaluateAsync(goal, transcript, ledger, budget)
+       -> Done(report)      -> terminal, report to parent
+       -> Blocked(report)   -> terminal, report to parent
+       -> Continue(remaining) -> feed `remaining` back in, run again
 ```
 
-A **continuation** is an `AgentMessage` re-enqueued onto the existing `AgentMessageChannel` with a
-new `AgentMessageSource.AutonomousContinuation`, carrying the judge's `remaining` text. This
-deliberately reuses the mechanism `SchedulerService` already uses to drive the agent with nobody
-watching (`AgentMessage { ConversationId, ChannelId, Source = ScheduledTask }`) — a scheduled task
-is already an unattended run, so the lane, serialization and session handling are proven.
+The continuation channel already exists: `SubagentRunner.InjectMessage` enqueues onto the runner's
+pending session and `SubagentCallbacks.DrainInjectedMessages` drains it each round. The judge's
+`remaining` text is injected exactly the way a user follow-up would be, so no new message path is
+introduced.
 
-Re-enqueueing rather than looping in place matters: it keeps per-channel message serialization,
-barge-in, compaction and cancellation working exactly as they do today, instead of introducing a
-second inner loop with its own half-correct copy of those semantics.
+Terminology, because the two are easy to conflate and the budgets below depend on the distinction:
+
+- **round** — one LLM call inside `AgentLoop` (bounded by `SubagentRunner.DefaultMaxRounds`)
+- **continuation** — one judge decision to keep going, each of which runs a fresh bounded loop
 
 ### The completion judge
 
@@ -105,11 +134,32 @@ Copying two hard-won properties from coda:
 - **`remaining` is fed forward** into the continuation so the next turn is told what is missing,
   rather than re-deriving it.
 
-### Budget
+### Budget — a backstop, not a control
 
-Wall-clock + continuation count, both user-settable at entry, both with generous defaults
-(proposed: **4 hours / 200 continuations** — Cortex turns are far heavier than coda's, so coda's
-240h/60000 is the wrong scale). Exhaustion ends the run and reports; it never silently keeps going.
+The budget exists to guarantee termination if everything else fails. It is deliberately set
+**absurdly high**, because a run that stops early because it ran out of turns is a worse failure
+than one that runs long:
+
+| Budget | Default | Override |
+|---|---|---|
+| wall-clock | **7 days** | longer at start, when the work is known to be bigger |
+| continuations | **10000** | higher at start, when the work is known to be bigger |
+
+The real controls are the completion judge and the stuck detector. If those are working, the budget
+is never reached; if they fail, the budget is what stops a runaway. coda's 240h / 60000 defaults are
+the same philosophy at a different scale.
+
+Two notes on what this implies:
+
+- Budget is measured as **consumed** and persisted on the task, so a container restart resumes a
+  run's clock rather than resetting a 7-day budget to zero.
+- A continuation runs a whole bounded loop, so the theoretical ceiling is
+  `10000 × SubagentRunner.DefaultMaxRounds` LLM calls. That is an enormous number and is *meant* to
+  be unreachable. The per-continuation round cap stays as-is and remains the thing that bounds any
+  single continuation.
+- `AgentLoopOutcome.MaxRoundsExceeded` currently maps to `SubagentTaskState.Failed`
+  (`SubagentRunner.cs:191`). Under a goal this must instead feed the supervisor, which decides
+  `Stalled` vs `Continue` — "one loop hit its round cap" is not the same as "the task failed".
 
 ### Stuck detection
 
@@ -152,25 +202,53 @@ Every decision the agent makes *instead of asking the user* is recorded: `Assump
 The ledger is the final report. It is what makes an unattended run reviewable rather than a wall of
 confident text, and it is the honest answer to "what did it decide while I was asleep?"
 
-### Auto-answering coda (the biggest immediate win)
+### Auto-answering coda — and a routing gap that must be fixed first
 
-Cortex's main job in autonomous runs is driving coda. Today coda's `request/permission`,
+Driving coda is the main job of an autonomous run. Today coda's `request/permission`,
 `request/question` and `request/planApproval` are relayed *to the human*:
 `CodaJsonRpcConnection` → `CodaSession` → `CodingHubBinder` → `CodingAgentInjectionService`
-(`OnPermissionRequest` / `OnQuestion` / `OnPlanApproval`), which enqueues a synthetic user message.
-The `coding_relay` system-prompt segment then instructs the agent to *"Ask the user to
-allow_once / allow_always / deny"*.
+(`OnPermissionRequest` / `OnQuestion` / `OnPlanApproval`).
 
-**No plumbing change is needed.** The answer channel already exists — `coding_session_respond`
-(`CodingSessionRespondTool`) — and the agent already receives the request. The change is which
-prompt segment fills the existing `{{coding_relay}}` placeholder:
+**Blocker — envelopes cannot currently reach a subagent.** Since autonomy now lives in subagents,
+this matters more than the prompt wording. Tracing the path:
 
-- attended → `SystemPromptConfig.CodingRelay` (unchanged, today's text)
-- autonomous → new `SystemPromptConfig.CodingRelayAutonomous`: answer it yourself, log an
-  `AnsweredForUser` ledger entry with the choice and the reason, never fabricate an option.
+- A subagent's coda session is keyed to its own channel, `subagent-{taskId}`
+  (`SubagentRunner.cs:213-218`, `ChannelId = conversationId`).
+- `CodingAgentInjectionService.Enqueue` (`:239-252`) builds
+  `AgentMessage { ConversationId = channelId, ChannelId = channelId, Source = CodingAgentInjection }`
+  and pushes it onto the **main `AgentMessageChannel`**.
+- That queue is drained by `AgentRuntime`, which would treat `subagent-{taskId}` as an ordinary
+  conversation.
+- The only way into a running subagent is `SubagentRunner.InjectMessage`, and its **only** caller is
+  `SubAgentSendTool`.
 
-Because the placeholder set is unchanged, **every user-customized template keeps working** — this
-respects the byte-identity guarantee the customizable-system-prompt feature is built on.
+The two paths never meet. So a subagent that starts a coda session and hits a question today has its
+envelope delivered to a phantom `AgentRuntime` conversation that nobody reads — the subagent never
+sees it, and neither does the user. The pending request then sits until the Bridge's expiry
+fallback resolves it (permission and plan **refused** by default, `CodaSession.cs:926-994`).
+
+**Required fix:** `CodingAgentInjectionService` must route by channel — when the owning channel is a
+`subagent-` channel with a live runner, deliver via `SubagentRunner.InjectMessage` instead of the
+`AgentMessageChannel`; otherwise behave exactly as today. `TodoStoreResolver` already establishes
+the `"subagent-"` prefix as a routing discriminator, so the convention exists.
+
+This is worth fixing on its own merits, independent of autonomy: it is a live bug for any subagent
+that drives coda.
+
+**Then the prompt.** Unlike the main agent, the subagent template has **no relay guidance at all** —
+`SystemPromptPlaceholders.Subagent` is `{personality, skill, instructions, skills,
+bootstrap_context, recalled_memories}`, with no `coding_relay`, and
+`SystemPromptDefaults.SubagentInstructions` never mentions coda envelopes or
+`coding_session_respond`. So this is not a segment swap (as an earlier draft of this spec assumed);
+it is **adding** relay guidance to the subagent prompt:
+
+- add `coding_relay` to the Subagent placeholder set
+- add `SystemPromptConfig.CodingRelayAutonomous`: recognise the envelope, answer it yourself via
+  `coding_session_respond`, log an `AnsweredForUser` ledger entry with the choice and the reason,
+  never fabricate an option
+
+Adding a placeholder is backward-compatible — existing customised subagent templates simply do not
+reference it and keep rendering exactly as before.
 
 Two safety rules ported from coda's `answerer.rs`, both of which were bugs it had to fix:
 
@@ -178,85 +256,131 @@ Two safety rules ported from coda's `answerer.rs`, both of which were bugs it ha
   *"Do not delete"* as *"Delete"*.
 - If no option can be resolved, **park the blocker** — never guess.
 
-### User control: entering and exiting
+A cheaper complementary move, available **today** with no code change: have the main agent pass a
+`goal` to `coding_session_start`, so coda supervises *itself* and never raises the question. That
+does not replace the above — coda can still ask when its own answerer parks — but it removes most
+of the traffic.
 
-Entry (all three set the same state):
+### The main agent's control surface
 
-- tool `autonomous_start(goal, maxDurationMinutes?, maxContinuations?)`
-- slash command `/auto <goal>` and `/auto stop`
-- Bridge web UI control on the session
+The main agent must be able to **start** a subagent in autonomous mode and **change that mode while
+the run is in flight**. The precedent for the whole shape already exists in this codebase:
+`coding_session_set_goal` does exactly this for coda sessions, and the main agent already knows how
+to reason about it.
 
-Exit:
+**Extend `sub_agent_start`** with the same optional fields:
 
-- `autonomous_stop`, `/auto stop`, or the UI
-- the supervisor reaching any terminal outcome
-- **barge-in**: a real user message (`AgentMessageSource.User`) arriving mid-run. Default is
-  **pause and ask**, not silent cancel — if the user is talking to it, the run should yield.
+```
+sub_agent_start({ task, description, goal?, maxDuration?, maxContinuations? })
+```
 
-### Visibility
+`goal` absent = today's behaviour exactly (a plain background subagent). `goal` present = an
+autonomous run, judged to completion.
 
-Silent multi-hour runs are unacceptable in practice. The run emits progress through the existing
-`IProactiveMessageDispatcher` at a throttled interval (proposed: on outcome change, on nudge, and at
-most every N continuations), and a final report containing the outcome, the elapsed budget and the
-full ledger.
+**Add `sub_agent_set_goal`**, mirroring `coding_session_set_goal` field-for-field:
 
-### State and persistence
+```
+sub_agent_set_goal({ taskId, goal?, maxDuration?, maxContinuations? })
+```
 
-`AgentSession` is in-memory and keyed by `ConversationId`; a long run represented only there dies
-with the container. Autonomous run state (goal, budget consumed, ledger, outcome) is persisted in
-SQLite alongside the existing scheduler/subagent stores, so a restart can resume or at minimum
-report honestly. This mirrors `SubagentTask` + `SubagentSessionStore`, which already solve exactly
-this for background work.
+- **set** a goal on a plain running subagent → it becomes autonomous from that point
+- **replace** the goal or the budget on an autonomous run → it re-aims
+- **clear** (empty or omitted `goal`) → it reverts to a plain subagent and ends at its next natural
+  completion
 
-### Subagents
+Two rules copied deliberately from the coda tool, because they prevent real mistakes:
 
-Subagents are already most of the way there: they cannot message the user at all (`send_message`,
-`sub_agent_*`, `schedule_task` and `session_timer` are in `SubagentRunner.s_excludedTools`), and
-`SystemPromptDefaults.SubagentInstructions` already says *"Work autonomously — do not ask clarifying
-questions."* What they lack is a judge and a budget: the only bound is
-`SubagentRunner.DefaultMaxRounds = 200`, and `AgentLoopOutcome.MaxRoundsExceeded` maps to
-**`SubagentTaskState.Failed`** (`SubagentRunner.cs:191`) — indistinguishable from a real error.
+- **No merge.** Always send the full goal text when changing a budget. A partial update that
+  silently dropped the goal while "just raising the budget" would turn an autonomous run into an
+  interactive one without anyone noticing.
+- **Effective at the next boundary**, not mid-round. coda's wording is *"takes effect from the next
+  `coding_session_send`"*; here the equivalent is the next continuation boundary. Live state is held
+  thread-safely on the runner and read at that boundary — the same pattern as
+  `SubagentRunnerRegistry.SetMaxConcurrent`, which is already a live, no-restart mutation.
+
+`sub_agent_read`, `sub_agent_send` and `sub_agent_stop` need no change: reading gives progress,
+sending injects steering, stopping cancels. `sub_agent_read` should additionally surface goal state
+(goal text, outcome so far, continuations used, elapsed, what remains) the way
+`coding_session_status` surfaces `goalStatus`.
+
+### Persistence
+
+Goal, budget limits and **consumed** budget live on `SubagentTask` alongside the existing
+`Rounds` counter, so they survive the requeue/`RunMode.Resume` path that already handles restarts.
+Without persisting *consumed* budget, every restart would silently hand the run a fresh 7 days.
+
+### Prompt guidance
+
+The main agent needs to know when to reach for this. Unlike the coda relay — where goal mode is
+described as *"off by default… use only when the user explicitly asks"* — a long-running task
+delegated to a subagent is the **expected** use, since that is now the only place autonomy lives.
+The main-agent prompt should say: when the user asks for something long-running or explicitly
+autonomous, delegate it with a `goal`; report progress on request via `sub_agent_read`; and use
+`sub_agent_set_goal` to re-aim or stand down a run.
 
 Wiring the same supervisor into the shared `AgentLoop` gives subagents goal-checked completion and
 turns "ran out of rounds" into a truthful `Stalled` / `BudgetExhausted` outcome with a ledger.
 
-## The mid-turn gate (do not repeat coda's bug)
+## The mid-loop gate (do not repeat coda's bug)
 
-coda shipped this design with a latent hole worth calling out explicitly, because Cortex's structure
-invites the same mistake: the stop decision is only reached **when a turn calls no tools**. An agent
-that calls a tool every single turn never reaches it, so every budget and stuck check behind it is
-dead code.
+coda shipped this design with a latent hole worth calling out explicitly: the stop decision is only
+reached **when a turn calls no tools**. An agent that calls a tool every single turn never reaches
+it, so every budget and stuck check behind it is dead code.
 
-Cortex is not unbounded — `MaxToolRounds = 200` caps a turn — but budget and stuck detection must
-still be evaluated **inside** the tool loop, after each tool round, not only at the end-of-turn hook.
-coda's fix was `AutonomySupervisor::check_mid_turn()`; Cortex needs the equivalent call in
-`AgentRuntime`'s round loop and in `AgentLoop`. Deliberately **not** the completion judge — that
-would be an LLM call per tool round.
+A subagent is not unbounded — `SubagentRunner.DefaultMaxRounds` caps a loop — but budget and stuck
+detection must still be evaluated **inside** `AgentLoop`, after each tool round, not only where the
+loop completes. coda's fix was `AutonomySupervisor::check_mid_turn()`; Cortex needs the equivalent
+call in `AgentLoop`'s round loop. Deliberately **not** the completion judge — that would be an LLM
+call per tool round.
+
+## Visibility
+
+A 7-day run must not be silent, and subagents **cannot** message the user (`send_message` is in
+`s_excludedTools`, deliberately — it is what makes them structurally unattended). Progress therefore
+flows through the parent, not around it:
+
+- `todos_write` already works and is explicitly *"visible to the main agent"*
+  (`SystemPromptDefaults.SubagentInstructions`) — the cheapest progress signal, already built.
+- `sub_agent_read` gives the parent the transcript on demand; it should additionally surface goal
+  state (outcome so far, continuations used, elapsed, remaining).
+- The existing terminal `[Background task completed]` notification delivers the final report.
+
+Open question below: whether that is enough, or whether a long run should be able to push an
+unprompted progress note to the parent conversation.
 
 ## Risks
 
 | Risk | Mitigation |
 |---|---|
 | Judge declares success that did not happen | fails open; progress measured from observable signals, not prose |
-| Cost of a long unattended run | budget defaults sized for Cortex; progress reporting; judge is one cheap call per turn end |
+| Cost of a long unattended run | judge is one cheap call per continuation; stuck detector ends loops early; budget is a backstop, not the control |
+| Subagent never receives coda's question | **routing fix is a prerequisite** (see above); without it, requests expire and are refused by default |
 | Agent answers a coda question wrongly | exact-match option resolution; park instead of guess; every answer ledgered |
-| Run outlives its usefulness | stuck detector ends `Stalled` runs before the budget drains |
-| Container restart loses a long run | run state persisted in SQLite |
-| Silent divergence from user intent | barge-in pauses; throttled progress; ledger reviewable after the fact |
+| Run outlives its usefulness | stuck detector ends `Stalled` runs long before a 7-day budget drains |
+| Container restart loses or resets a long run | goal, limits and **consumed** budget persisted on `SubagentTask`; existing requeue + `RunMode.Resume` |
+| A long run is silent | todos visible to the parent; `sub_agent_read` on demand |
+| `MaxRoundsExceeded` misreported as failure | under a goal it feeds the supervisor, not `SubagentTaskState.Failed` |
 
 ## Suggested phasing
 
-1. `AutonomySupervisor` + completion judge + budget + continuation re-enqueue, main agent, tool-only
-   entry/exit. Smallest thing that is genuinely useful.
-2. Ledger + termination proof + stuck detector + mid-turn gate.
-3. `CodingRelayAutonomous` segment (auto-answering coda).
-4. Subagent wiring; persistence; slash command and Bridge UI.
+1. **Routing fix** — deliver coda envelopes to the owning subagent runner. Independently valuable;
+   a live bug today.
+2. `AutonomySupervisor` + completion judge + backstop budget, wired into `AgentLoop` /
+   `SubagentRunner`; `goal` on `sub_agent_start`. Smallest genuinely useful increment.
+3. Ledger + termination proof + stuck detector + mid-loop gate.
+4. `sub_agent_set_goal` (live re-aiming), goal state in `sub_agent_read`, persistence of consumed
+   budget.
+5. `coding_relay` placeholder + `CodingRelayAutonomous` for the subagent prompt.
 
 ## Open questions for review
 
-1. **Budget defaults** — is 4h / 200 continuations the right scale?
-2. **Barge-in semantics** — pause-and-ask (proposed) or hard cancel?
-3. **Should autonomous mode be per-conversation or per-agent?** Per-conversation is proposed, since
-   `AgentSession` is already keyed that way and it lets one channel run autonomously while another
-   stays interactive.
-4. **Progress cadence** — every N continuations, time-based, or outcome-change only?
+1. **Progress cadence** — are parent-visible todos plus `sub_agent_read` enough, or should a long
+   run be able to push an unprompted progress note to the parent conversation? This is the one
+   place where the "subagents cannot message the user" rule is genuinely inconvenient.
+2. **Concurrency** — long autonomous runs occupy `SubagentRunnerRegistry` slots (default 5) for
+   days. Should autonomous runs have their own pool, or a higher cap, so they cannot starve ordinary
+   short-lived subagents?
+3. **Nested delegation** — `sub_agent_start` is excluded from subagents, so an autonomous run cannot
+   subdivide its own work. Is that acceptable for multi-day goals?
+4. **Judge model** — same model as the run (simple, shares the provider), or a cheaper one, given it
+   fires once per continuation?
