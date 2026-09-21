@@ -92,7 +92,6 @@ public sealed class SubagentRunnerGoalTests
 
     private static SubagentRunner NewRunner(ILlmClient llm)
         => new(llm, new ToolRegistry([], new ActiveChannelStore(), NullLogger<ToolRegistry>.Instance), 4, NullLogger<SubagentRunner>.Instance);
-
     private static AutonomySupervisor Supervisor(ILlmClient llm)
     {
         var modelProvider = Substitute.For<IModelProvider>();

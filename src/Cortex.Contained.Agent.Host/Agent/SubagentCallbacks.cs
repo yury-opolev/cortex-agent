@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using Cortex.Contained.Agent.Host.Agent.Autonomy;
 using Cortex.Contained.Agent.Host.Tools;
 using Cortex.Contained.Contracts.Config;
 using Cortex.Contained.Contracts.Llm;
@@ -26,6 +27,18 @@ public sealed partial class SubagentCallbacks : IAgentLoopCallbacks
     private readonly AgentSession? pendingSession;
     private readonly ImageAgingConfig imageAging;
     private readonly IImageDescriber? imageDescriber;
+
+    /// <summary>Tool actions seen in the current round, fed to the stuck detector at round end.</summary>
+    private readonly List<StuckDetectorAction> roundActions = [];
+
+    /// <summary>Supervisor for a goal run, or null for a plain subagent.</summary>
+    private AutonomySupervisor? supervisor;
+
+    /// <summary>How much tool output forms the observation fingerprint for loop detection.</summary>
+    private const int ObservationFingerprintLength = 256;
+
+    /// <summary>Attaches or clears the goal supervisor. Read at the next round boundary.</summary>
+    internal void SetSupervisor(AutonomySupervisor? value) => this.supervisor = value;
 
     /// <summary>Compaction threshold — compact when context reaches this fraction of the window.</summary>
     private const double CompactionThreshold = 0.65;
@@ -141,10 +154,29 @@ public sealed partial class SubagentCallbacks : IAgentLoopCallbacks
     public Task OnToolCompleteAsync(LlmToolCall toolCall, AgentToolResult result, TimeSpan duration, CancellationToken ct)
     {
         this.LogToolCompleted(this.conversationId, toolCall.Name, result.Success, (long)duration.TotalMilliseconds);
+
+        // Recorded for the stuck detector. Deliberately keyed on tool + arguments + observation
+        // and NOT on the model's reasoning text: real reasoning never repeats verbatim, so
+        // including it would stop every repeat-detection heuristic from ever firing.
+        this.roundActions.Add(new StuckDetectorAction(
+            toolCall.Name,
+            toolCall.Arguments ?? string.Empty,
+            Thought: string.Empty,
+            Observation: Summarise(result),
+            IsError: !result.Success));
+
         return Task.CompletedTask;
     }
 
-    public async Task OnRoundCompleteAsync(int round, LlmTokenUsage? usage, CancellationToken ct)
+    private static string Summarise(AgentToolResult result)
+    {
+        var text = result.Success ? result.Content : result.Error ?? string.Empty;
+        return text is { Length: > ObservationFingerprintLength }
+            ? text[..ObservationFingerprintLength]
+            : text ?? string.Empty;
+    }
+
+    public async Task<bool> OnRoundCompleteAsync(int round, LlmTokenUsage? usage, CancellationToken ct)
     {
         // Persist messages to SubagentSessionStore after each round
         if (this.store is not null && this.taskId is not null)
@@ -161,6 +193,53 @@ public sealed partial class SubagentCallbacks : IAgentLoopCallbacks
                 this.LogCompactionTriggered(this.conversationId, usage.TotalInputTokens, threshold);
                 await CompactAsync(ct).ConfigureAwait(false);
             }
+        }
+
+        return this.RunMidLoopGate();
+    }
+
+    /// <summary>
+    /// THE MID-LOOP GATE. Budget and loop checks have to run here, because the completion judge is
+    /// only reached when a turn calls no tools — an agent that calls one every round would
+    /// otherwise be bounded by nothing. Deliberately excludes the judge itself, which is an LLM
+    /// call and would cost a model request per tool round.
+    /// </summary>
+    private bool RunMidLoopGate()
+    {
+        var active = this.supervisor;
+        if (active is null)
+        {
+            this.roundActions.Clear();
+            return true;
+        }
+
+        var turn = this.roundActions.Count == 0
+            ? StuckDetectorTurn.Monologue(string.Empty)
+            : StuckDetectorTurn.WithActions([.. this.roundActions]);
+        this.roundActions.Clear();
+
+        var decision = active.CheckMidLoop(turn);
+        switch (decision.Action)
+        {
+            case MidLoopAction.Stop:
+                this.LogMidLoopStop(this.conversationId, decision.Outcome);
+                return false;
+
+            case MidLoopAction.Nudge:
+                // Describe the loop back to the run rather than killing it outright — an agent
+                // that can see the loop it is in will often break out of it.
+                this.pendingSession?.EnqueuePending(new AgentMessage
+                {
+                    ConversationId = this.conversationId,
+                    ChannelId = this.conversationId,
+                    Text = "[autonomy supervisor] " + decision.Nudge,
+                    Source = AgentMessageSource.User,
+                });
+                this.LogMidLoopNudge(this.conversationId);
+                return true;
+
+            default:
+                return true;
         }
     }
 
@@ -334,4 +413,10 @@ public sealed partial class SubagentCallbacks : IAgentLoopCallbacks
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "[subagent] {ConversationId} compaction failed: {ErrorMessage}")]
     private partial void LogCompactionFailed(string conversationId, string errorMessage);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "[autonomy] {ConversationId} halted mid-loop: {Outcome}")]
+    private partial void LogMidLoopStop(string conversationId, GoalOutcome outcome);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "[autonomy] {ConversationId} nudged out of a detected loop")]
+    private partial void LogMidLoopNudge(string conversationId);
 }

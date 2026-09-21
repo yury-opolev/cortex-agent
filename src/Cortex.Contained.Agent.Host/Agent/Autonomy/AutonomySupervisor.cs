@@ -51,6 +51,13 @@ internal sealed partial class AutonomySupervisor
 
     private bool loopingSinceLastCheck;
 
+    /// <summary>
+    /// The outcome recorded when <see cref="CheckMidLoop"/> decided to stop, so the caller can
+    /// report WHY the loop halted. <see cref="AgentLoopOutcome.CallbackHalted"/> alone cannot
+    /// distinguish an exhausted budget from a run that stayed stuck after its nudge.
+    /// </summary>
+    public GoalOutcome? MidLoopStop { get; private set; }
+
     public AutonomySupervisor(
         string goal,
         GoalBudget budget,
@@ -87,6 +94,7 @@ internal sealed partial class AutonomySupervisor
         if (this.budget.IsExhausted)
         {
             this.LogBudgetExhausted(this.budget.Consumed.Elapsed, this.budget.Consumed.ContinuationsUsed);
+            this.MidLoopStop = GoalOutcome.BudgetExhausted;
             return new MidLoopDecision(MidLoopAction.Stop, GoalOutcome.BudgetExhausted, string.Empty);
         }
 
@@ -104,6 +112,7 @@ internal sealed partial class AutonomySupervisor
         if (this.loopingSinceLastCheck)
         {
             this.LogStuckAfterNudge(detection.Description);
+            this.MidLoopStop = GoalOutcome.Stalled;
             return new MidLoopDecision(MidLoopAction.Stop, GoalOutcome.Stalled, string.Empty);
         }
 
@@ -152,6 +161,18 @@ internal sealed partial class AutonomySupervisor
         this.budget.RecordContinuation();
         return verdict;
     }
+
+    /// <summary>
+    /// The run's final report for a given outcome: why it stopped, what it spent, and every
+    /// decision it made instead of asking a human.
+    /// </summary>
+    public string BuildStopReport(GoalOutcome outcome) => this.BuildReport(outcome switch
+    {
+        GoalOutcome.BudgetExhausted => "Budget exhausted.",
+        GoalOutcome.Stalled => "Run was still looping after a nudge.",
+        GoalOutcome.GenuinelyBlocked => "Every remaining item is blocked.",
+        _ => "Run ended.",
+    });
 
     /// <summary>
     /// The run's final report: the reason it stopped, what it spent, and every decision it made

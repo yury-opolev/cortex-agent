@@ -254,6 +254,10 @@ public sealed partial class SubagentRunner : IDisposable
             this.imageAgingOptions?.CurrentValue,
             this.imageDescriber);
 
+        // The callbacks own the mid-loop gate: the supervisor must be consulted after every tool
+        // round, not only where a turn stops calling tools.
+        callbacks.SetSupervisor(this.supervisor);
+
         AgentLoopResult result;
         try
         {
@@ -358,11 +362,26 @@ public sealed partial class SubagentRunner : IDisposable
             // A hard error is terminal even under a goal — retrying a broken provider is not
             // autonomy. A doom loop is terminal too: AgentLoop builds a fresh DoomLoopDetector per
             // call, so continuing would reset the detector and let the same repeated command run
-            // once per continuation. Running out of rounds is NOT terminal: it is one bounded loop
-            // ending, which is exactly what the supervisor exists to adjudicate.
+            // once per continuation. CallbackHalted means the mid-loop gate already decided to
+            // stop (budget exhausted or stuck after a nudge), so it is terminal by definition.
+            // Running out of rounds is NOT terminal: it is one bounded loop ending, which is
+            // exactly what the supervisor exists to adjudicate.
             if (result.Outcome is AgentLoopOutcome.Error or AgentLoopOutcome.DoomLoop)
             {
                 return result with { RoundsExecuted = totalRounds };
+            }
+
+            if (result.Outcome is AgentLoopOutcome.CallbackHalted)
+            {
+                var midLoop = active.MidLoopStop ?? GoalOutcome.Stalled;
+                this.LogGoalRunStopped(config.ConversationId, midLoop, totalRounds);
+                return result with
+                {
+                    Outcome = AgentLoopOutcome.MaxRoundsExceeded,
+                    ResponseText = active.BuildStopReport(midLoop),
+                    ErrorMessage = null,
+                    RoundsExecuted = totalRounds,
+                };
             }
 
             var verdict = await active
