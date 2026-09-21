@@ -1,4 +1,5 @@
 using System.Collections.Frozen;
+using Cortex.Contained.Agent.Host.Agent.Autonomy;
 using Cortex.Contained.Contracts.Config;
 using Cortex.Contained.Contracts.Llm;
 using Microsoft.Extensions.Options;
@@ -12,7 +13,7 @@ namespace Cortex.Contained.Agent.Host.Agent;
 /// and fed additional input by <see cref="Tools.BuiltIn.SubAgentSendTool"/> (<see cref="InjectMessage"/>).
 /// All loop logic is delegated to <see cref="AgentLoop"/> with <see cref="SubagentCallbacks"/>.
 /// </summary>
-public sealed class SubagentRunner : IDisposable
+public sealed partial class SubagentRunner : IDisposable
 {
     /// <summary>Default safety-net round limit when none is configured.</summary>
     internal const int DefaultMaxRounds = 200;
@@ -36,6 +37,16 @@ public sealed class SubagentRunner : IDisposable
     private readonly ILogger logger;
     private readonly IOptionsMonitor<ImageAgingConfig>? imageAgingOptions;
     private readonly IImageDescriber? imageDescriber;
+
+    /// <summary>
+    /// Supervisor for a goal-driven run, or <see langword="null"/> for an ordinary subagent.
+    /// Nullable rather than a separate runner type so a plain subagent keeps exactly its previous
+    /// single-loop behaviour, and so <c>sub_agent_set_goal</c> can attach one to a live run.
+    /// </summary>
+    private AutonomySupervisor? supervisor;
+
+    /// <summary>Attaches or clears the goal supervisor. Takes effect at the next loop boundary.</summary>
+    internal void SetSupervisor(AutonomySupervisor? value) => this.supervisor = value;
 
     /// <summary>
     /// Session used solely for its pending message queue.
@@ -246,10 +257,13 @@ public sealed class SubagentRunner : IDisposable
         AgentLoopResult result;
         try
         {
-            result = await this.agentLoop.ExecuteAsync(config, callbacks, cancellationToken).ConfigureAwait(false);
+            result = await this.RunLoopWithSupervisionAsync(config, callbacks, messages, cancellationToken)
+                .ConfigureAwait(false);
         }
         finally
         {
+            // Only once the WHOLE run is over. Clearing this per inner loop would make a goal run
+            // deaf to injected messages from its second continuation onward.
             this.StopAcceptingMessages();
         }
 
@@ -298,8 +312,88 @@ public sealed class SubagentRunner : IDisposable
         }
     }
 
+    /// <summary>
+    /// Runs the agent loop once when there is no goal, or repeatedly under a goal until the
+    /// supervisor says to stop.
+    /// </summary>
+    /// <remarks>
+    /// Without a supervisor this is exactly the previous single call, so a plain subagent is
+    /// unaffected. Under a goal, a finished loop is not the end of the run: the supervisor judges
+    /// it, and a CONTINUE verdict feeds the judge's "what is still missing" back in through the
+    /// same pending-message inlet a human follow-up would use, then runs another bounded loop.
+    /// </remarks>
+    private async Task<AgentLoopResult> RunLoopWithSupervisionAsync(
+        AgentLoopConfig config,
+        SubagentCallbacks callbacks,
+        List<LlmMessage> messages,
+        CancellationToken cancellationToken)
+    {
+        if (this.supervisor is null)
+        {
+            return await this.agentLoop.ExecuteAsync(config, callbacks, cancellationToken).ConfigureAwait(false);
+        }
+
+        var totalRounds = 0;
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var result = await this.agentLoop.ExecuteAsync(config, callbacks, cancellationToken).ConfigureAwait(false);
+            totalRounds += result.RoundsExecuted;
+
+            // A hard error is terminal even under a goal — retrying a broken provider is not
+            // autonomy. Running out of rounds is NOT an error though: it is one bounded loop
+            // ending, which is exactly what the supervisor exists to adjudicate.
+            if (result.Outcome is AgentLoopOutcome.Error)
+            {
+                return result with { RoundsExecuted = totalRounds };
+            }
+
+            var verdict = await this.supervisor
+                .EvaluateCompletionAsync(messages, BuildProofInput(this.supervisor), cancellationToken)
+                .ConfigureAwait(false);
+
+            if (verdict is GoalVerdict.StopVerdict stop)
+            {
+                this.LogGoalRunStopped(config.ConversationId, stop.Outcome, totalRounds);
+                return result with
+                {
+                    Outcome = stop.Outcome == GoalOutcome.Met ? AgentLoopOutcome.Completed : AgentLoopOutcome.MaxRoundsExceeded,
+                    ResponseText = stop.Report,
+                    RoundsExecuted = totalRounds,
+                };
+            }
+
+            var remaining = ((GoalVerdict.ContinueVerdict)verdict).Remaining;
+            this.LogGoalContinuing(config.ConversationId, totalRounds);
+
+            if (!this.InjectMessage(remaining))
+            {
+                // Cannot feed the continuation back in, so the run cannot continue. Report what
+                // was achieved rather than spinning on an inlet that will never accept.
+                return result with { RoundsExecuted = totalRounds };
+            }
+        }
+    }
+
+    /// <summary>
+    /// Observable progress signals for the termination proof. Deliberately excludes the judge's
+    /// prose — a run that narrates progress it did not make must not be able to prove liveness.
+    /// </summary>
+    private static TerminationProofInput BuildProofInput(AutonomySupervisor supervisor)
+    {
+        var parked = supervisor.Ledger.ParkedBlockerItemKeys().ToList();
+        return new TerminationProofInput(parked, parked, IsLooping: false, NothingLeftToAdvance: false, []);
+    }
+
     public void Dispose()
     {
         this.pendingSession.Dispose();
     }
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "[autonomy] Goal run {ConversationId} stopped as {Outcome} after {Rounds} rounds")]
+    private partial void LogGoalRunStopped(string conversationId, GoalOutcome outcome, int rounds);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "[autonomy] Goal run {ConversationId} continuing after {Rounds} rounds")]
+    private partial void LogGoalContinuing(string conversationId, int rounds);
 }
