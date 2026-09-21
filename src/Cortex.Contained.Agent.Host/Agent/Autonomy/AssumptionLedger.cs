@@ -1,6 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
-using Cortex.Contained.Agent.Host.Mcp;
+using Cortex.Contained.Contracts.Security;
 
 namespace Cortex.Contained.Agent.Host.Agent.Autonomy;
 
@@ -27,11 +27,20 @@ internal sealed record AssumptionLedgerEntry(
 
 /// <summary>
 /// Records every autonomous decision that replaced asking a human, with redaction before storage.
+/// <para>
+/// Redaction is <see cref="SensitiveDataRedactor"/> — pattern-based, so only a secret-looking
+/// substring is replaced and the surrounding prose survives. That matters more here than almost
+/// anywhere else: this ledger IS the report of an unattended multi-day run, so a blanket payload
+/// suppressor would leave every entry reading as the same placeholder and destroy the audit trail.
+/// </para>
+/// <para>
+/// Identity keys are hashed from the ORIGINAL text, never the redacted display text. Redaction is
+/// not identity-preserving, so a work item whose text contained a secret would otherwise never
+/// match itself and the blocked-work proof would never fire.
+/// </para>
 /// </summary>
 internal sealed class AssumptionLedger
 {
-    private const string RedactionToolName = "mcp__autonomy_ledger";
-
     private readonly object syncLock = new();
     private readonly List<AssumptionLedgerEntry> entries = [];
     private long nextSequence;
@@ -118,7 +127,7 @@ internal sealed class AssumptionLedger
     }
 
     private static string Redact(string text)
-        => McpTelemetrySanitizer.Input(RedactionToolName, text);
+        => SensitiveDataRedactor.Redact(text);
 
     private static string? RedactOrNull(string? text)
         => text is null ? null : Redact(text);

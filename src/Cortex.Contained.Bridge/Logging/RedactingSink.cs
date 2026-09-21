@@ -1,5 +1,5 @@
-using Cortex.Contained.Bridge.Security;
 using Cortex.Contained.Common.Security;
+using Cortex.Contained.Contracts.Security;
 using Serilog.Core;
 using Serilog.Events;
 

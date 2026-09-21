@@ -1,5 +1,4 @@
 using Cortex.Contained.Agent.Host.Agent.Autonomy;
-using Cortex.Contained.Agent.Host.Mcp;
 
 namespace Cortex.Contained.Agent.Host.Tests;
 
@@ -22,20 +21,45 @@ public class AssumptionLedgerTests
         var entry = Assert.Single(ledger.Snapshot());
 
         Assert.Equal(AssumptionLedgerEntryKind.ParkedBlocker, entry.Kind);
-        Assert.Equal(McpTelemetrySanitizer.RedactedPayload, entry.Tried);
+
+        // The exhaustion rule is only meaningful if the proof of what was tried survives storage.
+        Assert.Equal("tried command", entry.Tried);
     }
 
     [Fact]
-    public void RecordAssumption_RedactsFreeTextBeforeStorage()
+    public void RecordAssumption_FreeTextWithoutSecrets_SurvivesVerbatim()
+    {
+        // The ledger IS the report of an unattended run. A blanket suppressor would render every
+        // entry as the same placeholder and destroy the audit trail, so ordinary prose must live.
+        var ledger = new AssumptionLedger();
+
+        ledger.RecordAssumption(
+            "migrate the billing schema",
+            "chose the additive column approach",
+            "a destructive rename would break rollback");
+        var entry = Assert.Single(ledger.Snapshot());
+
+        Assert.Equal("migrate the billing schema", entry.WorkItem);
+        Assert.Equal("chose the additive column approach", entry.Decision);
+        Assert.Equal("a destructive rename would break rollback", entry.Reason);
+    }
+
+    [Fact]
+    public void RecordAssumption_RedactsOnlyTheSecretAndKeepsSurroundingText()
     {
         var ledger = new AssumptionLedger();
 
-        ledger.RecordAssumption("deploy secret=abc123", "choose default", "because secret=abc123");
+        ledger.RecordAssumption("deploy with secret=abc123 now", "choose default", "key was sk-abcdefghijklmnopqrstuvwxyz012345");
         var entry = Assert.Single(ledger.Snapshot());
 
-        Assert.Equal(McpTelemetrySanitizer.RedactedPayload, entry.WorkItem);
-        Assert.Equal(McpTelemetrySanitizer.RedactedPayload, entry.Decision);
-        Assert.Equal(McpTelemetrySanitizer.RedactedPayload, entry.Reason);
+        Assert.StartsWith("deploy with secret=", entry.WorkItem, StringComparison.Ordinal);
+        Assert.DoesNotContain("abc123", entry.WorkItem, StringComparison.Ordinal);
+        Assert.Contains("[REDACTED]", entry.WorkItem, StringComparison.Ordinal);
+
+        Assert.Equal("choose default", entry.Decision);
+
+        Assert.StartsWith("key was ", entry.Reason, StringComparison.Ordinal);
+        Assert.DoesNotContain("sk-abcdefghijklmnopqrstuvwxyz012345", entry.Reason, StringComparison.Ordinal);
     }
 
     [Fact]

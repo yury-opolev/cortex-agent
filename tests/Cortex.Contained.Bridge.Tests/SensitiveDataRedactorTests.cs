@@ -1,4 +1,4 @@
-using Cortex.Contained.Bridge.Security;
+using Cortex.Contained.Contracts.Security;
 
 namespace Cortex.Contained.Bridge.Tests;
 
