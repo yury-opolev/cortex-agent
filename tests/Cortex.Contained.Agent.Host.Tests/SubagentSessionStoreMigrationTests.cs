@@ -6,7 +6,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Cortex.Contained.Agent.Host.Tests;
 
 /// <summary>
-/// Verifies the v1 → v2 subagent schema migration is additive and non-destructive:
+/// Verifies subagent schema migrations are additive and non-destructive:
 /// existing tasks survive, interrupted work is requeued, and historical terminal
 /// tasks are marked delivered so they are never re-announced after an upgrade.
 /// </summary>
@@ -49,7 +49,7 @@ public class SubagentSessionStoreMigrationTests : IDisposable
         Assert.NotNull(store.GetById("sa-completed"));
         Assert.NotNull(store.GetById("sa-failed"));
         Assert.NotNull(store.GetById("sa-cancelled"));
-        Assert.Equal(2, ReadUserVersion());
+        Assert.Equal(3, ReadUserVersion());
         Assert.Equal("ok", store.GetById("sa-completed")!.Result);
     }
 
@@ -141,11 +141,11 @@ public class SubagentSessionStoreMigrationTests : IDisposable
         using var reopened = CreateStore();
 
         Assert.NotNull(reopened.GetById("sa-pre-crash"));
-        Assert.Equal(2, ReadUserVersion());
+        Assert.Equal(3, ReadUserVersion());
     }
 
     [Fact]
-    public void Constructor_NewDatabase_CreatesVersion2Schema()
+    public void Constructor_NewDatabase_CreatesVersion3Schema()
     {
         using (var store = CreateStore())
         {
@@ -165,6 +165,11 @@ public class SubagentSessionStoreMigrationTests : IDisposable
                 StartedAt = DateTimeOffset.UtcNow.AddMinutes(-5),
                 LastProgressAt = DateTimeOffset.UtcNow.AddMinutes(-1),
                 RestartCount = 3,
+                Goal = "finish everything",
+                GoalMaxDuration = TimeSpan.FromHours(6),
+                GoalMaxContinuations = 123,
+                GoalConsumedElapsed = TimeSpan.FromMinutes(14),
+                GoalConsumedContinuations = 5,
             };
             store.Create(task);
 
@@ -177,9 +182,42 @@ public class SubagentSessionStoreMigrationTests : IDisposable
             Assert.NotNull(reloaded.NotificationUpdatedAt);
             Assert.NotNull(reloaded.StartedAt);
             Assert.Equal(3, reloaded.RestartCount);
+            Assert.Equal("finish everything", reloaded.Goal);
+            Assert.Equal(TimeSpan.FromHours(6), reloaded.GoalMaxDuration);
+            Assert.Equal(123, reloaded.GoalMaxContinuations);
+            Assert.Equal(TimeSpan.FromMinutes(14), reloaded.GoalConsumedElapsed);
+            Assert.Equal(5, reloaded.GoalConsumedContinuations);
         }
 
-        Assert.Equal(2, ReadUserVersion());
+        Assert.Equal(3, ReadUserVersion());
+    }
+
+    // ── Migration from v2 ────────────────────────────────────────────────
+
+    [Fact]
+    public void Constructor_V2Database_MigratesToV3WithoutDroppingTasks()
+    {
+        SeedV2Database(conn =>
+        {
+            InsertV2Task(conn, "sa-v2-queued", "queued");
+            InsertV2Task(conn, "sa-v2-completed", "completed", completedAt: "2026-07-01T11:00:00.0000000Z", result: "ok");
+        });
+
+        using var store = CreateStore();
+
+        var queued = store.GetById("sa-v2-queued");
+        var completed = store.GetById("sa-v2-completed");
+        Assert.NotNull(queued);
+        Assert.NotNull(completed);
+        Assert.Equal(SubagentTaskState.Queued, queued.State);
+        Assert.Equal(SubagentTaskState.Completed, completed.State);
+        Assert.Equal("ok", completed.Result);
+        Assert.Null(queued.Goal);
+        Assert.Null(queued.GoalMaxDuration);
+        Assert.Null(queued.GoalMaxContinuations);
+        Assert.Equal(TimeSpan.Zero, queued.GoalConsumedElapsed);
+        Assert.Equal(0, queued.GoalConsumedContinuations);
+        Assert.Equal(3, ReadUserVersion());
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────
@@ -245,6 +283,90 @@ public class SubagentSessionStoreMigrationTests : IDisposable
             VALUES
                 ($taskId, 'conv-1', 'webchat-default', 'v1 task', 'do things',
                  $state, $messagesJson, $result, NULL, '2026-07-01T10:00:00.0000000Z', $completedAt, 0)
+            """;
+        cmd.Parameters.AddWithValue("$taskId", taskId);
+        cmd.Parameters.AddWithValue("$state", state);
+        cmd.Parameters.AddWithValue("$messagesJson", messagesJson);
+        cmd.Parameters.AddWithValue("$result", (object?)result ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$completedAt", (object?)completedAt ?? DBNull.Value);
+        cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>Creates a v2-schema database exactly as the previous store version would have.</summary>
+    private void SeedV2Database(Action<SqliteConnection> seed)
+    {
+        Directory.CreateDirectory(Path.Combine(_tempDir, "subagents"));
+        using var conn = new SqliteConnection($"Data Source={DatabasePath};Pooling=False");
+        conn.Open();
+
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = """
+                CREATE TABLE subagent_tasks (
+                    task_id                 TEXT PRIMARY KEY,
+                    parent_conversation     TEXT NOT NULL,
+                    parent_channel          TEXT NOT NULL,
+                    description             TEXT NOT NULL,
+                    prompt                  TEXT NOT NULL,
+                    state                   TEXT NOT NULL DEFAULT 'queued',
+                    messages_json           TEXT NOT NULL DEFAULT '[]',
+                    result                  TEXT,
+                    eval_response           TEXT,
+                    created_at              TEXT NOT NULL,
+                    completed_at            TEXT,
+                    rounds                  INTEGER NOT NULL DEFAULT 0,
+                    run_mode                TEXT NOT NULL DEFAULT 'new',
+                    skill_name              TEXT,
+                    notification_state      TEXT NOT NULL DEFAULT 'none',
+                    notification_attempts   INTEGER NOT NULL DEFAULT 0,
+                    notification_updated_at TEXT,
+                    started_at              TEXT,
+                    last_progress_at        TEXT NOT NULL,
+                    restart_count           INTEGER NOT NULL DEFAULT 0
+                );
+
+                CREATE INDEX idx_subagent_active
+                    ON subagent_tasks (state)
+                    WHERE state IN ('queued', 'running', 'revising');
+
+                CREATE INDEX idx_subagent_parent
+                    ON subagent_tasks (parent_conversation);
+
+                CREATE INDEX idx_subagent_queue
+                    ON subagent_tasks(state, created_at)
+                    WHERE state = 'queued';
+
+                CREATE INDEX idx_subagent_notifications
+                    ON subagent_tasks(notification_state, completed_at)
+                    WHERE notification_state IN ('pending', 'enqueued');
+
+                PRAGMA user_version = 2;
+                """;
+            cmd.ExecuteNonQuery();
+        }
+
+        seed(conn);
+    }
+
+    private static void InsertV2Task(
+        SqliteConnection conn,
+        string taskId,
+        string state,
+        string messagesJson = "[]",
+        string? completedAt = null,
+        string? result = null)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            INSERT INTO subagent_tasks
+                (task_id, parent_conversation, parent_channel, description, prompt,
+                 state, messages_json, result, eval_response, created_at, completed_at, rounds,
+                 run_mode, skill_name, notification_state, notification_attempts,
+                 notification_updated_at, started_at, last_progress_at, restart_count)
+            VALUES
+                ($taskId, 'conv-1', 'webchat-default', 'v2 task', 'do things',
+                 $state, $messagesJson, $result, NULL, '2026-07-01T10:00:00.0000000Z', $completedAt, 0,
+                 'new', NULL, 'none', 0, NULL, NULL, '2026-07-01T10:00:00.0000000Z', 0)
             """;
         cmd.Parameters.AddWithValue("$taskId", taskId);
         cmd.Parameters.AddWithValue("$state", state);

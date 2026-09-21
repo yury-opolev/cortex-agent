@@ -1,5 +1,6 @@
 using System.Globalization;
 using Cortex.Contained.Agent.Host.Agent;
+using Cortex.Contained.Agent.Host.Agent.Autonomy;
 using Cortex.Contained.Contracts.Llm;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -42,6 +43,30 @@ public class SubagentSessionStoreTests : IDisposable
         Assert.Equal(SubagentTaskState.Running, retrieved.State);
         Assert.Equal("conv-1", retrieved.ParentConversation);
         Assert.Equal("webchat-default", retrieved.ParentChannel);
+        Assert.Null(retrieved.Goal);
+        Assert.Null(retrieved.GoalMaxDuration);
+        Assert.Null(retrieved.GoalMaxContinuations);
+        Assert.Equal(TimeSpan.Zero, retrieved.GoalConsumedElapsed);
+        Assert.Equal(0, retrieved.GoalConsumedContinuations);
+    }
+
+    [Fact]
+    public void Create_WithGoalAndLimits_PersistsAutonomyFields()
+    {
+        var task = CreateTask("sa-goal", "Goal task");
+        task.Goal = "ship the feature";
+        task.GoalMaxDuration = TimeSpan.FromHours(2);
+        task.GoalMaxContinuations = 17;
+
+        _store.Create(task);
+
+        var retrieved = _store.GetById("sa-goal");
+        Assert.NotNull(retrieved);
+        Assert.Equal("ship the feature", retrieved.Goal);
+        Assert.Equal(TimeSpan.FromHours(2), retrieved.GoalMaxDuration);
+        Assert.Equal(17, retrieved.GoalMaxContinuations);
+        Assert.Equal(TimeSpan.Zero, retrieved.GoalConsumedElapsed);
+        Assert.Equal(0, retrieved.GoalConsumedContinuations);
     }
 
     [Fact]
@@ -232,6 +257,23 @@ public class SubagentSessionStoreTests : IDisposable
         Assert.NotNull(task);
         Assert.Equal(2, task.Messages.Count);
         Assert.Equal(3, task.Rounds);
+    }
+
+    [Fact]
+    public void UpdateGoalBudgetConsumed_PersistsConsumedBudget()
+    {
+        var task = CreateTask("sa-budget", "Budget test");
+        task.Goal = "finish";
+        task.GoalMaxDuration = TimeSpan.FromDays(7);
+        task.GoalMaxContinuations = GoalBudget.DefaultContinuationLimit;
+        _store.Create(task);
+
+        _store.UpdateGoalBudgetConsumed("sa-budget", TimeSpan.FromMinutes(42), 9);
+
+        var retrieved = _store.GetById("sa-budget");
+        Assert.NotNull(retrieved);
+        Assert.Equal(TimeSpan.FromMinutes(42), retrieved.GoalConsumedElapsed);
+        Assert.Equal(9, retrieved.GoalConsumedContinuations);
     }
 
     // ── Crash recovery ───────────────────────────────────────────────────

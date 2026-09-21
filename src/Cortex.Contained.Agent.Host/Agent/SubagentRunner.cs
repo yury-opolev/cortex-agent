@@ -299,7 +299,15 @@ public sealed partial class SubagentRunner : IDisposable
             if (!alreadyPersisted)
             {
                 messages.Add(new LlmMessage { Role = "assistant", Content = responseText });
-                this.store.UpdateMessages(this.taskId, messages, result.RoundsExecuted);
+                var active = this.supervisor;
+                if (active is null)
+                {
+                    this.store.UpdateMessages(this.taskId, messages, result.RoundsExecuted);
+                }
+                else
+                {
+                    this.store.UpdateMessages(this.taskId, messages, result.RoundsExecuted, active.Budget.Consumed);
+                }
             }
         }
 
@@ -405,6 +413,14 @@ public sealed partial class SubagentRunner : IDisposable
             }
 
             var remaining = ((GoalVerdict.ContinueVerdict)verdict).Remaining;
+            if (this.store is not null && this.taskId is not null)
+            {
+                this.store.UpdateGoalBudgetConsumed(
+                    this.taskId,
+                    active.Budget.Consumed.Elapsed,
+                    active.Budget.Consumed.ContinuationsUsed);
+            }
+
             this.LogGoalContinuing(config.ConversationId, totalRounds);
 
             // Framed as a supervisor note, NOT as the user speaking. The judge's text is derived

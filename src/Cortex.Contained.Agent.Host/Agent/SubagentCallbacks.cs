@@ -181,7 +181,7 @@ public sealed partial class SubagentCallbacks : IAgentLoopCallbacks
         // Persist messages to SubagentSessionStore after each round
         if (this.store is not null && this.taskId is not null)
         {
-            this.store.UpdateMessages(this.taskId, this.messages, round);
+            this.PersistMessages(round);
         }
 
         // Check if compaction is needed
@@ -284,7 +284,7 @@ public sealed partial class SubagentCallbacks : IAgentLoopCallbacks
         // Persist final state
         if (this.store is not null && this.taskId is not null)
         {
-            this.store.UpdateMessages(this.taskId, this.messages, result.RoundsExecuted);
+            this.PersistMessages(result.RoundsExecuted);
         }
 
         return Task.CompletedTask;
@@ -298,6 +298,23 @@ public sealed partial class SubagentCallbacks : IAgentLoopCallbacks
     public void OnToolResultMessage(LlmMessage message)
     {
         this.messages.Add(message);
+    }
+
+    private void PersistMessages(int rounds)
+    {
+        if (this.store is null || this.taskId is null)
+        {
+            return;
+        }
+
+        var active = this.supervisor;
+        if (active is null)
+        {
+            this.store.UpdateMessages(this.taskId, this.messages, rounds);
+            return;
+        }
+
+        this.store.UpdateMessages(this.taskId, this.messages, rounds, active.Budget.Consumed);
     }
 
     // ── Private: Compaction ──────────────────────────────────────────────

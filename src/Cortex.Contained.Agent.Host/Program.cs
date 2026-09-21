@@ -1,5 +1,6 @@
 ﻿using System.Globalization;
 using Cortex.Contained.Agent.Host.Agent;
+using Cortex.Contained.Agent.Host.Agent.Autonomy;
 using Cortex.Contained.Agent.Host.Hubs;
 using Cortex.Contained.Agent.Host.Llm;
 using Cortex.Contained.Agent.Host.Scheduler;
@@ -528,6 +529,7 @@ builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Agent.SubagentExecutio
     var agentConfig = sp.GetRequiredService<IOptionsMonitor<AgentConfig>>();
     var subagentStore = sp.GetRequiredService<SubagentSessionStore>();
     var todoStore = sp.GetRequiredService<InMemoryTodoStore>();
+    var timeProvider = sp.GetRequiredService<TimeProvider>();
     var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
     var runnerLogger = loggerFactory.CreateLogger<SubagentRunner>();
 
@@ -537,10 +539,35 @@ builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Agent.SubagentExecutio
     // cycle (coordinator -> ToolRegistry -> SubAgent*Tool -> coordinator) that hangs host startup
     // before Kestrel binds. Deferring it to the runner factory breaks the cycle: by the time a
     // subagent is dispatched, the coordinator singleton is already fully built and cached.
-    Func<SubagentTask, SubagentRunner> runnerFactory = task => new SubagentRunner(
-        llmClient, sp.GetRequiredService<ToolRegistry>(), agentConfig.CurrentValue.MaxSubagentRounds,
-        runnerLogger, subagentStore, task.TaskId, modelProvider, todoStore,
-        transientStreamRetries: agentConfig.CurrentValue.SubagentTransientStreamRetries);
+    Func<SubagentTask, SubagentRunner> runnerFactory = task =>
+    {
+        var runner = new SubagentRunner(
+            llmClient, sp.GetRequiredService<ToolRegistry>(), agentConfig.CurrentValue.MaxSubagentRounds,
+            runnerLogger, subagentStore, task.TaskId, modelProvider, todoStore,
+            transientStreamRetries: agentConfig.CurrentValue.SubagentTransientStreamRetries);
+
+        if (!string.IsNullOrWhiteSpace(task.Goal))
+        {
+            var budget = GoalBudget.Rehydrate(
+                new GoalBudgetConsumed(task.GoalConsumedElapsed, task.GoalConsumedContinuations),
+                timeProvider,
+                task.GoalMaxDuration,
+                task.GoalMaxContinuations);
+
+            runner.SetSupervisor(new AutonomySupervisor(
+                task.Goal,
+                budget,
+                new CompletionJudge(
+                    llmClient,
+                    modelProvider,
+                    loggerFactory.CreateLogger<CompletionJudge>()),
+                new StuckDetector(),
+                new AssumptionLedger(),
+                loggerFactory.CreateLogger<AutonomySupervisor>()));
+        }
+
+        return runner;
+    };
 
     return new Cortex.Contained.Agent.Host.Agent.SubagentExecutionCoordinator(
         subagentStore,

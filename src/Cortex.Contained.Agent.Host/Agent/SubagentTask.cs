@@ -115,6 +115,31 @@ public sealed class SubagentTask
     /// <summary>Optional skill the subagent was launched with.</summary>
     public string? SkillName { get; init; }
 
+    /// <summary>
+    /// Autonomous objective for this task. Null means this is an ordinary background subagent.
+    /// </summary>
+    public string? Goal { get; set; }
+
+    /// <summary>
+    /// Wall-clock backstop for a goal run. Null means this dimension is intentionally unlimited.
+    /// </summary>
+    public TimeSpan? GoalMaxDuration { get; set; }
+
+    /// <summary>
+    /// Continuation-count backstop for a goal run. Null means this dimension is intentionally unlimited.
+    /// </summary>
+    public int? GoalMaxContinuations { get; set; }
+
+    /// <summary>
+    /// Consumed wall-clock budget persisted so a restarted goal run cannot receive a fresh clock.
+    /// </summary>
+    public TimeSpan GoalConsumedElapsed { get; set; }
+
+    /// <summary>
+    /// Consumed continuation budget persisted so a restarted goal run cannot receive fresh turns.
+    /// </summary>
+    public int GoalConsumedContinuations { get; set; }
+
     /// <summary>Delivery state of the terminal result notification.</summary>
     public SubagentNotificationState NotificationState { get; set; }
 
