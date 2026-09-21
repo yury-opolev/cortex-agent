@@ -1,7 +1,7 @@
 # Cortex autonomous mode — design
 
-Status: **draft, for review** (branch `feat/coda-uptake-autonomy`)
-Date: 2026-09-20
+Status: **approved** — all open questions resolved. Ready to implement; no code written yet.
+Date: 2026-09-20 (revised 2026-09-21)
 
 ## Goal
 
@@ -345,8 +345,9 @@ flows through the parent, not around it:
   state (outcome so far, continuations used, elapsed, remaining).
 - The existing terminal `[Background task completed]` notification delivers the final report.
 
-Open question below: whether that is enough, or whether a long run should be able to push an
-unprompted progress note to the parent conversation.
+Resolved (see *Resolved* below): this pull-based set is the baseline, enriched with goal state in
+`{{active_tasks}}`, plus a **supervisor-emitted** push on exception only. The subagent's model never
+gains the ability to message the user — only the runtime does.
 
 ## Risks
 
@@ -363,24 +364,18 @@ unprompted progress note to the parent conversation.
 
 ## Suggested phasing
 
-1. **Routing fix** — deliver coda envelopes to the owning subagent runner. Independently valuable;
-   a live bug today.
+1. **Routing fix** — one general "deliver to `subagent-{id}`" router, used by both
+   `CodingAgentInjectionService` (coda envelopes) and `SubagentExecutionCoordinator` (child
+   completion notices). Independently valuable; a live bug today.
 2. `AutonomySupervisor` + completion judge + backstop budget, wired into `AgentLoop` /
    `SubagentRunner`; `goal` on `sub_agent_start`. Smallest genuinely useful increment.
 3. Ledger + termination proof + stuck detector + mid-loop gate.
-4. `sub_agent_set_goal` (live re-aiming), goal state in `sub_agent_read`, persistence of consumed
-   budget.
-5. `coding_relay` placeholder + `CodingRelayAutonomous` for the subagent prompt.
-
-## Open questions for review
-
-1. **Progress cadence** — are parent-visible todos plus `sub_agent_read` enough, or should a long
-   run be able to push an unprompted progress note to the parent conversation? This is the one
-   place where the "subagents cannot message the user" rule is genuinely inconvenient.
-2. **Nested delegation** — `sub_agent_start` is excluded from subagents, so an autonomous run cannot
-   subdivide its own work. Is that acceptable for multi-day goals?
-3. **Judge model** — same model as the run (simple, shares the provider), or a cheaper one, given it
-   fires once per continuation?
+4. `sub_agent_set_goal` (live re-aiming), goal state in `sub_agent_read` **and in
+   `{{active_tasks}}`** (progress option A), persistence of consumed budget.
+5. Nested delegation: un-exclude the `sub_agent_*` family for subagents, depth-first claiming,
+   depth cap, cascade stop.
+6. `coding_relay` placeholder + `CodingRelayAutonomous` for the subagent prompt; supervisor-emitted
+   exception push (progress option B).
 
 ## Resolved
 
@@ -396,3 +391,71 @@ starvation rules — to express something the existing cap already expresses. If
 out short ones, the answer is to raise the cap, which is already live-editable from the Bridge
 settings page with no restart (`SubagentRunnerRegistry.SetMaxConcurrent`). The default was raised
 from 5 to 10 for exactly this reason.
+
+**Judge model: the same model as the run.** No separate cheap-model path. The judge shares the
+run's provider and model via `IModelProvider`, matching how subagents already inherit the parent's
+model (`SubagentExecutor.cs:64`). It fires once per continuation, not per round, so the cost is
+proportional to judge *decisions* rather than work done.
+
+**Nested delegation: yes — an autonomous run may subdivide its work.** This reverses today's
+behaviour, where the whole `sub_agent_*` family is excluded from subagents
+(`SubagentRunner.s_excludedTools`, commented "no recursion"). A multi-day goal that cannot delegate
+is a poor fit for work that naturally fans out.
+
+Enabling it is *not* a one-line exclusion change. Four consequences:
+
+1. **Un-exclude the family, not just `sub_agent_start`.** A parent needs `sub_agent_read`,
+   `sub_agent_send` and `sub_agent_stop` to manage children. Only `send_message`, `schedule_task`
+   and `session_timer` remain excluded — the ones that would let a subagent reach the user.
+2. **Starvation is a real deadlock, not a slowdown.** `sub_agent_start` returns immediately, so a
+   parent does not block — but it *keeps its runner slot* while waiting for children. Tasks are
+   claimed oldest-first (`SubagentSessionStore` "claim the oldest queued task"), and children are
+   always created *after* their parents, so FIFO systematically favours parents. With the pool full
+   of parents waiting on children that can never be admitted, nothing progresses — and under a
+   7-day budget "it resolves eventually" is false.
+   **Fix: claim depth-first.** Prefer queued tasks with the greatest depth, so leaves drain and the
+   tree unwinds. Combine with a **depth cap** (proposed: 3) to bound the tree.
+3. **Cascade stop.** Stopping or cancelling a parent must stop its whole subtree, otherwise
+   orphaned children keep burning budget with nobody to report to.
+4. **Completion notices hit the routing gap.** `SubagentExecutionCoordinator` delivers a child's
+   terminal result with `messageChannel.EnqueueAsync` (`:491`) addressed to
+   `task.ParentConversation`. When the parent is itself a subagent that is `subagent-{parentTaskId}`,
+   which `AgentRuntime` drains — not the parent's runner. This is the **same root cause** as the
+   coda-envelope gap above, so phase 1 should ship **one** general "deliver to `subagent-{id}`"
+   router used by both `CodingAgentInjectionService` and the coordinator, rather than two
+   special cases.
+
+**Progress cadence: enrich `{{active_tasks}}` (A) + supervisor-emitted push on exception (B).
+Everything else stays pull.** A periodic heartbeat (C) is **rejected** — on a multi-day run it is
+the option most likely to become noise, and noise trains the reader to ignore it.
+
+A 7-day run must not be a black box, but subagents deliberately cannot `send_message` — that
+exclusion is what makes them structurally unattended, and weakening it casually would undo the
+property the whole design rests on.
+
+**What already exists — all pull-based, no new code:**
+
+| Mechanism | Reaches | Note |
+|---|---|---|
+| `todos_write` | main agent | `SubagentInstructions` already says progress is *"visible to the main agent"* |
+| `{{active_tasks}}` | main agent's system prompt | `PromptAssembler.BuildActiveTasksSection` already lists every active task with id, description, state and elapsed minutes |
+| `sub_agent_read` | main agent, on demand | full transcript |
+| `[Background task completed]` | parent conversation | terminal only |
+
+The gap is not absence of signal — it is that all of it is **pull**, so the main agent only sees it
+when the user happens to talk to it. A run that wedges at hour 30 of 168 stays invisible until
+someone asks.
+
+**A — enrich `active_tasks`.** Add goal state to the section that already renders: outcome so far,
+continuations used, elapsed vs budget, and the judge's current `remaining`. Costs almost nothing,
+needs no new delivery path, breaks no invariant. It does not solve "nobody is asking", but it means
+that the moment anyone does, the answer is already in front of the agent.
+
+**B — supervisor-emitted push, exception only.** The **supervisor** (trusted runtime code), *not*
+the subagent's model, posts a structured note to the parent conversation when something genuinely
+warrants interrupting: stuck detected, blocker parked, outcome became `GenuinelyBlocked`, or budget
+crossed a threshold. This is the load-bearing distinction — the model still cannot message the
+user; only the runtime can, and only in a fixed form. The `s_excludedTools` invariant is untouched,
+because nothing is un-excluded. "No news is good news."
+
+C can be revisited behind a setting if A + B prove too quiet in practice.
