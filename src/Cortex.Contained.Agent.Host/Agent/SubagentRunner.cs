@@ -44,6 +44,8 @@ public sealed class SubagentRunner : IDisposable
     /// <see cref="SubagentCallbacks.DrainInjectedMessages"/> each round.
     /// </summary>
     private readonly AgentSession pendingSession = new("subagent-pending");
+    private readonly Lock messageAcceptanceLock = new();
+    private bool acceptingMessages = true;
 
     /// <summary>
     /// Tool names excluded from the subagent's tool definitions.
@@ -135,15 +137,25 @@ public sealed class SubagentRunner : IDisposable
     /// Works before or during execution — messages are enqueued on
     /// the pending session and drained each round by the callbacks.
     /// </summary>
-    public void InjectMessage(string message)
+    /// <returns><see langword="true"/> when the message can still be drained by this runner.</returns>
+    public bool InjectMessage(string message)
     {
-        this.pendingSession.EnqueuePending(new AgentMessage
+        lock (this.messageAcceptanceLock)
         {
-            ConversationId = "subagent",
-            ChannelId = "subagent",
-            Text = message,
-            Source = AgentMessageSource.User,
-        });
+            if (!this.acceptingMessages)
+            {
+                return false;
+            }
+
+            this.pendingSession.EnqueuePending(new AgentMessage
+            {
+                ConversationId = "subagent",
+                ChannelId = "subagent",
+                Text = message,
+                Source = AgentMessageSource.User,
+            });
+            return true;
+        }
     }
 
     /// <summary>
@@ -231,7 +243,15 @@ public sealed class SubagentRunner : IDisposable
             this.imageAgingOptions?.CurrentValue,
             this.imageDescriber);
 
-        var result = await this.agentLoop.ExecuteAsync(config, callbacks, cancellationToken).ConfigureAwait(false);
+        AgentLoopResult result;
+        try
+        {
+            result = await this.agentLoop.ExecuteAsync(config, callbacks, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            this.StopAcceptingMessages();
+        }
 
         // For non-completed outcomes, use the error message as the response text.
         // For completed with empty response (LLM put everything in tool calls),
@@ -268,6 +288,14 @@ public sealed class SubagentRunner : IDisposable
         // Terminal state ownership belongs to the coordinator: the runner only reports the
         // outcome. It never writes a terminal state through the unguarded UpdateState path.
         return new SubagentExecutionResult(ToTerminalState(result.Outcome), responseText);
+    }
+
+    private void StopAcceptingMessages()
+    {
+        lock (this.messageAcceptanceLock)
+        {
+            this.acceptingMessages = false;
+        }
     }
 
     public void Dispose()

@@ -56,6 +56,7 @@ public class SubagentRunnerTests
 
         Assert.Equal(SubagentTaskState.Failed, result.TerminalState);
         Assert.Contains("Rate limit exceeded", result.Result);
+        Assert.False(runner.InjectMessage("too late"));
     }
 
     [Fact]
@@ -93,6 +94,25 @@ public class SubagentRunnerTests
         var result = await runner.RunAsync("gpt-4o", "System", "Prompt", "conv-1", CancellationToken.None);
 
         Assert.Equal(SubagentTaskState.Failed, result.TerminalState);
+        Assert.False(runner.InjectMessage("too late"));
+    }
+
+    [Fact]
+    public async Task RunAsync_CancelledRun_RejectsLaterInjection()
+    {
+        using var cts = new CancellationTokenSource();
+        _mockLlmClient.StreamCompleteAsync(Arg.Any<LlmCompletionRequest>(), Arg.Any<CancellationToken>())
+            .Returns(_ => CancelledStream(cts.Token));
+
+        var runner = new SubagentRunner(_mockLlmClient, CreateRegistry(), 0, NullLogger<SubagentRunner>.Instance);
+        await cts.CancelAsync();
+
+        // ThrowsAnyAsync, not ThrowsAsync: cancellation surfaces as TaskCanceledException, a
+        // subclass, and xUnit's ThrowsAsync demands an exact type match.
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            runner.RunAsync("gpt-4o", "System", "Prompt", "conv-1", cts.Token));
+
+        Assert.False(runner.InjectMessage("too late"));
     }
 
     [Fact]
@@ -402,11 +422,12 @@ public class SubagentRunnerTests
         var runner = new SubagentRunner(_mockLlmClient, CreateRegistry(tool), 0, NullLogger<SubagentRunner>.Instance);
 
         // Inject before running — will be picked up at the start of round 2
-        runner.InjectMessage("Also check tests/");
+        Assert.True(runner.InjectMessage("Also check tests/"));
 
         var result = await runner.RunAsync("gpt-4o", "System", "Prompt", "conv-1", CancellationToken.None);
 
         Assert.Equal("Found injected message.", result.Result);
+        Assert.False(runner.InjectMessage("too late"));
     }
 
     [Fact]
@@ -454,6 +475,13 @@ public class SubagentRunnerTests
     {
         await Task.CompletedTask;
         yield return new LlmStreamChunk { ErrorMessage = error };
+    }
+
+    private static async IAsyncEnumerable<LlmStreamChunk> CancelledStream(
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);
+        yield return new LlmStreamChunk { ContentDelta = "unreachable" };
     }
 
     private static async IAsyncEnumerable<LlmStreamChunk> ToolCallStream(string callId, string toolName, string args)

@@ -59,7 +59,17 @@ public sealed partial class SubagentMessageRouter
             return false;
         }
 
-        runner.InjectMessage(message.Text);
+        // TOCTOU: the runner may have finished between the registry lookup and here. InjectMessage
+        // enqueues onto a pending session that is only drained per round, so injecting into a
+        // finished runner would silently swallow the message — and returning true would suppress
+        // the channel fallback. A dropped coda permission request is exactly the failure this
+        // router exists to prevent: it would sit until the Bridge's expiry fallback REFUSES it.
+        if (!runner.InjectMessage(message.Text))
+        {
+            this.LogRunnerNoLongerAccepting(taskId, message.ConversationId);
+            return false;
+        }
+
         this.LogInjected(taskId, message.ConversationId);
         return true;
     }
@@ -69,4 +79,7 @@ public sealed partial class SubagentMessageRouter
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "[subagent-router] Injected message into live runner {TaskId} for {ConversationId}")]
     private partial void LogInjected(string taskId, string conversationId);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "[subagent-router] Runner {TaskId} stopped accepting messages; falling back to message channel for {ConversationId}")]
+    private partial void LogRunnerNoLongerAccepting(string taskId, string conversationId);
 }

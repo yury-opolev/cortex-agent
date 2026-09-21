@@ -26,6 +26,30 @@ public sealed class SubagentMessageRouterTests
     }
 
     [Fact]
+    public async Task TryEnqueue_RegisteredRunnerAfterRunEnded_EnqueuesMessageChannel()
+    {
+        var channel = new AgentMessageChannel();
+        var registry = new SubagentRunnerRegistry(2, NullLogger<SubagentRunnerRegistry>.Instance);
+        var llmClient = Substitute.For<ILlmClient>();
+        llmClient.StreamCompleteAsync(Arg.Any<LlmCompletionRequest>(), Arg.Any<CancellationToken>())
+            .Returns(SingleChunkStream("done"));
+        var runner = new SubagentRunner(
+            llmClient,
+            new ToolRegistry([], new ActiveChannelStore(), NullLogger<ToolRegistry>.Instance),
+            10,
+            NullLogger<SubagentRunner>.Instance);
+        Assert.True(registry.TryRegister("task-ended", runner, out _));
+        await runner.RunAsync("gpt-4o", "System", "Prompt", "subagent-task-ended", CancellationToken.None);
+        var router = new SubagentMessageRouter(channel, registry, NullLogger<SubagentMessageRouter>.Instance);
+
+        Assert.True(router.TryEnqueue(CreateMessage("subagent-task-ended", "fallback")));
+
+        Assert.True(channel.TryRead(out var message));
+        Assert.Equal("fallback", message!.Text);
+        Assert.Empty(DrainInjectedMessages(runner));
+    }
+
+    [Fact]
     public void TryEnqueue_NormalConversation_EnqueuesMessageChannel()
     {
         var channel = new AgentMessageChannel();
@@ -72,5 +96,16 @@ public sealed class SubagentMessageRouterTests
         var field = typeof(SubagentRunner).GetField("pendingSession", BindingFlags.Instance | BindingFlags.NonPublic);
         var session = Assert.IsType<AgentSession>(field!.GetValue(runner));
         return session.DrainPendingMessages();
+    }
+
+    private static async IAsyncEnumerable<LlmStreamChunk> SingleChunkStream(string content)
+    {
+        await Task.CompletedTask;
+        yield return new LlmStreamChunk
+        {
+            ContentDelta = content,
+            IsComplete = true,
+            FinishReason = "stop",
+        };
     }
 }
