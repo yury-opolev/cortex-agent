@@ -1,19 +1,30 @@
 using System.Text.RegularExpressions;
 
-namespace Cortex.Contained.Bridge.Security;
+namespace Cortex.Contained.Contracts.Security;
 
 /// <summary>
-/// Redacts sensitive data patterns from text before it is logged.
+/// Redacts sensitive data patterns from text before it is logged or persisted.
 /// Handles API keys, tokens, phone numbers, and long Base64 strings.
+/// <para>
+/// Lives in Contracts so the Bridge and the Agent Host share ONE implementation. Two copies of
+/// security-critical redaction is how one of them silently goes stale — a pattern added on one
+/// side of the process boundary would not protect the other.
+/// </para>
+/// <para>
+/// This is a redactor, not a suppressor: only the sensitive substring is replaced and the
+/// surrounding text survives verbatim. Callers that need the text to stay readable — the autonomy
+/// assumption ledger, for instance, which IS the report of an unattended run — depend on that.
+/// Contrast <c>McpTelemetrySanitizer</c>, which deliberately discards a whole payload.
+/// </para>
 /// </summary>
-internal static partial class SensitiveDataRedactor
+public static partial class SensitiveDataRedactor
 {
     private const string RedactedPlaceholder = "[REDACTED]";
 
     /// <summary>
     /// Redacts all known sensitive patterns from the input string.
     /// </summary>
-    internal static string Redact(string? input)
+    public static string Redact(string? input)
     {
         if (string.IsNullOrEmpty(input))
         {
@@ -25,7 +36,7 @@ internal static partial class SensitiveDataRedactor
         // Order matters: redact key-value patterns first (most specific),
         // then structured identifiers, then general patterns.
 
-        // 1. Key-value pairs: "api_key=xxx", "token: xxx", "password=xxx", etc.
+        // 1. Key-value pairs: "api_key=xxx", "token: xxx", "******", etc.
         result = KeyValueSecretPattern().Replace(result, static m =>
             $"{m.Groups[1].Value}{m.Groups[2].Value}{RedactedPlaceholder}");
 
@@ -41,7 +52,7 @@ internal static partial class SensitiveDataRedactor
         return result;
     }
 
-    // Key-value patterns: api_key=value, token: value, secret=value, password=value, credential=value
+    // Key-value patterns: api_key=value, token: value, secret=value, ****** credential=value
     [GeneratedRegex(
         @"(?i)(api[_\-]?key|token|secret|password|credential)(\s*[=:]\s*)\S+",
         RegexOptions.Compiled)]
