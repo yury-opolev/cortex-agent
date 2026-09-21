@@ -51,6 +51,10 @@ public sealed class SubagentHostCompositionTests
             services.AddSingleton(new AgentMessageChannel());
             services.AddSingleton(_ => new SubagentSessionStore(dir, NullLogger<SubagentSessionStore>.Instance));
             services.AddSingleton(_ => new SubagentRunnerRegistry(5, NullLogger<SubagentRunnerRegistry>.Instance));
+            services.AddSingleton(sp => new SubagentMessageRouter(
+                sp.GetRequiredService<AgentMessageChannel>(),
+                sp.GetRequiredService<SubagentRunnerRegistry>(),
+                NullLogger<SubagentMessageRouter>.Instance));
 
             // Mirror Program.cs's FIXED coordinator registration: the runner factory resolves ToolRegistry
             // LAZILY (only when a subagent is actually dispatched), never during coordinator construction.
@@ -69,7 +73,7 @@ public sealed class SubagentHostCompositionTests
                     sp.GetRequiredService<SubagentRunnerRegistry>(),
                     sp.GetRequiredService<ISubagentExecutor>(),
                     runnerFactory,
-                    sp.GetRequiredService<AgentMessageChannel>(),
+                    sp.GetRequiredService<SubagentMessageRouter>(),
                     NullLogger<SubagentExecutionCoordinator>.Instance);
             });
 

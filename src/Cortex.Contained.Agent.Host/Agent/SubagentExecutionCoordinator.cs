@@ -10,9 +10,10 @@ namespace Cortex.Contained.Agent.Host.Agent;
 /// (never overwriting a Failed/Cancelled as Completed), requeues (not fails) in-flight work on host
 /// shutdown, and only dispatches once Bridge + credentials + MCP-catalog readiness are all signaled.
 /// It also owns durable completion delivery: pending terminal-result notifications are claimed
-/// (→ Enqueued) and pushed onto the <see cref="AgentMessageChannel"/> with an awaited enqueue;
+/// (→ Enqueued) and pushed through <see cref="SubagentMessageRouter"/> with an awaited enqueue;
 /// the claim stays Enqueued until <see cref="AgentRuntime"/> confirms the parent turn delivered
-/// the response (or releases it for redelivery on failure) — at-least-once, never silently lost.
+/// the response (or releases it for redelivery on failure) — at-least-once for main-runtime
+/// parents, and direct runner injection for live subagent parents.
 /// </summary>
 public sealed partial class SubagentExecutionCoordinator : IHostedService, IDisposable
 {
@@ -20,7 +21,7 @@ public sealed partial class SubagentExecutionCoordinator : IHostedService, IDisp
     private readonly SubagentRunnerRegistry registry;
     private readonly ISubagentExecutor executor;
     private readonly Func<SubagentTask, SubagentRunner> runnerFactory;
-    private readonly AgentMessageChannel messageChannel;
+    private readonly SubagentMessageRouter messageRouter;
     private readonly ILogger<SubagentExecutionCoordinator> logger;
 
     /// <summary>
@@ -69,7 +70,7 @@ public sealed partial class SubagentExecutionCoordinator : IHostedService, IDisp
         SubagentRunnerRegistry registry,
         ISubagentExecutor executor,
         Func<SubagentTask, SubagentRunner> runnerFactory,
-        AgentMessageChannel messageChannel,
+        SubagentMessageRouter messageRouter,
         ILogger<SubagentExecutionCoordinator> logger,
         TimeSpan? backstopTickInterval = null)
     {
@@ -77,7 +78,7 @@ public sealed partial class SubagentExecutionCoordinator : IHostedService, IDisp
         this.registry = registry;
         this.executor = executor;
         this.runnerFactory = runnerFactory;
-        this.messageChannel = messageChannel;
+        this.messageRouter = messageRouter;
         this.logger = logger;
 
         // Injectable so tests can drive the backstop fast; production uses the real constant.
@@ -461,7 +462,7 @@ public sealed partial class SubagentExecutionCoordinator : IHostedService, IDisp
 
     /// <summary>
     /// Claims pending terminal-result notifications (→ Enqueued) and pushes each onto the
-    /// parent conversation's message queue with an AWAITED enqueue (backpressure — never
+    /// parent conversation's route with an AWAITED enqueue (backpressure on fallback — never
     /// <c>TryEnqueue</c>, which would silently drop on a full channel). The claim stays
     /// Enqueued while <see cref="AgentRuntime"/> processes the parent turn; a throw or
     /// cancellation releases it back to Pending for redelivery.
@@ -488,7 +489,7 @@ public sealed partial class SubagentExecutionCoordinator : IHostedService, IDisp
 
             try
             {
-                await this.messageChannel.EnqueueAsync(message, stopping).ConfigureAwait(false);
+                await this.messageRouter.EnqueueAsync(message, stopping).ConfigureAwait(false);
                 this.LogCompletionEnqueued(task.TaskId, task.ParentConversation);
             }
             catch (OperationCanceledException)

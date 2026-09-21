@@ -7,25 +7,25 @@ namespace Cortex.Contained.Agent.Host.Coding;
 
 /// <summary>
 /// Subscribes to <see cref="CodingAgentEventBus"/> and enqueues a synthetic
-/// user-role <see cref="AgentMessage"/> on the affected channel each time a
+/// user-role <see cref="AgentMessage"/> to the affected conversation each time a
 /// terminal event (final result / permission ask / clarification / error) arrives.
 /// </summary>
 public sealed partial class CodingAgentInjectionService : IHostedService
 {
     private readonly CodingAgentEventBus bus;
     private readonly CodingAgentSessionStore store;
-    private readonly AgentMessageChannel queue;
+    private readonly SubagentMessageRouter messageRouter;
     private readonly ILogger<CodingAgentInjectionService> logger;
 
     public CodingAgentInjectionService(
         CodingAgentEventBus bus,
         CodingAgentSessionStore store,
-        AgentMessageChannel queue,
+        SubagentMessageRouter messageRouter,
         ILogger<CodingAgentInjectionService> logger)
     {
         this.bus = bus;
         this.store = store;
-        this.queue = queue;
+        this.messageRouter = messageRouter;
         this.logger = logger;
     }
 
@@ -245,7 +245,7 @@ public sealed partial class CodingAgentInjectionService : IHostedService
             Text = envelope,
             Source = AgentMessageSource.CodingAgentInjection,
         };
-        if (!this.queue.TryEnqueue(message))
+        if (!this.messageRouter.TryEnqueue(message))
         {
             this.LogQueueFull(channelId);
         }

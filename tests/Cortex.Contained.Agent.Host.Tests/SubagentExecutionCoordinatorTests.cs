@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Reflection;
 using Cortex.Contained.Agent.Host.Agent;
 using Cortex.Contained.Agent.Host.Tools;
 using Cortex.Contained.Contracts.Llm;
@@ -317,6 +318,47 @@ public sealed class SubagentExecutionCoordinatorTests : IDisposable
             _store.GetById("sa-backstop")!.NotificationState == SubagentNotificationState.Enqueued);
     }
 
+    [Fact]
+    public async Task CompletionNotification_LiveSubagentParent_InjectsParentRunner()
+    {
+        _store.Create(new SubagentTask
+        {
+            TaskId = "sa-child",
+            ParentConversation = "subagent-parent",
+            ParentChannel = "subagent-parent",
+            Description = "d",
+            Prompt = "p",
+            State = SubagentTaskState.Completed,
+            Result = "child done",
+            CompletedAt = DateTimeOffset.UtcNow,
+            NotificationState = SubagentNotificationState.Pending,
+        });
+
+        var channel = new AgentMessageChannel();
+        var registry = new SubagentRunnerRegistry(2, NullLogger<SubagentRunnerRegistry>.Instance);
+        var parentRunner = NewRunner();
+        Assert.True(registry.TryRegister("parent", parentRunner, out _));
+        var router = new SubagentMessageRouter(channel, registry, NullLogger<SubagentMessageRouter>.Instance);
+        var coordinator = new SubagentExecutionCoordinator(
+            _store,
+            registry,
+            new RecordingExecutor(),
+            _ => NewRunner(),
+            router,
+            NullLogger<SubagentExecutionCoordinator>.Instance);
+
+        await using var harness = new Harness(coordinator, registry);
+        await coordinator.StartAsync(CancellationToken.None);
+
+        harness.MarkAllReady();
+
+        await WaitUntilAsync(() => PendingMessageCount(parentRunner) > 0);
+        Assert.False(channel.TryRead(out _));
+        var injected = DrainInjectedMessages(parentRunner);
+        var message = Assert.Single(injected);
+        Assert.Contains("child done", message.Text);
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────
 
     private void SeedQueued(
@@ -349,6 +391,7 @@ public sealed class SubagentExecutionCoordinatorTests : IDisposable
         TimeSpan? backstopTickInterval = null)
     {
         var registry = new SubagentRunnerRegistry(maxConcurrent, NullLogger<SubagentRunnerRegistry>.Instance);
+        var channel = new AgentMessageChannel();
 
         SubagentRunner DefaultRunnerFactory(SubagentTask _) => new(
             Substitute.For<ILlmClient>(),
@@ -361,7 +404,7 @@ public sealed class SubagentExecutionCoordinatorTests : IDisposable
             registry,
             executor,
             runnerFactory ?? DefaultRunnerFactory,
-            new AgentMessageChannel(),
+            new SubagentMessageRouter(channel, registry, NullLogger<SubagentMessageRouter>.Instance),
             NullLogger<SubagentExecutionCoordinator>.Instance,
             backstopTickInterval);
 
@@ -374,6 +417,20 @@ public sealed class SubagentExecutionCoordinatorTests : IDisposable
         new ToolRegistry([], new ActiveChannelStore(), NullLogger<ToolRegistry>.Instance),
         10,
         NullLogger<SubagentRunner>.Instance);
+
+    private static IReadOnlyList<AgentMessage> DrainInjectedMessages(SubagentRunner runner)
+    {
+        var field = typeof(SubagentRunner).GetField("pendingSession", BindingFlags.Instance | BindingFlags.NonPublic);
+        var session = Assert.IsType<AgentSession>(field!.GetValue(runner));
+        return session.DrainPendingMessages();
+    }
+
+    private static int PendingMessageCount(SubagentRunner runner)
+    {
+        var field = typeof(SubagentRunner).GetField("pendingSession", BindingFlags.Instance | BindingFlags.NonPublic);
+        var session = Assert.IsType<AgentSession>(field!.GetValue(runner));
+        return session.PendingMessageCount;
+    }
 
     /// <summary>Polls for the whole window and fails as soon as the condition becomes true.</summary>
     private static async Task AssertNeverAsync(Func<bool> condition, int windowMs = 300)

@@ -139,6 +139,7 @@ builder.Services.AddHttpClient("embedding-probe", c =>
 // --- Message Queue ---
 builder.Services.AddSingleton(sp =>
     new AgentMessageChannel(sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.AgentMetrics>()));
+builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Agent.SubagentMessageRouter>();
 
 // --- Memory Services (MemoryMcp.Core) ---
 builder.Services.AddMemoryMcpCore(builder.Configuration);
@@ -546,7 +547,7 @@ builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Agent.SubagentExecutio
         sp.GetRequiredService<SubagentRunnerRegistry>(),
         sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.ISubagentExecutor>(),
         runnerFactory,
-        sp.GetRequiredService<AgentMessageChannel>(),
+        sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.SubagentMessageRouter>(),
         loggerFactory.CreateLogger<Cortex.Contained.Agent.Host.Agent.SubagentExecutionCoordinator>());
 });
 builder.Services.AddHostedService(sp =>
@@ -800,4 +801,3 @@ app.UseAuthorization();
 app.MapHub<AgentHub>("/hub/agent");
 
 app.Run();
-

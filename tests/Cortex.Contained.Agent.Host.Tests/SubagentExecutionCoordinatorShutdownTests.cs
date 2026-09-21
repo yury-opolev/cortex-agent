@@ -26,6 +26,7 @@ public class SubagentExecutionCoordinatorShutdownTests
         var store = new SubagentSessionStore(tempDir, NullLogger<SubagentSessionStore>.Instance);
         var registry = new SubagentRunnerRegistry(2, NullLogger<SubagentRunnerRegistry>.Instance);
         var executor = Substitute.For<ISubagentExecutor>();
+        var channel = new AgentMessageChannel();
 
         return new SubagentExecutionCoordinator(
             store,
@@ -36,7 +37,7 @@ public class SubagentExecutionCoordinatorShutdownTests
                 new ToolRegistry([], new ActiveChannelStore(), NullLogger<ToolRegistry>.Instance),
                 10,
                 NullLogger<SubagentRunner>.Instance),
-            new AgentMessageChannel(),
+            new SubagentMessageRouter(channel, registry, NullLogger<SubagentMessageRouter>.Instance),
             NullLogger<SubagentExecutionCoordinator>.Instance,
             TimeSpan.FromSeconds(30));
     }

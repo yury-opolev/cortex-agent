@@ -46,7 +46,7 @@ public sealed class AgentHubSubagentReadinessTests : IAsyncDisposable
             _registry,
             _executor,
             RunnerFactory,
-            _messageChannel,
+            new SubagentMessageRouter(_messageChannel, _registry, NullLogger<SubagentMessageRouter>.Instance),
             NullLogger<SubagentExecutionCoordinator>.Instance);
         _coordinator.StartAsync(CancellationToken.None).GetAwaiter().GetResult();
 

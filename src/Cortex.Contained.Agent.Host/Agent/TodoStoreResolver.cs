@@ -10,9 +10,6 @@ public sealed class TodoStoreResolver
     private readonly SqliteTodoStore sqliteStore;
     private readonly InMemoryTodoStore inMemoryStore;
 
-    /// <summary>Prefix used by subagent conversation IDs.</summary>
-    private const string SubagentPrefix = "subagent-";
-
     public TodoStoreResolver(SqliteTodoStore sqliteStore, InMemoryTodoStore inMemoryStore)
     {
         this.sqliteStore = sqliteStore;
@@ -25,7 +22,7 @@ public sealed class TodoStoreResolver
     /// </summary>
     public ITodoStore Resolve(string conversationId)
     {
-        return conversationId.StartsWith(SubagentPrefix, StringComparison.OrdinalIgnoreCase)
+        return SubagentConversationIds.IsSubagentConversation(conversationId)
             ? this.inMemoryStore
             : this.sqliteStore;
     }
