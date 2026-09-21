@@ -149,20 +149,32 @@ internal sealed class GoalBudget
 
     private static void ValidateLimit(TimeSpan? wallClockLimit, int? continuationLimit)
     {
-        if (wallClockLimit is { } finiteWallClockLimit
-            && finiteWallClockLimit < DefaultWallClockLimit)
+        // Any POSITIVE limit is allowed, in either direction from the default. An earlier version
+        // permitted only upward overrides, which inverted the safe default: an operator could not
+        // express "cap this run at an hour", but could trivially express "no cap at all" — for a
+        // subsystem that runs ungated shell and file tools unattended for days.
+        if (wallClockLimit is { } finiteWallClockLimit && finiteWallClockLimit <= TimeSpan.Zero)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(wallClockLimit),
-                "Autonomous goal wall-clock budgets may only override the default upward.");
+                "An autonomous goal wall-clock budget must be positive.");
         }
 
-        if (continuationLimit is { } finiteContinuationLimit
-            && finiteContinuationLimit < DefaultContinuationLimit)
+        if (continuationLimit is { } finiteContinuationLimit && finiteContinuationLimit <= 0)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(continuationLimit),
-                "Autonomous goal continuation budgets may only override the default upward.");
+                "An autonomous goal continuation budget must be positive.");
+        }
+
+        // At least one finite backstop must survive. The budget's whole purpose is to guarantee
+        // termination when the judge and the stuck detector both fail; disabling both dimensions
+        // removes the only unconditional stop and makes a run genuinely unbounded.
+        if (wallClockLimit is null && continuationLimit is null)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(wallClockLimit),
+                "An autonomous goal must keep at least one finite budget; disabling both removes the termination guarantee.");
         }
     }
 

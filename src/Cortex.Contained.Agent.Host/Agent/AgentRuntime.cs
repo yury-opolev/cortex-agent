@@ -378,6 +378,19 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
         {
             await foreach (var message in this.messageQueue.ReadAllAsync(cancellationToken).ConfigureAwait(false))
             {
+                // A message addressed to a subagent conversation only reaches this queue when the
+                // router could not find a live runner for it — the subagent has finished. Creating
+                // an ordinary session for it would run that content with the FULL main-agent
+                // toolset (this runtime applies no tool exclusions), so orphaned coda output from
+                // a finished subagent would execute at main-agent privilege in a conversation
+                // nobody is watching. Drop it instead: the subagent sandbox does not get to leak
+                // its work upward just because it outlived its runner.
+                if (SubagentConversationIds.IsSubagentConversation(message.ConversationId))
+                {
+                    this.LogOrphanedSubagentMessageDropped(message.ConversationId, message.Source);
+                    continue;
+                }
+
                 this.LogMessageDispatched(message.ConversationId, message.CorrelationId, message.ConversationId);
 
                 var session = this.sessions.GetOrCreate(message.ConversationId);
@@ -2321,6 +2334,9 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Dispatched message {ConversationId} (correlationId={CorrelationId}) to lane {DispatchKey}")]
     private partial void LogMessageDispatched(string conversationId, string correlationId, string dispatchKey);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Dropped a message for finished subagent conversation {ConversationId} (source={Source}): running it here would grant the full main-agent toolset")]
+    private partial void LogOrphanedSubagentMessageDropped(string conversationId, AgentMessageSource source);
 
     [LoggerMessage(Level = LogLevel.Error, Message = "Consumer error processing message for {ConversationId} (correlationId={CorrelationId}): {ErrorMessage}")]
     private partial void LogConsumerMessageError(string conversationId, string correlationId, string errorMessage);

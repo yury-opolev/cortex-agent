@@ -79,17 +79,37 @@ public sealed class AutonomyCoreTests
     }
 
     [Fact]
-    public void Create_WithParsedNoLimitValues_DisablesBothLimits()
+    public void Create_WithOneNoLimitValue_KeepsTheOtherAsTheBackstop()
     {
         var budget = GoalBudget.Create(
             new FakeTimeProvider(),
             GoalBudget.ParseWallClockLimit("none"),
-            GoalBudget.ParseContinuationLimit("none"));
+            GoalBudget.ParseContinuationLimit("500"));
 
         Assert.Null(budget.WallClockLimit);
-        Assert.Null(budget.ContinuationLimit);
-        Assert.Null(budget.WallClockRemaining);
-        Assert.Null(budget.ContinuationsRemaining);
+        Assert.Equal(500, budget.ContinuationLimit);
+    }
+
+    [Fact]
+    public void Create_WithBothLimitsDisabled_Throws()
+    {
+        // The budget's whole purpose is to guarantee termination when the judge and the stuck
+        // detector both fail. Disabling both dimensions removes the only unconditional stop.
+        Assert.Throws<ArgumentOutOfRangeException>(() => GoalBudget.Create(
+            new FakeTimeProvider(),
+            GoalBudget.ParseWallClockLimit("none"),
+            GoalBudget.ParseContinuationLimit("none")));
+    }
+
+    [Fact]
+    public void Create_WithLimitSmallerThanTheDefault_IsAllowed()
+    {
+        // An operator must be able to say "cap this run at an hour". Permitting only upward
+        // overrides inverted the safe default for a subsystem that runs ungated tools unattended.
+        var budget = GoalBudget.Create(new FakeTimeProvider(), TimeSpan.FromHours(1), continuationLimit: 5);
+
+        Assert.Equal(TimeSpan.FromHours(1), budget.WallClockLimit);
+        Assert.Equal(5, budget.ContinuationLimit);
     }
 
     [Theory]
@@ -153,13 +173,22 @@ public sealed class AutonomyCoreTests
     [Theory]
     [InlineData("  done  ")]
     [InlineData("```text\r\nDONE\r\n```")]
-    [InlineData("Here is my verdict:\nDONE")]
     public void ParseReply_ToleratedDoneShapes_ReturnsMetOutcome(string reply)
     {
         var verdict = CompletionJudge.ParseReply(reply);
 
         var stop = Assert.IsType<GoalVerdict.StopVerdict>(verdict);
         Assert.Equal(GoalOutcome.Met, stop.Outcome);
+    }
+
+    [Theory]
+    [InlineData("Here is my verdict:\nDONE")]
+    [InlineData("DONE\nThough I could not verify the tests actually ran.")]
+    public void ParseReply_DoneBuriedInProse_FailsOpenToContinue(string reply)
+    {
+        // A DONE surrounded by commentary is not an unambiguous verdict — and commentary is
+        // exactly what an injected transcript induces. Only a bare DONE may terminate a run.
+        Assert.IsType<GoalVerdict.ContinueVerdict>(CompletionJudge.ParseReply(reply));
     }
 
     [Fact]
