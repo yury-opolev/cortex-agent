@@ -137,9 +137,16 @@ public class LlmStreamStallTelemetryTests
 
         var report = Assert.Single(observer.Reports);
         Assert.Equal(Fast.FirstChunk, report.Budget);
+
+        // Tolerance, not >=: the guard's timer and the Stopwatch that measures Elapsed read
+        // different clocks, and Windows timer granularity is ~15.6ms, so the wait can complete a
+        // fraction of a millisecond "early" by the Stopwatch's reckoning (observed: 399.59ms
+        // against a 400ms budget). The assertion's intent is that Elapsed reflects the real idle
+        // wait rather than zero or some unrelated value, which a small tolerance preserves.
+        var tolerance = TimeSpan.FromMilliseconds(25);
         Assert.True(
-            report.Elapsed >= Fast.FirstChunk,
-            $"elapsed idle time ({report.Elapsed}) should be at least the budget ({Fast.FirstChunk}).");
+            report.Elapsed >= Fast.FirstChunk - tolerance,
+            $"elapsed idle time ({report.Elapsed}) should be at least the budget ({Fast.FirstChunk}) within {tolerance.TotalMilliseconds}ms.");
         Assert.True(report.Elapsed < TimeSpan.FromSeconds(30));
     }
 

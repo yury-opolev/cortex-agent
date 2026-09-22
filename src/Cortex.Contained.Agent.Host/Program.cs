@@ -575,7 +575,12 @@ builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Agent.SubagentExecutio
         sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.ISubagentExecutor>(),
         runnerFactory,
         sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.SubagentMessageRouter>(),
-        loggerFactory.CreateLogger<Cortex.Contained.Agent.Host.Agent.SubagentExecutionCoordinator>());
+        loggerFactory.CreateLogger<Cortex.Contained.Agent.Host.Agent.SubagentExecutionCoordinator>(),
+        backstopTickInterval: null,
+        // Cascade: a finishing subagent's coda sessions are ended with it. Nothing else does
+        // this — the Bridge job object only reaps when the Bridge dies.
+        sp.GetRequiredService<Cortex.Contained.Agent.Host.Coding.ICodingAgent>(),
+        sp.GetRequiredService<Cortex.Contained.Agent.Host.Coding.CodingAgentSessionStore>());
 });
 builder.Services.AddHostedService(sp =>
     sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.SubagentExecutionCoordinator>());

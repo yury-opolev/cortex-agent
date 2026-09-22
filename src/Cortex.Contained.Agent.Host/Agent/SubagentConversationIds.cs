@@ -13,6 +13,9 @@ internal static class SubagentConversationIds
     internal static bool IsSubagentConversation(string conversationId)
         => conversationId.StartsWith(Prefix, StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>The conversation/channel id a subagent task owns.</summary>
+    internal static string ToConversationId(string taskId) => Prefix + taskId;
+
     internal static bool TryGetTaskId(string conversationId, out string taskId)
     {
         if (conversationId.StartsWith(Prefix, StringComparison.OrdinalIgnoreCase)

@@ -22,6 +22,8 @@ public sealed partial class SubagentExecutionCoordinator : IHostedService, IDisp
     private readonly ISubagentExecutor executor;
     private readonly Func<SubagentTask, SubagentRunner> runnerFactory;
     private readonly SubagentMessageRouter messageRouter;
+    private readonly Coding.ICodingAgent? codingAgent;
+    private readonly Coding.CodingAgentSessionStore? codingSessions;
     private readonly ILogger<SubagentExecutionCoordinator> logger;
 
     /// <summary>
@@ -72,7 +74,9 @@ public sealed partial class SubagentExecutionCoordinator : IHostedService, IDisp
         Func<SubagentTask, SubagentRunner> runnerFactory,
         SubagentMessageRouter messageRouter,
         ILogger<SubagentExecutionCoordinator> logger,
-        TimeSpan? backstopTickInterval = null)
+        TimeSpan? backstopTickInterval = null,
+        Coding.ICodingAgent? codingAgent = null,
+        Coding.CodingAgentSessionStore? codingSessions = null)
     {
         this.store = store;
         this.registry = registry;
@@ -80,6 +84,8 @@ public sealed partial class SubagentExecutionCoordinator : IHostedService, IDisp
         this.runnerFactory = runnerFactory;
         this.messageRouter = messageRouter;
         this.logger = logger;
+        this.codingAgent = codingAgent;
+        this.codingSessions = codingSessions;
 
         // Injectable so tests can drive the backstop fast; production uses the real constant.
         // A non-positive value is rejected by PeriodicTimer, so fall back to the default.
@@ -456,6 +462,63 @@ public sealed partial class SubagentExecutionCoordinator : IHostedService, IDisp
     private void RecordTerminalResult(string taskId, SubagentExecutionResult result)
     {
         this.store.TrySetTerminalResult(taskId, result);
+        this.ReapOwnedCodaSessions(taskId);
+    }
+
+    /// <summary>
+    /// Ends any coda session the finishing subagent started.
+    /// <para>
+    /// Nothing else does this. The Bridge's job object only kills coda when the BRIDGE dies, and
+    /// the prompt idle timeout only resolves an unanswered request — neither covers "the subagent
+    /// that owned this session is gone". Without this a subagent could start coda, finish, and
+    /// leave it running on the host for days with its output discarded, because
+    /// <see cref="AgentRuntime"/> now drops messages addressed to a finished subagent rather than
+    /// running them at main-agent privilege.
+    /// </para>
+    /// <para>
+    /// Best-effort and never allowed to fail the terminal-result path: losing the subagent's
+    /// result would be a worse outcome than leaking a session, so every failure is logged and
+    /// swallowed.
+    /// </para>
+    /// </summary>
+    private void ReapOwnedCodaSessions(string taskId)
+    {
+        if (this.codingAgent is null || this.codingSessions is null)
+        {
+            return;
+        }
+
+        var channelId = SubagentConversationIds.ToConversationId(taskId);
+
+        try
+        {
+            var owned = this.codingSessions.ListActiveByChannel(channelId);
+            foreach (var session in owned)
+            {
+                _ = this.EndCodaSessionAsync(session.SessionId, taskId);
+            }
+        }
+#pragma warning disable CA1031 // Reaping must never fail the terminal-result path.
+        catch (Exception ex)
+#pragma warning restore CA1031
+        {
+            this.LogCodaReapFailed(taskId, ex.Message);
+        }
+    }
+
+    private async Task EndCodaSessionAsync(string sessionId, string taskId)
+    {
+        try
+        {
+            await this.codingAgent!.EndSessionAsync(sessionId, CancellationToken.None).ConfigureAwait(false);
+            this.LogCodaSessionReaped(taskId, sessionId);
+        }
+#pragma warning disable CA1031 // Best effort: a stuck coda session must not block subagent completion.
+        catch (Exception ex)
+#pragma warning restore CA1031
+        {
+            this.LogCodaReapFailed(taskId, ex.Message);
+        }
     }
 
     // ── Durable completion delivery ──────────────────────────────────────
@@ -588,4 +651,10 @@ public sealed partial class SubagentExecutionCoordinator : IHostedService, IDisp
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "[subagent-coordinator] Shutdown wait interrupted: {ErrorMessage}")]
     private partial void LogShutdownWaitInterrupted(string errorMessage);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "[subagent-coordinator] Ended coda session {SessionId} owned by finished subagent {TaskId}")]
+    private partial void LogCodaSessionReaped(string taskId, string sessionId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "[subagent-coordinator] Could not end a coda session owned by {TaskId}: {ErrorMessage}")]
+    private partial void LogCodaReapFailed(string taskId, string errorMessage);
 }
