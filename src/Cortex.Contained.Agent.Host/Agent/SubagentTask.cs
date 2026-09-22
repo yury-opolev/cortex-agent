@@ -157,6 +157,24 @@ public sealed class SubagentTask
 
     /// <summary>Number of times execution was restarted (crash recovery or requeue).</summary>
     public int RestartCount { get; set; }
+
+    /// <summary>
+    /// Nesting depth. 0 for a task the main agent started, 1 for a child of that task, and so on.
+    /// <para>
+    /// This is what keeps nested delegation live: queued tasks are claimed DEEPEST FIRST, because
+    /// a parent holds its runner slot while waiting for children and children are always created
+    /// after their parents — so pure FIFO would admit parents ahead of the children they wait on
+    /// and the pool could deadlock.
+    /// </para>
+    /// </summary>
+    public int Depth { get; init; }
+
+    /// <summary>
+    /// The subagent task that started this one, or null when the main agent did.
+    /// Used to cascade a stop through the subtree so a cancelled parent cannot orphan children
+    /// that keep burning budget with nobody left to report to.
+    /// </summary>
+    public string? ParentTaskId { get; init; }
 }
 
 /// <summary>

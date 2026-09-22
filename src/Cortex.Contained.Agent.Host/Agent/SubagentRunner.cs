@@ -60,11 +60,19 @@ public sealed partial class SubagentRunner : IDisposable
 
     /// <summary>
     /// Tool names excluded from the subagent's tool definitions.
-    /// Prevents recursion and controls scope.
+    /// <para>
+    /// The <c>sub_agent_*</c> family is deliberately ALLOWED: an autonomous run that cannot
+    /// subdivide its work is a poor fit for multi-day goals. Recursion is bounded by a depth cap
+    /// and kept live by depth-first claiming rather than by hiding the tools.
+    /// </para>
+    /// <para>
+    /// What remains excluded is exactly the set that would let a subagent reach the user or
+    /// schedule work outside its own lifetime. That is the property the whole unattended design
+    /// rests on: a subagent cannot ask a human, so it must decide.
+    /// </para>
     /// </summary>
     private static readonly FrozenSet<string> s_excludedTools = FrozenSet.ToFrozenSet(
         [
-            "sub_agent_start", "sub_agent_read", "sub_agent_send", // no recursion
             "send_message",    // subagent must not message user directly
             "schedule_task",   // subagent should not create scheduled tasks
             "session_timer",   // timers fire back into the parent conversation, not a subagent

@@ -226,27 +226,44 @@ public class SubagentRunnerTests
     }
 
     [Fact]
-    public async Task RunAsync_ExcludesSubagentTools_FromDefinitions()
+    public async Task RunAsync_AllowsDelegationButExcludesUserReachingTools_FromDefinitions()
     {
+        // Nested delegation is deliberately ALLOWED: an autonomous run that cannot subdivide its
+        // work is a poor fit for multi-day goals. Recursion is bounded by a depth cap and kept
+        // live by depth-first claiming, not by hiding the tools.
+        //
+        // What must stay excluded is exactly the set that would let a subagent reach the user or
+        // schedule work beyond its own lifetime. That is the property the unattended design rests
+        // on: a subagent cannot ask a human, so it has to decide.
         var tool = new FakeTool("date_time", "Gets current date", "now");
         var startTool = new FakeTool("sub_agent_start", "Start subagent", "done");
-        var readTool = new FakeTool("sub_agent_read", "Read subagent", "done");
-        var sendTool = new FakeTool("sub_agent_send", "Send to subagent", "done");
+        var sendMessage = new FakeTool("send_message", "Message the user", "done");
+        var scheduleTask = new FakeTool("schedule_task", "Schedule work", "done");
+        var sessionTimer = new FakeTool("session_timer", "Set a timer", "done");
 
         _mockLlmClient.StreamCompleteAsync(Arg.Any<LlmCompletionRequest>(), Arg.Any<CancellationToken>())
             .Returns(SingleChunkStream("Result"));
 
-        var runner = new SubagentRunner(_mockLlmClient, CreateRegistry(tool, startTool, readTool, sendTool), 0, NullLogger<SubagentRunner>.Instance);
+        var runner = new SubagentRunner(
+            _mockLlmClient,
+            CreateRegistry(tool, startTool, sendMessage, scheduleTask, sessionTimer),
+            0,
+            NullLogger<SubagentRunner>.Instance);
         await runner.RunAsync("gpt-4o", "System", "Prompt", "conv-1", CancellationToken.None);
 
-        // Verify the LLM request does NOT include any subagent tools
         var llmCall = _mockLlmClient.ReceivedCalls()
             .First(c => c.GetMethodInfo().Name == nameof(ILlmClient.StreamCompleteAsync));
         var request = (LlmCompletionRequest)llmCall.GetArguments()[0]!;
 
         Assert.NotNull(request.Tools);
-        Assert.Single(request.Tools); // Only date_time
-        Assert.Equal("date_time", request.Tools[0].Name);
+        var names = request.Tools.Select(t => t.Name).ToList();
+
+        Assert.Contains("date_time", names);
+        Assert.Contains("sub_agent_start", names);
+
+        Assert.DoesNotContain("send_message", names);
+        Assert.DoesNotContain("schedule_task", names);
+        Assert.DoesNotContain("session_timer", names);
     }
 
     [Fact]

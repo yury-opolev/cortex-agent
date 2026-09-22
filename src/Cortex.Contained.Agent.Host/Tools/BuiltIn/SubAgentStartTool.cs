@@ -13,6 +13,12 @@ namespace Cortex.Contained.Agent.Host.Tools.BuiltIn;
 /// </summary>
 public sealed partial class SubAgentStartTool : IAgentTool
 {
+    /// <summary>
+    /// How deep delegation may nest. Bounds the tree so a runaway cannot fan out indefinitely,
+    /// while still letting a multi-day goal split work a couple of levels down.
+    /// </summary>
+    internal const int MaxDelegationDepth = 3;
+
     private readonly SubagentSessionStore store;
     private readonly SubagentExecutionCoordinator coordinator;
     private readonly ILogger<SubAgentStartTool> logger;
@@ -163,6 +169,26 @@ public sealed partial class SubAgentStartTool : IAgentTool
 
         var taskId = string.Create(CultureInfo.InvariantCulture, $"sa-{Guid.NewGuid():N}");
 
+        // Nesting: when the caller is itself a subagent, this task is its child. Depth is what
+        // bounds the tree and what depth-first claiming uses to keep it from deadlocking.
+        string? parentTaskId = null;
+        var depth = 0;
+        if (SubagentConversationIds.TryGetTaskId(context.ConversationId, out var callerTaskId))
+        {
+            var parent = this.store.GetById(callerTaskId);
+            if (parent is not null)
+            {
+                parentTaskId = parent.TaskId;
+                depth = parent.Depth + 1;
+
+                if (depth > MaxDelegationDepth)
+                {
+                    return Task.FromResult(AgentToolResult.Fail(
+                        $"Delegation depth limit reached ({MaxDelegationDepth}). Do this work yourself rather than delegating further."));
+                }
+            }
+        }
+
         // Persist a durable, queued task. The coordinator owns admission + execution.
         var task = new SubagentTask
         {
@@ -178,6 +204,8 @@ public sealed partial class SubAgentStartTool : IAgentTool
             GoalMaxDuration = goalMaxDuration,
             GoalMaxContinuations = goalMaxContinuations,
             CreatedAt = DateTimeOffset.UtcNow,
+            Depth = depth,
+            ParentTaskId = parentTaskId,
         };
         this.store.Create(task);
 

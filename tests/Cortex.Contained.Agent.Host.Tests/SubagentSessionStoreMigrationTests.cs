@@ -49,7 +49,7 @@ public class SubagentSessionStoreMigrationTests : IDisposable
         Assert.NotNull(store.GetById("sa-completed"));
         Assert.NotNull(store.GetById("sa-failed"));
         Assert.NotNull(store.GetById("sa-cancelled"));
-        Assert.Equal(3, ReadUserVersion());
+        Assert.Equal(4, ReadUserVersion());
         Assert.Equal("ok", store.GetById("sa-completed")!.Result);
     }
 
@@ -141,11 +141,11 @@ public class SubagentSessionStoreMigrationTests : IDisposable
         using var reopened = CreateStore();
 
         Assert.NotNull(reopened.GetById("sa-pre-crash"));
-        Assert.Equal(3, ReadUserVersion());
+        Assert.Equal(4, ReadUserVersion());
     }
 
     [Fact]
-    public void Constructor_NewDatabase_CreatesVersion3Schema()
+    public void Constructor_NewDatabase_CreatesVersion4Schema()
     {
         using (var store = CreateStore())
         {
@@ -189,7 +189,7 @@ public class SubagentSessionStoreMigrationTests : IDisposable
             Assert.Equal(5, reloaded.GoalConsumedContinuations);
         }
 
-        Assert.Equal(3, ReadUserVersion());
+        Assert.Equal(4, ReadUserVersion());
     }
 
     // ── Migration from v2 ────────────────────────────────────────────────
@@ -217,7 +217,7 @@ public class SubagentSessionStoreMigrationTests : IDisposable
         Assert.Null(queued.GoalMaxContinuations);
         Assert.Equal(TimeSpan.Zero, queued.GoalConsumedElapsed);
         Assert.Equal(0, queued.GoalConsumedContinuations);
-        Assert.Equal(3, ReadUserVersion());
+        Assert.Equal(4, ReadUserVersion());
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────
@@ -371,6 +371,105 @@ public class SubagentSessionStoreMigrationTests : IDisposable
         cmd.Parameters.AddWithValue("$taskId", taskId);
         cmd.Parameters.AddWithValue("$state", state);
         cmd.Parameters.AddWithValue("$messagesJson", messagesJson);
+        cmd.Parameters.AddWithValue("$result", (object?)result ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$completedAt", (object?)completedAt ?? DBNull.Value);
+        cmd.ExecuteNonQuery();
+    }
+
+    [Fact]
+    public void Constructor_V3Database_MigratesToV4WithoutDroppingTasks()
+    {
+        SeedV3Database(conn =>
+        {
+            InsertV3Task(conn, "sa-v3-queued", "queued");
+            InsertV3Task(conn, "sa-v3-completed", "completed", completedAt: "2026-07-01T11:00:00.0000000Z", result: "ok");
+        });
+
+        using var store = CreateStore();
+
+        var queued = store.GetById("sa-v3-queued");
+        var completed = store.GetById("sa-v3-completed");
+        Assert.NotNull(queued);
+        Assert.NotNull(completed);
+        Assert.Equal("ok", completed.Result);
+
+        // Everything that existed before nesting was, by definition, a top-level task.
+        Assert.Equal(0, queued.Depth);
+        Assert.Null(queued.ParentTaskId);
+        Assert.Equal(4, ReadUserVersion());
+    }
+
+    /// <summary>Creates a v3-schema database exactly as the previous store version would have.</summary>
+    private void SeedV3Database(Action<SqliteConnection> seed)
+    {
+        Directory.CreateDirectory(Path.Combine(_tempDir, "subagents"));
+        using var conn = new SqliteConnection($"Data Source={DatabasePath};Pooling=False");
+        conn.Open();
+
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = """
+                CREATE TABLE subagent_tasks (
+                    task_id                 TEXT PRIMARY KEY,
+                    parent_conversation     TEXT NOT NULL,
+                    parent_channel          TEXT NOT NULL,
+                    description             TEXT NOT NULL,
+                    prompt                  TEXT NOT NULL,
+                    state                   TEXT NOT NULL DEFAULT 'queued',
+                    messages_json           TEXT NOT NULL DEFAULT '[]',
+                    result                  TEXT,
+                    eval_response           TEXT,
+                    created_at              TEXT NOT NULL,
+                    completed_at            TEXT,
+                    rounds                  INTEGER NOT NULL DEFAULT 0,
+                    run_mode                TEXT NOT NULL DEFAULT 'new',
+                    skill_name              TEXT,
+                    goal                    TEXT,
+                    goal_max_duration_ticks INTEGER,
+                    goal_max_continuations  INTEGER,
+                    goal_consumed_elapsed_ticks INTEGER NOT NULL DEFAULT 0,
+                    goal_consumed_continuations INTEGER NOT NULL DEFAULT 0,
+                    notification_state      TEXT NOT NULL DEFAULT 'none',
+                    notification_attempts   INTEGER NOT NULL DEFAULT 0,
+                    notification_updated_at TEXT,
+                    started_at              TEXT,
+                    last_progress_at        TEXT NOT NULL,
+                    restart_count           INTEGER NOT NULL DEFAULT 0
+                );
+
+                CREATE INDEX idx_subagent_queue
+                    ON subagent_tasks(state, created_at)
+                    WHERE state = 'queued';
+
+                PRAGMA user_version = 3;
+                """;
+            cmd.ExecuteNonQuery();
+        }
+
+        seed(conn);
+    }
+
+    private static void InsertV3Task(
+        SqliteConnection conn,
+        string taskId,
+        string state,
+        string? completedAt = null,
+        string? result = null)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            INSERT INTO subagent_tasks
+                (task_id, parent_conversation, parent_channel, description, prompt,
+                 state, messages_json, result, eval_response, created_at, completed_at, rounds,
+                 run_mode, skill_name, notification_state, notification_attempts,
+                 notification_updated_at, started_at, last_progress_at, restart_count)
+            VALUES
+                ($taskId, 'conv-1', 'webchat-default', 'v3 task', 'do things',
+                 $state, '[]', $result, NULL, '2026-07-01T10:00:00.0000000Z', $completedAt, 0,
+                 'new', NULL, 'none', 0, NULL, NULL, '2026-07-01T10:00:00.0000000Z', 0)
+            """;
+        cmd.Parameters.AddWithValue("$taskId", taskId);
+        cmd.Parameters.AddWithValue("$state", state);
         cmd.Parameters.AddWithValue("$result", (object?)result ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$completedAt", (object?)completedAt ?? DBNull.Value);
         cmd.ExecuteNonQuery();
