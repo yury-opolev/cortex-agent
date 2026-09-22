@@ -18,6 +18,9 @@ public sealed class SystemPromptConfig
     /// <summary>Authorable coding-agent relay block.</summary>
     public string CodingRelay { get; set; } = SystemPromptDefaults.CodingRelay;
 
+    /// <summary>Authorable autonomous coding-agent relay block for subagents.</summary>
+    public string CodingRelayAutonomous { get; set; } = SystemPromptDefaults.CodingRelayAutonomous;
+
     /// <summary>Authorable fixed instructions block for subagents.</summary>
     public string SubagentInstructions { get; set; } = SystemPromptDefaults.SubagentInstructions;
 }

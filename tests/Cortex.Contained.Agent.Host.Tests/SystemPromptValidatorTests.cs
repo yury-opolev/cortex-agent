@@ -26,6 +26,30 @@ public class SystemPromptValidatorTests
         Assert.Contains(result.Errors, e => e.Contains("bogus_thing", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void Validate_SubagentTemplateWithCodingRelay_IsValid()
+    {
+        var config = SystemPromptDefaults.Create();
+        config.SubagentTemplate = "{{instructions}}{{coding_relay}}";
+
+        var result = SystemPromptValidator.Validate(config);
+
+        Assert.True(result.IsValid);
+        Assert.Empty(result.Errors);
+    }
+
+    [Fact]
+    public void Validate_SubagentTemplateWithUnknownPlaceholder_IsError()
+    {
+        var config = SystemPromptDefaults.Create();
+        config.SubagentTemplate = "{{instructions}}{{not_a_real_placeholder}}";
+
+        var result = SystemPromptValidator.Validate(config);
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, e => e.Contains("not_a_real_placeholder", StringComparison.Ordinal));
+    }
+
     [Theory]
     [InlineData("{{Self_Notes}}")]   // uppercase
     [InlineData("{{active-tasks}}")] // hyphen
@@ -52,6 +76,18 @@ public class SystemPromptValidatorTests
 
         Assert.False(result.IsValid);
         Assert.Contains(result.Errors, e => e.Contains("CodingRelay", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Validate_CodingRelayAutonomousOverCap_IsError()
+    {
+        var config = SystemPromptDefaults.Create();
+        config.CodingRelayAutonomous = new string('x', SystemPromptPlaceholders.SegmentMaxChars + 1);
+
+        var result = SystemPromptValidator.Validate(config);
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, e => e.Contains("CodingRelayAutonomous", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]

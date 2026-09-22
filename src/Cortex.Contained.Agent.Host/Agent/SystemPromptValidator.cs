@@ -26,6 +26,7 @@ public static partial class SystemPromptValidator
 
         CheckSegmentCap(result, "VoiceMode", config.VoiceMode);
         CheckSegmentCap(result, "CodingRelay", config.CodingRelay);
+        CheckSegmentCap(result, "CodingRelayAutonomous", config.CodingRelayAutonomous);
         CheckSegmentCap(result, "SubagentInstructions", config.SubagentInstructions);
 
         result.IsValid = result.Errors.Count == 0;
