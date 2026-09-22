@@ -195,10 +195,47 @@ internal sealed partial class PromptAssembler
         {
             var elapsed = (DateTimeOffset.UtcNow - task.CreatedAt).TotalMinutes;
             var stateLabel = task.State.ToStorageValue();
-            section += $"- [{task.TaskId}] \"{task.Description}\" ({stateLabel}, {elapsed:F0}m ago)\n";
+            section += $"- [{task.TaskId}] \"{task.Description}\" ({stateLabel}, {elapsed:F0}m ago)"
+                + FormatGoalState(task)
+                + "\n";
         }
 
         return section;
+    }
+
+    /// <summary>
+    /// Goal state for an autonomous run, appended to its active-task line.
+    /// <para>
+    /// This is the main agent's standing view of a run it cannot otherwise see: the subagent
+    /// deliberately cannot message the user, so without this the only way to learn that a
+    /// multi-day run is burning its budget is to ask. Rendering it here means the answer is
+    /// already in front of the agent the moment anyone does ask.
+    /// </para>
+    /// </summary>
+    private static string FormatGoalState(SubagentTask task)
+    {
+        if (string.IsNullOrWhiteSpace(task.Goal))
+        {
+            return string.Empty;
+        }
+
+        var parts = new List<string> { $"goal: \"{task.Goal}\"" };
+
+        if (task.GoalMaxContinuations is { } continuationLimit)
+        {
+            parts.Add($"{task.GoalConsumedContinuations}/{continuationLimit} continuations");
+        }
+        else if (task.GoalConsumedContinuations > 0)
+        {
+            parts.Add($"{task.GoalConsumedContinuations} continuations");
+        }
+
+        if (task.GoalMaxDuration is { } durationLimit)
+        {
+            parts.Add($"{task.GoalConsumedElapsed:g} of {durationLimit:g} used");
+        }
+
+        return " — autonomous [" + string.Join(", ", parts) + "]";
     }
 
     /// <summary>

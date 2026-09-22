@@ -439,12 +439,41 @@ public sealed partial class SubagentSessionStore : SqliteStoreBase
     }
 
     /// <summary>
+    /// Sets, replaces or clears a task's autonomous goal and its budget limits.
+    /// <para>
+    /// Consumed budget is deliberately NOT reset: re-aiming a run that has already spent six days
+    /// must not silently hand it a fresh seven. Clearing the goal keeps the consumed values too,
+    /// so re-setting a goal later resumes rather than restarts.
+    /// </para>
+    /// </summary>
+    public void UpdateGoal(string taskId, string? goal, TimeSpan? maxDuration, int? maxContinuations)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(taskId);
+
+        lock (this.syncLock)
+        {
+            using var cmd = this.Connection.CreateCommand();
+            cmd.CommandText = """
+                UPDATE subagent_tasks
+                SET goal = $goal,
+                    goal_max_duration_ticks = $goalMaxDurationTicks,
+                    goal_max_continuations = $goalMaxContinuations
+                WHERE task_id = $taskId
+                """;
+            cmd.Parameters.AddWithValue("$taskId", taskId);
+            cmd.Parameters.AddWithValue("$goal", (object?)goal ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$goalMaxDurationTicks", (object?)maxDuration?.Ticks ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$goalMaxContinuations", (object?)maxContinuations ?? DBNull.Value);
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    /// <summary>
     /// Persist only consumed autonomous budget when no message round is being written.
     /// Continuation decisions happen between loops, so without this write a restart at that
     /// boundary would lose the just-spent continuation.
     /// </summary>
-    public void UpdateGoalBudgetConsumed(string taskId, TimeSpan elapsed, int continuationsUsed)
-    {
+    public void UpdateGoalBudgetConsumed(string taskId, TimeSpan elapsed, int continuationsUsed)    {
         ArgumentException.ThrowIfNullOrWhiteSpace(taskId);
         if (elapsed < TimeSpan.Zero)
         {

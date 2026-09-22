@@ -591,6 +591,15 @@ builder.Services.AddSingleton<IAgentTool>(sp =>
         sp.GetRequiredService<ILogger<SubAgentReadTool>>(),
         sp.GetRequiredService<InMemoryTodoStore>()));
 builder.Services.AddSingleton<IAgentTool>(sp =>
+    new SubAgentSetGoalTool(
+        sp.GetRequiredService<SubagentSessionStore>(),
+        sp.GetRequiredService<SubagentRunnerRegistry>(),
+        sp.GetRequiredService<ILlmClient>(),
+        sp.GetRequiredService<IModelProvider>(),
+        sp.GetRequiredService<ILoggerFactory>(),
+        sp.GetRequiredService<TimeProvider>(),
+        sp.GetRequiredService<ILogger<SubAgentSetGoalTool>>()));
+builder.Services.AddSingleton<IAgentTool>(sp =>
     new SubAgentSendTool(
         sp.GetRequiredService<SubagentSessionStore>(),
         sp.GetRequiredService<SubagentRunnerRegistry>(),
