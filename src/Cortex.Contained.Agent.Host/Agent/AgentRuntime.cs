@@ -2143,6 +2143,11 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
             changed.Add(nameof(Contracts.SystemPrompt.SystemPromptConfig.CodingRelay));
         }
 
+        if (!string.Equals(oldConfig.CodingRelayAutonomous, newConfig.CodingRelayAutonomous, StringComparison.Ordinal))
+        {
+            changed.Add(nameof(Contracts.SystemPrompt.SystemPromptConfig.CodingRelayAutonomous));
+        }
+
         if (!string.Equals(oldConfig.SubagentInstructions, newConfig.SubagentInstructions, StringComparison.Ordinal))
         {
             changed.Add(nameof(Contracts.SystemPrompt.SystemPromptConfig.SubagentInstructions));
@@ -2579,4 +2584,3 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
         Message = "[system-prompt] config updated: changed={ChangedFields} {OldFingerprint}->{NewFingerprint} warnings={WarningCount}")]
     private partial void LogSystemPromptUpdated(string changedFields, string oldFingerprint, string newFingerprint, int warningCount);
 }
-

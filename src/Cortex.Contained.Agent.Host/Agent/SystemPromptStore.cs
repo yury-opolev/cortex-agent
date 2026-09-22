@@ -129,7 +129,12 @@ public sealed partial class SystemPromptStore
     {
         var c = this.Read();
         var material = string.Concat(
-            c.MainTemplate, c.SubagentTemplate, c.VoiceMode, c.CodingRelay, c.SubagentInstructions);
+            c.MainTemplate,
+            c.SubagentTemplate,
+            c.VoiceMode,
+            c.CodingRelay,
+            c.CodingRelayAutonomous,
+            c.SubagentInstructions);
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(material));
         return Convert.ToHexString(hash, 0, 4).ToLowerInvariant();
     }

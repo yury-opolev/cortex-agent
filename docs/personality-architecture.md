@@ -89,7 +89,7 @@ independent of `personality.md`.
 
 ### Template model
 
-Two placeholder templates plus three authorable prose segments make up the config
+Two placeholder templates plus authorable prose segments make up the config
 (`SystemPromptConfig` in `Cortex.Contained.Contracts.SystemPrompt`):
 
 | Field | Used for |
@@ -98,11 +98,12 @@ Two placeholder templates plus three authorable prose segments make up the confi
 | `SubagentTemplate` | Subagent (`sub_agent_start`) system prompt |
 | `VoiceMode` | Authorable prose injected into the main prompt only on voice channels |
 | `CodingRelay` | Authorable prose injected into the main prompt describing the `coding_*` tool relay |
+| `CodingRelayAutonomous` | Authorable prose injected into the subagent prompt for autonomous `coding_session_respond` handling |
 | `SubagentInstructions` | Authorable fixed instructions injected into the subagent prompt |
 
 Templates use `{{placeholder}}` tokens. **Computed placeholders** (personality, self-notes,
 skills, channel label, active tasks/plans, recalled memories, bootstrap context, etc.) are
-filled in at render time from live state; the three segments above are **authorable prose**
+filled in at render time from live state; the segment fields above are **authorable prose**
 — free text the user edits directly, then referenced from a template via their own
 placeholder (`{{voice_mode}}`, `{{coding_relay}}`, `{{instructions}}`).
 
@@ -111,7 +112,7 @@ placeholder (`{{voice_mode}}`, `{{coding_relay}}`, `{{instructions}}`).
 | Template | Allowed placeholders |
 |----------|----------------------|
 | Main | `personality`, `self_notes`, `skills`, `channel`, `voice_mode`, `active_tasks`, `active_plans`, `coding_relay` |
-| Subagent | `personality`, `skill`, `instructions`, `skills`, `bootstrap_context`, `recalled_memories` |
+| Subagent | `personality`, `skill`, `instructions`, `skills`, `coding_relay`, `bootstrap_context`, `recalled_memories` |
 
 `SystemPromptPlaceholders` (Contracts) is the single source of truth for both the allowed
 sets and the "recommended" subsets (`MainRecommended`, `SubagentRecommended`) used for

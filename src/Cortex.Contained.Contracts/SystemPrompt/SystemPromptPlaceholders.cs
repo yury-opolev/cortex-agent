@@ -26,7 +26,7 @@ public static class SystemPromptPlaceholders
     public static readonly FrozenSet<string> Subagent = FrozenSet.ToFrozenSet(
         [
             "personality", "skill", "instructions", "skills",
-            "bootstrap_context", "recalled_memories",
+            "coding_relay", "bootstrap_context", "recalled_memories",
         ], StringComparer.Ordinal);
 
     /// <summary>Main placeholders whose absence is worth warning about.</summary>
