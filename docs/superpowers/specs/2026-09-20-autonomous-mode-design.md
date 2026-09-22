@@ -374,11 +374,14 @@ gains the ability to message the user — only the runtime does.
 4. ✅ Goal + budget persisted on `SubagentTask` (schema v3), consumed budget written each
    continuation so a restart resumes rather than resetting the clock.
 5. ⬜ Nested delegation: un-exclude the `sub_agent_*` family for subagents, depth-first claiming,
-   depth cap, cascade stop — **plus ending coda sessions owned by a finishing subagent**, which
-   nothing does today.
-6. ⬜ `sub_agent_set_goal` (live re-aiming), goal state in `sub_agent_read` and `{{active_tasks}}`
-   (progress option A), `coding_relay` placeholder + `CodingRelayAutonomous` for the subagent
-   prompt, supervisor-emitted exception push (progress option B).
+   depth cap, cascade stop for child tasks.
+6. ✅ `sub_agent_set_goal` (live re-aiming and stand-down), goal state in `sub_agent_read` and
+   `{{active_tasks}}` (progress option A), `coding_relay` placeholder +
+   `CodingRelayAutonomous` for the subagent prompt. ⬜ Supervisor-emitted exception push
+   (progress option B) remains.
+
+Also done outside the original phasing: ending coda sessions owned by a finishing subagent
+(`SubagentExecutionCoordinator.RecordTerminalResult`), which nothing did before.
 
 ## Resolved
 
