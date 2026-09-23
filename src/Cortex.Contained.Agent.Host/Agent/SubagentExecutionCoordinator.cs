@@ -552,8 +552,18 @@ public sealed partial class SubagentExecutionCoordinator : IHostedService, IDisp
 
             try
             {
-                await this.messageRouter.EnqueueAsync(message, stopping).ConfigureAwait(false);
+                var injectedIntoRunner = await this.messageRouter.EnqueueAsync(message, stopping).ConfigureAwait(false);
                 this.LogCompletionEnqueued(task.TaskId, task.ParentConversation);
+
+                if (injectedIntoRunner)
+                {
+                    // A nested child reporting to a subagent parent: the message went straight
+                    // into that runner, so AgentRuntime never sees it and nothing would ever
+                    // confirm the claim. Left Enqueued it would sit unsettled until a restart
+                    // released it, and then be re-announced — once per restart, forever. The
+                    // injection is the delivery, so settle it here.
+                    this.store.MarkNotificationDelivered(task.TaskId);
+                }
             }
             catch (OperationCanceledException)
             {

@@ -134,11 +134,22 @@ public sealed partial class SubAgentStopTool : IAgentTool
     /// leave the leaves briefly parentless and still consuming pool slots.
     /// </summary>
     private int StopSubtree(string rootTaskId)
+        => this.StopSubtree(rootTaskId, new HashSet<string>(StringComparer.Ordinal));
+
+    private int StopSubtree(string rootTaskId, HashSet<string> visited)
     {
+        // Guard the recursion rather than trusting the stored parent links. Depth is capped at
+        // creation, but a cycle introduced by data corruption or a future repoint would otherwise
+        // recurse until the stack blew — taking the host down while cancelling a subagent.
+        if (!visited.Add(rootTaskId))
+        {
+            return 0;
+        }
+
         var stopped = 0;
         foreach (var child in this.store.ListChildren(rootTaskId))
         {
-            stopped += this.StopSubtree(child.TaskId);
+            stopped += this.StopSubtree(child.TaskId, visited);
 
             // Cancel a live runner if there is one, then record the terminal state through the
             // guarded write so a child that already finished on its own is never overwritten.

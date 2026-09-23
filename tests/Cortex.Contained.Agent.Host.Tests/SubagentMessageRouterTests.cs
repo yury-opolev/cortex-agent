@@ -50,6 +50,43 @@ public sealed class SubagentMessageRouterTests
     }
 
     [Fact]
+    public async Task EnqueueAsync_LiveSubagentParent_ReportsRunnerInjection()
+    {
+        // The caller holds a durable delivery claim. A runner injection IS the delivery, because
+        // AgentRuntime never sees the message and so never confirms it — the router must say so,
+        // or the claim sits unsettled until a restart releases it and re-announces the result.
+        var channel = new AgentMessageChannel();
+        var registry = new SubagentRunnerRegistry(2, NullLogger<SubagentRunnerRegistry>.Instance);
+        var llmClient = Substitute.For<ILlmClient>();
+        using var runner = new SubagentRunner(
+            llmClient,
+            new ToolRegistry([], new ActiveChannelStore(), NullLogger<ToolRegistry>.Instance),
+            10,
+            NullLogger<SubagentRunner>.Instance);
+        Assert.True(registry.TryRegister("task-live", runner, out _));
+        var router = new SubagentMessageRouter(channel, registry, NullLogger<SubagentMessageRouter>.Instance);
+
+        var injected = await router.EnqueueAsync(CreateMessage("subagent-task-live", "child done"));
+
+        Assert.True(injected);
+        Assert.False(channel.TryRead(out _));
+    }
+
+    [Fact]
+    public async Task EnqueueAsync_NormalConversation_ReportsChannelDelivery()
+    {
+        var channel = new AgentMessageChannel();
+        var registry = new SubagentRunnerRegistry(2, NullLogger<SubagentRunnerRegistry>.Instance);
+        var router = new SubagentMessageRouter(channel, registry, NullLogger<SubagentMessageRouter>.Instance);
+
+        var injected = await router.EnqueueAsync(CreateMessage("webchat-default", "hello"));
+
+        // AgentRuntime will confirm this one, so the caller must NOT settle the claim itself.
+        Assert.False(injected);
+        Assert.True(channel.TryRead(out _));
+    }
+
+    [Fact]
     public void TryEnqueue_NormalConversation_EnqueuesMessageChannel()
     {
         var channel = new AgentMessageChannel();

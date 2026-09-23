@@ -34,15 +34,22 @@ public sealed partial class SubagentMessageRouter
     }
 
     /// <summary>Route with fallback backpressure when the message belongs to the main runtime queue.</summary>
-    public async ValueTask EnqueueAsync(AgentMessage message, CancellationToken cancellationToken = default)
+    /// <returns>
+    /// <see langword="true"/> when the message was injected directly into a live subagent runner.
+    /// That distinction matters for anything with a delivery receipt: a runner injection IS the
+    /// delivery, because <see cref="AgentRuntime"/> never sees the message and so never confirms
+    /// it. A caller holding a durable claim must settle it itself in that case.
+    /// </returns>
+    public async ValueTask<bool> EnqueueAsync(AgentMessage message, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (this.TryInjectLiveSubagent(message))
         {
-            return;
+            return true;
         }
 
         await this.messageChannel.EnqueueAsync(message, cancellationToken).ConfigureAwait(false);
+        return false;
     }
 
     private bool TryInjectLiveSubagent(AgentMessage message)
