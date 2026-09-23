@@ -24,7 +24,7 @@ public sealed class SubAgentStopToolTests : IDisposable
             _registry,
             new NoopExecutor(),
             _ => Runner(),
-            new AgentMessageChannel(),
+            new SubagentMessageRouter(new AgentMessageChannel(), _registry, NullLogger<SubagentMessageRouter>.Instance),
             NullLogger<SubagentExecutionCoordinator>.Instance);
         _tool = new SubAgentStopTool(_store, _registry, _coordinator, NullLogger<SubAgentStopTool>.Instance);
     }

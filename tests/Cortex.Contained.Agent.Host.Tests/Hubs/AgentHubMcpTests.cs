@@ -21,12 +21,14 @@ public sealed class AgentHubMcpTests : IDisposable
         _store = new SubagentSessionStore(_dir, NullLogger<SubagentSessionStore>.Instance);
 
         // Not started — UpdateMcpToolCatalog only flips the readiness flag on it.
+        var registry = new SubagentRunnerRegistry(1, NullLogger<SubagentRunnerRegistry>.Instance);
+        var channel = new AgentMessageChannel();
         _coordinator = new SubagentExecutionCoordinator(
             _store,
-            new SubagentRunnerRegistry(1, NullLogger<SubagentRunnerRegistry>.Instance),
+            registry,
             Substitute.For<ISubagentExecutor>(),
             _ => throw new InvalidOperationException("not used"),
-            new AgentMessageChannel(),
+            new SubagentMessageRouter(channel, registry, NullLogger<SubagentMessageRouter>.Instance),
             NullLogger<SubagentExecutionCoordinator>.Instance);
     }
 

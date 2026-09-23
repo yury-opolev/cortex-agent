@@ -80,6 +80,9 @@ public enum AgentLoopOutcome
 
     /// <summary>Exhausted all allowed rounds without a final response.</summary>
     MaxRoundsExceeded,
+
+    /// <summary>A callback asked the loop to stop mid-round (e.g. a supervisor budget or loop check).</summary>
+    CallbackHalted,
 }
 
 /// <summary>
@@ -131,9 +134,16 @@ public interface IAgentLoopCallbacks
 
     /// <summary>
     /// Called after all tools in a round have been executed.
-    /// Use for: compaction checks, state persistence, token tracking.
+    /// Use for: compaction checks, state persistence, token tracking, and any per-round
+    /// supervision that must run even when the model never stops calling tools.
     /// </summary>
-    Task OnRoundCompleteAsync(int round, LlmTokenUsage? usage, CancellationToken ct);
+    /// <returns>
+    /// <see langword="true"/> to keep looping; <see langword="false"/> to halt the loop with
+    /// <see cref="AgentLoopOutcome.CallbackHalted"/>. Returning false is how a supervisor enforces
+    /// a budget or ends a looping run — a check that could only run once the model stopped calling
+    /// tools would never run at all for an agent that calls one every round.
+    /// </returns>
+    Task<bool> OnRoundCompleteAsync(int round, LlmTokenUsage? usage, CancellationToken ct);
 
     /// <summary>
     /// Called when the LLM returns a context overflow error.
@@ -413,8 +423,18 @@ public sealed partial class AgentLoop
                 callbacks.OnToolResultMessage(toolMessage);
             }
 
-            // Post-round hook (compaction, persistence, etc.)
-            await callbacks.OnRoundCompleteAsync(round + 1, usage, cancellationToken).ConfigureAwait(false);
+            // Post-round hook (compaction, persistence, supervision). A callback may halt here —
+            // this is the only check that runs for an agent that calls a tool every round.
+            if (!await callbacks.OnRoundCompleteAsync(round + 1, usage, cancellationToken).ConfigureAwait(false))
+            {
+                return new AgentLoopResult
+                {
+                    Outcome = AgentLoopOutcome.CallbackHalted,
+                    ResponseText = string.Empty,
+                    Usage = usage,
+                    RoundsExecuted = round + 1,
+                };
+            }
         }
 
         // Exhausted all rounds

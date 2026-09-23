@@ -480,10 +480,10 @@ public class AgentLoopTransientRetryTests
         public Task OnToolStartAsync(LlmToolCall tc, CancellationToken ct) => Task.CompletedTask;
         public Task OnToolCompleteAsync(LlmToolCall tc, AgentToolResult r, TimeSpan d, CancellationToken ct)
             => Task.CompletedTask;
-        public Task OnRoundCompleteAsync(int round, LlmTokenUsage? usage, CancellationToken ct)
+        public Task<bool> OnRoundCompleteAsync(int round, LlmTokenUsage? usage, CancellationToken ct)
         {
             this.RoundsCompleted++;
-            return Task.CompletedTask;
+            return Task.FromResult(true);
         }
         public Task<bool> OnContextOverflowAsync(string err, CancellationToken ct)
         {

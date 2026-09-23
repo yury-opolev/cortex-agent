@@ -1,8 +1,10 @@
 using Cortex.Contained.Agent.Host.Agent;
+using Cortex.Contained.Contracts.Llm;
 using Cortex.Contained.Contracts.Config;
 using Cortex.Contained.Contracts.SystemPrompt;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using System.Reflection;
 
 namespace Cortex.Contained.Agent.Host.Tests;
 
@@ -53,7 +55,7 @@ public class SystemPromptCharacterizationTests
     }
 
     [Fact]
-    public void SubagentPrompt_EmptyValues_MatchesGoldenInstructionsOnly()
+    public void SubagentPrompt_EmptyValues_IncludesAutonomousRelayGuidance()
     {
         // Locks the Task-7 TARGET output (renderer + defaults), not the live
         // SubAgentStartTool.BuildSubagentSystemPrompt (which uses AppendLine and therefore
@@ -68,11 +70,18 @@ public class SystemPromptCharacterizationTests
             ["skills"] = "",
             ["bootstrap_context"] = "",
             ["recalled_memories"] = "",
+            ["coding_relay"] = SystemPromptDefaults.CodingRelayAutonomous,
         };
 
         var result = SystemPromptRenderer.Render(SystemPromptDefaults.SubagentTemplate, values);
 
-        Assert.Equal(SystemPromptDefaults.SubagentInstructions, result);
+        var expected = SystemPromptDefaults.SubagentInstructions
+            + SystemPromptDefaults.CodingRelayAutonomous;
+
+        Assert.Equal(expected, result);
+        Assert.Contains("answer Coda yourself", result, StringComparison.Ordinal);
+        Assert.Contains("exact, case-insensitive match", result, StringComparison.Ordinal);
+        Assert.Contains("coding_session_respond", result, StringComparison.Ordinal);
         Assert.DoesNotContain("\r", result);
     }
 
@@ -87,18 +96,72 @@ public class SystemPromptCharacterizationTests
             ["skills"] = "",
             ["bootstrap_context"] = "\n## User context\nctx",
             ["recalled_memories"] = "\n## Recalled context\nmem",
+            ["coding_relay"] = SystemPromptDefaults.CodingRelayAutonomous,
         };
 
         var result = SystemPromptRenderer.Render(SystemPromptDefaults.SubagentTemplate, values);
 
-        // Template is "{{personality}}{{skill}}{{instructions}}{{skills}}{{bootstrap_context}}{{recalled_memories}}",
-        // so with personality/skills empty the concatenation order is: skill, instructions, bootstrap_context, recalled_memories.
+        // Template is "{{personality}}{{skill}}{{instructions}}{{skills}}{{coding_relay}}{{bootstrap_context}}{{recalled_memories}}",
+        // so with personality/skills empty the concatenation order is: skill, instructions, coding_relay, bootstrap_context, recalled_memories.
         var expected = values["skill"]
             + values["instructions"]
+            + values["coding_relay"]
             + values["bootstrap_context"]
             + values["recalled_memories"];
 
         Assert.Equal(expected, result);
         Assert.DoesNotContain("\r", result);
+    }
+
+    [Fact]
+    public void SubagentPrompt_CustomTemplateWithoutCodingRelay_RendersByteIdentically()
+    {
+        var template = "{{instructions}}{{bootstrap_context}}{{recalled_memories}}";
+        var valuesWithoutRelay = new Dictionary<string, string>
+        {
+            ["instructions"] = "instructions",
+            ["bootstrap_context"] = "\nctx",
+            ["recalled_memories"] = "\nmem",
+        };
+        var valuesWithRelay = new Dictionary<string, string>(valuesWithoutRelay)
+        {
+            ["coding_relay"] = SystemPromptDefaults.CodingRelayAutonomous,
+        };
+
+        var before = SystemPromptRenderer.Render(template, valuesWithoutRelay);
+        var after = SystemPromptRenderer.Render(template, valuesWithRelay);
+
+        Assert.Equal(before, after);
+        Assert.Equal("instructions\nctx\nmem", after);
+    }
+
+    [Fact]
+    public void SubagentExecutor_DefaultPrompt_IncludesAutonomousRelayGuidance()
+    {
+        var executor = NewSubagentExecutor();
+        var method = typeof(SubagentExecutor).GetMethod(
+            "BuildSubagentSystemPrompt",
+            BindingFlags.Instance | BindingFlags.NonPublic)!;
+
+        var prompt = (string)method.Invoke(executor, ["memories", null, null])!;
+
+        Assert.Contains(SystemPromptDefaults.CodingRelayAutonomous, prompt, StringComparison.Ordinal);
+        Assert.Contains("answer Coda yourself", prompt, StringComparison.Ordinal);
+        Assert.Contains("Never substring-match", prompt, StringComparison.Ordinal);
+    }
+
+    private static SubagentExecutor NewSubagentExecutor()
+    {
+        var modelProvider = Substitute.For<IModelProvider>();
+        modelProvider.DefaultModel.Returns("test-model");
+        modelProvider.ContextWindow.Returns(128_000);
+        var llmClient = Substitute.For<ILlmClient>();
+
+        return new SubagentExecutor(
+            new SubagentRunnerRegistry(1, NullLogger<SubagentRunnerRegistry>.Instance),
+            llmClient,
+            modelProvider,
+            AppContext.BaseDirectory,
+            NullLogger<SubagentExecutor>.Instance);
     }
 }

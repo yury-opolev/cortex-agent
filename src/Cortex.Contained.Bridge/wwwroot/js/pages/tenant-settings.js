@@ -28,7 +28,7 @@ function tenantSettingsPage() {
         personalityStatus: "",
 
         // System Prompt
-        systemPrompt: { mainTemplate: "", subagentTemplate: "", voiceMode: "", codingRelay: "", subagentInstructions: "" },
+        systemPrompt: { mainTemplate: "", subagentTemplate: "", voiceMode: "", codingRelay: "", codingRelayAutonomous: "", subagentInstructions: "" },
         systemPromptLoading: false,
         savingSystemPrompt: false,
         systemPromptErrors: [],

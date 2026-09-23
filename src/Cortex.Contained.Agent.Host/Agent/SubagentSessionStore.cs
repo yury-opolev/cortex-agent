@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Cortex.Contained.Agent.Host.Agent.Autonomy;
 using Cortex.Contained.Agent.Host.Storage;
 using Cortex.Contained.Contracts.Llm;
 using Microsoft.Data.Sqlite;
@@ -31,7 +32,7 @@ public sealed partial class SubagentSessionStore : SqliteStoreBase
     private static readonly TimeSpan RecordRetention = TimeSpan.FromDays(7);
 
     /// <summary>Current schema version. Bump when adding migrations.</summary>
-    private const int CurrentSchemaVersion = 2;
+    private const int CurrentSchemaVersion = 4;
 
     /// <summary>
     /// Initialises the subagent session store, opening the SQLite database at <paramref name="stateRoot"/>/subagents/subagents.db.
@@ -58,14 +59,25 @@ public sealed partial class SubagentSessionStore : SqliteStoreBase
         var version = GetSchemaVersion();
         if (version == 0)
         {
-            this.CreateVersion2Schema();
+            this.CreateVersion4Schema();
             return;
         }
 
         if (version == 1)
         {
             this.MigrateVersion1ToVersion2();
-            this.SetSchemaVersion(CurrentSchemaVersion);
+            version = 2;
+        }
+
+        if (version == 2)
+        {
+            this.MigrateVersion2ToVersion3();
+            version = 3;
+        }
+
+        if (version == 3)
+        {
+            this.MigrateVersion3ToVersion4();
             return;
         }
 
@@ -76,12 +88,43 @@ public sealed partial class SubagentSessionStore : SqliteStoreBase
     }
 
     /// <summary>
-    /// Creates the complete v2 schema on a fresh (version 0) database. Crash-idempotent:
+    /// Migrates v3 to v4 non-destructively: adds the nesting columns and re-creates the queue
+    /// index in depth-first order. Existing rows default to depth 0 with no parent task, which is
+    /// exactly what every pre-nesting subagent was.
+    /// </summary>
+    private void MigrateVersion3ToVersion4()
+    {
+        using var transaction = this.Connection.BeginTransaction();
+        using var cmd = this.Connection.CreateCommand();
+        cmd.Transaction = transaction;
+        cmd.CommandText = """
+            ALTER TABLE subagent_tasks ADD COLUMN depth INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE subagent_tasks ADD COLUMN parent_task_id TEXT;
+
+            CREATE INDEX IF NOT EXISTS idx_subagent_children
+                ON subagent_tasks (parent_task_id)
+                WHERE parent_task_id IS NOT NULL;
+
+            DROP INDEX IF EXISTS idx_subagent_queue;
+            CREATE INDEX idx_subagent_queue
+                ON subagent_tasks(state, depth DESC, created_at)
+                WHERE state = 'queued';
+
+            PRAGMA user_version = 4;
+            """;
+        cmd.ExecuteNonQuery();
+        transaction.Commit();
+
+        this.LogSchemaMigrated(3, CurrentSchemaVersion);
+    }
+
+    /// <summary>
+    /// Creates the complete v4 schema on a fresh (version 0) database. Crash-idempotent:
     /// every CREATE uses IF NOT EXISTS and the create + <c>user_version</c> stamp run in one
     /// transaction, so a crash mid-bootstrap on a fresh DB re-runs cleanly instead of
     /// crash-looping on "table already exists".
     /// </summary>
-    private void CreateVersion2Schema()
+    private void CreateVersion4Schema()
     {
         using var transaction = this.Connection.BeginTransaction();
         using var cmd = this.Connection.CreateCommand();
@@ -102,12 +145,19 @@ public sealed partial class SubagentSessionStore : SqliteStoreBase
                 rounds                  INTEGER NOT NULL DEFAULT 0,
                 run_mode                TEXT NOT NULL DEFAULT 'new',
                 skill_name              TEXT,
+                goal                    TEXT,
+                goal_max_duration_ticks INTEGER,
+                goal_max_continuations  INTEGER,
+                goal_consumed_elapsed_ticks INTEGER NOT NULL DEFAULT 0,
+                goal_consumed_continuations INTEGER NOT NULL DEFAULT 0,
                 notification_state      TEXT NOT NULL DEFAULT 'none',
                 notification_attempts   INTEGER NOT NULL DEFAULT 0,
                 notification_updated_at TEXT,
                 started_at              TEXT,
                 last_progress_at        TEXT NOT NULL,
-                restart_count           INTEGER NOT NULL DEFAULT 0
+                restart_count           INTEGER NOT NULL DEFAULT 0,
+                depth                   INTEGER NOT NULL DEFAULT 0,
+                parent_task_id          TEXT
             );
 
             CREATE INDEX IF NOT EXISTS idx_subagent_active
@@ -117,15 +167,19 @@ public sealed partial class SubagentSessionStore : SqliteStoreBase
             CREATE INDEX IF NOT EXISTS idx_subagent_parent
                 ON subagent_tasks (parent_conversation);
 
+            CREATE INDEX IF NOT EXISTS idx_subagent_children
+                ON subagent_tasks (parent_task_id)
+                WHERE parent_task_id IS NOT NULL;
+
             CREATE INDEX IF NOT EXISTS idx_subagent_queue
-                ON subagent_tasks(state, created_at)
+                ON subagent_tasks(state, depth DESC, created_at)
                 WHERE state = 'queued';
 
             CREATE INDEX IF NOT EXISTS idx_subagent_notifications
                 ON subagent_tasks(notification_state, completed_at)
                 WHERE notification_state IN ('pending', 'enqueued');
 
-            PRAGMA user_version = 2;
+            PRAGMA user_version = 4;
             """;
         cmd.ExecuteNonQuery();
         transaction.Commit();
@@ -183,7 +237,31 @@ public sealed partial class SubagentSessionStore : SqliteStoreBase
         cmd.ExecuteNonQuery();
         transaction.Commit();
 
-        this.LogSchemaMigrated(1, CurrentSchemaVersion);
+        this.LogSchemaMigrated(1, 2);
+    }
+
+    /// <summary>
+    /// Migrates a v2 database to v3 non-destructively by adding autonomy columns only.
+    /// Existing plain subagents deliberately get null goal/limit values and zero consumed budget.
+    /// </summary>
+    private void MigrateVersion2ToVersion3()
+    {
+        using var transaction = this.Connection.BeginTransaction();
+        using var cmd = this.Connection.CreateCommand();
+        cmd.Transaction = transaction;
+        cmd.CommandText = """
+            ALTER TABLE subagent_tasks ADD COLUMN goal TEXT;
+            ALTER TABLE subagent_tasks ADD COLUMN goal_max_duration_ticks INTEGER;
+            ALTER TABLE subagent_tasks ADD COLUMN goal_max_continuations INTEGER;
+            ALTER TABLE subagent_tasks ADD COLUMN goal_consumed_elapsed_ticks INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE subagent_tasks ADD COLUMN goal_consumed_continuations INTEGER NOT NULL DEFAULT 0;
+
+            PRAGMA user_version = 3;
+            """;
+        cmd.ExecuteNonQuery();
+        transaction.Commit();
+
+        this.LogSchemaMigrated(2, CurrentSchemaVersion);
     }
 
     // ── CRUD ─────────────────────────────────────────────────────────────
@@ -198,13 +276,15 @@ public sealed partial class SubagentSessionStore : SqliteStoreBase
                 INSERT INTO subagent_tasks
                     (task_id, parent_conversation, parent_channel, description, prompt,
                      state, messages_json, result, eval_response, created_at, completed_at, rounds,
-                     run_mode, skill_name, notification_state, notification_attempts,
-                     notification_updated_at, started_at, last_progress_at, restart_count)
+                     run_mode, skill_name, goal, goal_max_duration_ticks, goal_max_continuations,
+                     goal_consumed_elapsed_ticks, goal_consumed_continuations, notification_state, notification_attempts,
+                     notification_updated_at, started_at, last_progress_at, restart_count, depth, parent_task_id)
                 VALUES
                     ($taskId, $parentConversation, $parentChannel, $description, $prompt,
                      $state, $messagesJson, $result, $evalResponse, $createdAt, $completedAt, $rounds,
-                     $runMode, $skillName, $notificationState, $notificationAttempts,
-                     $notificationUpdatedAt, $startedAt, $lastProgressAt, $restartCount)
+                     $runMode, $skillName, $goal, $goalMaxDurationTicks, $goalMaxContinuations,
+                     $goalConsumedElapsedTicks, $goalConsumedContinuations, $notificationState, $notificationAttempts,
+                     $notificationUpdatedAt, $startedAt, $lastProgressAt, $restartCount, $depth, $parentTaskId)
                 """;
             BindParameters(cmd, task);
             cmd.ExecuteNonQuery();
@@ -286,6 +366,24 @@ public sealed partial class SubagentSessionStore : SqliteStoreBase
         }
     }
 
+    /// <summary>Direct children of a task, for cascading a stop through the subtree.</summary>
+    public IReadOnlyList<SubagentTask> ListChildren(string parentTaskId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(parentTaskId);
+
+        lock (this.syncLock)
+        {
+            using var cmd = this.Connection.CreateCommand();
+            cmd.CommandText = """
+                SELECT * FROM subagent_tasks
+                WHERE parent_task_id = $parentTaskId
+                  AND state IN ('queued', 'running', 'revising')
+                """;
+            cmd.Parameters.AddWithValue("$parentTaskId", parentTaskId);
+            return ReadTasks(cmd);
+        }
+    }
+
     /// <summary>Get the oldest queued task, or null if none.</summary>
     public SubagentTask? GetOldestQueued()
     {
@@ -304,21 +402,34 @@ public sealed partial class SubagentSessionStore : SqliteStoreBase
     }
 
     /// <summary>
-    /// Atomically claim the oldest queued task: transition it to Running and return it
+    /// Atomically claim the next queued task: transition it to Running and return it
     /// (now Running), or null if none are queued. The SELECT and the UPDATE happen under
     /// a single lock so two concurrent dequeue callers can never claim the same task.
     /// </summary>
-    public SubagentTask? TryClaimOldestQueued()
+    /// <remarks>
+    /// Ordering is DEPTH-FIRST (deepest queued task first), then oldest. This is a deadlock
+    /// fix, not a preference. A parent keeps its runner slot while it waits for children, and a
+    /// child is always created AFTER its parent — so pure FIFO systematically admits parents
+    /// ahead of the children they are waiting on. Fill the pool with such parents and nothing
+    /// can ever progress; under a multi-day budget "it resolves eventually" is false. Draining
+    /// the deepest work first unwinds the tree from the leaves and guarantees forward progress.
+    /// </remarks>
+    /// <param name="minDepth">
+    /// Lowest nesting depth that may be claimed. Pass 1 to admit only delegated work, which is
+    /// how the coordinator reserves pool capacity for children when parents are holding slots.
+    /// </param>
+    public SubagentTask? TryClaimOldestQueued(int minDepth = 0)
     {
         lock (this.syncLock)
         {
             using var selectCmd = this.Connection.CreateCommand();
             selectCmd.CommandText = """
                 SELECT * FROM subagent_tasks
-                WHERE state = 'queued'
-                ORDER BY created_at
+                WHERE state = 'queued' AND depth >= $minDepth
+                ORDER BY depth DESC, created_at
                 LIMIT 1
                 """;
+            selectCmd.Parameters.AddWithValue("$minDepth", minDepth);
             var tasks = ReadTasks(selectCmd);
             if (tasks.Count == 0)
             {
@@ -364,6 +475,104 @@ public sealed partial class SubagentSessionStore : SqliteStoreBase
             cmd.Parameters.AddWithValue("$taskId", taskId);
             cmd.Parameters.AddWithValue("$messagesJson", json);
             cmd.Parameters.AddWithValue("$rounds", rounds);
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    /// <summary>
+    /// Persist the subagent's current message history, round count and consumed goal budget.
+    /// The consumed budget is written with per-round progress so restart recovery resumes the
+    /// real elapsed clock rather than silently granting a fresh goal budget.
+    /// </summary>
+    internal void UpdateMessages(
+        string taskId,
+        IReadOnlyList<LlmMessage> messages,
+        int rounds,
+        GoalBudgetConsumed goalConsumed)
+    {
+        var json = SerializeMessages(messages);
+
+        lock (this.syncLock)
+        {
+            using var cmd = this.Connection.CreateCommand();
+            cmd.CommandText = """
+                UPDATE subagent_tasks
+                SET messages_json = $messagesJson,
+                    rounds = $rounds,
+                    goal_consumed_elapsed_ticks = $goalConsumedElapsedTicks,
+                    goal_consumed_continuations = $goalConsumedContinuations
+                WHERE task_id = $taskId
+                """;
+            cmd.Parameters.AddWithValue("$taskId", taskId);
+            cmd.Parameters.AddWithValue("$messagesJson", json);
+            cmd.Parameters.AddWithValue("$rounds", rounds);
+            cmd.Parameters.AddWithValue("$goalConsumedElapsedTicks", goalConsumed.Elapsed.Ticks);
+            cmd.Parameters.AddWithValue("$goalConsumedContinuations", goalConsumed.ContinuationsUsed);
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    /// <summary>
+    /// Sets, replaces or clears a task's autonomous goal and its budget limits.
+    /// <para>
+    /// Consumed budget is deliberately NOT reset: re-aiming a run that has already spent six days
+    /// must not silently hand it a fresh seven. Clearing the goal keeps the consumed values too,
+    /// so re-setting a goal later resumes rather than restarts.
+    /// </para>
+    /// </summary>
+    public void UpdateGoal(string taskId, string? goal, TimeSpan? maxDuration, int? maxContinuations)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(taskId);
+
+        lock (this.syncLock)
+        {
+            using var cmd = this.Connection.CreateCommand();
+            cmd.CommandText = """
+                UPDATE subagent_tasks
+                SET goal = $goal,
+                    goal_max_duration_ticks = $goalMaxDurationTicks,
+                    goal_max_continuations = $goalMaxContinuations
+                WHERE task_id = $taskId
+                """;
+            cmd.Parameters.AddWithValue("$taskId", taskId);
+            cmd.Parameters.AddWithValue("$goal", (object?)goal ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$goalMaxDurationTicks", (object?)maxDuration?.Ticks ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$goalMaxContinuations", (object?)maxContinuations ?? DBNull.Value);
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    /// <summary>
+    /// Persist only consumed autonomous budget when no message round is being written.
+    /// Continuation decisions happen between loops, so without this write a restart at that
+    /// boundary would lose the just-spent continuation.
+    /// </summary>
+    public void UpdateGoalBudgetConsumed(string taskId, TimeSpan elapsed, int continuationsUsed)    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(taskId);
+        if (elapsed < TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(elapsed), "Consumed elapsed time cannot be negative.");
+        }
+
+        if (continuationsUsed < 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(continuationsUsed),
+                "Consumed continuations cannot be negative.");
+        }
+
+        lock (this.syncLock)
+        {
+            using var cmd = this.Connection.CreateCommand();
+            cmd.CommandText = """
+                UPDATE subagent_tasks
+                SET goal_consumed_elapsed_ticks = $goalConsumedElapsedTicks,
+                    goal_consumed_continuations = $goalConsumedContinuations
+                WHERE task_id = $taskId
+                """;
+            cmd.Parameters.AddWithValue("$taskId", taskId);
+            cmd.Parameters.AddWithValue("$goalConsumedElapsedTicks", elapsed.Ticks);
+            cmd.Parameters.AddWithValue("$goalConsumedContinuations", continuationsUsed);
             cmd.ExecuteNonQuery();
         }
     }
@@ -854,6 +1063,13 @@ public sealed partial class SubagentSessionStore : SqliteStoreBase
         cmd.Parameters.AddWithValue("$rounds", task.Rounds);
         cmd.Parameters.AddWithValue("$runMode", task.RunMode.ToStorageValue());
         cmd.Parameters.AddWithValue("$skillName", (object?)task.SkillName ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$goal", (object?)task.Goal ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$goalMaxDurationTicks",
+            task.GoalMaxDuration.HasValue ? task.GoalMaxDuration.Value.Ticks : (object)DBNull.Value);
+        cmd.Parameters.AddWithValue("$goalMaxContinuations",
+            task.GoalMaxContinuations.HasValue ? task.GoalMaxContinuations.Value : (object)DBNull.Value);
+        cmd.Parameters.AddWithValue("$goalConsumedElapsedTicks", task.GoalConsumedElapsed.Ticks);
+        cmd.Parameters.AddWithValue("$goalConsumedContinuations", task.GoalConsumedContinuations);
         cmd.Parameters.AddWithValue("$notificationState", task.NotificationState.ToStorageValue());
         cmd.Parameters.AddWithValue("$notificationAttempts", task.NotificationAttempts);
         cmd.Parameters.AddWithValue("$notificationUpdatedAt",
@@ -862,6 +1078,8 @@ public sealed partial class SubagentSessionStore : SqliteStoreBase
             task.StartedAt.HasValue ? FormatDto(task.StartedAt.Value) : (object)DBNull.Value);
         cmd.Parameters.AddWithValue("$lastProgressAt", FormatDto(task.LastProgressAt));
         cmd.Parameters.AddWithValue("$restartCount", task.RestartCount);
+        cmd.Parameters.AddWithValue("$depth", task.Depth);
+        cmd.Parameters.AddWithValue("$parentTaskId", (object?)task.ParentTaskId ?? DBNull.Value);
     }
 
     private static List<SubagentTask> ReadTasks(SqliteCommand cmd)
@@ -890,6 +1108,14 @@ public sealed partial class SubagentSessionStore : SqliteStoreBase
                 RunMode = SubagentRunModeExtensions.Parse(reader.GetString(reader.GetOrdinal("run_mode"))),
                 SkillName = reader.IsDBNull(reader.GetOrdinal("skill_name"))
                     ? null : reader.GetString(reader.GetOrdinal("skill_name")),
+                Goal = reader.IsDBNull(reader.GetOrdinal("goal"))
+                    ? null : reader.GetString(reader.GetOrdinal("goal")),
+                GoalMaxDuration = reader.IsDBNull(reader.GetOrdinal("goal_max_duration_ticks"))
+                    ? null : TimeSpan.FromTicks(reader.GetInt64(reader.GetOrdinal("goal_max_duration_ticks"))),
+                GoalMaxContinuations = reader.IsDBNull(reader.GetOrdinal("goal_max_continuations"))
+                    ? null : reader.GetInt32(reader.GetOrdinal("goal_max_continuations")),
+                GoalConsumedElapsed = TimeSpan.FromTicks(reader.GetInt64(reader.GetOrdinal("goal_consumed_elapsed_ticks"))),
+                GoalConsumedContinuations = reader.GetInt32(reader.GetOrdinal("goal_consumed_continuations")),
                 NotificationState = SubagentNotificationStateExtensions.Parse(
                     reader.GetString(reader.GetOrdinal("notification_state"))),
                 NotificationAttempts = reader.GetInt32(reader.GetOrdinal("notification_attempts")),
@@ -899,6 +1125,9 @@ public sealed partial class SubagentSessionStore : SqliteStoreBase
                     ? null : ParseDto(reader.GetString(reader.GetOrdinal("started_at"))),
                 LastProgressAt = ParseDto(reader.GetString(reader.GetOrdinal("last_progress_at"))),
                 RestartCount = reader.GetInt32(reader.GetOrdinal("restart_count")),
+            Depth = reader.GetInt32(reader.GetOrdinal("depth")),
+            ParentTaskId = reader.IsDBNull(reader.GetOrdinal("parent_task_id"))
+                ? null : reader.GetString(reader.GetOrdinal("parent_task_id")),
             });
         }
 

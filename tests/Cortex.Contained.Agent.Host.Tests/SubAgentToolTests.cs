@@ -64,7 +64,7 @@ public class SubAgentToolTests : IDisposable
             _registry,
             executor,
             RunnerFactory,
-            new AgentMessageChannel(),
+            new SubagentMessageRouter(new AgentMessageChannel(), _registry, NullLogger<SubagentMessageRouter>.Instance),
             NullLogger<SubagentExecutionCoordinator>.Instance);
 
         _coordinators.Add(coordinator);
@@ -101,6 +101,45 @@ public class SubAgentToolTests : IDisposable
         Assert.Equal(SubagentRunMode.New, task.RunMode);
         Assert.Equal("deep-research", task.SkillName);
         Assert.Equal("Do the research", task.Prompt);
+        Assert.Null(task.Goal);
+        Assert.Null(task.GoalMaxDuration);
+        Assert.Null(task.GoalMaxContinuations);
+    }
+
+    [Fact]
+    public async Task Start_WithGoalAndBudget_PersistsAutonomyFields()
+    {
+        var coordinator = BuildCoordinator(new NoopExecutor(), started: false);
+        var tool = new SubAgentStartTool(_store, coordinator, NullLogger<SubAgentStartTool>.Instance);
+
+        var result = await tool.ExecuteAsync(
+            """
+            {"description":"Ship feature","prompt":"Implement and verify it","goal":"Feature is implemented and tests are green","maxDuration":"2h","maxContinuations":"42"}
+            """,
+            _context, CancellationToken.None);
+
+        Assert.True(result.Success);
+        var task = Assert.Single(_store.GetActive());
+        Assert.Equal("Feature is implemented and tests are green", task.Goal);
+        Assert.Equal(TimeSpan.FromHours(2), task.GoalMaxDuration);
+        Assert.Equal(42, task.GoalMaxContinuations);
+        Assert.Equal(TimeSpan.Zero, task.GoalConsumedElapsed);
+        Assert.Equal(0, task.GoalConsumedContinuations);
+    }
+
+    [Fact]
+    public async Task Start_InvalidMaxDuration_ReturnsToolError()
+    {
+        var coordinator = BuildCoordinator(new NoopExecutor(), started: false);
+        var tool = new SubAgentStartTool(_store, coordinator, NullLogger<SubAgentStartTool>.Instance);
+
+        var result = await tool.ExecuteAsync(
+            """{"description":"Ship feature","prompt":"Implement it","goal":"done","maxDuration":"tomorrow"}""",
+            _context, CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Contains("maxDuration", result.Error!, StringComparison.Ordinal);
+        Assert.Empty(_store.GetActive());
     }
 
     [Fact]

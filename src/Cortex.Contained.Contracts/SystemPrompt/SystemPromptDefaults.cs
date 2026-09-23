@@ -20,7 +20,7 @@ public static class SystemPromptDefaults
     /// injected into subagents unless the user opts in).
     /// </summary>
     public const string SubagentTemplate =
-        "{{personality}}{{skill}}{{instructions}}{{skills}}{{bootstrap_context}}{{recalled_memories}}";
+        "{{personality}}{{skill}}{{instructions}}{{skills}}{{coding_relay}}{{bootstrap_context}}{{recalled_memories}}";
 
     /// <summary>Voice-mode block — verbatim copy of the former VoiceModeInstructions.</summary>
     public const string VoiceMode = """
@@ -172,6 +172,50 @@ public static class SystemPromptDefaults
             `coding_session_status` shows no recent activity. Then resume or end it — once.
 
         """;
+
+    /// <summary>
+    /// Autonomous coding-agent relay block for subagents. It intentionally differs from
+    /// <see cref="CodingRelay"/> because subagents cannot message the human directly.
+    /// </summary>
+    public const string CodingRelayAutonomous =
+        "\n\n" +
+        "## Coding agent (Coda) autonomous relay\n" +
+        "You may receive a synthetic user-role message starting with\n" +
+        "`[coding session=… status=… …]`. This is a Coda relay envelope, not a\n" +
+        "human request. In a subagent you MUST answer Coda yourself with\n" +
+        "`coding_session_respond`; do not try to reach the user. The `send_message`\n" +
+        "tool is unavailable to subagents, so relaying is structurally impossible.\n" +
+        "\n" +
+        "Envelope handling:\n" +
+        "  - `status=ready`: Coda finished. Incorporate `Final:` into your work summary.\n" +
+        "  - `status=awaiting-permission`: Coda asks to run a tool. Respond with\n" +
+        "    \"allow_once\", \"allow_always\", or \"deny\". Prefer the conservative\n" +
+        "    answer unless the goal plainly requires the requested action. Answering\n" +
+        "    explicitly is better than stalling because unanswered permissions are\n" +
+        "    refused by default after timeout.\n" +
+        "  - `status=awaiting-question`: Coda asks a question. If `Options:` are\n" +
+        "    present, choose by exact, case-insensitive match against an offered\n" +
+        "    option. Never substring-match: \"Do not delete\" is not \"Delete\".\n" +
+        "    If no option matches exactly, do not guess. Pick the safest available\n" +
+        "    action, or park the blocker and explain why.\n" +
+        "  - `status=awaiting-plan`: Coda requests plan approval. Prefer the\n" +
+        "    conservative answer unless the goal plainly requires approval. Answer\n" +
+        "    \"approve\" or \"reject\" explicitly because unanswered plans are\n" +
+        "    refused by default after timeout.\n" +
+        "  - `status=crashed`, `status=stalled`, or `status=prompt-expired`: treat it\n" +
+        "    as a blocker or recovery item. Do not start duplicate sessions; inspect\n" +
+        "    status/history first if continuing is safe.\n" +
+        "\n" +
+        "Decision discipline:\n" +
+        "  - Use the envelope's `requestId`; if it is missing or stale, recover it\n" +
+        "    from `coding_session_status.pendingRequest`. Never guess a request id.\n" +
+        "  - State the reason in the `coding_session_respond` turn or immediately\n" +
+        "    after it, and record an `AnsweredForUser`-style note in your progress\n" +
+        "    and final report with the question/request, answer, and reason.\n" +
+        "  - Be conservative around destructive operations, permission escalation,\n" +
+        "    network publication, credential handling, and broad file deletion.\n" +
+        "  - If blocked because no safe exact option exists, park the blocker rather\n" +
+        "    than fabricating an answer.\n";
 
     /// <summary>
     /// Fixed subagent instructions — verbatim copy of the SubAgentStartTool block. Uses

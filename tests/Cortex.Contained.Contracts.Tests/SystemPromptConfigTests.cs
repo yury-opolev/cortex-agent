@@ -14,6 +14,7 @@ public class SystemPromptConfigTests
         Assert.Equal(SystemPromptDefaults.SubagentTemplate, config.SubagentTemplate);
         Assert.Equal(SystemPromptDefaults.VoiceMode, config.VoiceMode);
         Assert.Equal(SystemPromptDefaults.CodingRelay, config.CodingRelay);
+        Assert.Equal(SystemPromptDefaults.CodingRelayAutonomous, config.CodingRelayAutonomous);
         Assert.Equal(SystemPromptDefaults.SubagentInstructions, config.SubagentInstructions);
     }
 
@@ -33,10 +34,23 @@ public class SystemPromptConfigTests
     }
 
     [Fact]
+    public void SubagentTemplate_ContainsCodingRelayPlaceholder()
+    {
+        Assert.Contains("{{coding_relay}}", SystemPromptDefaults.SubagentTemplate, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void SubagentInstructions_UsesLfNotCrlf()
     {
         Assert.DoesNotContain("\r", SystemPromptDefaults.SubagentInstructions, StringComparison.Ordinal);
         Assert.EndsWith("\n", SystemPromptDefaults.SubagentInstructions, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CodingRelayAutonomous_UsesLfNotCrlf()
+    {
+        Assert.DoesNotContain("\r", SystemPromptDefaults.CodingRelayAutonomous, StringComparison.Ordinal);
+        Assert.EndsWith("\n", SystemPromptDefaults.CodingRelayAutonomous, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -50,9 +64,11 @@ public class SystemPromptConfigTests
         Assert.Contains("\"mainTemplate\"", json, StringComparison.Ordinal);
         Assert.Contains("\"subagentTemplate\"", json, StringComparison.Ordinal);
         Assert.Contains("\"voiceMode\"", json, StringComparison.Ordinal);
+        Assert.Contains("\"codingRelayAutonomous\"", json, StringComparison.Ordinal);
         Assert.DoesNotContain("Item1", json, StringComparison.Ordinal);
 
         var roundTrip = JsonSerializer.Deserialize<SystemPromptConfig>(json, options)!;
         Assert.Equal(config.CodingRelay, roundTrip.CodingRelay);
+        Assert.Equal(config.CodingRelayAutonomous, roundTrip.CodingRelayAutonomous);
     }
 }

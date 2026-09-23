@@ -10,9 +10,10 @@ namespace Cortex.Contained.Agent.Host.Agent;
 /// (never overwriting a Failed/Cancelled as Completed), requeues (not fails) in-flight work on host
 /// shutdown, and only dispatches once Bridge + credentials + MCP-catalog readiness are all signaled.
 /// It also owns durable completion delivery: pending terminal-result notifications are claimed
-/// (→ Enqueued) and pushed onto the <see cref="AgentMessageChannel"/> with an awaited enqueue;
+/// (→ Enqueued) and pushed through <see cref="SubagentMessageRouter"/> with an awaited enqueue;
 /// the claim stays Enqueued until <see cref="AgentRuntime"/> confirms the parent turn delivered
-/// the response (or releases it for redelivery on failure) — at-least-once, never silently lost.
+/// the response (or releases it for redelivery on failure) — at-least-once for main-runtime
+/// parents, and direct runner injection for live subagent parents.
 /// </summary>
 public sealed partial class SubagentExecutionCoordinator : IHostedService, IDisposable
 {
@@ -20,7 +21,9 @@ public sealed partial class SubagentExecutionCoordinator : IHostedService, IDisp
     private readonly SubagentRunnerRegistry registry;
     private readonly ISubagentExecutor executor;
     private readonly Func<SubagentTask, SubagentRunner> runnerFactory;
-    private readonly AgentMessageChannel messageChannel;
+    private readonly SubagentMessageRouter messageRouter;
+    private readonly Coding.ICodingAgent? codingAgent;
+    private readonly Coding.CodingAgentSessionStore? codingSessions;
     private readonly ILogger<SubagentExecutionCoordinator> logger;
 
     /// <summary>
@@ -69,16 +72,20 @@ public sealed partial class SubagentExecutionCoordinator : IHostedService, IDisp
         SubagentRunnerRegistry registry,
         ISubagentExecutor executor,
         Func<SubagentTask, SubagentRunner> runnerFactory,
-        AgentMessageChannel messageChannel,
+        SubagentMessageRouter messageRouter,
         ILogger<SubagentExecutionCoordinator> logger,
-        TimeSpan? backstopTickInterval = null)
+        TimeSpan? backstopTickInterval = null,
+        Coding.ICodingAgent? codingAgent = null,
+        Coding.CodingAgentSessionStore? codingSessions = null)
     {
         this.store = store;
         this.registry = registry;
         this.executor = executor;
         this.runnerFactory = runnerFactory;
-        this.messageChannel = messageChannel;
+        this.messageRouter = messageRouter;
         this.logger = logger;
+        this.codingAgent = codingAgent;
+        this.codingSessions = codingSessions;
 
         // Injectable so tests can drive the backstop fast; production uses the real constant.
         // A non-positive value is rejected by PeriodicTimer, so fall back to the default.
@@ -367,7 +374,17 @@ public sealed partial class SubagentExecutionCoordinator : IHostedService, IDisp
         // claimed in this pass still runs to completion; only new claims stop.
         while (!stopping.IsCancellationRequested && this.IsReady && this.registry.HasAvailableSlot)
         {
-            var task = this.store.TryClaimOldestQueued();
+            // Reserve capacity for delegated work. Depth-first CLAIM ordering only reorders
+            // QUEUED tasks, so it cannot help when the pool is already full of RUNNING parents:
+            // a parent holds its slot across continuations while it waits for a child, and with
+            // every slot held by such a parent the claim path is never even reached. Children
+            // would then starve until the multi-day budget expired.
+            //
+            // Capping how much of the pool depth-0 work may occupy guarantees a child can always
+            // be admitted, which is what actually makes the tree drain.
+            var minDepth = this.registry.ActiveCount >= this.TopLevelSlotCeiling ? 1 : 0;
+
+            var task = this.store.TryClaimOldestQueued(minDepth);
             if (task is null)
             {
                 break;
@@ -455,13 +472,126 @@ public sealed partial class SubagentExecutionCoordinator : IHostedService, IDisp
     private void RecordTerminalResult(string taskId, SubagentExecutionResult result)
     {
         this.store.TrySetTerminalResult(taskId, result);
+        this.ReapOwnedCodaSessions(taskId);
+    }
+
+    /// <summary>
+    /// Ends any coda session the finishing subagent started.
+    /// <para>
+    /// Nothing else does this. The Bridge's job object only kills coda when the BRIDGE dies, and
+    /// the prompt idle timeout only resolves an unanswered request — neither covers "the subagent
+    /// that owned this session is gone". Without this a subagent could start coda, finish, and
+    /// leave it running on the host for days with its output discarded, because
+    /// <see cref="AgentRuntime"/> now drops messages addressed to a finished subagent rather than
+    /// running them at main-agent privilege.
+    /// </para>
+    /// <para>
+    /// Best-effort and never allowed to fail the terminal-result path: losing the subagent's
+    /// result would be a worse outcome than leaking a session, so every failure is logged and
+    /// swallowed.
+    /// </para>
+    /// </summary>
+    private void ReapOwnedCodaSessions(string taskId)
+    {
+        if (this.codingAgent is null || this.codingSessions is null)
+        {
+            return;
+        }
+
+        var channelId = SubagentConversationIds.ToConversationId(taskId);
+
+        try
+        {
+            var owned = this.codingSessions.ListActiveByChannel(channelId);
+            foreach (var session in owned)
+            {
+                _ = this.EndCodaSessionAsync(session.SessionId, taskId);
+            }
+        }
+#pragma warning disable CA1031 // Reaping must never fail the terminal-result path.
+        catch (Exception ex)
+#pragma warning restore CA1031
+        {
+            this.LogCodaReapFailed(taskId, ex.Message);
+        }
+    }
+
+    private async Task EndCodaSessionAsync(string sessionId, string taskId)
+    {
+        try
+        {
+            await this.codingAgent!.EndSessionAsync(sessionId, CancellationToken.None).ConfigureAwait(false);
+            this.LogCodaSessionReaped(taskId, sessionId);
+        }
+#pragma warning disable CA1031 // Best effort: a stuck coda session must not block subagent completion.
+        catch (Exception ex)
+#pragma warning restore CA1031
+        {
+            this.LogCodaReapFailed(taskId, ex.Message);
+        }
     }
 
     // ── Durable completion delivery ──────────────────────────────────────
 
     /// <summary>
+    /// How many slots depth-0 tasks may occupy. The remainder is reserved for delegated work so
+    /// a pool full of waiting parents can never starve the children they are waiting on. Always
+    /// leaves at least one reserved slot, and always allows at least one top-level task.
+    /// </summary>
+    private int TopLevelSlotCeiling => Math.Max(1, this.registry.MaxConcurrent - Math.Max(1, this.registry.MaxConcurrent / 4));
+
+    /// <summary>
+    /// The conversation a completion should actually be delivered to.
+    /// <para>
+    /// A nested child reports to <c>subagent-{parentTaskId}</c>. If that parent has already
+    /// finished there is no runner to inject into, the router falls back to the main channel, and
+    /// <see cref="AgentRuntime"/> DROPS messages addressed to a finished subagent conversation
+    /// (they would otherwise run at full main-agent privilege). The child's result would then be
+    /// silently lost and its claim stranded — re-attempted once per restart until retention
+    /// purged it — which breaks the at-least-once guarantee this class exists to provide.
+    /// </para>
+    /// <para>
+    /// So walk up to the nearest ancestor that can still receive it, falling back to the
+    /// originating human conversation at the root. A result that outlived its delegator is still
+    /// the user's answer.
+    /// </para>
+    /// </summary>
+    private string ResolveDeliverableParent(SubagentTask task)
+    {
+        if (!SubagentConversationIds.TryGetTaskId(task.ParentConversation, out var parentTaskId))
+        {
+            return task.ParentConversation;
+        }
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var current = this.store.GetById(parentTaskId);
+
+        while (current is not null && seen.Add(current.TaskId))
+        {
+            var isLive = current.State is SubagentTaskState.Running or SubagentTaskState.Revising
+                && this.registry.TryGet(current.TaskId) is not null;
+
+            if (isLive)
+            {
+                return SubagentConversationIds.ToConversationId(current.TaskId);
+            }
+
+            if (!SubagentConversationIds.TryGetTaskId(current.ParentConversation, out var nextId))
+            {
+                // Reached a task started from a human conversation — deliver there.
+                this.LogCompletionRetargeted(task.TaskId, current.ParentConversation);
+                return current.ParentConversation;
+            }
+
+            current = this.store.GetById(nextId);
+        }
+
+        return task.ParentConversation;
+    }
+
+    /// <summary>
     /// Claims pending terminal-result notifications (→ Enqueued) and pushes each onto the
-    /// parent conversation's message queue with an AWAITED enqueue (backpressure — never
+    /// parent conversation's route with an AWAITED enqueue (backpressure on fallback — never
     /// <c>TryEnqueue</c>, which would silently drop on a full channel). The claim stays
     /// Enqueued while <see cref="AgentRuntime"/> processes the parent turn; a throw or
     /// cancellation releases it back to Pending for redelivery.
@@ -479,7 +609,7 @@ public sealed partial class SubagentExecutionCoordinator : IHostedService, IDisp
 
             var message = new AgentMessage
             {
-                ConversationId = task.ParentConversation,
+                ConversationId = this.ResolveDeliverableParent(task),
                 ChannelId = task.ParentChannel,
                 Text = BuildCompletionTriggerText(task),
                 Source = AgentMessageSource.SubagentCompletion,
@@ -488,8 +618,18 @@ public sealed partial class SubagentExecutionCoordinator : IHostedService, IDisp
 
             try
             {
-                await this.messageChannel.EnqueueAsync(message, stopping).ConfigureAwait(false);
+                var injectedIntoRunner = await this.messageRouter.EnqueueAsync(message, stopping).ConfigureAwait(false);
                 this.LogCompletionEnqueued(task.TaskId, task.ParentConversation);
+
+                if (injectedIntoRunner)
+                {
+                    // A nested child reporting to a subagent parent: the message went straight
+                    // into that runner, so AgentRuntime never sees it and nothing would ever
+                    // confirm the claim. Left Enqueued it would sit unsettled until a restart
+                    // released it, and then be re-announced — once per restart, forever. The
+                    // injection is the delivery, so settle it here.
+                    this.store.MarkNotificationDelivered(task.TaskId);
+                }
             }
             catch (OperationCanceledException)
             {
@@ -587,4 +727,13 @@ public sealed partial class SubagentExecutionCoordinator : IHostedService, IDisp
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "[subagent-coordinator] Shutdown wait interrupted: {ErrorMessage}")]
     private partial void LogShutdownWaitInterrupted(string errorMessage);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "[subagent-coordinator] Retargeted completion for {TaskId} to {ConversationId}: its subagent parent is gone")]
+    private partial void LogCompletionRetargeted(string taskId, string conversationId);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "[subagent-coordinator] Ended coda session {SessionId} owned by finished subagent {TaskId}")]
+    private partial void LogCodaSessionReaped(string taskId, string sessionId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "[subagent-coordinator] Could not end a coda session owned by {TaskId}: {ErrorMessage}")]
+    private partial void LogCodaReapFailed(string taskId, string errorMessage);
 }

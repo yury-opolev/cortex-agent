@@ -49,7 +49,7 @@ public sealed class SubagentCompletionRedeliveryTests : IAsyncDisposable
             registry,
             new StubExecutor(),
             RunnerFactory,
-            _messageChannel,
+            new SubagentMessageRouter(_messageChannel, registry, NullLogger<SubagentMessageRouter>.Instance),
             NullLogger<SubagentExecutionCoordinator>.Instance);
 
         var sessionConfig = new SessionConfig();

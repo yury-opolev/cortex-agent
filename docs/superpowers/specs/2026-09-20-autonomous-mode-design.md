@@ -1,6 +1,6 @@
 # Cortex autonomous mode — design
 
-Status: **approved** — all open questions resolved. Ready to implement; no code written yet.
+Status: **implemented** — phases 1–4 shipped on `feat/autonomous-subagents`; phases 5–6 open.
 Date: 2026-09-20 (revised 2026-09-21)
 
 ## Goal
@@ -364,18 +364,24 @@ gains the ability to message the user — only the runtime does.
 
 ## Suggested phasing
 
-1. **Routing fix** — one general "deliver to `subagent-{id}`" router, used by both
+1. ✅ **Routing fix** — one general "deliver to `subagent-{id}`" router, used by both
    `CodingAgentInjectionService` (coda envelopes) and `SubagentExecutionCoordinator` (child
    completion notices). Independently valuable; a live bug today.
-2. `AutonomySupervisor` + completion judge + backstop budget, wired into `AgentLoop` /
-   `SubagentRunner`; `goal` on `sub_agent_start`. Smallest genuinely useful increment.
-3. Ledger + termination proof + stuck detector + mid-loop gate.
-4. `sub_agent_set_goal` (live re-aiming), goal state in `sub_agent_read` **and in
-   `{{active_tasks}}`** (progress option A), persistence of consumed budget.
-5. Nested delegation: un-exclude the `sub_agent_*` family for subagents, depth-first claiming,
-   depth cap, cascade stop.
-6. `coding_relay` placeholder + `CodingRelayAutonomous` for the subagent prompt; supervisor-emitted
-   exception push (progress option B).
+2. ✅ `AutonomySupervisor` + completion judge + backstop budget, wired into `AgentLoop` /
+   `SubagentRunner`; `goal` on `sub_agent_start`.
+3. ✅ Ledger + termination proof + stuck detector + **mid-loop gate** (via
+   `IAgentLoopCallbacks.OnRoundCompleteAsync`, which now returns a continue/halt decision).
+4. ✅ Goal + budget persisted on `SubagentTask` (schema v3), consumed budget written each
+   continuation so a restart resumes rather than resetting the clock.
+5. ✅ Nested delegation: the `sub_agent_*` family un-excluded for subagents, depth-first claiming,
+   depth cap of 3, cascade stop for child tasks.
+6. ✅ `sub_agent_set_goal` (live re-aiming and stand-down), goal state in `sub_agent_read` and
+   `{{active_tasks}}` (progress option A), `coding_relay` placeholder +
+   `CodingRelayAutonomous` for the subagent prompt. ⬜ Supervisor-emitted exception push
+   (progress option B) remains.
+
+Also done outside the original phasing: ending coda sessions owned by a finishing subagent
+(`SubagentExecutionCoordinator.RecordTerminalResult`), which nothing did before.
 
 ## Resolved
 

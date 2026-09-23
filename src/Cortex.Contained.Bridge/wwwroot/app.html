@@ -690,7 +690,7 @@
 
                             <label class="form-label small fw-semibold mb-1">Subagent template</label>
                             <div class="mb-2 d-flex flex-wrap gap-1">
-                                <template x-for="name in ['personality', 'skill', 'instructions', 'skills', 'bootstrap_context', 'recalled_memories']" :key="name">
+                                <template x-for="name in ['personality', 'skill', 'instructions', 'skills', 'coding_relay', 'bootstrap_context', 'recalled_memories']" :key="name">
                                     <button type="button" class="btn btn-sm btn-outline-secondary py-0"
                                             @click="insertPlaceholder('subagentTemplate', name)">
                                         <span x-text="'{{' + name + '}}'"></span>
@@ -706,6 +706,10 @@
 
                             <label class="form-label small fw-semibold mb-1">Coding relay segment</label>
                             <textarea class="form-control font-monospace mb-3" rows="3" x-model="systemPrompt.codingRelay"
+                                      :disabled="systemPromptLoading"></textarea>
+
+                            <label class="form-label small fw-semibold mb-1">Autonomous coding relay segment</label>
+                            <textarea class="form-control font-monospace mb-3" rows="3" x-model="systemPrompt.codingRelayAutonomous"
                                       :disabled="systemPromptLoading"></textarea>
 
                             <label class="form-label small fw-semibold mb-1">Subagent instructions segment</label>

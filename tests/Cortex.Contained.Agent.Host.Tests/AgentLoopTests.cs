@@ -295,7 +295,7 @@ public class AgentLoopTests
         public Task OnContentDeltaAsync(string delta, int seq, CancellationToken ct) { ContentDeltas.Add(delta); return Task.CompletedTask; }
         public Task OnToolStartAsync(LlmToolCall tc, CancellationToken ct) { ToolsStarted++; return Task.CompletedTask; }
         public Task OnToolCompleteAsync(LlmToolCall tc, AgentToolResult r, TimeSpan d, CancellationToken ct) { ToolsCompleted++; return Task.CompletedTask; }
-        public Task OnRoundCompleteAsync(int round, LlmTokenUsage? usage, CancellationToken ct) { RoundsCompleted++; return Task.CompletedTask; }
+        public Task<bool> OnRoundCompleteAsync(int round, LlmTokenUsage? usage, CancellationToken ct) { RoundsCompleted++; return Task.FromResult(true); }
         public Task<bool> OnContextOverflowAsync(string err, CancellationToken ct) { OverflowRecovered = RecoverFromOverflow; return Task.FromResult(RecoverFromOverflow); }
         public Task OnErrorAsync(string err, CancellationToken ct) { ErrorReceived = true; return Task.CompletedTask; }
         public Task OnDoomLoopAsync(string tool, CancellationToken ct) => Task.CompletedTask;

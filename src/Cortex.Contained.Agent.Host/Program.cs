@@ -1,5 +1,6 @@
 ﻿using System.Globalization;
 using Cortex.Contained.Agent.Host.Agent;
+using Cortex.Contained.Agent.Host.Agent.Autonomy;
 using Cortex.Contained.Agent.Host.Hubs;
 using Cortex.Contained.Agent.Host.Llm;
 using Cortex.Contained.Agent.Host.Scheduler;
@@ -139,6 +140,7 @@ builder.Services.AddHttpClient("embedding-probe", c =>
 // --- Message Queue ---
 builder.Services.AddSingleton(sp =>
     new AgentMessageChannel(sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.AgentMetrics>()));
+builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Agent.SubagentMessageRouter>();
 
 // --- Memory Services (MemoryMcp.Core) ---
 builder.Services.AddMemoryMcpCore(builder.Configuration);
@@ -527,6 +529,7 @@ builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Agent.SubagentExecutio
     var agentConfig = sp.GetRequiredService<IOptionsMonitor<AgentConfig>>();
     var subagentStore = sp.GetRequiredService<SubagentSessionStore>();
     var todoStore = sp.GetRequiredService<InMemoryTodoStore>();
+    var timeProvider = sp.GetRequiredService<TimeProvider>();
     var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
     var runnerLogger = loggerFactory.CreateLogger<SubagentRunner>();
 
@@ -536,18 +539,48 @@ builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Agent.SubagentExecutio
     // cycle (coordinator -> ToolRegistry -> SubAgent*Tool -> coordinator) that hangs host startup
     // before Kestrel binds. Deferring it to the runner factory breaks the cycle: by the time a
     // subagent is dispatched, the coordinator singleton is already fully built and cached.
-    Func<SubagentTask, SubagentRunner> runnerFactory = task => new SubagentRunner(
-        llmClient, sp.GetRequiredService<ToolRegistry>(), agentConfig.CurrentValue.MaxSubagentRounds,
-        runnerLogger, subagentStore, task.TaskId, modelProvider, todoStore,
-        transientStreamRetries: agentConfig.CurrentValue.SubagentTransientStreamRetries);
+    Func<SubagentTask, SubagentRunner> runnerFactory = task =>
+    {
+        var runner = new SubagentRunner(
+            llmClient, sp.GetRequiredService<ToolRegistry>(), agentConfig.CurrentValue.MaxSubagentRounds,
+            runnerLogger, subagentStore, task.TaskId, modelProvider, todoStore,
+            transientStreamRetries: agentConfig.CurrentValue.SubagentTransientStreamRetries);
+
+        if (!string.IsNullOrWhiteSpace(task.Goal))
+        {
+            var budget = GoalBudget.Rehydrate(
+                new GoalBudgetConsumed(task.GoalConsumedElapsed, task.GoalConsumedContinuations),
+                timeProvider,
+                task.GoalMaxDuration,
+                task.GoalMaxContinuations);
+
+            runner.SetSupervisor(new AutonomySupervisor(
+                task.Goal,
+                budget,
+                new CompletionJudge(
+                    llmClient,
+                    modelProvider,
+                    loggerFactory.CreateLogger<CompletionJudge>()),
+                new StuckDetector(),
+                new AssumptionLedger(),
+                loggerFactory.CreateLogger<AutonomySupervisor>()));
+        }
+
+        return runner;
+    };
 
     return new Cortex.Contained.Agent.Host.Agent.SubagentExecutionCoordinator(
         subagentStore,
         sp.GetRequiredService<SubagentRunnerRegistry>(),
         sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.ISubagentExecutor>(),
         runnerFactory,
-        sp.GetRequiredService<AgentMessageChannel>(),
-        loggerFactory.CreateLogger<Cortex.Contained.Agent.Host.Agent.SubagentExecutionCoordinator>());
+        sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.SubagentMessageRouter>(),
+        loggerFactory.CreateLogger<Cortex.Contained.Agent.Host.Agent.SubagentExecutionCoordinator>(),
+        backstopTickInterval: null,
+        // Cascade: a finishing subagent's coda sessions are ended with it. Nothing else does
+        // this — the Bridge job object only reaps when the Bridge dies.
+        sp.GetRequiredService<Cortex.Contained.Agent.Host.Coding.ICodingAgent>(),
+        sp.GetRequiredService<Cortex.Contained.Agent.Host.Coding.CodingAgentSessionStore>());
 });
 builder.Services.AddHostedService(sp =>
     sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.SubagentExecutionCoordinator>());
@@ -562,6 +595,15 @@ builder.Services.AddSingleton<IAgentTool>(sp =>
         sp.GetRequiredService<SubagentSessionStore>(),
         sp.GetRequiredService<ILogger<SubAgentReadTool>>(),
         sp.GetRequiredService<InMemoryTodoStore>()));
+builder.Services.AddSingleton<IAgentTool>(sp =>
+    new SubAgentSetGoalTool(
+        sp.GetRequiredService<SubagentSessionStore>(),
+        sp.GetRequiredService<SubagentRunnerRegistry>(),
+        sp.GetRequiredService<ILlmClient>(),
+        sp.GetRequiredService<IModelProvider>(),
+        sp.GetRequiredService<ILoggerFactory>(),
+        sp.GetRequiredService<TimeProvider>(),
+        sp.GetRequiredService<ILogger<SubAgentSetGoalTool>>()));
 builder.Services.AddSingleton<IAgentTool>(sp =>
     new SubAgentSendTool(
         sp.GetRequiredService<SubagentSessionStore>(),
@@ -800,4 +842,3 @@ app.UseAuthorization();
 app.MapHub<AgentHub>("/hub/agent");
 
 app.Run();
-

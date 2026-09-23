@@ -1,6 +1,9 @@
-﻿using Cortex.Contained.Agent.Host.Agent;
+﻿using System.Reflection;
+using Cortex.Contained.Agent.Host.Agent;
 using Cortex.Contained.Agent.Host.Coding;
+using Cortex.Contained.Agent.Host.Tools;
 using Cortex.Contained.Contracts.Coding;
+using Cortex.Contained.Contracts.Llm;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Cortex.Contained.Agent.Host.Tests.Coding;
@@ -11,6 +14,7 @@ public class CodingAgentInjectionServiceTests : IDisposable
     private readonly CodingAgentSessionStore store;
     private readonly CodingAgentEventBus bus;
     private readonly AgentMessageChannel queue;
+    private readonly SubagentRunnerRegistry registry;
     private readonly CodingAgentInjectionService service;
 
     public CodingAgentInjectionServiceTests()
@@ -20,10 +24,12 @@ public class CodingAgentInjectionServiceTests : IDisposable
         this.store = new CodingAgentSessionStore(this.tempRoot);
         this.bus = new CodingAgentEventBus();
         this.queue = new AgentMessageChannel();
+        this.registry = new SubagentRunnerRegistry(2, NullLogger<SubagentRunnerRegistry>.Instance);
+        var router = new SubagentMessageRouter(this.queue, this.registry, NullLogger<SubagentMessageRouter>.Instance);
         this.service = new CodingAgentInjectionService(
             this.bus,
             this.store,
-            this.queue,
+            router,
             NullLogger<CodingAgentInjectionService>.Instance);
 
         this.service.StartAsync(CancellationToken.None).GetAwaiter().GetResult();
@@ -83,6 +89,29 @@ public class CodingAgentInjectionServiceTests : IDisposable
         Assert.Equal(CodingSessionState.AwaitingPermission, record!.State);
         Assert.True(this.queue.TryRead(out var message));
         Assert.Contains("status=awaiting-permission", message!.Text);
+    }
+
+    [Fact]
+    public void PermissionRequest_LiveSubagentConversation_InjectsRunner()
+    {
+        var sessionId = Guid.NewGuid().ToString();
+        var runner = CreateRunner();
+        Assert.True(this.registry.TryRegister("task-parent", runner, out _));
+        this.store.Upsert(MakeRecord(sessionId, "subagent-task-parent"));
+
+        this.bus.RaisePermissionRequest(new CodingPermissionRequestEvent
+        {
+            SessionId = sessionId,
+            RequestId = "r-subagent",
+            ToolName = "Bash",
+            InputPreview = "{}",
+        });
+
+        Assert.False(this.queue.TryRead(out _));
+        var injected = DrainInjectedMessages(runner);
+        var message = Assert.Single(injected);
+        Assert.Contains("status=awaiting-permission", message.Text);
+        Assert.Contains("r-subagent", message.Text);
     }
 
     [Fact]
@@ -338,5 +367,18 @@ public class CodingAgentInjectionServiceTests : IDisposable
             CreatedAt = now,
             LastActivityAt = now,
         };
+    }
+
+    private static SubagentRunner CreateRunner() => new(
+        Substitute.For<ILlmClient>(),
+        new ToolRegistry([], new ActiveChannelStore(), NullLogger<ToolRegistry>.Instance),
+        10,
+        NullLogger<SubagentRunner>.Instance);
+
+    private static IReadOnlyList<AgentMessage> DrainInjectedMessages(SubagentRunner runner)
+    {
+        var field = typeof(SubagentRunner).GetField("pendingSession", BindingFlags.Instance | BindingFlags.NonPublic);
+        var session = Assert.IsType<AgentSession>(field!.GetValue(runner));
+        return session.DrainPendingMessages();
     }
 }

@@ -401,6 +401,7 @@ internal sealed partial class SubagentExecutor : ISubagentExecutor
             ["skill"] = skillValue,
             ["instructions"] = config.SubagentInstructions,
             ["skills"] = this.skillRegistry?.FormatForSystemPrompt() ?? string.Empty,
+            ["coding_relay"] = config.CodingRelayAutonomous,
             ["bootstrap_context"] = string.IsNullOrWhiteSpace(bootstrapContext)
                 ? string.Empty
                 : $"\n## User context\n{bootstrapContext}",

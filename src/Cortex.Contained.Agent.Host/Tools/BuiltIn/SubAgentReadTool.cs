@@ -102,9 +102,17 @@ public sealed partial class SubAgentReadTool : IAgentTool
             sb.AppendLine(task.EvalResponse);
         }
 
-        // Include subagent's todo list if available
-        if (this.todoStore is not null)
+        if (!string.IsNullOrWhiteSpace(task.Goal))
         {
+            sb.AppendLine();
+            sb.AppendLine("--- Autonomous goal ---");
+            sb.AppendLine(CultureInfo.InvariantCulture, $"Goal: {task.Goal}");
+            sb.AppendLine(CultureInfo.InvariantCulture, $"Continuations used: {task.GoalConsumedContinuations}{FormatLimit(task.GoalMaxContinuations)}");
+            sb.AppendLine(CultureInfo.InvariantCulture, $"Elapsed: {task.GoalConsumedElapsed:g}{FormatLimit(task.GoalMaxDuration)}");
+        }
+
+        // Include subagent's todo list if available
+        if (this.todoStore is not null)        {
             var subagentConvId = $"subagent-{task.TaskId}";
             var todos = this.todoStore.ReadAll(subagentConvId);
             if (todos.Count > 0)
@@ -125,7 +133,15 @@ public sealed partial class SubAgentReadTool : IAgentTool
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "[sub_agent_read] Read task {TaskId}: {State}")]
     private partial void LogTaskRead(string taskId, string state);
-
     [LoggerMessage(Level = LogLevel.Debug, Message = "[sub_agent_read] Task not found: {TaskId}")]
     private partial void LogTaskNotFound(string taskId);
+
+    /// <summary>Renders " of &lt;limit&gt;" for a set budget, or nothing when that dimension is unlimited.</summary>
+    private static string FormatLimit(int? limit) => limit is { } value
+        ? string.Create(CultureInfo.InvariantCulture, $" of {value}")
+        : string.Empty;
+
+    private static string FormatLimit(TimeSpan? limit) => limit is { } value
+        ? string.Create(CultureInfo.InvariantCulture, $" of {value:g}")
+        : string.Empty;
 }
