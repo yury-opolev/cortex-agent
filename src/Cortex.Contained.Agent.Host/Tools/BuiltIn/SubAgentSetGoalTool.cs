@@ -153,10 +153,43 @@ public sealed partial class SubAgentSetGoalTool : IAgentTool
             return Task.FromResult(AgentToolResult.Fail($"No subagent task found with id '{taskId}'."));
         }
 
+        // Ownership. Without this any caller holding a task id could re-aim or re-budget ANY run
+        // in the store — and since this branch lets subagents use the sub_agent_* family, a
+        // prompt-injected subagent could hijack a depth-0 task the user asked for, point it at its
+        // own objective, and extend its backstop to effectively unbounded.
+        if (!this.CallerOwns(task, context))
+        {
+            return Task.FromResult(AgentToolResult.Fail(
+                $"Subagent '{taskId}' was not started from this conversation; you can only change goals you own."));
+        }
+
         if (task.State is SubagentTaskState.Completed or SubagentTaskState.Failed or SubagentTaskState.Cancelled)
         {
             return Task.FromResult(AgentToolResult.Fail(
                 $"Subagent '{taskId}' already finished ({task.State.ToStorageValue()}); its goal cannot be changed."));
+        }
+
+        // Validate BEFORE persisting. The schema advertises 7d/10000 defaults, so an ordinary
+        // call with no budget arguments must get them — persisting null/null would write a row
+        // with no termination backstop at all, and the next claim would throw out of the runner
+        // factory and wedge the task in Running with no runner, permanently, across restarts.
+        if (goal is not null)
+        {
+            maxDuration ??= GoalBudget.DefaultWallClockLimit;
+            maxContinuations ??= GoalBudget.DefaultContinuationLimit;
+
+            try
+            {
+                _ = GoalBudget.Rehydrate(
+                    new GoalBudgetConsumed(task.GoalConsumedElapsed, task.GoalConsumedContinuations),
+                    this.timeProvider,
+                    maxDuration,
+                    maxContinuations);
+            }
+            catch (ArgumentOutOfRangeException ex)
+            {
+                return Task.FromResult(AgentToolResult.Fail(ex.Message));
+            }
         }
 
         this.store.UpdateGoal(taskId, goal, maxDuration, maxContinuations);
@@ -171,6 +204,41 @@ public sealed partial class SubAgentSetGoalTool : IAgentTool
         return Task.FromResult(AgentToolResult.Ok(goal is null
             ? $"Cleared the autonomous goal for '{taskId}'. It will finish its current pass and stop."
             : $"Set the autonomous goal for '{taskId}'. Takes effect at its next loop boundary."));
+    }
+
+    /// <summary>
+    /// A caller may only manage tasks it started, or descendants of its own task.
+    /// <para>
+    /// <c>ToolExecutionContext.ConversationId</c> is set by the agent loop from its own config,
+    /// never from model-supplied arguments, so it is a trustworthy identity here.
+    /// </para>
+    /// </summary>
+    private bool CallerOwns(SubagentTask task, ToolExecutionContext context)
+    {
+        if (string.Equals(task.ParentConversation, context.ConversationId, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        if (!SubagentConversationIds.TryGetTaskId(context.ConversationId, out var callerTaskId))
+        {
+            return false;
+        }
+
+        // Walk up from the target: a subagent may manage its own subtree.
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var current = task;
+        while (current?.ParentTaskId is { } parentId && seen.Add(parentId))
+        {
+            if (string.Equals(parentId, callerTaskId, StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            current = this.store.GetById(parentId);
+        }
+
+        return false;
     }
 
     private AutonomySupervisor BuildSupervisor(

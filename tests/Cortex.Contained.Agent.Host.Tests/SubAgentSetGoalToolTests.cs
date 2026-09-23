@@ -125,6 +125,43 @@ public sealed class SubAgentSetGoalToolTests : IDisposable
         Assert.False(result.Success);
     }
 
+    [Fact]
+    public async Task Execute_NoBudgetArguments_AppliesAdvertisedDefaults()
+    {
+        // The schema advertises 7d/10000. Persisting null/null would write a row with no
+        // termination backstop, and the next claim would throw out of the runner factory and
+        // wedge the task in Running with no runner, permanently, across restarts.
+        this.Seed("sa-def");
+        var tool = this.NewTool();
+
+        var result = await tool.ExecuteAsync(
+            JsonSerializer.Serialize(new { task_id = "sa-def", goal = "a goal" }),
+            Ctx(),
+            CancellationToken.None);
+
+        Assert.True(result.Success);
+        var task = this.store.GetById("sa-def")!;
+        Assert.NotNull(task.GoalMaxDuration);
+        Assert.NotNull(task.GoalMaxContinuations);
+    }
+
+    [Fact]
+    public async Task Execute_TaskOwnedByAnotherConversation_IsRefused()
+    {
+        // Without an ownership check, any caller holding a task id could re-aim any run in the
+        // store — and subagents can now use the sub_agent_* family.
+        this.Seed("sa-victim");
+        var tool = this.NewTool();
+
+        var result = await tool.ExecuteAsync(
+            JsonSerializer.Serialize(new { task_id = "sa-victim", goal = "hijacked", maxDuration = "3650d" }),
+            new ToolExecutionContext { ChannelId = "subagent-sa-attacker", ConversationId = "subagent-sa-attacker" },
+            CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Null(this.store.GetById("sa-victim")!.Goal);
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────
 
     private void Seed(string taskId, string? goal = null) => this.store.Create(new SubagentTask

@@ -58,6 +58,31 @@ public sealed class NestedDelegationTests : IDisposable
         Assert.Equal("sa-first", claimed!.TaskId);
     }
 
+    [Fact]
+    public void TryClaimOldestQueued_MinDepthOne_SkipsTopLevelWork()
+    {
+        // Reserved capacity: with the pool full of running parents, only delegated work may be
+        // admitted. Depth-first ORDERING alone cannot fix that, because the claim path is never
+        // reached when every slot is held by a running parent.
+        this.Seed("sa-top", depth: 0);
+        this.Seed("sa-nested", depth: 1, parentTaskId: "sa-top");
+
+        var claimed = this.store.TryClaimOldestQueued(minDepth: 1);
+
+        Assert.Equal("sa-nested", claimed!.TaskId);
+    }
+
+    [Fact]
+    public void TryClaimOldestQueued_MinDepthOne_NoNestedWork_ClaimsNothing()
+    {
+        this.Seed("sa-only-top", depth: 0);
+
+        Assert.Null(this.store.TryClaimOldestQueued(minDepth: 1));
+
+        // And the top-level task is untouched, still claimable once a slot frees up.
+        Assert.Equal(SubagentTaskState.Queued, this.store.GetById("sa-only-top")!.State);
+    }
+
     // ── Depth cap ────────────────────────────────────────────────────
 
     [Fact]
@@ -145,6 +170,36 @@ public sealed class NestedDelegationTests : IDisposable
         var done = this.store.GetById("sa-done")!;
         Assert.Equal(SubagentTaskState.Completed, done.State);
         Assert.Equal("finished first", done.Result);
+    }
+
+    [Fact]
+    public async Task Stop_TaskOwnedByAnotherConversation_IsRefused()
+    {
+        this.Seed("sa-other", depth: 0, state: SubagentTaskState.Running);
+        var tool = this.NewStopTool();
+
+        var result = await tool.ExecuteAsync(
+            JsonSerializer.Serialize(new { task_id = "sa-other" }),
+            CtxForSubagent("sa-unrelated"),
+            CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal(SubagentTaskState.Running, this.store.GetById("sa-other")!.State);
+    }
+
+    [Fact]
+    public async Task Stop_OwnDescendant_IsAllowed()
+    {
+        this.Seed("sa-owner", depth: 0, state: SubagentTaskState.Running);
+        this.Seed("sa-mine", depth: 1, parentTaskId: "sa-owner", state: SubagentTaskState.Running);
+        var tool = this.NewStopTool();
+
+        var result = await tool.ExecuteAsync(
+            JsonSerializer.Serialize(new { task_id = "sa-mine" }),
+            CtxForSubagent("sa-owner"),
+            CancellationToken.None);
+
+        Assert.True(result.Success);
     }
 
     // ── Schema ───────────────────────────────────────────────────────

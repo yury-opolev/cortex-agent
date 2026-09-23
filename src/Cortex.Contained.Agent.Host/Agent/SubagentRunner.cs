@@ -262,8 +262,8 @@ public sealed partial class SubagentRunner : IDisposable
             this.imageAgingOptions?.CurrentValue,
             this.imageDescriber);
 
-        // The callbacks own the mid-loop gate: the supervisor must be consulted after every tool
-        // round, not only where a turn stops calling tools.
+        // The callbacks own the mid-loop gate. RunLoopWithSupervisionAsync re-syncs this every
+        // iteration so a goal set or cleared mid-run reaches the gate too.
         callbacks.SetSupervisor(this.supervisor);
 
         AgentLoopResult result;
@@ -358,6 +358,13 @@ public sealed partial class SubagentRunner : IDisposable
             // (sub_agent_set_goal "stand down"). Re-reading the field mid-iteration would
             // dereference null and crash the run instead of finishing as a plain subagent.
             var active = this.supervisor;
+
+            // Re-sync every iteration, not once at start. The callbacks own the mid-loop gate, so
+            // a supervisor set or replaced mid-run would otherwise leave that gate bound to stale
+            // state forever — the old budget and old stuck detector — while the outer loop judged
+            // against the new one, and the two would fight over the persisted consumed budget.
+            callbacks.SetSupervisor(active);
+
             if (active is null)
             {
                 // No goal at all, or the goal was cleared mid-run. A cleared goal reverts to a
@@ -368,7 +375,19 @@ public sealed partial class SubagentRunner : IDisposable
                     return lastResult with { RoundsExecuted = totalRounds };
                 }
 
-                return await this.agentLoop.ExecuteAsync(config, callbacks, cancellationToken).ConfigureAwait(false);
+                var unsupervised = await this.agentLoop.ExecuteAsync(config, callbacks, cancellationToken).ConfigureAwait(false);
+                totalRounds += unsupervised.RoundsExecuted;
+
+                // A goal may have been attached WHILE that pass ran. Loop round so it takes
+                // effect on this run rather than silently waiting for a resume that may never
+                // come — sub_agent_set_goal promises it applies at the next loop boundary.
+                if (this.supervisor is null)
+                {
+                    return unsupervised with { RoundsExecuted = totalRounds };
+                }
+
+                lastResult = unsupervised;
+                continue;
             }
 
             var result = await this.agentLoop.ExecuteAsync(config, callbacks, cancellationToken).ConfigureAwait(false);

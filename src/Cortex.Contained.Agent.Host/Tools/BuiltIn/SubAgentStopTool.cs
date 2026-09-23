@@ -78,10 +78,27 @@ public sealed partial class SubAgentStopTool : IAgentTool
             return Task.FromResult(AgentToolResult.Fail($"No subagent task found with ID '{taskId}'."));
         }
 
-        // Cascade BEFORE stopping the parent. A stopped parent must not orphan children that
-        // keep burning budget with nobody left to report to — and under a multi-day budget an
-        // orphan can outlive its parent by days. Depth-first through the subtree so leaves are
-        // cancelled before the branches above them.
+        // Ownership: a caller may only stop tasks it started, or descendants of its own task.
+        // Since this branch lets subagents use the sub_agent_* family, without this a
+        // prompt-injected subagent could cancel any run in the store — including a depth-0 task
+        // the user asked for, and its whole subtree.
+        if (!this.CallerOwns(task, context))
+        {
+            return Task.FromResult(AgentToolResult.Fail(
+                $"Subagent '{taskId}' was not started from this conversation; you can only stop tasks you own."));
+        }
+
+        // Already terminal: nothing to stop, and nothing to cascade — the subtree was cascaded
+        // when this task reached its terminal state.
+        if (task.State is SubagentTaskState.Completed or SubagentTaskState.Failed or SubagentTaskState.Cancelled)
+        {
+            return Task.FromResult(AgentToolResult.Ok(
+                $"Subagent {taskId} is already {task.State.ToStorageValue()}; nothing to stop."));
+        }
+
+        // Cascade before stopping the parent. A stopped parent must not orphan children that keep
+        // burning budget with nobody left to report to — and under a multi-day budget an orphan
+        // can outlive its parent by days. Depth-first so leaves are cancelled before branches.
         var cascaded = this.StopSubtree(taskId);
 
         switch (task.State)
@@ -133,6 +150,38 @@ public sealed partial class SubAgentStopTool : IAgentTool
     /// how many were stopped. Depth-first matters: cancelling a branch before its leaves would
     /// leave the leaves briefly parentless and still consuming pool slots.
     /// </summary>
+    /// <summary>
+    /// A caller may only stop tasks it started, or descendants of its own task.
+    /// <c>ToolExecutionContext.ConversationId</c> comes from the agent loop's own config, never
+    /// from model-supplied arguments, so it is a trustworthy identity here.
+    /// </summary>
+    private bool CallerOwns(SubagentTask task, ToolExecutionContext context)
+    {
+        if (string.Equals(task.ParentConversation, context.ConversationId, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        if (!SubagentConversationIds.TryGetTaskId(context.ConversationId, out var callerTaskId))
+        {
+            return false;
+        }
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var current = task;
+        while (current?.ParentTaskId is { } parentId && seen.Add(parentId))
+        {
+            if (string.Equals(parentId, callerTaskId, StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            current = this.store.GetById(parentId);
+        }
+
+        return false;
+    }
+
     private int StopSubtree(string rootTaskId)
         => this.StopSubtree(rootTaskId, new HashSet<string>(StringComparer.Ordinal));
 

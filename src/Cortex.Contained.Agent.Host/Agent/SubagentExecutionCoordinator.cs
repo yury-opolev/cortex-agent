@@ -374,7 +374,17 @@ public sealed partial class SubagentExecutionCoordinator : IHostedService, IDisp
         // claimed in this pass still runs to completion; only new claims stop.
         while (!stopping.IsCancellationRequested && this.IsReady && this.registry.HasAvailableSlot)
         {
-            var task = this.store.TryClaimOldestQueued();
+            // Reserve capacity for delegated work. Depth-first CLAIM ordering only reorders
+            // QUEUED tasks, so it cannot help when the pool is already full of RUNNING parents:
+            // a parent holds its slot across continuations while it waits for a child, and with
+            // every slot held by such a parent the claim path is never even reached. Children
+            // would then starve until the multi-day budget expired.
+            //
+            // Capping how much of the pool depth-0 work may occupy guarantees a child can always
+            // be admitted, which is what actually makes the tree drain.
+            var minDepth = this.registry.ActiveCount >= this.TopLevelSlotCeiling ? 1 : 0;
+
+            var task = this.store.TryClaimOldestQueued(minDepth);
             if (task is null)
             {
                 break;
@@ -524,6 +534,62 @@ public sealed partial class SubagentExecutionCoordinator : IHostedService, IDisp
     // ── Durable completion delivery ──────────────────────────────────────
 
     /// <summary>
+    /// How many slots depth-0 tasks may occupy. The remainder is reserved for delegated work so
+    /// a pool full of waiting parents can never starve the children they are waiting on. Always
+    /// leaves at least one reserved slot, and always allows at least one top-level task.
+    /// </summary>
+    private int TopLevelSlotCeiling => Math.Max(1, this.registry.MaxConcurrent - Math.Max(1, this.registry.MaxConcurrent / 4));
+
+    /// <summary>
+    /// The conversation a completion should actually be delivered to.
+    /// <para>
+    /// A nested child reports to <c>subagent-{parentTaskId}</c>. If that parent has already
+    /// finished there is no runner to inject into, the router falls back to the main channel, and
+    /// <see cref="AgentRuntime"/> DROPS messages addressed to a finished subagent conversation
+    /// (they would otherwise run at full main-agent privilege). The child's result would then be
+    /// silently lost and its claim stranded — re-attempted once per restart until retention
+    /// purged it — which breaks the at-least-once guarantee this class exists to provide.
+    /// </para>
+    /// <para>
+    /// So walk up to the nearest ancestor that can still receive it, falling back to the
+    /// originating human conversation at the root. A result that outlived its delegator is still
+    /// the user's answer.
+    /// </para>
+    /// </summary>
+    private string ResolveDeliverableParent(SubagentTask task)
+    {
+        if (!SubagentConversationIds.TryGetTaskId(task.ParentConversation, out var parentTaskId))
+        {
+            return task.ParentConversation;
+        }
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var current = this.store.GetById(parentTaskId);
+
+        while (current is not null && seen.Add(current.TaskId))
+        {
+            var isLive = current.State is SubagentTaskState.Running or SubagentTaskState.Revising
+                && this.registry.TryGet(current.TaskId) is not null;
+
+            if (isLive)
+            {
+                return SubagentConversationIds.ToConversationId(current.TaskId);
+            }
+
+            if (!SubagentConversationIds.TryGetTaskId(current.ParentConversation, out var nextId))
+            {
+                // Reached a task started from a human conversation — deliver there.
+                this.LogCompletionRetargeted(task.TaskId, current.ParentConversation);
+                return current.ParentConversation;
+            }
+
+            current = this.store.GetById(nextId);
+        }
+
+        return task.ParentConversation;
+    }
+
+    /// <summary>
     /// Claims pending terminal-result notifications (→ Enqueued) and pushes each onto the
     /// parent conversation's route with an AWAITED enqueue (backpressure on fallback — never
     /// <c>TryEnqueue</c>, which would silently drop on a full channel). The claim stays
@@ -543,7 +609,7 @@ public sealed partial class SubagentExecutionCoordinator : IHostedService, IDisp
 
             var message = new AgentMessage
             {
-                ConversationId = task.ParentConversation,
+                ConversationId = this.ResolveDeliverableParent(task),
                 ChannelId = task.ParentChannel,
                 Text = BuildCompletionTriggerText(task),
                 Source = AgentMessageSource.SubagentCompletion,
@@ -661,6 +727,9 @@ public sealed partial class SubagentExecutionCoordinator : IHostedService, IDisp
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "[subagent-coordinator] Shutdown wait interrupted: {ErrorMessage}")]
     private partial void LogShutdownWaitInterrupted(string errorMessage);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "[subagent-coordinator] Retargeted completion for {TaskId} to {ConversationId}: its subagent parent is gone")]
+    private partial void LogCompletionRetargeted(string taskId, string conversationId);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "[subagent-coordinator] Ended coda session {SessionId} owned by finished subagent {TaskId}")]
     private partial void LogCodaSessionReaped(string taskId, string sessionId);

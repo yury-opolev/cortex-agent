@@ -414,17 +414,22 @@ public sealed partial class SubagentSessionStore : SqliteStoreBase
     /// can ever progress; under a multi-day budget "it resolves eventually" is false. Draining
     /// the deepest work first unwinds the tree from the leaves and guarantees forward progress.
     /// </remarks>
-    public SubagentTask? TryClaimOldestQueued()
+    /// <param name="minDepth">
+    /// Lowest nesting depth that may be claimed. Pass 1 to admit only delegated work, which is
+    /// how the coordinator reserves pool capacity for children when parents are holding slots.
+    /// </param>
+    public SubagentTask? TryClaimOldestQueued(int minDepth = 0)
     {
         lock (this.syncLock)
         {
             using var selectCmd = this.Connection.CreateCommand();
             selectCmd.CommandText = """
                 SELECT * FROM subagent_tasks
-                WHERE state = 'queued'
+                WHERE state = 'queued' AND depth >= $minDepth
                 ORDER BY depth DESC, created_at
                 LIMIT 1
                 """;
+            selectCmd.Parameters.AddWithValue("$minDepth", minDepth);
             var tasks = ReadTasks(selectCmd);
             if (tasks.Count == 0)
             {
