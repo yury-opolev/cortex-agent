@@ -469,6 +469,7 @@ public sealed partial class SessionTimerService : IDisposable, IAsyncDisposable
                 // live session rather than in isolation.
                 ConversationId = entry.ConversationId,
                 ChannelId = entry.ChannelId,
+                IsVoice = entry.ChannelId is "discord-voice" or "voice-default",
                 Text = BuildIntentText(entry.ToView()),
                 Source = AgentMessageSource.SessionTimer,
                 CorrelationId = Guid.NewGuid().ToString("N"),

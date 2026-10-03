@@ -42,6 +42,46 @@ public class SchedulerToolTests : IDisposable
 
     // ── ScheduleTaskTool Tests ───────────────────────────────────────────
 
+    [Theory]
+    [InlineData(null)]
+    [InlineData("webchat-default")]
+    public async Task ScheduleTaskTool_Create_PersistsOriginSeparatelyFromOptionalTarget(string? target)
+    {
+        var arguments = new Dictionary<string, object>
+        {
+            ["action"] = "create",
+            ["description"] = "90s rest cue",
+            ["message"] = "call the next set",
+            ["delay_minutes"] = 1.5,
+        };
+        if (target is not null)
+        {
+            arguments["channel"] = target;
+        }
+
+        var args = System.Text.Json.JsonSerializer.Serialize(arguments);
+        var context = new ToolExecutionContext
+        {
+            ConversationId = "discord-voice-default",
+            ChannelId = "discord-voice",
+        };
+
+        var result = await _scheduleTaskTool.ExecuteAsync(args, context, CancellationToken.None);
+        Assert.True(result.Success, result.Error);
+        var id = Assert.Single(_scheduler.GetActive()).Id;
+        using var reloaded = new SchedulerService(new AgentMessageChannel(), _tempDir, NullLogger<SchedulerService>.Instance);
+        var task = reloaded.GetTask(id);
+
+        Assert.NotNull(task);
+        Assert.Equal(target, task.ChannelId); // Do not default or rewrite the explicit target contract.
+        Assert.Equal("discord-voice", task.OriginChannelId);
+        Assert.Contains("Origin channel: discord-voice", SchedulerService.BuildEnrichedMessageText(task), StringComparison.Ordinal);
+        if (target is not null)
+        {
+            Assert.Contains("Target channel: webchat-default", SchedulerService.BuildEnrichedMessageText(task), StringComparison.Ordinal);
+        }
+    }
+
     [Fact]
     public void ScheduleTaskTool_Name_IsCorrect()
     {
@@ -197,7 +237,8 @@ public class SchedulerToolTests : IDisposable
         Assert.True(result.Success);
         Assert.Contains("Check weather", result.Content);
         Assert.Contains("pending", result.Content);
-        Assert.Contains("Channel: (webchat fallback)", result.Content); // No explicit channel
+        Assert.Contains("Channel: (not specified)", result.Content); // No explicit target or fallback.
+        Assert.Contains("Origin channel: webchat-default", result.Content);
     }
 
     [Fact]
@@ -245,7 +286,7 @@ public class SchedulerToolTests : IDisposable
     [Fact]
     public async Task ScheduleTaskTool_Create_DefaultsWork()
     {
-        // No channel needed — defaults to null (last-active on delivery)
+        // No explicit target supplied: it remains null, independently of the captured origin.
         var args = """
         {
             "action": "create",

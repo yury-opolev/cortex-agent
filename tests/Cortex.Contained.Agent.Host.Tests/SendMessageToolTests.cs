@@ -190,6 +190,26 @@ public class SendMessageToolTests : IDisposable
     }
 
     [Fact]
+    public async Task ExecuteAsync_VoiceOriginWithoutExplicitChannel_StillRejectsOmission()
+    {
+        var client = Substitute.For<IAgentHubClient>();
+        SetClient(client);
+        _activeChannelStore.Set(["discord-voice", "webchat-default"]);
+        var context = new ToolExecutionContext
+        {
+            ConversationId = "discord-voice-default",
+            ChannelId = "discord-voice",
+        };
+
+        var result = await _tool.ExecuteAsync("""{"text":"rest is up"}""", context, CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Contains("Missing required parameter: channel", result.Error, StringComparison.Ordinal);
+        Assert.Contains("The user is currently on 'discord-voice'", result.Error, StringComparison.Ordinal);
+        await client.DidNotReceive().OnProactiveMessage(Arg.Any<ProactiveMessage>());
+    }
+
+    [Fact]
     public async Task ExecuteAsync_NoChannelSpecified_ReturnsErrorWithHint()
     {
         var mockClient = Substitute.For<IAgentHubClient>();

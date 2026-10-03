@@ -61,6 +61,22 @@ public sealed class SessionTimerServiceTests : IDisposable
         Assert.Contains("call the next round", message.Text, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("discord-voice", true)]
+    [InlineData("voice-default", true)]
+    [InlineData("webchat-default", false)]
+    [InlineData("discord-dm", false)]
+    public void Fired_timer_preserves_channel_and_voice_presentation(string channelId, bool isVoice)
+    {
+        this.service.Schedule("origin-conversation", channelId, 90, "rest is up");
+
+        var message = this.FireDue(90);
+
+        Assert.Equal("origin-conversation", message.ConversationId);
+        Assert.Equal(channelId, message.ChannelId);
+        Assert.Equal(isVoice, message.IsVoice);
+    }
+
     [Fact]
     public void Fired_intent_tells_the_model_to_act_rather_than_repeat_the_text()
     {

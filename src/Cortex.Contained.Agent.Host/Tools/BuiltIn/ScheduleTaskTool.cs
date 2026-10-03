@@ -119,7 +119,7 @@ internal sealed class ScheduleTaskTool : IAgentTool
 
             return action switch
             {
-                "create" => HandleCreate(root),
+                "create" => HandleCreate(root, context),
                 "cancel" => HandleCancel(root),
                 "get" => HandleGet(root),
                 _ => Task.FromResult(AgentToolResult.Fail($"Unknown action: '{action}'. Valid actions: create, cancel, get")),
@@ -131,7 +131,7 @@ internal sealed class ScheduleTaskTool : IAgentTool
         }
     }
 
-    private Task<AgentToolResult> HandleCreate(JsonElement root)
+    private Task<AgentToolResult> HandleCreate(JsonElement root, ToolExecutionContext context)
     {
         // Required fields
         if (!root.TryGetProperty("description", out var descElement) ||
@@ -240,6 +240,7 @@ internal sealed class ScheduleTaskTool : IAgentTool
             MaxExecutions = maxExecutions,
             CreatedAtUtc = DateTimeOffset.UtcNow,
             ChannelId = channelId,
+            OriginChannelId = context.ChannelId,
         };
 
         this.scheduler.Schedule(task);
@@ -298,7 +299,8 @@ internal sealed class ScheduleTaskTool : IAgentTool
         sb.AppendLine(CultureInfo.InvariantCulture, $"  Description: {task.Description}");
         sb.AppendLine(CultureInfo.InvariantCulture, $"  Message: {task.MessageText}");
         sb.AppendLine(CultureInfo.InvariantCulture, $"  Status: {status}");
-        sb.AppendLine(CultureInfo.InvariantCulture, $"  Channel: {task.ChannelId ?? "(webchat fallback)"}");
+        sb.AppendLine(CultureInfo.InvariantCulture, $"  Channel: {task.ChannelId ?? "(not specified)"}");
+        sb.AppendLine(CultureInfo.InvariantCulture, $"  Origin channel: {task.OriginChannelId ?? "(unknown)"}");
         sb.AppendLine(CultureInfo.InvariantCulture, $"  Scheduled: {task.ScheduledAtUtc:yyyy-MM-dd HH:mm:ss UTC}");
         sb.AppendLine(CultureInfo.InvariantCulture, $"  Next execution: {task.NextExecutionUtc:yyyy-MM-dd HH:mm:ss UTC}");
         sb.AppendLine(CultureInfo.InvariantCulture, $"  Recurrence: {recurrence}");

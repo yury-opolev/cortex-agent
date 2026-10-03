@@ -2,14 +2,19 @@ using System.Runtime.CompilerServices;
 using Cortex.Contained.Agent.Host.Agent;
 using Cortex.Contained.Agent.Host.Hubs;
 using Cortex.Contained.Agent.Host.Memory;
+using Cortex.Contained.Agent.Host.Reminders;
+using Cortex.Contained.Agent.Host.Scheduler;
 using Cortex.Contained.Agent.Host.Storage;
+using Cortex.Contained.Agent.Host.Tools.BuiltIn;
 using Cortex.Contained.Agent.Host.Tools;
 using Cortex.Contained.Contracts.Config;
 using Cortex.Contained.Contracts.Hub;
 using Cortex.Contained.Contracts.Llm;
+using Cortex.Contained.Contracts.SystemPrompt;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Cortex.Contained.Agent.Host.Tests;
 
@@ -33,6 +38,7 @@ public sealed class TimerComposerRuntimeTests : IAsyncLifetime
     private const string ComposedReply = "Round 2 — guards up!";
 
     private readonly List<LlmCompletionRequest> requests = [];
+    private readonly PingTool ping = new();
 
     public TimerComposerRuntimeTests()
     {
@@ -41,7 +47,7 @@ public sealed class TimerComposerRuntimeTests : IAsyncLifetime
             sessionConfig, new MemorySettingsStore(), NullLogger<AgentSessionStore>.Instance);
 
         var activeChannelStore = new ActiveChannelStore();
-        var toolRegistry = new ToolRegistry([new PingTool()], activeChannelStore, NullLogger<ToolRegistry>.Instance);
+        var toolRegistry = new ToolRegistry([this.ping], activeChannelStore, NullLogger<ToolRegistry>.Instance);
 
         var hubContext = Substitute.For<IHubContext<AgentHub, IAgentHubClient>>();
         var hubClients = Substitute.For<IHubClients<IAgentHubClient>>();
@@ -122,6 +128,93 @@ public sealed class TimerComposerRuntimeTests : IAsyncLifetime
 
         Assert.Fail("the composed timer outcome never reached the conversation");
         throw new InvalidOperationException("unreachable");
+    }
+
+    [Fact]
+    public async Task Voice_timer_composer_receives_origin_channel_and_voice_context()
+    {
+        const string conversationId = "discord-voice-default";
+        var session = this.sessions.GetOrCreateWithIdleCheck(conversationId);
+        session.AddMessage(new LlmMessage { Role = "user", Content = "Rest for ninety seconds" });
+        this.ScriptToolCallThenAnswer();
+        var time = new FakeTimeProvider();
+        using var timers = new SessionTimerService(this.messageChannel, NullLogger<SessionTimerService>.Instance, time);
+        var tool = new SessionTimerTool(timers);
+        var result = await tool.ExecuteAsync(
+            """{"action":"create","delay_seconds":90,"intent":"call the next set"}""",
+            new ToolExecutionContext { ConversationId = conversationId, ChannelId = "discord-voice" },
+            CancellationToken.None);
+        Assert.True(result.Success, result.Error);
+
+        time.Advance(TimeSpan.FromSeconds(90));
+        await WaitForComposedOutcomeAsync(session);
+
+        var request = await this.WaitForRequestCountAsync(2);
+        Assert.Contains("The user is currently talking to you via Discord voice (discord-voice).", request.Messages[0].Content, StringComparison.Ordinal);
+        Assert.Contains(IntentComposer.Framing, request.Messages[0].Content, StringComparison.Ordinal);
+        Assert.Contains(SystemPromptDefaults.VoiceMode, request.Messages[0].Content, StringComparison.Ordinal);
+        Assert.NotNull(this.ping.LastContext);
+        Assert.Equal("discord-voice", this.ping.LastContext.ChannelId);
+        Assert.Equal(conversationId, this.ping.LastContext.ConversationId);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("webchat-default")]
+    public async Task Scheduled_voice_task_isolated_run_receives_persisted_origin(string? target)
+    {
+        var path = Path.Combine(Path.GetTempPath(), "cortex-origin-runtime-" + Guid.NewGuid().ToString("N"));
+        var time = new FakeTimeProvider(DateTimeOffset.Parse("2026-10-03T12:00:00Z", null));
+        this.ScriptToolCallThenAnswer();
+        try
+        {
+            string taskId;
+            using (var scheduler = new SchedulerService(this.messageChannel, path, NullLogger<SchedulerService>.Instance, time))
+            {
+                var tool = new ScheduleTaskTool(scheduler, new ActiveChannelStore());
+                var arguments = new Dictionary<string, object>
+                {
+                    ["action"] = "create",
+                    ["description"] = "rest cue",
+                    ["message"] = "call the next set",
+                    ["scheduled_at"] = "2026-10-03T12:01:30Z",
+                };
+                if (target is not null)
+                {
+                    arguments["channel"] = target;
+                }
+
+                var result = await tool.ExecuteAsync(
+                    System.Text.Json.JsonSerializer.Serialize(arguments),
+                    new ToolExecutionContext { ConversationId = "discord-voice-default", ChannelId = "discord-voice" },
+                    CancellationToken.None);
+                Assert.True(result.Success, result.Error);
+                taskId = Assert.Single(scheduler.GetActive()).Id;
+            }
+
+            time.Advance(TimeSpan.FromSeconds(90));
+            using var reloaded = new SchedulerService(this.messageChannel, path, NullLogger<SchedulerService>.Instance, time);
+            await reloaded.ExecuteDueTasksAsync();
+            var request = await this.WaitForRequestCountAsync(2);
+
+            Assert.Contains(request.Messages, m => m.Content?.Contains("Origin channel: discord-voice", StringComparison.Ordinal) == true);
+            Assert.Contains("The user is currently talking to you via Discord voice (discord-voice).", request.Messages[0].Content, StringComparison.Ordinal);
+            Assert.Contains(SystemPromptDefaults.VoiceMode, request.Messages[0].Content, StringComparison.Ordinal);
+            Assert.DoesNotContain(IntentComposer.Framing, request.Messages[0].Content, StringComparison.Ordinal);
+            Assert.NotNull(this.ping.LastContext);
+            Assert.Equal("discord-voice", this.ping.LastContext.ChannelId);
+            Assert.Equal($"scheduled-{taskId}", this.ping.LastContext.ConversationId);
+            if (target is not null)
+            {
+                Assert.Contains(request.Messages, m => m.Content?.Contains("Target channel: webchat-default", StringComparison.Ordinal) == true);
+            }
+        }
+        finally
+        {
+            using var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={Path.Combine(path, "scheduler", "tasks.db")}");
+            Microsoft.Data.Sqlite.SqliteConnection.ClearPool(connection);
+            Directory.Delete(path, recursive: true);
+        }
     }
 
     [Fact]
@@ -449,13 +542,18 @@ public sealed class TimerComposerRuntimeTests : IAsyncLifetime
 
     private sealed class PingTool : IAgentTool
     {
+        public ToolExecutionContext? LastContext { get; private set; }
+
         public string Name => "ping";
 
         public string Description => "Returns pong.";
 
         public string ParametersSchema => """{"type":"object","properties":{}}""";
 
-        public Task<AgentToolResult> ExecuteAsync(string argumentsJson, ToolExecutionContext context, CancellationToken cancellationToken) =>
-            Task.FromResult(AgentToolResult.Ok("pong"));
+        public Task<AgentToolResult> ExecuteAsync(string argumentsJson, ToolExecutionContext context, CancellationToken cancellationToken)
+        {
+            this.LastContext = context;
+            return Task.FromResult(AgentToolResult.Ok("pong"));
+        }
     }
 }

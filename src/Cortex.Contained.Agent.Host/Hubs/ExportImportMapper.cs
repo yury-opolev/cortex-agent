@@ -54,6 +54,7 @@ public static class ExportImportMapper
             NextExecutionUtc = task.NextExecutionUtc,
             ExecutionCount = task.ExecutionCount,
             ChannelId = task.ChannelId,
+            OriginChannelId = task.OriginChannelId,
         };
     }
 
@@ -73,6 +74,7 @@ public static class ExportImportMapper
             NextExecutionUtc = dto.NextExecutionUtc,
             ExecutionCount = dto.ExecutionCount,
             ChannelId = dto.ChannelId,
+            OriginChannelId = dto.OriginChannelId,
         };
     }
 }
