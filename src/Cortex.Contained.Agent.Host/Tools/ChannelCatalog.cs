@@ -35,7 +35,7 @@ internal static class ChannelCatalog
         new("discord-guild", FriendlyName: "discord-guild", DisplayName: "Discord (guild)",
             PromptLabel: "Discord (server channel)", Aliases: ["discord-guild"]),
         new("discord-voice", FriendlyName: "discord-voice", DisplayName: "Discord Voice",
-            PromptLabel: null, Aliases: ["discord-voice"]),
+            PromptLabel: "Discord voice (discord-voice)", Aliases: ["discord-voice"]),
         new("webchat-default", FriendlyName: "webchat", DisplayName: "WebChat",
             PromptLabel: "the web chat interface", Aliases: ["webchat", "webchat-default"]),
         new("voice-default", FriendlyName: "voice", DisplayName: "Voice",

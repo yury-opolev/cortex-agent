@@ -14,7 +14,7 @@ internal sealed class SqliteTaskStore : SqliteStoreBase
     private static readonly TimeSpan CleanupAge = TimeSpan.FromDays(7);
 
     /// <summary>Current schema version. Bump when adding migrations.</summary>
-    private const int CurrentSchemaVersion = 3;
+    private const int CurrentSchemaVersion = 4;
 
     /// <summary>
     /// Initialises the task store, opening the SQLite database at <paramref name="dataPath"/>/scheduler/tasks.db.
@@ -28,7 +28,7 @@ internal sealed class SqliteTaskStore : SqliteStoreBase
     private void EnsureSchema()
     {
         var version = GetSchemaVersion();
-        if (version < CurrentSchemaVersion)
+        if (version < 3)
         {
             // Drop and recreate — old tasks are expendable.
             ExecuteNonQuery("DROP TABLE IF EXISTS tasks");
@@ -55,7 +55,21 @@ internal sealed class SqliteTaskStore : SqliteStoreBase
                     WHERE status IN ('pending', 'running');
                 """);
 
-            this.SetSchemaVersion(CurrentSchemaVersion);
+            this.SetSchemaVersion(3);
+            version = 3;
+        }
+
+        if (version < CurrentSchemaVersion)
+        {
+            // Preserve existing schedules. A legacy target does not prove its origin.
+            using var transaction = this.Connection.BeginTransaction();
+            using var command = this.Connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = "ALTER TABLE tasks ADD COLUMN origin_channel_id TEXT";
+            command.ExecuteNonQuery();
+            command.CommandText = $"PRAGMA user_version = {CurrentSchemaVersion}";
+            command.ExecuteNonQuery();
+            transaction.Commit();
         }
     }
 
@@ -70,12 +84,12 @@ internal sealed class SqliteTaskStore : SqliteStoreBase
                     (id, description, message_text, scheduled_at_utc,
                      cron_expression, max_executions,
                      created_at_utc, status, last_executed_at_utc,
-                     next_execution_utc, execution_count, channel_id)
+                     next_execution_utc, execution_count, channel_id, origin_channel_id)
                 VALUES
                     ($id, $description, $messageText, $scheduledAtUtc,
                      $cronExpression, $maxExecutions,
                      $createdAtUtc, $status, $lastExecutedAtUtc,
-                     $nextExecutionUtc, $executionCount, $channelId)
+                     $nextExecutionUtc, $executionCount, $channelId, $originChannelId)
                 """;
             BindTaskParameters(cmd, task);
             cmd.ExecuteNonQuery();
@@ -209,6 +223,7 @@ internal sealed class SqliteTaskStore : SqliteStoreBase
         cmd.Parameters.AddWithValue("$nextExecutionUtc", FormatDto(task.NextExecutionUtc));
         cmd.Parameters.AddWithValue("$executionCount", task.ExecutionCount);
         cmd.Parameters.AddWithValue("$channelId", (object?)task.ChannelId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$originChannelId", (object?)task.OriginChannelId ?? DBNull.Value);
     }
 
     private static List<ScheduledTask> ReadTasks(SqliteCommand cmd)
@@ -239,6 +254,9 @@ internal sealed class SqliteTaskStore : SqliteStoreBase
                 ChannelId = reader.IsDBNull(reader.GetOrdinal("channel_id"))
                     ? null
                     : reader.GetString(reader.GetOrdinal("channel_id")),
+                OriginChannelId = reader.IsDBNull(reader.GetOrdinal("origin_channel_id"))
+                    ? null
+                    : reader.GetString(reader.GetOrdinal("origin_channel_id")),
             });
         }
 

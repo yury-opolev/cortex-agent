@@ -62,6 +62,13 @@ public sealed class ScheduledTask
     public string? ChannelId { get; set; }
 
     /// <summary>
+    /// Channel on which this task was created, independent of the optional delivery target.
+    /// Carried into the fired run so the agent knows where the request originated.
+    /// Null for legacy tasks and internal jobs with no originating user channel.
+    /// </summary>
+    public string? OriginChannelId { get; init; }
+
+    /// <summary>
     /// Whether this task uses cron-based recurrence.
     /// </summary>
     internal bool IsRecurring => !string.IsNullOrWhiteSpace(CronExpression);

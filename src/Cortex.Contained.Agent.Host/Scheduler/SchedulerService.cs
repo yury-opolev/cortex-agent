@@ -165,10 +165,15 @@ public sealed partial class SchedulerService : IDisposable
                     // Enqueue the task's message into the agent's processing queue.
                     // All scheduled tasks serialize on the "scheduled-tasks" lane in
                     // the agent runtime, so concurrent execution never happens.
+                    // The execution context identifies where the request originated, not an
+                    // explicitly different delivery target (which remains in the instructions).
+                    // Legacy/internal tasks may not have origin metadata.
+                    var originChannelId = task.OriginChannelId ?? task.ChannelId ?? "scheduled";
                     var agentMessage = new AgentMessage
                     {
                         ConversationId = $"scheduled-{task.Id}",
-                        ChannelId = task.ChannelId ?? "scheduled",
+                        ChannelId = originChannelId,
+                        IsVoice = originChannelId is "discord-voice" or "voice-default",
                         Text = enrichedText,
                         Source = AgentMessageSource.ScheduledTask,
                         CorrelationId = Guid.NewGuid().ToString("N"),
@@ -269,6 +274,11 @@ public sealed partial class SchedulerService : IDisposable
         if (task.IsRecurring)
         {
             sb.AppendLine(CultureInfo.InvariantCulture, $"Schedule: {task.CronExpression}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(task.OriginChannelId))
+        {
+            sb.AppendLine(CultureInfo.InvariantCulture, $"Origin channel: {task.OriginChannelId}");
         }
 
         if (task.ChannelId is not null)

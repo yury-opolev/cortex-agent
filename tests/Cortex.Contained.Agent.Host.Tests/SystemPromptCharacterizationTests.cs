@@ -32,6 +32,21 @@ public class SystemPromptCharacterizationTests
             NullLogger<PromptAssembler>.Instance);
     }
 
+    [Theory]
+    [InlineData("discord-voice", "Discord voice (discord-voice)")]
+    [InlineData("discord-dm", "Discord (direct message)")]
+    [InlineData("discord-guild", "Discord (server channel)")]
+    [InlineData("webchat-default", "the web chat interface")]
+    [InlineData("voice-default", "the voice channel")]
+    [InlineData("plugin:terminal:default", "the terminal connector")]
+    public async Task MainPrompt_UserChannel_IdentifiesCurrentChannel(string channelId, string label)
+    {
+        using var session = new AgentSession("conversation");
+        var messages = await NewAssembler().BuildPromptAsync(session, CancellationToken.None, channelId);
+
+        Assert.Contains($"The user is currently talking to you via {label}.", messages[0].Content, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task MainPrompt_Default_MatchesGolden()
     {

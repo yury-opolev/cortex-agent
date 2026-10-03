@@ -192,6 +192,27 @@ public class ExportImportMapperTests
     }
 
     [Fact]
+    public void ScheduledOrigin_SurvivesExportImportWithoutReplacingTarget()
+    {
+        var original = new ScheduledTask
+        {
+            Id = "voice-origin",
+            Description = "Rest cue",
+            MessageText = "Next set",
+            ScheduledAtUtc = new DateTimeOffset(2026, 10, 3, 12, 0, 0, TimeSpan.Zero),
+            OriginChannelId = "discord-voice",
+            ChannelId = "webchat-default",
+        };
+
+        var json = System.Text.Json.JsonSerializer.Serialize(ExportImportMapper.MapTaskToDto(original));
+        var dto = System.Text.Json.JsonSerializer.Deserialize<ScheduledTaskDto>(json)!;
+        var restored = ExportImportMapper.MapDtoToTask(dto);
+
+        Assert.Equal("discord-voice", restored.OriginChannelId);
+        Assert.Equal("webchat-default", restored.ChannelId);
+    }
+
+    [Fact]
     public void MapDtoToTask_NullableFields()
     {
         var dto = new ScheduledTaskDto

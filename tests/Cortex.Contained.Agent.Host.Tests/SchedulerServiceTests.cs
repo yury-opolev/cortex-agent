@@ -181,6 +181,24 @@ public class SchedulerServiceTests : IDisposable
         Assert.Equal("scheduled-t-ch", enqueued.ConversationId);
     }
 
+    [Theory]
+    [InlineData("discord-voice", true)]
+    [InlineData("voice-default", true)]
+    [InlineData("webchat-default", false)]
+    [InlineData("discord-dm", false)]
+    public async Task ExecuteDueTasksAsync_Channel_PreservesVoicePresentation(string channelId, bool isVoice)
+    {
+        var task = CreateOneShotTask("voice-cue", "Rest cue", minutesFromNow: -1);
+        task.ChannelId = channelId;
+        _scheduler.Schedule(task);
+
+        await _scheduler.ExecuteDueTasksAsync();
+
+        Assert.True(_messageChannel.TryRead(out var message));
+        Assert.Equal(channelId, message!.ChannelId);
+        Assert.Equal(isVoice, message.IsVoice);
+    }
+
     [Fact]
     public async Task ExecuteDueTasksAsync_FutureTask_NotEnqueued()
     {

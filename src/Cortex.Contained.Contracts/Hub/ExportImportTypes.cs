@@ -75,6 +75,7 @@ public sealed record ScheduledTaskDto
     public DateTimeOffset NextExecutionUtc { get; init; }
     public int ExecutionCount { get; init; }
     public string? ChannelId { get; init; }
+    public string? OriginChannelId { get; init; }
 }
 
 /// <summary>Result of an import operation.</summary>
