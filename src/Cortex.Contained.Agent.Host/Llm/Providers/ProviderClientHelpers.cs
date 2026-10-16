@@ -1,3 +1,5 @@
+using System.Collections.Frozen;
+using System.Net.Http.Headers;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Cortex.Contained.Contracts.Llm;
@@ -22,12 +24,37 @@ internal static class ProviderClientHelpers
         return error.Length <= maxLength ? error : string.Concat(error.AsSpan(0, maxLength), "...");
     }
 
+    /// <summary>
+    /// Request headers whose values carry credentials (case-insensitive). Their values are
+    /// masked by <see cref="FormatHeadersForLog"/> — e.g. the GitHub Copilot
+    /// <c>Authorization: Bearer gho_…</c> header and the Anthropic <c>x-api-key</c> header.
+    /// </summary>
+    private static readonly FrozenSet<string> sensitiveHeaderNames = FrozenSet.ToFrozenSet(
+        ["Authorization", "Proxy-Authorization", "x-api-key", "api-key", "Cookie"],
+        StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Formats request headers as <c>name=value, …</c> for an error-context log line,
+    /// masking every credential-bearing header so a live token never reaches the logs.
+    /// </summary>
+    internal static string FormatHeadersForLog(HttpHeaders headers)
+    {
+        return string.Join(", ", headers.Select(header => sensitiveHeaderNames.Contains(header.Key)
+            ? $"{header.Key}={MaskToken(header.Value.FirstOrDefault() ?? string.Empty)}"
+            : $"{header.Key}={string.Join(",", header.Value)}"));
+    }
+
     /// <summary>Masks a token for safe logging: shows prefix and suffix only.</summary>
     internal static string MaskToken(string token)
     {
         if (string.IsNullOrEmpty(token))
         {
             return "<empty>";
+        }
+
+        if (token.Length <= 8)
+        {
+            return "****";
         }
 
         if (token.Length <= 20)

@@ -96,10 +96,7 @@ internal sealed partial class AnthropicApiClient : IProviderApiClient
             this.LogHttpError(request.RequestId, (int)response.StatusCode, errorBody);
 
             // On error, log masked headers, HTTP version, and truncated request body
-            var maskedHeaders = string.Join(", ", httpRequest.Headers
-                .Select(h => h.Key == "x-api-key"
-                    ? $"{h.Key}={ProviderClientHelpers.MaskToken(h.Value.FirstOrDefault() ?? "")}"
-                    : $"{h.Key}={string.Join(",", h.Value)}"));
+            var maskedHeaders = ProviderClientHelpers.FormatHeadersForLog(httpRequest.Headers);
             var httpVer = response.Version.Major == 2 ? "2.0" : "1.1";
             var bodyPreview = requestJson.Length > 500
                 ? requestJson[..500] + "..."
@@ -296,10 +293,7 @@ internal sealed partial class AnthropicApiClient : IProviderApiClient
             this.LogHttpError(request.RequestId, statusCode, errorBody);
 
             // On error, log masked headers, HTTP version, and truncated request body
-            var maskedHeaders = string.Join(", ", httpRequest.Headers
-                .Select(h => h.Key == "x-api-key"
-                    ? $"{h.Key}={ProviderClientHelpers.MaskToken(h.Value.FirstOrDefault() ?? "")}"
-                    : $"{h.Key}={string.Join(",", h.Value)}"));
+            var maskedHeaders = ProviderClientHelpers.FormatHeadersForLog(httpRequest.Headers);
             var httpVer = response.Version.Major == 2 ? "2.0" : "1.1";
             var bodyPreview = requestJson.Length > 500
                 ? requestJson[..500] + "..."
