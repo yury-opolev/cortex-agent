@@ -585,6 +585,21 @@
                 </div>
                 </template>
 
+                <!-- Diagnostics Card -->
+                <div class="col-12">
+                    <div class="card">
+                        <div class="card-header"><i class="bi bi-bug me-2"></i>Diagnostics</div>
+                        <div class="card-body">
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="full-llm-errors-toggle"
+                                       x-model="showFullLlmErrors" @change="saveDiagnostics()">
+                                <label class="form-check-label" for="full-llm-errors-toggle">Show full LLM provider errors in chat</label>
+                            </div>
+                            <small class="text-body-secondary">Appends the provider's raw error response (up to 1500 characters) to error messages. It can contain technical details. On by default for the default tenant only.</small>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- API Channel Card -->
                 <div class="col-12">
                     <div class="card">

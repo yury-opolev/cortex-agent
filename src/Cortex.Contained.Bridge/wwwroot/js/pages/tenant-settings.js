@@ -13,6 +13,7 @@ function tenantSettingsPage() {
         // Editable fields
         persona: "",
         apiEnabled: false,
+        showFullLlmErrors: false,
         enabled: true,
         voiceGender: "female",
 
@@ -83,6 +84,7 @@ function tenantSettingsPage() {
                 this.tenant = tenants.find(t => t.tenantId === this.tenantId);
                 if (this.tenant) {
                     this.apiEnabled = this.tenant.apiEnabled;
+                    this.showFullLlmErrors = this.tenant.showFullLlmErrors === true;
                     this.enabled = this.tenant.enabled;
                     this.voiceGender = this.tenant.voiceGender || "female";
                     this.discordGuildId = this.tenant.discordGuildId || "";
@@ -132,6 +134,21 @@ function tenantSettingsPage() {
                 Alpine.store("toast").error(e.message);
             }
             this.saving = false;
+        },
+
+        async saveDiagnostics() {
+            const intended = this.showFullLlmErrors;
+            try {
+                await api.put(`/api/tenants/${encodeURIComponent(this.tenantId)}`, {
+                    showFullLlmErrors: intended,
+                });
+                Alpine.store("toast").success(intended
+                    ? "Full LLM errors will be shown in chat"
+                    : "Full LLM errors hidden from chat");
+            } catch (e) {
+                Alpine.store("toast").error(e.message);
+                this.showFullLlmErrors = !intended;
+            }
         },
 
         async saveVoiceConfig() {
