@@ -139,6 +139,12 @@ public sealed record AgentErrorMessage
     public required string Message { get; init; }
     public bool IsRetryable { get; init; }
 
+    /// <summary>
+    /// Raw provider error text (e.g. <c>HTTP 400: {...}</c>) behind <see cref="Message"/>.
+    /// The Bridge appends it to the channel message only for tenants that opt in.
+    /// </summary>
+    public string? Detail { get; init; }
+
     /// <summary>Correlation ID for end-to-end request tracing.</summary>
     public string? CorrelationId { get; init; }
 }
