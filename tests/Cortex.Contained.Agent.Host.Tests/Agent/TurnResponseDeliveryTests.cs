@@ -40,6 +40,21 @@ public sealed class TurnResponseDeliveryTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task PersistLlmErrorAsync_HttpError_SendsSanitizedMessageWithRawDetail()
+    {
+        var delivery = this.NewDelivery();
+        const string raw = "HTTP 400: {\"error\":{\"code\":\"model_not_supported\"}}";
+
+        await delivery.PersistLlmErrorAsync(raw, CancellationToken.None);
+
+        await this.client.Received(1).OnError(Arg.Is<AgentErrorMessage>(m =>
+            m.Message == "The model provider returned an error (HTTP 400)."
+            && m.Detail == raw));
+        var saved = await this.store.GetMessagesAsync("chan-1");
+        Assert.DoesNotContain(saved, m => m.Content.Contains("model_not_supported", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task StreamChunkAsync_ProactiveMode_DoesNotEmit()
     {
         var delivery = this.NewDelivery(proactive: true);

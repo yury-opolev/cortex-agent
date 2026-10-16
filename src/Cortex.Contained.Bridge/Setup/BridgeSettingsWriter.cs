@@ -281,6 +281,11 @@ internal static class BridgeSettingsWriter
                 {
                     sb.AppendLine("    apiEnabled: true");
                 }
+
+                if (tenant.ShowFullLlmErrors is { } showFullLlmErrors)
+                {
+                    sb.AppendLine(CultureInfo.InvariantCulture, $"    showFullLlmErrors: {(showFullLlmErrors ? "true" : "false")}");
+                }
             }
         }
 

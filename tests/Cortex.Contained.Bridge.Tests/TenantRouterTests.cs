@@ -27,6 +27,32 @@ public class TenantRouterTests : IAsyncDisposable
         GC.SuppressFinalize(this);
     }
 
+    [Theory]
+    [InlineData("main", true)]
+    [InlineData("guest", false)]
+    [InlineData("unknown", false)]
+    public async Task ShouldShowFullLlmErrors_UnsetFlag_FollowsDefaultTenant(string tenantId, bool expected)
+    {
+        var config = new BridgeConfig();
+        config.Tenants["main"] = new TenantConfig { Default = true };
+        config.Tenants["guest"] = new TenantConfig();
+        var registry = new TenantRegistry(config, () => { }, NullLogger<TenantRegistry>.Instance);
+        await using var router = new TenantRouter(registry, NullLoggerFactory.Instance, NullLogger<TenantRouter>.Instance);
+
+        Assert.Equal(expected, router.ShouldShowFullLlmErrors(tenantId));
+    }
+
+    [Fact]
+    public async Task ShouldShowFullLlmErrors_ExplicitFalseOnDefault_ReturnsFalse()
+    {
+        var config = new BridgeConfig();
+        config.Tenants["main"] = new TenantConfig { Default = true, ShowFullLlmErrors = false };
+        var registry = new TenantRegistry(config, () => { }, NullLogger<TenantRegistry>.Instance);
+        await using var router = new TenantRouter(registry, NullLoggerFactory.Instance, NullLogger<TenantRouter>.Instance);
+
+        Assert.False(router.ShouldShowFullLlmErrors("main"));
+    }
+
     [Fact]
     public void OnClientConnected_Setter_StoresDelegate()
     {

@@ -484,6 +484,17 @@ public sealed class TenantConfig
     public string VoiceGender { get; set; } = "female";
 
     /// <summary>
+    /// Whether channel error messages for this tenant include the raw LLM provider
+    /// response (e.g. <c>{"error":{"code":"model_not_supported",...}}</c>), capped for
+    /// chat. Null = use the default: on for the default tenant, off for all others.
+    /// Use <see cref="ResolveShowFullLlmErrors"/> to read the effective value.
+    /// </summary>
+    public bool? ShowFullLlmErrors { get; set; }
+
+    /// <summary>Effective <see cref="ShowFullLlmErrors"/>: the explicit value, else <see cref="Default"/>.</summary>
+    public bool ResolveShowFullLlmErrors() => this.ShowFullLlmErrors ?? this.Default;
+
+    /// <summary>
     /// Migrates legacy <see cref="DiscordUsers"/> list to the single
     /// <see cref="DiscordUserId"/> field. Should be called once after deserialization.
     /// </summary>

@@ -71,8 +71,9 @@ internal sealed partial class TurnResponseDelivery
 
     public async Task PersistLlmErrorAsync(string errorMessage, CancellationToken cancellationToken)
     {
-        // The raw message may carry a full HTML error page (e.g. GitHub's "Unicorn!" 502);
-        // it is already in the logs. Present a clean line to the channel + history.
+        // The raw message may carry a full HTML error page (e.g. GitHub's "Unicorn!" 502).
+        // The channel gets a clean line; the raw text rides along as Detail so the Bridge
+        // can show it to tenants that opt in. History keeps the clean line only.
         var userMessage = Llm.LlmErrorPresenter.ToUserMessage(errorMessage);
 
         await this.client.OnError(new AgentErrorMessage
@@ -80,6 +81,7 @@ internal sealed partial class TurnResponseDelivery
             ConversationId = this.replyConversationId,
             ErrorCode = ErrorCodes.LlmError,
             Message = userMessage,
+            Detail = errorMessage,
             IsRetryable = true,
             CorrelationId = this.correlationId,
         }).ConfigureAwait(false);

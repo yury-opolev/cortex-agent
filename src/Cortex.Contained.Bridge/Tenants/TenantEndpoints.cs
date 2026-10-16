@@ -50,6 +50,7 @@ public static class TenantEndpoints
                     s.HasSetupCode,
                     s.SetupCodeExpiresAt,
                     s.ApiEnabled,
+                    s.ShowFullLlmErrors,
                     VoiceGender = config?.VoiceGender ?? "female",
                     config?.DiscordGuildId,
                     config?.DiscordVoiceChannelId,
@@ -83,6 +84,7 @@ public static class TenantEndpoints
                 Channels = request.Channels ?? [],
                 ApiEnabled = request.ApiEnabled,
                 IdleTimeoutMinutes = request.IdleTimeoutMinutes,
+                ShowFullLlmErrors = request.ShowFullLlmErrors,
             };
 
             try
@@ -139,6 +141,11 @@ public static class TenantEndpoints
             if (request.ApiEnabled.HasValue)
             {
                 existing.ApiEnabled = request.ApiEnabled.Value;
+            }
+
+            if (request.ShowFullLlmErrors.HasValue)
+            {
+                existing.ShowFullLlmErrors = request.ShowFullLlmErrors.Value;
             }
 
             if (request.IdleTimeoutMinutes.HasValue)
@@ -1330,6 +1337,7 @@ public sealed record CreateTenantRequest
     public List<string>? Channels { get; init; }
     public bool ApiEnabled { get; init; }
     public int IdleTimeoutMinutes { get; init; }
+    public bool? ShowFullLlmErrors { get; init; }
 }
 
 public sealed record UpdateTenantRequest
@@ -1345,6 +1353,7 @@ public sealed record UpdateTenantRequest
     public string? DiscordGuildId { get; init; }
     public string? DiscordVoiceChannelId { get; init; }
     public string? VoiceGreeting { get; init; }
+    public bool? ShowFullLlmErrors { get; init; }
 }
 
 public sealed record SendMessageRequest

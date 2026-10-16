@@ -100,6 +100,13 @@ public sealed partial class TenantRouter : IAsyncDisposable
         => this.connections.TryGetValue(tenantId, out var conn) && conn.Client.IsConnected;
 
     /// <summary>
+    /// Whether channel errors for <paramref name="tenantId"/> should include the raw LLM
+    /// provider response. Unknown tenants never do.
+    /// </summary>
+    public bool ShouldShowFullLlmErrors(string tenantId)
+        => this.registry.GetTenant(tenantId)?.ResolveShowFullLlmErrors() ?? false;
+
+    /// <summary>
     /// Disconnects and removes the connection for a tenant.
     /// Called when a tenant is stopped or deleted.
     /// </summary>
@@ -140,6 +147,7 @@ public sealed partial class TenantRouter : IAsyncDisposable
                         || config.SetupCodeExpiresAt > DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()),
                 SetupCodeExpiresAt = config.SetupCodeExpiresAt,
                 ApiEnabled = config.ApiEnabled,
+                ShowFullLlmErrors = config.ResolveShowFullLlmErrors(),
             });
         }
         return result;
@@ -294,4 +302,7 @@ public sealed record TenantStatus
 
     // API channel
     public bool ApiEnabled { get; init; }
+
+    // Diagnostics (resolved: explicit value, else on for the default tenant only)
+    public bool ShowFullLlmErrors { get; init; }
 }
