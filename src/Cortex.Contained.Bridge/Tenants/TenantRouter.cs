@@ -147,6 +147,7 @@ public sealed partial class TenantRouter : IAsyncDisposable
                         || config.SetupCodeExpiresAt > DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()),
                 SetupCodeExpiresAt = config.SetupCodeExpiresAt,
                 ApiEnabled = config.ApiEnabled,
+                ShowFullLlmErrors = config.ResolveShowFullLlmErrors(),
             });
         }
         return result;
@@ -301,4 +302,7 @@ public sealed record TenantStatus
 
     // API channel
     public bool ApiEnabled { get; init; }
+
+    // Diagnostics (resolved: explicit value, else on for the default tenant only)
+    public bool ShowFullLlmErrors { get; init; }
 }
