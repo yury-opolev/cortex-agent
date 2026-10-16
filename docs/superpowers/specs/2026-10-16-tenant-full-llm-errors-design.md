@@ -77,4 +77,5 @@ default to off because a raw body can expose internal details to an end user.
 - `TurnResponseDelivery.PersistLlmErrorAsync` sends `Detail` = raw message while
   `Message` stays sanitized.
 - `BridgeSettingsWriter` round-trip writes the explicit value and omits null.
-- Tenant PUT endpoint merges `showFullLlmErrors`.
+- Tenant PUT merge of `showFullLlmErrors`: verified manually through the UI toggle
+  (no `/api/tenants` endpoint test harness exists; the merge is a one-line assignment).
