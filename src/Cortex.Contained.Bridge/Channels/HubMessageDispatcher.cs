@@ -332,7 +332,13 @@ public sealed partial class HubMessageDispatcher
                 MessageId = Guid.NewGuid().ToString("N"),
                 ConversationId = deliveryConversationId,
                 ChannelId = channelId,
-                Content = new MessageContent { Text = agentError.Message },
+                Content = new MessageContent
+                {
+                    Text = LlmErrorDetailFormatter.Compose(
+                        agentError.Message,
+                        agentError.Detail,
+                        this.tenantRouter.ShouldShowFullLlmErrors(tenantId)),
+                },
             };
 
             await channel.SendMessageAsync(errorOutbound, CancellationToken.None).ConfigureAwait(false);

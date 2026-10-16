@@ -500,6 +500,56 @@ public class HubMessageDispatcherTests : IAsyncDisposable
         return (dispatcher, channelManager, router);
     }
 
+    [Theory]
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    public async Task OnError_TenantFlag_ControlsProviderDetail(bool isDefaultTenant, bool expectDetail)
+    {
+        // The registry promotes a lone tenant to default, so a non-default t1 needs a
+        // separate default tenant beside it.
+        var config = new BridgeConfig();
+        if (!isDefaultTenant)
+        {
+            config.Tenants["main"] = new TenantConfig { Endpoint = "http://localhost:5100/main", Enabled = true, Default = true };
+        }
+
+        config.Tenants["t1"] = new TenantConfig { Endpoint = "http://localhost:5100/t1", Enabled = true, Default = isDefaultTenant };
+        var registry = new TenantRegistry(config, () => { }, NullLogger<TenantRegistry>.Instance);
+        await using var router = new TenantRouter(registry, NullLoggerFactory.Instance, NullLogger<TenantRouter>.Instance);
+        await using var channelManager = new ChannelManager(NullLogger<ChannelManager>.Instance);
+        await using var client = new HubClient(NullLogger<HubClient>.Instance);
+        var dispatcher = new HubMessageDispatcher(channelManager, router, NullLogger<HubMessageDispatcher>.Instance);
+        dispatcher.Initialize();
+        dispatcher.WireHubClient(client, "t1");
+        var channel = CreateMockChannel("webchat-default");
+        channel.SendMessageAsync(Arg.Any<OutboundMessage>(), Arg.Any<CancellationToken>())
+            .Returns(new SendResult { Success = true });
+        channelManager.RegisterChannel(channel);
+
+        await RaiseErrorEventOn(client, new AgentErrorMessage
+        {
+            ConversationId = "webchat-default",
+            ErrorCode = "LLM_ERROR",
+            Message = "The model provider returned an error (HTTP 400).",
+            Detail = "HTTP 400: model_not_supported",
+        });
+
+        await channel.Received(1).SendMessageAsync(
+            Arg.Is<OutboundMessage>(m => m.Content.Text != null
+                && m.Content.Text.Contains("model_not_supported", StringComparison.Ordinal) == expectDetail),
+            Arg.Any<CancellationToken>());
+    }
+
+    private static async Task RaiseErrorEventOn(HubClient client, AgentErrorMessage error)
+    {
+        var eventField = typeof(HubClient).GetField(
+            nameof(HubClient.OnError),
+            BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+        Assert.NotNull(eventField);
+        var handler = (Delegate)eventField!.GetValue(client)!;
+        await (Task)handler.DynamicInvoke(error)!;
+    }
+
     private async Task<ProactiveMessageResult> RaiseProactiveMessageEvent(ProactiveMessage message)
     {
         return await RaiseProactiveMessageEventOn(_hubClient, message);
