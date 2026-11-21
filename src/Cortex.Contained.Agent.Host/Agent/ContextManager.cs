@@ -29,6 +29,15 @@ internal static class ContextManager
     internal const string PrunedToolResultPlaceholder = "[Old tool result content cleared]";
 
     /// <summary>
+    /// The stub that replaces a pruned tool result: points at the recorded evidence when there is
+    /// one, so the model can re-read what was recorded instead of guessing what the result said.
+    /// </summary>
+    internal static string PrunedContent(LlmMessage message) =>
+        message.EvidenceId is { } evidenceId
+            ? $"[Old tool result content cleared — evidence {evidenceId}; event_get returns what was recorded]"
+            : PrunedToolResultPlaceholder;
+
+    /// <summary>
     /// Token threshold for protecting recent tool results from pruning.
     /// Walking backwards from the most recent message, the first N estimated tokens
     /// of tool output are protected. Only tool results beyond this are pruned.
@@ -200,7 +209,7 @@ internal static class ContextManager
         {
             if (toPruneIndices.Contains(i))
             {
-                result.Add(messages[i] with { Content = PrunedToolResultPlaceholder });
+                result.Add(messages[i] with { Content = PrunedContent(messages[i]) });
             }
             else
             {
