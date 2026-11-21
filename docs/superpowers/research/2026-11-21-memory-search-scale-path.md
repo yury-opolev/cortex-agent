@@ -56,7 +56,12 @@ Why not a graph ANN index (HNSW) now:
 - Its recall collapses under restrictive filters. Qdrant's own benchmark shows plain HNSW at 0.1% recall with a 1% filter. pgvector's post-filtered HNSW gives 0.79 recall@10 at 0.1% selectivity, against 1.00 for B-tree pre-filter + exact search (100k rows).
 - It only clearly pays off beyond roughly 1–5M vectors.
 
-## Current-code defects found (to fix)
+## Current-code defects found (fixed in increment 0)
+
+Both defects below are fixed in `lib/memory-mcp` on branch `feat/inc0-correctness` (PR yury-opolev/memory-mcp#1, kept open until the owner validates the Cortex feature branch):
+- sqlite-vec v0.1.9 is vendored, `secure_delete` is on, the WAL is truncated after deletes, and legacy vector tables are rebuilt once and vacuumed.
+- Search is an exact scan with filters applied before scoring.
+- Threshold callers use the dense-only `FindSimilarAsync`.
 
 1. **Post-filtering.** `MemoryMcp.Core` `SqliteVecMemoryStore.SearchAsync` fetches `limit×10` nearest neighbours, then filters by tags. With a selective filter, recall collapses (0.106 recall@10 at 1% selectivity in a synthetic test). Filters must move into the scan.
 2. **Deleted vectors are not erased.** The pinned sqlite-vec `0.1.7-alpha.2.1` predates the DELETE fix (v0.1.7, 2026-03-17), so a delete only flips a validity bit. `PRAGMA secure_delete` and FTS5 `secure-delete` are also off.
