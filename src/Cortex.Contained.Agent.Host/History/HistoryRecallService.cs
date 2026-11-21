@@ -66,7 +66,8 @@ public sealed partial class HistoryRecallService
         // not-yet-indexed tail, matched against the source, is searched.
         var purgeFenced = state is not null && state.AppliedPurgeGeneration < meta.PurgeGeneration;
         var index = purgeFenced ? null : reader;
-        var chunks = reader?.ReadChunkCounts();
+        var denseEnabled = this.options.CurrentValue.Dense.Enabled;
+        var chunks = denseEnabled ? reader?.ReadChunkCounts() : null;
         if (queryVector is not null && (index is null || chunks is not { Embedded: > 0 }))
         {
             (queryVector, denseNote) = (null, index is null ? "fallback: index withheld" : "fallback: no chunk is embedded yet");

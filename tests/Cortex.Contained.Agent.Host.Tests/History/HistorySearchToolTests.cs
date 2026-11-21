@@ -51,6 +51,19 @@ public sealed class HistorySearchToolTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task ExecuteAsync_DenseDisabled_RendersNoDenseOrModeLines()
+    {
+        await this.h.SayAsync("the ferry to Aarhus", 0);
+        await this.IndexAsync();
+
+        var result = await this.RunAsync(new { query = "aarhus" });
+
+        Assert.True(result.Success);
+        Assert.DoesNotContain("dense:", result.Content, StringComparison.Ordinal);
+        Assert.DoesNotContain("mode:", result.Content, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_Hit_RendersContractFields()
     {
         var id = await this.h.SayAsync("the ferry to Aarhus", 0);

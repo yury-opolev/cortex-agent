@@ -287,7 +287,10 @@ public static class HistoryResultRenderer
         var builder = new StringBuilder();
         builder.Append(CoverageBlock(coverage));
 
-        builder.Append(result.Mode == HistorySearchMode.Hybrid ? "mode: hybrid (keyword + semantic)\n" : "mode: keyword\n");
+        if (coverage.Dense != "off")
+        {
+            builder.Append(result.Mode == HistorySearchMode.Hybrid ? "mode: hybrid (keyword + semantic)\n" : "mode: keyword\n");
+        }
         if (result.CollapsedDuplicates > 0)
         {
             builder.Append(CultureInfo.InvariantCulture, $"note: {result.CollapsedDuplicates} near-duplicate worker segments collapsed\n");
