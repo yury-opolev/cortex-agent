@@ -245,6 +245,40 @@ public sealed partial class SecretManager
     }
 
     /// <summary>
+    /// The tenant's storage master key (Base64, 256-bit) that encrypts its agent's databases (D4),
+    /// created on first use. Unlike the other secrets it is NEVER regenerated when it cannot be
+    /// decrypted: a new key would make the tenant's stored history unreadable, so this throws
+    /// <see cref="StorageKeyUnavailableException"/> instead (fail closed).
+    /// </summary>
+    public string GetOrCreateTenantStorageKey(string tenantId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
+        EnsureSecretsDirectory();
+
+        var filePath = Path.Combine(this.secretsDir, SecretsFileName);
+        var secrets = LoadSecrets(filePath);
+        if (secrets.TenantStorageKeys is not null && secrets.TenantStorageKeys.TryGetValue(tenantId, out var encrypted))
+        {
+            try
+            {
+                return this.store.Unprotect(encrypted);
+            }
+            catch (Exception ex)
+            {
+                this.LogStorageKeyDecryptionFailed(tenantId, ex.Message);
+                throw new StorageKeyUnavailableException($"The storage key of tenant '{tenantId}' cannot be decrypted; it is not regenerated.", ex);
+            }
+        }
+
+        var key = Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32));
+        secrets.TenantStorageKeys ??= new Dictionary<string, string>();
+        secrets.TenantStorageKeys[tenantId] = this.store.Protect(key);
+        SaveSecrets(filePath, secrets);
+        this.LogStorageKeyGenerated(tenantId);
+        return key;
+    }
+
+    /// <summary>
     /// Regenerates the hub token, encrypts and saves the new one. Returns the plaintext.
     /// </summary>
     public string RegenerateHubToken()
@@ -462,6 +496,12 @@ public sealed partial class SecretManager
     [LoggerMessage(Level = LogLevel.Information, Message = "Database encryption key auto-generated and saved to encrypted storage")]
     private partial void LogDatabaseKeyGenerated();
 
+    [LoggerMessage(Level = LogLevel.Information, Message = "Storage key generated for tenant {TenantId}")]
+    private partial void LogStorageKeyGenerated(string tenantId);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "Storage key of tenant {TenantId} cannot be decrypted (not regenerated): {ErrorMessage}")]
+    private partial void LogStorageKeyDecryptionFailed(string tenantId, string errorMessage);
+
     [LoggerMessage(Level = LogLevel.Information, Message = "Password hash stored in encrypted storage")]
     private partial void LogPasswordHashStored();
 
@@ -489,5 +529,7 @@ public sealed partial class SecretManager
         public string? PasswordHash { get; set; }
         /// <summary>DPAPI-encrypted Discord bot token.</summary>
         public string? DiscordBotToken { get; set; }
+        /// <summary>DPAPI-encrypted per-tenant storage master keys (Base64-encoded 256-bit), keyed by tenant ID.</summary>
+        public Dictionary<string, string>? TenantStorageKeys { get; set; }
     }
 }

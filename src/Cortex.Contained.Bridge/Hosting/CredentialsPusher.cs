@@ -54,6 +54,9 @@ public sealed partial class CredentialsPusher : ICredentialReplisher
     /// </summary>
     public async Task PushCredentialsAsync(CancellationToken cancellationToken)
     {
+        // The storage key goes first: the agent's encrypted stores open only once it arrives.
+        await this.PushStorageKeysAsync(cancellationToken).ConfigureAwait(false);
+
         var providers = await this.BuildProviderCredentialsAsync(cancellationToken).ConfigureAwait(false);
 
         if (providers.Count == 0)
@@ -117,6 +120,37 @@ public sealed partial class CredentialsPusher : ICredentialReplisher
         }
 
         this.LogCredentialsPushed(providers.Count);
+    }
+
+    /// <summary>
+    /// Pushes each connected tenant's storage master key (D4) from DPAPI storage. A tenant whose key
+    /// cannot be decrypted gets nothing, so its agent stays locked instead of starting a new history.
+    /// </summary>
+    private async Task PushStorageKeysAsync(CancellationToken cancellationToken)
+    {
+        foreach (var tenantId in this.tenantRouter.GetConnectedTenantIds())
+        {
+            var client = this.tenantRouter.GetClient(tenantId);
+            if (client?.IsConnected != true)
+            {
+                continue;
+            }
+
+            try
+            {
+                var grant = new StorageKeyGrant { Key = this.secretManager.GetOrCreateTenantStorageKey(tenantId) };
+                if (!await client.ProvideStorageKeyAsync(grant, cancellationToken).ConfigureAwait(false))
+                {
+                    this.LogStorageKeyRejected(tenantId);
+                }
+            }
+#pragma warning disable CA1031 // Individual tenant failures should not block others
+            catch (Exception ex)
+            {
+                this.LogStorageKeyPushFailed(tenantId, ex.Message);
+            }
+#pragma warning restore CA1031
+        }
     }
 
     /// <summary>
@@ -528,6 +562,12 @@ public sealed partial class CredentialsPusher : ICredentialReplisher
 
     [LoggerMessage(Level = LogLevel.Information, Message = "LLM credentials pushed to agent: {ProviderCount} providers")]
     private partial void LogCredentialsPushed(int providerCount);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "Agent of tenant {TenantId} rejected its storage key (it already uses a different key)")]
+    private partial void LogStorageKeyRejected(string tenantId);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "Could not push the storage key to tenant {TenantId}: {Error}")]
+    private partial void LogStorageKeyPushFailed(string tenantId, string error);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to push credentials to tenant '{TenantId}': {Error}")]
     private partial void LogCredentialPushToTenantFailed(string tenantId, string error);

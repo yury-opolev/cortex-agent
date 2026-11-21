@@ -289,6 +289,16 @@ public sealed partial class HubClient : IAsyncDisposable
             cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>Push the tenant storage key; false when the agent rejected it (wrong key for its data).</summary>
+    public async Task<bool> ProvideStorageKeyAsync(StorageKeyGrant grant, CancellationToken cancellationToken)
+    {
+        EnsureConnected();
+        return await this.connection!.InvokeAsync<bool>(
+            nameof(IAgentHub.ProvideStorageKey),
+            grant,
+            cancellationToken).ConfigureAwait(false);
+    }
+
     /// <summary>Push LLM provider credentials to the agent.</summary>
     public async Task ProvideCredentialsAsync(LlmCredentials credentials, CancellationToken cancellationToken)
     {
