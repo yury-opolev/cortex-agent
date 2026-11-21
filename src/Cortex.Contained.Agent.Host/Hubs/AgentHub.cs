@@ -44,6 +44,7 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
     private readonly Cortex.Contained.Agent.Host.Events.KnownSecrets? knownSecrets;
     private readonly Cortex.Contained.Agent.Host.Events.EventBackfillService? eventBackfill;
     private readonly Storage.StorageKeyRing? storageKeys;
+    private readonly Cortex.Contained.Agent.Host.Reranking.RerankerAccess? rerankerAccess;
     private readonly Cortex.Contained.Agent.Host.Mcp.McpToolStore mcpToolStore;
     private readonly IHttpClientFactory httpClientFactory;
     private readonly AgentMetrics metrics;
@@ -79,7 +80,8 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
         Cortex.Contained.Agent.Host.SpeakerId.EnrollmentOrchestrator? enrollmentOrchestrator = null,
         Cortex.Contained.Agent.Host.Events.KnownSecrets? knownSecrets = null,
         Cortex.Contained.Agent.Host.Events.EventBackfillService? eventBackfill = null,
-        Storage.StorageKeyRing? storageKeys = null)
+        Storage.StorageKeyRing? storageKeys = null,
+        Cortex.Contained.Agent.Host.Reranking.RerankerAccess? rerankerAccess = null)
     {
         this.runtime = runtime;
         this.llmClient = llmClient;
@@ -103,6 +105,7 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
         this.knownSecrets = knownSecrets;
         this.eventBackfill = eventBackfill;
         this.storageKeys = storageKeys;
+        this.rerankerAccess = rerankerAccess;
         this.mcpToolStore = mcpToolStore;
         this.httpClientFactory = httpClientFactory;
         this.metrics = metrics;
@@ -211,6 +214,16 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
         var outcome = this.storageKeys?.Provide(grant.Key) ?? Storage.StorageKeyAcceptance.Rejected;
         this.LogStorageKeyReceived(outcome);
         return Task.FromResult(outcome != Storage.StorageKeyAcceptance.Rejected);
+    }
+
+    /// <inheritdoc />
+    public Task ProvideRerankerGrant(RerankerGrant grant)
+    {
+        ArgumentNullException.ThrowIfNull(grant);
+        this.rerankerAccess?.Apply(grant);
+        var hasKey = !string.IsNullOrWhiteSpace(grant.ApiKey);
+        this.LogRerankerGrantReceived(grant.Enabled, hasKey);
+        return Task.CompletedTask;
     }
 
     /// <inheritdoc />
@@ -1051,6 +1064,9 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Storage key received: {Outcome}")]
     private partial void LogStorageKeyReceived(Storage.StorageKeyAcceptance outcome);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Reranker grant received: enabled={Enabled}, key={HasKey}")]
+    private partial void LogRerankerGrantReceived(bool enabled, bool hasKey);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Seeding history for channel {ChannelId}: {MessageCount} messages")]
     private partial void LogSeedHistory(string channelId, int messageCount);

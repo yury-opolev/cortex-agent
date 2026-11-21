@@ -172,6 +172,21 @@ builder.Services.AddHostedService<HistoryProjectorService>();
 builder.Services.AddHostedService<HistoryMaintenanceService>();
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Tools.IConversationToolGate, HistoryToolsGate>();
 
+// --- Reranker (increment 5): cortex-reranker sidecar after hybrid fusion; off until the Bridge grants it ---
+builder.Services.Configure<Cortex.Contained.Agent.Host.Reranking.RerankerOptions>(
+    builder.Configuration.GetSection(Cortex.Contained.Agent.Host.Reranking.RerankerOptions.SectionName));
+builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Reranking.RerankerAccess>();
+// Request logging off: the handler pipeline logs nothing about rerank calls (they carry history text).
+builder.Services.AddHttpClient(Cortex.Contained.Agent.Host.Reranking.LlamaServerReranker.HttpClientName).RemoveAllLoggers();
+builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Reranking.IReranker>(sp =>
+    new Cortex.Contained.Agent.Host.Reranking.LlamaServerReranker(
+        sp.GetRequiredService<IHttpClientFactory>(),
+        sp.GetRequiredService<IOptionsMonitor<Cortex.Contained.Agent.Host.Reranking.RerankerOptions>>(),
+        sp.GetRequiredService<Cortex.Contained.Agent.Host.Reranking.RerankerAccess>()));
+builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Reranking.RerankStage>();
+builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Reranking.IRerankStage>(
+    sp => sp.GetRequiredService<Cortex.Contained.Agent.Host.Reranking.RerankStage>());
+
 // --- Event log and provenance (increment 2): events in messages.db, tool payload policy ---
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Events.KnownSecrets>();
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Storage.StorageKeyRing>();
@@ -542,7 +557,8 @@ builder.Services.AddSingleton<IAgentTool>(sp =>
     new MemorySearchTool(
         sp.GetRequiredService<Cortex.Contained.Agent.Host.Memory.QuarantineAwareHybridSearch>(),
         sp.GetRequiredService<IEmbeddingService>(),
-        sp.GetRequiredService<IOptionsMonitor<MemoryMcp.Core.Configuration.MemoryMcpOptions>>()));
+        sp.GetRequiredService<IOptionsMonitor<MemoryMcp.Core.Configuration.MemoryMcpOptions>>(),
+        sp.GetRequiredService<Cortex.Contained.Agent.Host.Reranking.IRerankStage>()));
 
 // --- Memory Management (wraps IMemoryService + raw SQLite listing for web UI) ---
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Memory.MemoryManagementService>();
@@ -887,6 +903,12 @@ if (app.Services.GetRequiredService<IOptions<MemoryMcpOptions>>().Value.Encrypti
         {
             throw new InvalidOperationException("Invalid memory search configuration: " + string.Join(" ", memorySearchErrors));
         }
+
+if (app.Services.GetRequiredService<IOptions<Cortex.Contained.Agent.Host.Reranking.RerankerOptions>>().Value.Validate() is { Count: > 0 } rerankerErrors)
+{
+    throw new InvalidOperationException("Invalid reranker configuration: " + string.Join(" ", rerankerErrors));
+}
+
 // Queued/recovered subagent tasks are now dispatched by SubagentExecutionCoordinator (a hosted
 // service) once Bridge + credentials + MCP-catalog readiness are all signaled — no startup call here.
 
@@ -943,12 +965,13 @@ _ = Task.Run(async () =>
 });
 
 // --- Health endpoint (unauthenticated) ---
-app.MapGet("/health", async (ToolRegistry toolRegistry, AgentSessionStore sessionStore, HistoryHealthReporter historyHealth, CancellationToken cancellationToken) =>
+app.MapGet("/health", async (ToolRegistry toolRegistry, AgentSessionStore sessionStore, HistoryHealthReporter historyHealth, Cortex.Contained.Agent.Host.Reranking.RerankStage rerankStage, CancellationToken cancellationToken) =>
 {
     var toolCount = toolRegistry.Count;
     var sessionCount = sessionStore.GetAll().Count;
     var healthy = toolCount > 0;
     var history = await historyHealth.SnapshotAsync(cancellationToken).ConfigureAwait(false);
+    var reranker = rerankStage.Snapshot();
 
     return Results.Ok(new
     {
@@ -977,6 +1000,18 @@ app.MapGet("/health", async (ToolRegistry toolRegistry, AgentSessionStore sessio
                 history.PendingErasureSteps,
                 history.MaintenancePendingTasks,
                 dense = history.Dense,
+            },
+            // Optional subsystem: a degraded reranker never makes the agent unhealthy (searches keep the fused order).
+            reranker = new
+            {
+                status = !reranker.Enabled ? "off" : reranker.State == "ok" ? "ok" : "degraded",
+                reranker.Enabled,
+                reranker.State,
+                reranker.ConsecutiveFailures,
+                reranker.CircuitOpenUntil,
+                reranker.LastError,
+                reranker.LastLatencyMs,
+                reranker.LastCallAt,
             },
         },
     });
