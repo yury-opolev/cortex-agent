@@ -79,7 +79,7 @@ public sealed class OllamaHistoryEmbedder : IHistoryEmbedder
     public async Task<IReadOnlyList<float[]>> EmbedDocumentsAsync(IReadOnlyList<string> texts, CancellationToken cancellationToken)
     {
         this.EnsureAllowed();
-        var vectors = await this.embeddings.EmbedBatchAsync(texts, cancellationToken).ConfigureAwait(false);
+        var vectors = await this.embeddings.EmbedBatchStrictAsync(texts, cancellationToken).ConfigureAwait(false);
         foreach (var vector in vectors)
         {
             this.EnsureDimensions(vector);

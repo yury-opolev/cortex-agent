@@ -68,6 +68,12 @@ public sealed class EmbedderCheckTests
         public Task<IReadOnlyList<float[]>> EmbedBatchAsync(IEnumerable<string> texts, CancellationToken cancellationToken = default)
         {
             this.Calls++;
+            return Task.FromResult<IReadOnlyList<float[]>>(texts.Select(_ => new float[] { 1, 0, 0, 0 }).ToList());
+        }
+
+        public Task<IReadOnlyList<float[]>> EmbedBatchStrictAsync(IEnumerable<string> texts, CancellationToken cancellationToken = default)
+        {
+            this.Calls++;
             var list = texts.ToList();
             return list.Any(t => t.Length > maxChars)
                 ? throw new EmbeddingInputTooLongException("too long")

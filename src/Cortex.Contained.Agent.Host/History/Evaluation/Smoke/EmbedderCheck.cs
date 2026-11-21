@@ -50,7 +50,7 @@ public static class EmbedderCheck
         try
         {
             watch.Restart();
-            await embeddings.EmbedBatchAsync([maxChunk], cancellationToken).ConfigureAwait(false);
+            await embeddings.EmbedBatchStrictAsync([maxChunk], cancellationToken).ConfigureAwait(false);
             Report(true, string.Create(CultureInfo.InvariantCulture,
                 $"a {maxChunk.Length}-character mixed-script chunk fits num_ctx={ollama.NumCtx} ({watch.ElapsedMilliseconds} ms)"));
         }
@@ -63,7 +63,7 @@ public static class EmbedderCheck
         var tooLong = Synthetic(ollama.NumCtx * 8);
         try
         {
-            await embeddings.EmbedBatchAsync([tooLong], cancellationToken).ConfigureAwait(false);
+            await embeddings.EmbedBatchStrictAsync([tooLong], cancellationToken).ConfigureAwait(false);
             Report(false, "an input far beyond num_ctx was embedded: truncation is not disabled");
         }
         catch (EmbeddingInputTooLongException)

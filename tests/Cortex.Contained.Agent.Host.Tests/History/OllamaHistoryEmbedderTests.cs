@@ -72,9 +72,22 @@ public sealed class OllamaHistoryEmbedderTests
         await Assert.ThrowsAsync<InvalidOperationException>(() => this.Embedder().EmbedDocumentsAsync(["a"], CancellationToken.None));
     }
 
+    [Fact]
+    public async Task EmbedDocumentsAsync_RequestsNoTruncation()
+    {
+        await this.Embedder().EmbedDocumentsAsync(["chunk"], CancellationToken.None);
+
+        Assert.Equal(1, this.service.StrictBatchCalls);
+        Assert.Equal(0, this.service.TruncatingBatchCalls);
+    }
+
     private sealed class RecordingEmbeddingService : IEmbeddingService
     {
         public List<string> Texts { get; } = [];
+
+        public int StrictBatchCalls { get; private set; }
+
+        public int TruncatingBatchCalls { get; private set; }
 
         public Task<float[]> EmbedAsync(string text, CancellationToken cancellationToken = default)
         {
@@ -83,6 +96,18 @@ public sealed class OllamaHistoryEmbedderTests
         }
 
         public async Task<IReadOnlyList<float[]>> EmbedBatchAsync(IEnumerable<string> texts, CancellationToken cancellationToken = default)
+        {
+            this.TruncatingBatchCalls++;
+            return await this.EmbedAllAsync(texts, cancellationToken);
+        }
+
+        public async Task<IReadOnlyList<float[]>> EmbedBatchStrictAsync(IEnumerable<string> texts, CancellationToken cancellationToken = default)
+        {
+            this.StrictBatchCalls++;
+            return await this.EmbedAllAsync(texts, cancellationToken);
+        }
+
+        private async Task<IReadOnlyList<float[]>> EmbedAllAsync(IEnumerable<string> texts, CancellationToken cancellationToken)
         {
             var vectors = new List<float[]>();
             foreach (var text in texts)

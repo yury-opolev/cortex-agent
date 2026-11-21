@@ -225,6 +225,34 @@ public class MemoryCompactionServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task CompactionSweep_MemoryThrows_ContinuesWithNextMemory()
+    {
+        var items = new List<MemoryItem>
+        {
+            new() { MemoryId = "m-1", Content = "Too long to embed", Tags = [] },
+            new() { MemoryId = "m-2", Content = "Fine content", Tags = [] },
+        };
+        _management.ListAsync(Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(new MemoryListResult { Items = items, TotalCount = 2 });
+        _memoryService.FindSimilarAsync(
+            "Too long to embed", Arg.Any<int>(), Arg.Any<float>(), Arg.Any<CancellationToken>())
+            .Returns<List<SearchResult>>(_ => throw new EmbeddingInputTooLongException("too long"));
+        _memoryService.FindSimilarAsync(
+            "Fine content", Arg.Any<int>(), Arg.Any<float>(), Arg.Any<CancellationToken>())
+            .Returns(new List<SearchResult>());
+
+        var service = CreateService();
+        var method = typeof(MemoryCompactionService).GetMethod(
+            "RunCompactionAsync",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+
+        var result = await (Task<(int Checked, int Merged)>)method!.Invoke(service, [CancellationToken.None])!;
+
+        Assert.Equal(2, result.Checked);
+        await _memoryService.Received(1).FindSimilarAsync("Fine content", Arg.Any<int>(), Arg.Any<float>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task CompactionSweep_DuplicateCluster_CallsConsolidation()
     {
         // Default mocks first (consolidation's internal FindSimilarAsync needs a safe return)
