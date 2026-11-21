@@ -1,6 +1,8 @@
 using System.Globalization;
 using System.Text;
 using Cortex.Contained.Agent.Host.Llm;
+using Cortex.Contained.Agent.Host.Reranking;
+using Cortex.Contained.Agent.Host.Reranking.Evaluation;
 using Cortex.Contained.Contracts.Hub;
 using Cortex.Contained.Contracts.Llm;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -17,9 +19,10 @@ namespace Cortex.Contained.Agent.Host.History.Evaluation.Smoke;
 public static class HistorySmokeCli
 {
     private const string Usage =
-        "usage: history-smoke <init|generate-queries|pool|register|run|embedder-check> [--dir /app/state/eval/smoke] [--source /app/state/messages.db] [--tz Europe/Copenhagen] [--embedder http://embeddings:11434]\n" +
+        "usage: history-smoke <init|generate-queries|pool|register|run|embedder-check|reranker-check> [--dir /app/state/eval/smoke] [--source /app/state/messages.db] [--tz Europe/Copenhagen] [--embedder http://embeddings:11434] [--reranker http://reranker:8080]\n" +
         "generate-queries needs SMOKE_LLM_ENDPOINT, SMOKE_LLM_API_KEY, SMOKE_LLM_MODEL and optional SMOKE_LLM_API (default openai-completions).\n" +
-        "embedder-check uses MemoryMcp__Ollama__Model / __NumCtx / __Dimensions when set (synthetic text only).";
+        "embedder-check uses MemoryMcp__Ollama__Model / __NumCtx / __Dimensions when set (synthetic text only).\n" +
+        "reranker-check needs Reranker__ApiKey (the Bridge-held key, see docs/reranker.md) and uses Reranker__Model / __TimeoutMs when set (synthetic text only).";
 
     /// <summary>Entry point; returns a process exit code.</summary>
     public static Task<int> RunAsync(IReadOnlyList<string> args, TextWriter output, CancellationToken cancellationToken) =>
@@ -81,6 +84,27 @@ public static class HistorySmokeCli
                         }
 
                         return check.Passed ? 0 : 1;
+                    }
+
+                case "reranker-check":
+                    var rerankerOptions = RerankEvalSetup.Options(
+                        Option(args, "--reranker"),
+                        RerankEvalSetup.IntOption(Environment.GetEnvironmentVariable("Reranker__TimeoutMs"), new RerankerOptions().TimeoutMs));
+                    using (var http = new HttpClient { Timeout = TimeSpan.FromMinutes(2) })
+                    {
+                        var rerankerCheck = await RerankerCheck.RunAsync(
+                            RerankEvalSetup.LiveReranker(rerankerOptions, http),
+                            rerankerOptions,
+                            Environment.GetEnvironmentVariable("Reranker__ApiKey"),
+                            http,
+                            TimeSpan.FromSeconds(120),
+                            cancellationToken).ConfigureAwait(false);
+                        foreach (var line in rerankerCheck.Lines)
+                        {
+                            await output.WriteLineAsync(line).ConfigureAwait(false);
+                        }
+
+                        return rerankerCheck.Passed ? 0 : 1;
                     }
 
                 case "run":
