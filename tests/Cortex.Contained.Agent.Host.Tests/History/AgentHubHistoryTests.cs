@@ -25,6 +25,7 @@ public sealed class AgentHubHistoryTests : IAsyncDisposable
         Set("historyPurge", purge);
         Set("runtime", this.runtime);
         Set("messageStore", this.h.Store);
+        Set("logger", NullLogger<AgentHub>.Instance);
         Set("historyTools", new HistoryToolsSwitch(this.h.Monitor));
         var context = Substitute.For<HubCallerContext>();
         context.ConnectionAborted.Returns(CancellationToken.None);
@@ -85,6 +86,45 @@ public sealed class AgentHubHistoryTests : IAsyncDisposable
         Assert.NotNull(row.ToolCalls);
         await using var snapshot = await this.h.Store.OpenSnapshotAsync(CancellationToken.None);
         Assert.Equal(1, (await snapshot.ReadMetaAsync(CancellationToken.None)).RestoreGeneration);
+    }
+
+    [Fact]
+    public async Task ImportMessages_InvalidRow_RejectedBeforeAnyChange()
+    {
+        await this.h.SayAsync("old", 0);
+
+        var result = await this.hub.ImportMessages(new ImportMessagesRequest
+        {
+            ClearExisting = true,
+            Items =
+            [
+                new ExportMessageEntry { UserId = "u", ChannelId = "ch", Role = "user", Content = "fine", Timestamp = HistoryHarness.T0 },
+                new ExportMessageEntry { UserId = "u", ChannelId = "", Role = "user", Content = "broken", Timestamp = HistoryHarness.T0 },
+            ],
+        });
+
+        Assert.False(result.Success);
+        Assert.Contains("row 1", result.Error, StringComparison.Ordinal);
+        Assert.Equal("old", Assert.Single(await this.h.Store.GetMessagesAsync("ch")).Content);
+        await this.runtime.DidNotReceive().ResetAllSessionsAsync(Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ImportAll_InvalidMessageRow_RejectedBeforeMemoriesAreTouched()
+    {
+        // No memory service is wired: reaching the memory import would fail with a different error.
+        var result = await this.hub.ImportAll(new ExportBundle
+        {
+            Memories = new ExportMemoriesPayload { Items = [] },
+            Messages = new ExportMessagesPayload
+            {
+                Items = [new ExportMessageEntry { UserId = "u", ChannelId = "", Role = "user", Content = "broken", Timestamp = HistoryHarness.T0 }],
+            },
+            Tasks = new ExportTasksPayload { Items = [] },
+        });
+
+        Assert.False(result.Success);
+        Assert.Contains("row 0", result.Error, StringComparison.Ordinal);
     }
 
     [Fact]

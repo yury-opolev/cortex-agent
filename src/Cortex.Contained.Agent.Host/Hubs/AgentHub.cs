@@ -830,6 +830,14 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
         var importStartedAt = DateTimeOffset.UtcNow;
         try
         {
+            // The messages are validated first so a bad batch cannot leave memories already replaced.
+            var bundleErrors = Storage.MessageImportValidator.Validate(
+                bundle.Messages.Items.Select(ExportImportMapper.MapExportToMessageRecord).ToList());
+            if (bundleErrors.Count > 0)
+            {
+                return new ImportResult { Success = false, Error = "Import rejected: " + string.Join("; ", bundleErrors.Take(5)) };
+            }
+
             var memoriesResult = await ImportMemories(new ImportMemoriesRequest
             {
                 Items = bundle.Memories.Items.Select(m => new MemoryCreateRequest
@@ -919,6 +927,13 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
             var records = request.Items
                 .Select(ExportImportMapper.MapExportToMessageRecord)
                 .ToList();
+
+            // Validate and stage the whole batch before touching any row (§4.1 atomic import).
+            var errors = Storage.MessageImportValidator.Validate(records);
+            if (errors.Count > 0)
+            {
+                return new ImportResult { Success = false, Error = "Import rejected: " + string.Join("; ", errors.Take(5)) };
+            }
 
             // ClearExisting replaces everything in ONE transaction through the erasure workflow
             // (delete-all + insert + restore-generation bump), so the old rows are erased too.
