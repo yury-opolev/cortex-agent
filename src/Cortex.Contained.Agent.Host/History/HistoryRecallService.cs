@@ -303,6 +303,7 @@ public sealed partial class HistoryRecallService
         var tailNext = position.TailSkip + takenTail;
 
         var offset = position.IndexOffset;
+        var indexStart = hits.Count;
         var exhausted = reader is null;
         var scanned = 0;
         var pageSize = request.Limit * 3;
@@ -324,7 +325,7 @@ public sealed partial class HistoryRecallService
                 }
 
                 var hit = SegmentHit(candidate, new HistoryCursorPosition(offset + consumed, tailHits.Count, null, 0));
-                if (hit.EchoOnly)
+                if (hit.EchoOnly && !request.IncludeEchoes)
                 {
                     deferredEchoes.Add(hit);
                     continue;
@@ -342,14 +343,14 @@ public sealed partial class HistoryRecallService
             scanned += consumed;
         }
 
-        var next = new HistoryCursorPosition(offset, tailNext, null, 0);
-        var hasMore = !exhausted || tailNext < tailHits.Count;
         if (request.IncludeEchoes)
         {
-            hits.AddRange(deferredEchoes.OrderByDescending(e => e.Score).Take(Math.Max(0, request.Limit - hits.Count))
-                .Select(e => e with { Resume = next }));
+            RankEchoesIntoPage(hits, indexStart);
         }
-        else if (hits.Count == 0 && exhausted && position == HistoryCursorPosition.Start)
+
+        var next = new HistoryCursorPosition(offset, tailNext, null, 0);
+        var hasMore = !exhausted || tailNext < tailHits.Count;
+        if (!request.IncludeEchoes && hits.Count == 0 && exhausted && position == HistoryCursorPosition.Start)
         {
             hits.AddRange(deferredEchoes.OrderByDescending(e => e.Score).Take(request.Limit).Select(e => e with { Resume = next }));
         }
@@ -363,6 +364,34 @@ public sealed partial class HistoryRecallService
             Coverage = Empty(null),
             Binding = string.Empty,
         };
+    }
+
+    // Echo-only hits are scored x0.5 (SegmentHit), so with includeEchoes they sort below equally relevant
+    // originals inside the page instead of being dropped. A truncation cursor resumes at a hit's Resume
+    // offset, so after reordering it is lowered to just before the earliest not-yet-rendered hit (a repeat
+    // is harmless, a skipped hit is not).
+    private static void RankEchoesIntoPage(List<HistoryHit> hits, int indexStart)
+    {
+        if (!hits.Skip(indexStart).Any(h => h.EchoOnly))
+        {
+            return;
+        }
+
+        var ranked = hits.Skip(indexStart).OrderByDescending(h => h.Score).ToList();
+        var floor = long.MaxValue;
+        for (var i = ranked.Count - 1; i >= 0; i--)
+        {
+            var original = ranked[i].Resume;
+            if (floor != long.MaxValue)
+            {
+                ranked[i] = ranked[i] with { Resume = original with { IndexOffset = (int)Math.Min(original.IndexOffset, floor - 1) } };
+            }
+
+            floor = Math.Min(floor, original.IndexOffset);
+        }
+
+        hits.RemoveRange(indexStart, hits.Count - indexStart);
+        hits.AddRange(ranked);
     }
 
     private async Task<HistorySearchResult> SearchTimeOrderAsync(

@@ -138,6 +138,22 @@ public sealed class HistoryRecallServiceTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task SearchAsync_IncludeEchoesAndPageFills_EchoIsRankedInsteadOfLostAfterThePage()
+    {
+        var echo = await this.h.SayAsync("4711", 0, role: "assistant", toolCalls: HistoryRows.ToolCalls("history_search"));
+        await this.h.SayAsync("the code is 4711 and nothing else matters here today", 120);
+        await this.h.SayAsync("another note about the code 4711 written for later reference", 240);
+        await this.IndexAsync();
+
+        var page = await this.SearchAsync("4711", includeEchoes: true, limit: 2);
+
+        Assert.Equal(2, page.Hits.Count);
+        Assert.Contains(echo, Ids(page));
+        Assert.True(page.HasMore);
+        Assert.Equal(page.Hits.OrderByDescending(h => h.Score).Select(h => h.FirstMsgId), page.Hits.Select(h => h.FirstMsgId));
+    }
+
+    [Fact]
     public async Task SearchAsync_TimeOrder_ExhaustivePaginationInTimestampOrder()
     {
         var expected = new List<long>();
