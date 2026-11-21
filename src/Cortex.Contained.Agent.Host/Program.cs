@@ -795,7 +795,8 @@ builder.Services.AddSingleton(sp =>
         // must wake the coordinator's dispatch loop so it re-scans and redelivers.
         wakeSubagentCoordinator: sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.SubagentExecutionCoordinator>().SignalWorkAvailable,
         reasoningEffort: sp.GetRequiredService<IOptions<AgentConfig>>().Value.ReasoningEffort,
-        deliveries: sp.GetRequiredService<Cortex.Contained.Agent.Host.Events.DeliveryRecorder>()));
+        deliveries: sp.GetRequiredService<Cortex.Contained.Agent.Host.Events.DeliveryRecorder>(),
+        deliveryReports: sp.GetRequiredService<Cortex.Contained.Agent.Host.Events.DeliveryReportBuilder>()));
 builder.Services.AddSingleton<IAgentRuntime>(sp => sp.GetRequiredService<AgentRuntime>());
 
 // Bootstrap context store removed — replaced by self-notes
