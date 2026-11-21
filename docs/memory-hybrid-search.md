@@ -50,6 +50,14 @@ hits ≠ never happened).
 
 Invalid values stop the agent at startup.
 
+## Reranking (increment 5)
+
+With the reranker enabled (Bridge `Reranker:Enabled`, default false), `memory_search` in hybrid mode asks
+for `Reranker:Memory:TopN` fused memories, has the `cortex-reranker` sidecar reorder them by their title and
+content lines (≤ `MaxDocChars` each), returns `limit` of them and adds a `rerank: …` line to the footer.
+Dense (the default mode) and keyword searches are not reranked, so the default output is unchanged.
+Evaluation: `memory-eval rerank-curve` and `gate-r`. See [reranker.md](reranker.md).
+
 ## Erasure
 
 Deleting or editing a memory (tool, Bridge UI, consolidation, compaction) removes its FTS row in the same

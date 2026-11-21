@@ -98,6 +98,18 @@ only while the source segment is unchanged. `history-eval` run directories hold 
 `messages.db`; purges destroy the ones overlapping the purged range. See
 [history-hybrid-search.md](history-hybrid-search.md).
 
+## Reranker sidecar exposure
+
+With `Reranker:Enabled` (Bridge configuration, default false), the raw best-matching lines of the top
+hybrid history and memory candidates are sent to the `cortex-reranker` sidecar. It is reachable only on
+the internal compose network (no published port), requires an API key on every request (generated once,
+DPAPI-encrypted by the Bridge, passed to the container through the `docker compose` process environment
+and pushed to the agent's memory; the entrypoint refuses to start without it), logs no requests
+(`--log-verbosity 2`), exposes no web UI, `/slots` or `/metrics`, runs as an unprivileged user on a
+read-only root and keeps no state. The agent refuses to send text to any other host unless it uses HTTPS,
+and always with the key. The image's server and model are pinned (digest, sha256) and Self-Update verifies
+the built image id. See [reranker.md](reranker.md).
+
 ## Curated memory keyword index
 
 `memory.db` holds a contentless FTS5 index of every curated memory (folded title and content tokens

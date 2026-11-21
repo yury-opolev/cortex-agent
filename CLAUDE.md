@@ -134,6 +134,7 @@ scripts/
 - [Design reference](docs/design-reference.md) — design patterns and conventions
 - [Setup guide](docs/setup-guide.md) — installation and configuration
 - [Self-update](docs/self-update.md) — how to deploy a cortex change to the running install (MSIX + agent image), detached from a coda session
+- [Reranker](docs/reranker.md) — the opt-in `cortex-reranker` sidecar after hybrid history/memory fusion: exposure, Bridge key, Self-Update coverage, Gate R workflow
 - [History locator](docs/history-locator.md) — episodic history search (`history_search`/`history_read`), journal + FTS5 index, erasure workflow, D10 memory quarantine, smoke eval and behaviour gate
 - [Event log and provenance](docs/event-log.md) — content-free events for messages, tools and sends; delivery reports; `event_get`; backfill; encryption at rest
 

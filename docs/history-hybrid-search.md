@@ -66,6 +66,15 @@ pending job. Relevance hits carry `match keyword|semantic|both`.
 `/health → history.dense`: `state`, `embedded`, `total`, `pending`, `failed`, `oldestPendingQueuedAt`,
 `lastError`. An embedder failure never halts the projector: embedding pauses for 30 ticks and retries.
 
+## Reranking (increment 5)
+
+With the reranker enabled (Bridge `Reranker:Enabled`, default false), the first `Reranker:History:TopN`
+fused segments of a hybrid relevance search are reordered by the `cortex-reranker` sidecar, which sees
+only each segment's verified matching lines (≤ `MaxDocChars`). The coverage block adds a `rerank:` line
+(`on (…)`, `skipped: …`, `failed: …; fused order kept`, `not used: …`) and reranked hits show
+`| rerank 0.87`. Keyword and time-order searches are not reranked. Evaluation: `history-eval rerank-curve`
+and `gate-r`. See [reranker.md](reranker.md).
+
 ## Erasure and encryption
 
 Vectors (float32 in `chunks`, the int8 copy in `chunk_q8`) live in the generation file, so they are encrypted
