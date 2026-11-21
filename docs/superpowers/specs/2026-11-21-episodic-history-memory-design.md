@@ -54,7 +54,7 @@ The work is also the foundation for the ambient-agent model: an event log as the
 | D7 | Subagents get the same history tools as the main agent, with no extra restrictions. Re-confirmed in round 2. The privacy reviewer's objection is recorded as an accepted risk. |
 | D8 | The search engine is SQLite: FTS5 BM25 plus exact vector search with filters applied before scoring, fused with RRF. ANN indexes or a new engine only follow the triggers in the scale-path record. |
 | D9 | `Internal` rows (scheduled-task instructions, worker summaries, subagent completions) are indexed, labelled `internal (not necessarily delivered)`, excluded from results by default, and included with `includeInternal=true`. |
-| D10 | Until increment 2 provenance exists, curated memories whose `CreatedAt` falls in a purged time window are **quarantined**: hidden from `memory_search`, seeding and consolidation until the owner keeps or deletes them. They are never auto-deleted, and the delete confirmation says so. |
+| D10 | Curated memories whose `CreatedAt` falls in a purged time window are **quarantined**: hidden from `memory_search`, seeding and consolidation until the owner keeps or deletes them. They are never auto-deleted, and the delete confirmation says so. Time-window quarantine remains the mechanism; event provenance for memories (which events a memory was extracted from) is a possible future step. |
 
 ## 4. Roadmap
 

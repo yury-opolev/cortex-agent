@@ -896,7 +896,7 @@ Log.Information(
 if (app.Services.GetRequiredService<IOptions<MemoryMcpOptions>>().Value.Encryption.Enabled)
 {
     throw new InvalidOperationException(
-        "MemoryMcp:Encryption:Enabled is not supported by the Agent Host: its SQLite engine (SQLite3 Multiple Ciphers) cannot open SQLCipher databases. Encryption at rest arrives in increment 2.");
+        "MemoryMcp:Encryption:Enabled is not supported by the Agent Host: its SQLite engine (SQLite3 Multiple Ciphers) cannot open SQLCipher databases. Encrypt messages and history with Storage:EncryptAtRest; encrypting memory.db is not supported yet.");
 }
 
         if (app.Services.GetRequiredService<IOptions<MemoryMcpOptions>>().Value.Search.Validate() is { Count: > 0 } memorySearchErrors)

@@ -100,9 +100,11 @@ All delete paths (Bridge history page, channel history, tenant import with *clea
    `cleanupPending` and the number of quarantined memories.
 
 Retention: `messages.db` keeps history until deleted; the index and journal are derived and
-pruned; spill files and subagent transcripts are deleted with all-channel purges. **Known gap
-until increment 2:** per-channel purges do not delete tool-output spill files, Docker volume
-snapshots and host backups are outside this workflow, and nothing is encrypted at rest (D4).
+pruned; spill files and subagent transcripts are deleted with purges (per-channel purges delete
+exactly the spill files their tool results referenced, via the event log). Docker volume
+snapshots and host backups are outside this workflow. With `Storage:EncryptAtRest`, `messages.db`
+and the index generations are encrypted at rest; `subagents.db`, spill files and the memory
+database are not (see [security.md](security.md)).
 
 ### Memory quarantine (D10)
 
