@@ -14,6 +14,9 @@ public sealed record AgentToolResult
     /// <summary>Optional error message if <see cref="Success"/> is false.</summary>
     public string? Error { get; init; }
 
+    /// <summary>The <c>tool_result</c> event recorded for this result (evidence ID), when recorded.</summary>
+    public string? EvidenceId { get; init; }
+
     /// <summary>A successful result carrying <paramref name="content"/>.</summary>
     public static AgentToolResult Ok(string content) => new() { Success = true, Content = content };
 

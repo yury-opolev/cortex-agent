@@ -1,5 +1,6 @@
 using System.Collections.Frozen;
 using Cortex.Contained.Agent.Host.Agent;
+using Cortex.Contained.Agent.Host.Events;
 using Cortex.Contained.Agent.Host.Mcp;
 using Cortex.Contained.Contracts.Llm;
 
@@ -18,6 +19,7 @@ public sealed partial class ToolRegistry
     private readonly ActiveChannelStore activeChannelStore;
     private readonly IConversationToolGate[] gates;
     private readonly McpToolStore? mcpToolStore;
+    private readonly IToolEventRecorder? eventRecorder;
 
     /// <summary>
     /// Cached tool definitions, invalidated when EITHER the active channel list
@@ -28,8 +30,9 @@ public sealed partial class ToolRegistry
     private int cachedChannelVersion = -1;
     private int cachedMcpVersion = -1;
 
-    public ToolRegistry(IEnumerable<IAgentTool> tools, ActiveChannelStore activeChannelStore, ILogger<ToolRegistry> logger, IEnumerable<IConversationToolGate>? gates = null, McpToolStore? mcpToolStore = null)
+    public ToolRegistry(IEnumerable<IAgentTool> tools, ActiveChannelStore activeChannelStore, ILogger<ToolRegistry> logger,     IEnumerable<IConversationToolGate>? gates = null, McpToolStore? mcpToolStore = null, IToolEventRecorder? eventRecorder = null)
     {
+            this.eventRecorder = eventRecorder;
         this.logger = logger;
         this.activeChannelStore = activeChannelStore;
         this.gates = gates?.ToArray() ?? [];
@@ -129,8 +132,26 @@ public sealed partial class ToolRegistry
         return tool;
     }
 
-    /// <summary>Execute a tool call and return the result.</summary>
+    /// <summary>
+    /// Execute a tool call and return the result. With an event recorder, a <c>tool_call</c> event is
+    /// written before the tool runs and a <c>tool_result</c> event after it; the result carries the
+    /// latter's ID as <see cref="AgentToolResult.EvidenceId"/>.
+    /// </summary>
     public async Task<AgentToolResult> ExecuteAsync(LlmToolCall toolCall, ToolExecutionContext context, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(toolCall);
+        if (this.eventRecorder is null)
+        {
+            return (await this.ExecuteCoreAsync(toolCall, context, cancellationToken).ConfigureAwait(false)).Result;
+        }
+
+        var callEventId = await this.eventRecorder.RecordCallAsync(toolCall, CancellationToken.None).ConfigureAwait(false);
+        var (result, spillPath) = await this.ExecuteCoreAsync(toolCall, context, cancellationToken).ConfigureAwait(false);
+        var evidenceId = await this.eventRecorder.RecordResultAsync(toolCall, callEventId, result, spillPath, CancellationToken.None).ConfigureAwait(false);
+        return evidenceId is null ? result : result with { EvidenceId = evidenceId };
+    }
+
+    private async Task<(AgentToolResult Result, string? SpillPath)> ExecuteCoreAsync(LlmToolCall toolCall, ToolExecutionContext context, CancellationToken cancellationToken)
     {
         if (!this.tools.TryGetValue(toolCall.Name, out var tool))
         {
@@ -138,7 +159,7 @@ public sealed partial class ToolRegistry
             if (this.mcpToolStore is null || !this.mcpToolStore.TryGet(toolCall.Name, out tool))
             {
                 this.LogToolNotFound(toolCall.Name, toolCall.Id);
-                return AgentToolResult.Fail($"Unknown tool: {toolCall.Name}");
+                return (AgentToolResult.Fail($"Unknown tool: {toolCall.Name}"), null);
             }
         }
 
@@ -147,12 +168,13 @@ public sealed partial class ToolRegistry
         try
         {
             var result = await tool.ExecuteAsync(toolCall.Arguments, context, cancellationToken).ConfigureAwait(false);
+            string? spillPath = null;
 
             // Truncate large tool output to prevent context window overflow.
             // Full output is saved to disk; LLM gets a preview + hint to use file_read.
             if (result.Success && result.Content.Length > 0)
             {
-                var truncated = ToolOutputTruncator.Truncate(result.Content);
+                var truncated = ToolOutputTruncator.Truncate(result.Content, out spillPath);
                 if (!ReferenceEquals(truncated, result.Content))
                 {
                     result = result with { Content = truncated };
@@ -160,12 +182,12 @@ public sealed partial class ToolRegistry
             }
 
             this.LogToolComplete(toolCall.Name, toolCall.Id, result.Success);
-            return result;
+            return (result, spillPath);
         }
         catch (OperationCanceledException)
         {
             this.LogToolCancelled(toolCall.Name, toolCall.Id);
-            return AgentToolResult.Fail("Tool execution was cancelled.");
+            return (AgentToolResult.Fail("Tool execution was cancelled."), null);
         }
         catch (SandboxEscapeException ex)
         {
@@ -173,14 +195,14 @@ public sealed partial class ToolRegistry
             // level for auditing. Tool-visible behavior is unchanged: SandboxEscapeException
             // is an ArgumentException, so the result text matches the general handler below.
             this.LogSandboxEscapeBlocked(ex.Message, toolCall.Name);
-            return AgentToolResult.Fail($"Tool execution failed: {ex.Message}");
+            return (AgentToolResult.Fail($"Tool execution failed: {ex.Message}"), null);
         }
 #pragma warning disable CA1031 // Do not catch general exception types -- tool errors must be reported, not crash the agent
         catch (Exception ex)
 #pragma warning restore CA1031
         {
             this.LogToolError(toolCall.Name, toolCall.Id, ex.Message);
-            return AgentToolResult.Fail($"Tool execution failed: {ex.Message}");
+            return (AgentToolResult.Fail($"Tool execution failed: {ex.Message}"), null);
         }
     }
 

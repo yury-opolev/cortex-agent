@@ -48,8 +48,15 @@ internal static class ToolOutputTruncator
     /// The (possibly truncated) content string. If no truncation was needed,
     /// returns the original string unchanged.
     /// </returns>
-    internal static string Truncate(string output)
+    internal static string Truncate(string output) => Truncate(output, out _);
+
+    /// <summary>
+    /// Same as <see cref="Truncate(string)"/>, also returning the spill file the full output was
+    /// saved to (null when nothing was saved), so the tool-result event can reference it.
+    /// </summary>
+    internal static string Truncate(string output, out string? spillPath)
     {
+        spillPath = null;
         if (string.IsNullOrEmpty(output))
         {
             return output;
@@ -88,6 +95,7 @@ internal static class ToolOutputTruncator
 
         // Save full output to disk
         var filePath = SaveFullOutput(output);
+        spillPath = filePath;
 
         // Build the truncated message
         var removedBytes = byteCount - currentBytes;
