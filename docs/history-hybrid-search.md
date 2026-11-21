@@ -17,7 +17,7 @@ Design: [`docs/superpowers/specs/2026-11-21-inc3-hybrid-history-search-design.md
 | Debounce | `ReadPendingChunks` | A channel's last (open) segment is embedded only after 10 new messages or 2 minutes; closed segments immediately. |
 | Embed | `HistoryProjector.EmbedPendingAsync` | Reads due jobs, recomputes each chunk text from the source, embeds outside every lock, and publishes in one transaction only if the generation, the purge generation and the `TextHash` are unchanged. Rejected (too long) chunks count attempts and are reported as `failed` after 3. |
 | Search | `HistoryRecallService` (hybrid) | The query is embedded (with the Qwen3 instruction) before the read lease. Keyword candidates are verified and re-matched; dense candidates come from an exact scan with filters applied before scoring, best chunk per segment, and are served only while the segment fingerprint matches the source. |
-| Rank | `HybridFusion`, `NearDuplicateCollapse`, `RecencyPrior` | RRF (k = 60) by default; quoted phrases and identifier-like tokens double the keyword weight. Near-duplicate worker segments (same `delivered`/`internal` author) are collapsed by MMR. The recency prior is off by default. |
+| Rank | `HybridFusion`, `NearDuplicateCollapse`, `RecencyPrior` | RRF (k = 60) by default; quoted phrases and identifier-like tokens double the keyword weight. Near-duplicate worker segments (same `delivered`/`internal` author) are collapsed by MMR. The recency prior is off by default. Fusion, exact-intent detection, the recency prior, vector math, folding and stemming are the shared engine in `MemoryMcp.Core.Retrieval` (also used by [memory search](memory-hybrid-search.md)). |
 
 `order=time` stays exhaustive keyword search. `mode=keyword` forces keyword-only relevance.
 

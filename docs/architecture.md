@@ -60,6 +60,7 @@ ASP.NET Core app running inside Docker. Key subsystems:
 | `SchedulerService` | One-shot and recurring task scheduling (SQLite-backed) |
 | `ModelProvider` | Shared model name provider (avoids circular DI with `IAgentRuntime`) |
 | `MemorySettingsStore` | Runtime-mutable memory settings with `IOptionsMonitor` change tokens |
+| `IHybridMemorySearch` / `QuarantineAwareHybridSearch` | `memory_search` in dense, keyword (FTS5/BM25) or hybrid (RRF) mode on the engine shared with history search (`MemoryMcp.Core.Retrieval`); quarantined memories excluded before scoring (see [memory-hybrid-search.md](memory-hybrid-search.md)) |
 | `HistoryProjector` / `HistoryRecallService` | Episodic history locator: journal-fed contentless FTS5 index plus exact dense search over transcript chunks (hybrid, RRF), verified `history_search` / `history_read` (see [history-locator.md](history-locator.md), [history-hybrid-search.md](history-hybrid-search.md)) |
 | `HistoryPurgeService` | History erasure workflow (index, WAL, tool output, subagents, smoke and history-eval run artifacts) and D10 memory quarantine |
 | `Events` (event log) | Content-free provenance events for every message, tool call/result and send; delivery reports, `event_get`, backfill (see [event-log.md](event-log.md)) |

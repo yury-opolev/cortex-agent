@@ -98,6 +98,19 @@ only while the source segment is unchanged. `history-eval` run directories hold 
 `messages.db`; purges destroy the ones overlapping the purged range. See
 [history-hybrid-search.md](history-hybrid-search.md).
 
+## Curated memory keyword index
+
+`memory.db` holds a contentless FTS5 index of every curated memory (folded title and content tokens
+and their stems) next to the chunk metadata and vectors; the text itself stays in the `.memory.data`
+files. Like those files and the vectors, the index is **not** encrypted by `Storage:EncryptAtRest`
+(the memory store is outside that key). Deleting or editing a memory removes its row in the write
+transaction and rewrites the index with FTS5 `optimize` under `PRAGMA secure_delete=ON`, so no
+token of the deleted text stays in the database file (byte-level integrity tests). Quarantined
+memories (D10) are excluded before scoring in keyword and semantic search. `memory-eval` searches a
+private copy of the memory store that is deleted when the command ends; its `seeds.jsonl` holds raw
+memory text and is deleted by the owner after the dataset is written. See
+[memory-hybrid-search.md](memory-hybrid-search.md).
+
 ## Agent storage encryption and event payloads
 
 With `Storage:EncryptAtRest`, `messages.db` and the history index generations inside the container
