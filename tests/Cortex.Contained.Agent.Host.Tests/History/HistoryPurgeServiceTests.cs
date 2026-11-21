@@ -51,36 +51,37 @@ public sealed class HistoryPurgeServiceTests : IAsyncDisposable
         await this.h.CatchUpAsync();
     }
 
-    private List<string> AllFiles()
-    {
-        var db = Path.Combine(this.h.Root, "messages.db");
-        var files = new List<string> { db, db + "-wal", db + "-shm" };
-        foreach (var gen in this.h.Generations.List())
-        {
-            var path = this.h.Generations.PathFor(gen);
-            files.AddRange([path, path + "-wal", path + "-shm"]);
-        }
+    private IEnumerable<string> AllFiles() =>
+        Directory.EnumerateFiles(this.h.Root, "*", SearchOption.AllDirectories);
 
-        return files;
-    }
-
-    private bool AnyFileContains(string marker)
+    /// <summary>Files (relative names) containing <paramref name="marker"/> verbatim.</summary>
+    private List<string> FilesContaining(string marker)
     {
         var needle = Encoding.UTF8.GetBytes(marker);
-        foreach (var file in this.AllFiles().Where(File.Exists))
+        var hits = new List<string>();
+        foreach (var file in this.AllFiles())
         {
             using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
             using var copy = new MemoryStream();
             stream.CopyTo(copy);
             if (copy.ToArray().AsSpan().IndexOf(needle) >= 0)
             {
-                return true;
+                hits.Add(Path.GetRelativePath(this.h.Root, file));
             }
         }
 
-        return false;
+        return hits;
     }
 
+    private bool AnyFileContains(string marker) => this.FilesContaining(marker).Count > 0;
+
+    /// <summary>FTS5 prefix-compresses sorted terms, so each marker is a random token sharing no prefix with its neighbours and must be present in both the message store and the index before the purge.</summary>
+    private void AssertStoredInMessagesAndIndex(string marker)
+    {
+        var files = this.FilesContaining(marker);
+        Assert.Contains(files, f => f.StartsWith("messages.db", StringComparison.Ordinal));
+        Assert.Contains(files, f => f.StartsWith("history", StringComparison.Ordinal));
+    }
     private bool VocabularyContains(string prefix)
     {
         using var reader = this.h.Projector.Current!.OpenReader();
@@ -91,21 +92,21 @@ public sealed class HistoryPurgeServiceTests : IAsyncDisposable
     [Fact]
     public async Task PurgeAsync_Channel_MarkersGoneFromEveryFileAndVocabulary()
     {
-        await this.h.SayAsync("zqamarker alpha", 0, channel: "secret");
-        await this.h.SayAsync("zqbmarker beta", 1, channel: "secret", role: "assistant");
+        await this.h.SayAsync("xvkqjwzd alpha", 0, channel: "secret");
+        await this.h.SayAsync("wnfhgtrp beta", 1, channel: "secret", role: "assistant");
         await this.h.SayAsync("keepme gamma", 2, channel: "other");
         await this.IndexAsync();
-        Assert.True(this.AnyFileContains("zqamarker"));
-        Assert.True(this.VocabularyContains("zqa"));
+        Assert.True(this.AnyFileContains("xvkqjwzd"));
+        Assert.True(this.VocabularyContains("xvk"));
 
         var result = await this.purge.PurgeAsync(new HistoryPurgeScope("secret", null), null, CancellationToken.None);
 
         Assert.Equal(2, result.Deleted);
         Assert.True(result.ErasureComplete);
-        Assert.False(this.AnyFileContains("zqamarker"));
-        Assert.False(this.AnyFileContains("zqbmarker"));
-        Assert.False(this.VocabularyContains("zqa"));
-        Assert.False(this.VocabularyContains("zqb"));
+        Assert.False(this.AnyFileContains("xvkqjwzd"));
+        Assert.False(this.AnyFileContains("wnfhgtrp"));
+        Assert.False(this.VocabularyContains("xvk"));
+        Assert.False(this.VocabularyContains("wnf"));
         Assert.True(this.VocabularyContains("keepme"));
         Assert.Empty(await this.h.Store.ReadPendingErasureAsync(CancellationToken.None));
     }
@@ -113,21 +114,21 @@ public sealed class HistoryPurgeServiceTests : IAsyncDisposable
     [Fact]
     public async Task PurgeAsync_AfterSameLengthUpdate_OldTextGoneEverywhere()
     {
-        var id = await this.h.SayAsync("code zqcmarker", 0);
+        var id = await this.h.SayAsync("code pjdyzmqv", 0);
         await this.h.SayAsync("other channel", 1, channel: "other");
         await this.IndexAsync();
 
         await this.h.Store.UpdateContentAsync(id, "code xxxxxxxxx");
         await this.purge.PurgeAsync(new HistoryPurgeScope("other", null), null, CancellationToken.None);
 
-        Assert.False(this.AnyFileContains("zqcmarker"));
-        Assert.False(this.VocabularyContains("zqc"));
+        Assert.False(this.AnyFileContains("pjdyzmqv"));
+        Assert.False(this.VocabularyContains("pjd"));
     }
 
     [Fact]
     public async Task PurgeAsync_BusyReaderHoldsWal_IncompleteThenCompletesOnResume()
     {
-        await this.h.SayAsync("zqdmarker", 0);
+        await this.h.SayAsync("hrtkwxbn", 0);
         await this.IndexAsync();
         var reader = new SqliteConnection($"Data Source={Path.Combine(this.h.Root, "messages.db")};Mode=ReadOnly;Pooling=False");
         reader.Open();
@@ -143,13 +144,13 @@ public sealed class HistoryPurgeServiceTests : IAsyncDisposable
 
         Assert.False(result.ErasureComplete);
         Assert.Contains(ErasureSteps.MessagesWal, result.CleanupPending);
-        Assert.Empty((await this.recall.SearchAsync(new HistorySearchRequest { Query = "zqdmarker" }, CancellationToken.None)).Hits);
+        Assert.Empty((await this.recall.SearchAsync(new HistorySearchRequest { Query = "hrtkwxbn" }, CancellationToken.None)).Hits);
 
         transaction.Dispose();
         reader.Dispose();
         Assert.Empty(await this.purge.ResumePendingAsync(CancellationToken.None));
         Assert.Empty(await this.h.Store.ReadPendingErasureAsync(CancellationToken.None));
-        Assert.False(this.AnyFileContains("zqdmarker"));
+        Assert.False(this.AnyFileContains("hrtkwxbn"));
     }
 
     [Fact]
@@ -232,7 +233,7 @@ public sealed class HistoryPurgeServiceTests : IAsyncDisposable
     [Fact]
     public async Task PurgeAsync_WithReplacement_SwapsRowsAndReportsInserted()
     {
-        await this.h.SayAsync("zqhmarker", 0);
+        await this.h.SayAsync("gcsvnpqy", 0);
         await this.IndexAsync();
 
         var result = await this.purge.PurgeAsync(
@@ -242,6 +243,6 @@ public sealed class HistoryPurgeServiceTests : IAsyncDisposable
 
         Assert.Equal((1, 1), (result.Deleted, result.Inserted));
         Assert.Null(this.h.Projector.Current);
-        Assert.False(this.AnyFileContains("zqhmarker"));
+        Assert.False(this.AnyFileContains("gcsvnpqy"));
     }
 }
