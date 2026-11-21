@@ -153,6 +153,7 @@ builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Events.IEventLog>(sp =
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Events.ToolEventPayloads>();
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Events.IToolEventRecorder, Cortex.Contained.Agent.Host.Events.ToolEventRecorder>();
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Events.DeliveryRecorder>();
+builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Events.DeliveryReportBuilder>();
 
 // --- Operational metrics (thread-safe singleton; surfaced via health/ping) ---
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Agent.AgentMetrics>();
