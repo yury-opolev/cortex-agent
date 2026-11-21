@@ -41,7 +41,7 @@ public sealed record RerankOutcome(IReadOnlyList<int> Order, RerankStatus Status
 
 /// <summary>The <c>reranker</c> block of <c>/health</c>.</summary>
 /// <param name="Enabled">The Bridge enabled reranking.</param>
-/// <param name="State"><c>off</c>, <c>ok</c>, <c>circuit-open</c> or <c>unavailable: reason</c>.</param>
+/// <param name="State"><c>off</c>, <c>ok</c>, <c>circuit-open</c>, <c>half-open</c> or <c>unavailable: reason</c>.</param>
 /// <param name="ConsecutiveFailures">Failures since the last success.</param>
 /// <param name="CircuitOpenUntil">End of the current break, or null.</param>
 /// <param name="LastError">Last failure (no text from searches), or null.</param>
@@ -131,10 +131,12 @@ public sealed partial class RerankStage : IRerankStage
         var started = this.time.GetTimestamp();
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(settings.TimeoutMs);
+        var settled = false;
         try
         {
             var scores = await this.reranker.RerankAsync(query, documents, timeout.Token).ConfigureAwait(false);
             var latency = this.time.GetElapsedTime(started).TotalMilliseconds;
+            settled = true;
             this.breaker.Success();
             this.last = new LastCall(this.time.GetUtcNow(), latency, null);
             var byIndex = scores.ToDictionary(s => s.Index, s => s.Score);
@@ -150,11 +152,21 @@ public sealed partial class RerankStage : IRerankStage
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
+            settled = true;
             return this.Failed(count, started, string.Create(CultureInfo.InvariantCulture, $"timed out after {settings.TimeoutMs} ms"), settings);
         }
         catch (RerankerException ex)
         {
+            settled = true;
             return this.Failed(count, started, ex.Message.TrimEnd('.'), settings);
+        }
+        finally
+        {
+            if (!settled)
+            {
+                // Cancelled (or an unexpected error): neither a success nor a reranker failure, so a half-open trial must not stay claimed.
+                this.breaker.Abandon();
+            }
         }
     }
 
@@ -165,6 +177,7 @@ public sealed partial class RerankStage : IRerankStage
         var state = !this.access.Enabled ? "off"
             : this.reranker.UnavailableReason is { } reason ? "unavailable: " + reason
             : this.breaker.State == RerankCircuitState.Open ? "circuit-open"
+            : this.breaker.State == RerankCircuitState.HalfOpen ? "half-open"
             : "ok";
         return new RerankHealth(this.access.Enabled, state, this.breaker.ConsecutiveFailures, this.breaker.OpenUntil, last?.Error, last?.LatencyMs, last?.At);
     }

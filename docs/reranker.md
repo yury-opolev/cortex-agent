@@ -32,7 +32,7 @@ Design: [superpowers/specs/2026-11-21-inc5-reranker-design.md](superpowers/specs
 - **Read lease.** History reranking runs inside the read lease on the verified snapshot, so deleted text is
   never sent and a purge waits at most `TimeoutMs` for an in-flight rerank.
 - **Health.** `/health → subsystems.reranker`: `status` (`off`/`ok`/`degraded`), `state`
-  (`off`, `ok`, `circuit-open`, `unavailable: …`), `consecutiveFailures`, `circuitOpenUntil`, `lastError`,
+  (`off`, `ok`, `circuit-open`, `half-open`, `unavailable: …`), `consecutiveFailures`, `circuitOpenUntil`, `lastError`,
   `lastLatencyMs`, `lastCallAt`. A degraded reranker never makes the agent unhealthy.
 
 ## Configuration

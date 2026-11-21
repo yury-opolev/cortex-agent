@@ -79,6 +79,37 @@ public sealed class RerankStageTests
     }
 
     [Fact]
+    public async Task RerankAsync_CancelledHalfOpenTrial_ReleasesTheTrialSoTheNextCallCanTryAgain()
+    {
+        this.reranker.Failure = new RerankerException("The reranker answered HTTP 500.");
+        await this.stage.RerankAsync("q", Candidates("a", "b"), Budget, CancellationToken.None);
+        await this.stage.RerankAsync("q", Candidates("a", "b"), Budget, CancellationToken.None);
+        this.time.Advance(TimeSpan.FromSeconds(61));
+        this.reranker.Failure = null;
+        this.reranker.Delay = TimeSpan.FromSeconds(30);
+        using var cancel = new CancellationTokenSource(TimeSpan.FromMilliseconds(30));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => this.stage.RerankAsync("q", Candidates("a", "b"), Budget, cancel.Token));
+        this.reranker.Delay = null;
+        var next = await this.stage.RerankAsync("q", Candidates("a", "b"), Budget, CancellationToken.None);
+
+        Assert.Equal(RerankStatus.Applied, next.Status);
+        Assert.Equal("ok", this.stage.Snapshot().State);
+    }
+
+    [Fact]
+    public async Task Snapshot_AfterTheBreakEndsUntilATrialRuns_IsNotOk()
+    {
+        this.reranker.Failure = new RerankerException("The reranker answered HTTP 500.");
+        await this.stage.RerankAsync("q", Candidates("a", "b"), Budget, CancellationToken.None);
+        await this.stage.RerankAsync("q", Candidates("a", "b"), Budget, CancellationToken.None);
+        this.time.Advance(TimeSpan.FromSeconds(61));
+
+        Assert.Equal("half-open", this.stage.Snapshot().State);
+    }
+
+    [Fact]
     public async Task RerankAsync_Unavailable_SkipsWithReason()
     {
         this.reranker.UnavailableReason = "no reranker API key";

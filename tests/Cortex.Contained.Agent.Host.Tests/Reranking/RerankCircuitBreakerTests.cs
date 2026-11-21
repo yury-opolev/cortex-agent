@@ -38,6 +38,21 @@ public sealed class RerankCircuitBreakerTests
     }
 
     [Fact]
+    public void AbandonedTrial_FreesTheTrialWithoutCountingAFailure()
+    {
+        var breaker = new RerankCircuitBreaker(this.time);
+        breaker.Failure(1, Break);
+        this.time.Advance(Break);
+        Assert.True(breaker.TryEnter());
+
+        breaker.Abandon();
+
+        Assert.Equal(RerankCircuitState.HalfOpen, breaker.State);
+        Assert.Equal(1, breaker.ConsecutiveFailures);
+        Assert.True(breaker.TryEnter());
+    }
+
+    [Fact]
     public void FailedTrial_ReopensImmediately()
     {
         var breaker = new RerankCircuitBreaker(this.time);

@@ -100,6 +100,15 @@ public sealed class RerankCircuitBreaker
         }
     }
 
+    /// <summary>Ends a half-open trial that produced neither success nor failure (cancelled): the next call may trial again.</summary>
+    public void Abandon()
+    {
+        lock (this.gate)
+        {
+            this.trialInFlight = false;
+        }
+    }
+
     /// <summary>Records a failed call; returns true when this failure opened (or re-opened) the circuit.</summary>
     public bool Failure(int threshold, TimeSpan breakDuration)
     {
