@@ -106,6 +106,25 @@ public sealed class LlamaServerReranker : IReranker
         }
     }
 
+    /// <summary>
+    /// <c>GET /health</c> (public in llama-server, no key sent): true once the model is loaded. Never throws
+    /// for transport errors.
+    /// </summary>
+    public async Task<bool> ProbeHealthAsync(CancellationToken cancellationToken)
+    {
+        var settings = this.options.CurrentValue;
+        try
+        {
+            using var response = await this.httpClientFactory.CreateClient(HttpClientName)
+                .GetAsync(new Uri(settings.Endpoint.TrimEnd('/') + "/health"), cancellationToken).ConfigureAwait(false);
+            return response.IsSuccessStatusCode;
+        }
+        catch (HttpRequestException)
+        {
+            return false;
+        }
+    }
+
     private static List<RerankScore> Validate(RerankResponse? body, int count)
     {
         if (body?.Results is not { } results)
