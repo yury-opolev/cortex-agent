@@ -19,6 +19,15 @@ using Microsoft.Extensions.Options;
 using OllamaSharp;
 using Serilog;
 
+// Local smoke-evaluation CLI (§14.2), run with `docker exec`:
+// dotnet Cortex.Contained.Agent.Host.dll history-smoke <init|generate-queries|pool|register|run>
+if (args.Length > 0 && string.Equals(args[0], "history-smoke", StringComparison.Ordinal))
+{
+    Environment.ExitCode = await Cortex.Contained.Agent.Host.History.Evaluation.Smoke.HistorySmokeCli
+        .RunAsync(args[1..], Console.Out, CancellationToken.None).ConfigureAwait(false);
+    return;
+}
+
 var builder = WebApplication.CreateBuilder(args);
 
 // --- YAML Configuration Source ---
