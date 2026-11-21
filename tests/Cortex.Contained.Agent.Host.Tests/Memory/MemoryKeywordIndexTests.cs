@@ -272,10 +272,12 @@ public sealed class MemoryKeywordIndexTests : IDisposable
         return hits.Select(h => h.MemoryId).ToList();
     }
 
+    // Deletes from chunks fire a trigger that stamps vec_version(), so every writer needs the extension loaded.
     private void Execute(string sql)
     {
         using var connection = new SqliteConnection($"Data Source={this.options.DatabasePath};Pooling=False");
         connection.Open();
+        SqliteVecExtension.Load(connection);
         using var cmd = connection.CreateCommand();
         cmd.CommandText = sql;
         cmd.ExecuteNonQuery();
