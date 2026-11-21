@@ -1,6 +1,7 @@
 ﻿using System.Globalization;
 using Cortex.Contained.Agent.Host.Agent;
 using Cortex.Contained.Agent.Host.Agent.Autonomy;
+using Cortex.Contained.Agent.Host.History;
 using Cortex.Contained.Agent.Host.Hubs;
 using Cortex.Contained.Agent.Host.Llm;
 using Cortex.Contained.Agent.Host.Scheduler;
@@ -105,6 +106,38 @@ builder.Services.AddSingleton(sp =>
         Path.Combine(stateRoot, "messages.db"),
         sp.GetRequiredService<ILoggerFactory>().CreateLogger<Cortex.Contained.Agent.Host.Storage.MessageStore>()));
 
+// --- Episodic history locator (increment 1): journal-fed FTS5 index, recall tools, erasure ---
+builder.Services.Configure<HistoryOptions>(builder.Configuration.GetSection(HistoryOptions.SectionName));
+builder.Services.AddSingleton<IHistorySource>(sp => sp.GetRequiredService<MessageStore>());
+builder.Services.AddSingleton<IHistoryErasureStore>(sp => sp.GetRequiredService<MessageStore>());
+builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Memory.IMemoryQuarantineSource>(sp => sp.GetRequiredService<MessageStore>());
+builder.Services.AddSingleton<HistoryAccessGate>();
+builder.Services.AddSingleton<HistoryStatus>();
+builder.Services.AddSingleton<HistoryToolsSwitch>();
+builder.Services.AddSingleton(new HistoryIndexGenerations(Path.Combine(stateRoot, "history")));
+builder.Services.AddSingleton<HistoryProjector>();
+builder.Services.AddSingleton<HistoryRecallService>();
+builder.Services.AddSingleton<IErasureStep, IndexErasureStep>();
+builder.Services.AddSingleton<IErasureStep, MessagesWalErasureStep>();
+builder.Services.AddSingleton<IErasureStep>(new ToolOutputErasureStep(Path.Combine(sandboxRoot, "tool-output")));
+builder.Services.AddSingleton<IErasureStep, SubagentErasureStep>();
+builder.Services.AddSingleton<IErasureStep, SmokeArtifactErasureStep>();
+builder.Services.AddSingleton<IErasureStep, VacuumErasureStep>();
+builder.Services.AddSingleton(sp =>
+    new HistoryPurgeService(
+        sp.GetRequiredService<IHistoryErasureStore>(),
+        sp.GetRequiredService<HistoryAccessGate>(),
+        sp.GetRequiredService<HistoryProjector>(),
+        sp.GetServices<IErasureStep>(),
+        sp.GetRequiredService<IOptionsMonitor<HistoryOptions>>(),
+        sp.GetRequiredService<TimeProvider>(),
+        sp.GetRequiredService<ILogger<HistoryPurgeService>>(),
+        sp.GetRequiredService<Cortex.Contained.Agent.Host.Memory.MemoryQuarantine>()));
+builder.Services.AddSingleton<HistoryHealthReporter>();
+builder.Services.AddHostedService<HistoryProjectorService>();
+builder.Services.AddHostedService<HistoryMaintenanceService>();
+builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Tools.IConversationToolGate, HistoryToolsGate>();
+
 // --- Operational metrics (thread-safe singleton; surfaced via health/ping) ---
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Agent.AgentMetrics>();
 
@@ -173,7 +206,16 @@ builder.Services.AddSingleton<IAgentTool>(new DateTimeTool());
 builder.Services.AddSingleton<IAgentTool>(sp =>
     new HistoryListChannelsTool(sp.GetRequiredService<MessageStore>()));
 builder.Services.AddSingleton<IAgentTool>(sp =>
-    new HistoryReadTool(sp.GetRequiredService<MessageStore>()));
+    new HistoryReadTool(
+        sp.GetRequiredService<MessageStore>(),
+        sp.GetRequiredService<HistoryRecallService>(),
+        sp.GetRequiredService<HistoryToolsSwitch>(),
+        sp.GetRequiredService<IOptionsMonitor<HistoryOptions>>()));
+builder.Services.AddSingleton<IAgentTool>(sp =>
+    new HistorySearchTool(
+        sp.GetRequiredService<HistoryRecallService>(),
+        sp.GetRequiredService<HistoryToolsSwitch>(),
+        sp.GetRequiredService<IOptionsMonitor<HistoryOptions>>()));
 // ContextBootstrapTool removed — replaced by self-notes (self_notes_read/write)
 
 // Self-notes: agent-managed operational knowledge (injected into system prompt)
@@ -407,11 +449,20 @@ builder.Services.AddSingleton<IAgentTool>(sp =>
         () => sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.IAgentRuntime>(),
         sp.GetRequiredService<ILogger<RevertTransferTool>>()));
 
+// --- Memory quarantine (D10): memories created in a purged window stay hidden until reviewed ---
+builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Memory.IMemoryCreationTimes>(sp =>
+    sp.GetRequiredService<Cortex.Contained.Agent.Host.Memory.MemoryManagementService>());
+builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Memory.MemoryQuarantine>();
+builder.Services.AddSingleton(sp =>
+    new Cortex.Contained.Agent.Host.Memory.QuarantineAwareMemoryService(
+        sp.GetRequiredService<IMemoryService>(),
+        sp.GetRequiredService<Cortex.Contained.Agent.Host.Memory.MemoryQuarantine>()));
+
 // --- Memory Consolidation (shared dedup logic for extraction + ingest tool + compaction) ---
 builder.Services.AddSingleton(sp =>
     new Cortex.Contained.Agent.Host.Memory.MemoryConsolidationService(
         sp.GetRequiredService<ILlmClient>(),
-        sp.GetRequiredService<IMemoryService>(),
+        sp.GetRequiredService<Cortex.Contained.Agent.Host.Memory.QuarantineAwareMemoryService>(),
         sp.GetRequiredService<ILogger<Cortex.Contained.Agent.Host.Memory.MemoryConsolidationService>>()));
 
 // --- Model Provider (shared between AgentRuntime and memory services/tools) ---
@@ -433,7 +484,7 @@ builder.Services.AddSingleton<IAgentTool>(sp =>
     new MemoryDeleteTool(sp.GetRequiredService<IMemoryService>()));
 builder.Services.AddSingleton<IAgentTool>(sp =>
     new MemorySearchTool(
-        sp.GetRequiredService<IMemoryService>(),
+        sp.GetRequiredService<Cortex.Contained.Agent.Host.Memory.QuarantineAwareMemoryService>(),
         sp.GetRequiredService<IEmbeddingService>(),
         sp.GetRequiredService<IOptions<MemoryMcp.Core.Configuration.MemoryMcpOptions>>()));
 
@@ -463,14 +514,15 @@ builder.Services.Configure<Cortex.Contained.Agent.Host.Memory.MemoryCompactionOp
 builder.Services.AddSingleton(sp =>
     new Cortex.Contained.Agent.Host.Memory.MemoryCompactionService(
         sp.GetRequiredService<Cortex.Contained.Agent.Host.Memory.IMemoryManagementService>(),
-        sp.GetRequiredService<IMemoryService>(),
+        sp.GetRequiredService<Cortex.Contained.Agent.Host.Memory.QuarantineAwareMemoryService>(),
         sp.GetRequiredService<Cortex.Contained.Agent.Host.Memory.MemoryConsolidationService>(),
         sp.GetRequiredService<Cortex.Contained.Agent.Host.Memory.MemoryExtractionService>(),
         sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.IModelProvider>(),
         sp.GetRequiredService<Cortex.Contained.Agent.Host.Memory.MaintenanceStore>(),
         sp.GetRequiredService<Cortex.Contained.Agent.Host.Memory.MemorySettingsStore>(),
         sp.GetRequiredService<IOptions<Cortex.Contained.Agent.Host.Memory.MemoryCompactionOptions>>(),
-        sp.GetRequiredService<ILogger<Cortex.Contained.Agent.Host.Memory.MemoryCompactionService>>()));
+        sp.GetRequiredService<ILogger<Cortex.Contained.Agent.Host.Memory.MemoryCompactionService>>(),
+        sp.GetRequiredService<Cortex.Contained.Agent.Host.Memory.MemoryQuarantine>()));
 builder.Services.AddHostedService(sp =>
     sp.GetRequiredService<Cortex.Contained.Agent.Host.Memory.MemoryCompactionService>());
 
@@ -518,7 +570,7 @@ builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Agent.ISubagentExecuto
         sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.IModelProvider>(),
         stateRoot,
         sp.GetRequiredService<ILogger<Cortex.Contained.Agent.Host.Agent.SubagentExecutor>>(),
-        sp.GetRequiredService<IMemoryService>(),
+        sp.GetRequiredService<Cortex.Contained.Agent.Host.Memory.QuarantineAwareMemoryService>(),
         sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.SkillRegistry>(),
         sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.SystemPromptStore>()));
 
@@ -828,11 +880,12 @@ _ = Task.Run(async () =>
 });
 
 // --- Health endpoint (unauthenticated) ---
-app.MapGet("/health", (ToolRegistry toolRegistry, AgentSessionStore sessionStore) =>
+app.MapGet("/health", async (ToolRegistry toolRegistry, AgentSessionStore sessionStore, HistoryHealthReporter historyHealth, CancellationToken cancellationToken) =>
 {
     var toolCount = toolRegistry.Count;
     var sessionCount = sessionStore.GetAll().Count;
     var healthy = toolCount > 0;
+    var history = await historyHealth.SnapshotAsync(cancellationToken).ConfigureAwait(false);
 
     return Results.Ok(new
     {
@@ -843,6 +896,22 @@ app.MapGet("/health", (ToolRegistry toolRegistry, AgentSessionStore sessionStore
         {
             toolRegistry = new { status = toolCount > 0 ? "ok" : "degraded", toolCount },
             sessionStore = new { status = "ok", sessionCount },
+            history = new
+            {
+                status = history.Halted || history.PendingErasureTasks > 0 ? "degraded" : "ok",
+                history.Enabled,
+                history.ToolsEnabled,
+                history.SqliteVersion,
+                history.Generation,
+                history.BuildComplete,
+                history.BuildInProgress,
+                history.CheckpointLag,
+                history.JournalBacklog,
+                history.Halted,
+                history.LastError,
+                history.PendingErasureTasks,
+                history.PendingErasureSteps,
+            },
         },
     });
 });
