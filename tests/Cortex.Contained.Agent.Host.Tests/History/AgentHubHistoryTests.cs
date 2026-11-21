@@ -12,6 +12,8 @@ namespace Cortex.Contained.Agent.Host.Tests.History;
 /// <summary>Every hub delete/import path runs through <see cref="HistoryPurgeService"/>.</summary>
 public sealed class AgentHubHistoryTests : IAsyncDisposable
 {
+    private static readonly string[] ClearedPair = ["a", "b"];
+    private static readonly string[] ReplacedPair = ["old-1", "old-2"];
     private readonly HistoryHarness h = new();
     private readonly IAgentRuntime runtime = Substitute.For<IAgentRuntime>();
     private readonly AgentHub hub;
@@ -163,6 +165,37 @@ public sealed class AgentHubHistoryTests : IAsyncDisposable
         Assert.Single(created);
         Assert.Single(await this.h.Store.ReadQuarantineWindowsAsync(CancellationToken.None));
         Assert.Empty(await quarantine.GetQuarantinedIdsAsync(CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task ClearAllMemories_DeletesInOneBatch()
+    {
+        var memoryService = Substitute.For<Cortex.Contained.Agent.Host.Memory.IMemoryManagementService>();
+        memoryService.ListAsync(Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(new MemoryListResult { Items = [new MemoryItem { MemoryId = "a", Content = "x" }, new MemoryItem { MemoryId = "b", Content = "y" }], TotalCount = 2 });
+        Set("memoryService", memoryService);
+
+        await this.hub.ClearAllMemories();
+
+        await memoryService.Received(1).DeleteManyAsync(
+            Arg.Is<IReadOnlyCollection<string>>(ids => ids.SequenceEqual(ClearedPair)), Arg.Any<CancellationToken>());
+        await memoryService.DidNotReceive().DeleteAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ImportMemories_ClearExisting_ReplacesInOneBatchDelete()
+    {
+        var memoryService = Substitute.For<Cortex.Contained.Agent.Host.Memory.IMemoryManagementService>();
+        memoryService.ListAsync(Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(new MemoryListResult { Items = [new MemoryItem { MemoryId = "old-1", Content = "x" }, new MemoryItem { MemoryId = "old-2", Content = "y" }], TotalCount = 2 });
+        Set("memoryService", memoryService);
+
+        var result = await this.hub.ImportMemories(new ImportMemoriesRequest { ClearExisting = true, Items = [] });
+
+        Assert.True(result.Success, result.Error);
+        await memoryService.Received(1).DeleteManyAsync(
+            Arg.Is<IReadOnlyCollection<string>>(ids => ids.SequenceEqual(ReplacedPair)), Arg.Any<CancellationToken>());
+        await memoryService.DidNotReceive().DeleteAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]

@@ -153,6 +153,12 @@ public sealed class MemoryManagementService : IMemoryManagementService, IMemoryC
         return this.memoryService.DeleteAsync(memoryId, cancellationToken);
     }
 
+    /// <summary>Delete many memories as one batch.</summary>
+    public Task<int> DeleteManyAsync(IReadOnlyCollection<string> memoryIds, CancellationToken cancellationToken = default)
+    {
+        return this.memoryService.DeleteManyAsync(memoryIds, cancellationToken);
+    }
+
     /// <summary>Search memories by semantic similarity.</summary>
     public async Task<IReadOnlyList<MemorySearchItem>> SearchAsync(
         string query, int limit = 10, float? minScore = null, List<string>? tags = null,

@@ -210,6 +210,43 @@ public sealed class MemoryKeywordIndexTests : IDisposable
         Assert.Equal(0, this.store.KeywordIndexRebuildCount);
     }
 
+    [Fact]
+    [Trait("Category", "Integrity")]
+    public async Task DeleteMemories_Bulk_OptimizesOnceAndErasesEveryDeletedToken()
+    {
+        await this.InitializeAsync();
+        var ids = new List<string>();
+        for (var i = 0; i < 12; i++)
+        {
+            ids.Add($"b{i:D2}");
+            await this.StoreAsync(ids[i], null, $"zqxbulkmarker{i:D2} filler");
+        }
+
+        await this.StoreAsync("keep", null, "a surviving memory");
+        Assert.True(this.DatabaseContains("zqxbulk"));
+        var before = this.store.KeywordOptimizeCount;
+
+        var deleted = await this.store.DeleteMemoriesAsync(ids, CancellationToken.None);
+
+        Assert.Equal(12, deleted);
+        Assert.Equal(1, this.store.KeywordOptimizeCount - before);
+        Assert.False(this.DatabaseContains("zqxbulk"));
+        Assert.Equal(["keep"], await this.SearchAsync("surviving"));
+        Assert.Empty(Directory.GetFiles(this.options.MemoriesDirectory, "b*"));
+    }
+
+    [Fact]
+    public async Task DeleteMemory_Single_StillOptimizesImmediately()
+    {
+        await this.InitializeAsync();
+        await this.StoreAsync("m1", null, "one memory");
+        var before = this.store.KeywordOptimizeCount;
+
+        await this.store.DeleteMemoryAsync("m1", CancellationToken.None);
+
+        Assert.Equal(1, this.store.KeywordOptimizeCount - before);
+    }
+
     private SqliteVecMemoryStore NewStore() =>
         new(Options.Create(this.options), new NullContentEncryptor(), NullLogger<SqliteVecMemoryStore>.Instance);
 

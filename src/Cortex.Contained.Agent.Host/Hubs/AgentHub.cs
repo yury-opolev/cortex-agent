@@ -566,11 +566,17 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
     /// <inheritdoc />
     public async Task ClearAllMemories()
     {
-        var memories = await this.memoryService.ListAsync(limit: 10000, offset: 0, Context.ConnectionAborted)
+        await this.DeleteListedMemoriesAsync(10000).ConfigureAwait(false);
+    }
+
+    private async Task DeleteListedMemoriesAsync(int limit)
+    {
+        var memories = await this.memoryService.ListAsync(limit, offset: 0, Context.ConnectionAborted)
             .ConfigureAwait(false);
-        foreach (var memory in memories.Items)
+        if (memories.Items.Count > 0)
         {
-            await this.memoryService.DeleteAsync(memory.MemoryId, Context.ConnectionAborted)
+            await this.memoryService.DeleteManyAsync(
+                memories.Items.Select(m => m.MemoryId).ToList(), Context.ConnectionAborted)
                 .ConfigureAwait(false);
         }
     }
@@ -582,15 +588,7 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
         await this.historyPurge.PurgeAsync(HistoryPurgeScope.All, null, Context.ConnectionAborted)
             .ConfigureAwait(false);
 
-        // Clear all memories by listing and deleting each one
-        // (IMemoryManagementService has no bulk-delete; this is acceptable for a reset operation)
-        var memories = await this.memoryService.ListAsync(limit: 10000, offset: 0, Context.ConnectionAborted)
-            .ConfigureAwait(false);
-        foreach (var memory in memories.Items)
-        {
-            await this.memoryService.DeleteAsync(memory.MemoryId, Context.ConnectionAborted)
-                .ConfigureAwait(false);
-        }
+        await this.DeleteListedMemoriesAsync(10000).ConfigureAwait(false);
 
         // Reset sessions
         await this.runtime.ResetAllSessionsAsync(Context.ConnectionAborted)
@@ -920,13 +918,7 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
         {
             if (request.ClearExisting)
             {
-                var existing = await this.memoryService.ListAsync(limit: 100_000, offset: 0, Context.ConnectionAborted)
-                    .ConfigureAwait(false);
-                foreach (var memory in existing.Items)
-                {
-                    await this.memoryService.DeleteAsync(memory.MemoryId, Context.ConnectionAborted)
-                        .ConfigureAwait(false);
-                }
+                await this.DeleteListedMemoriesAsync(100_000).ConfigureAwait(false);
             }
 
             var imported = 0;

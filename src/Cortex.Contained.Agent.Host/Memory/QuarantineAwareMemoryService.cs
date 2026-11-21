@@ -39,6 +39,10 @@ public sealed class QuarantineAwareMemoryService : IMemoryService
         this.inner.DeleteAsync(memoryId, cancellationToken);
 
     /// <inheritdoc />
+    public Task<int> DeleteManyAsync(IReadOnlyCollection<string> memoryIds, CancellationToken cancellationToken = default) =>
+        this.inner.DeleteManyAsync(memoryIds, cancellationToken);
+
+    /// <inheritdoc />
     public Task<List<SearchResult>> SearchAsync(string query, int limit = 5, float? minScore = null, List<string>? tags = null, CancellationToken cancellationToken = default) =>
         this.FilteredAsync(limit, fetch => this.inner.SearchAsync(query, fetch, minScore, tags, cancellationToken), cancellationToken);
 
