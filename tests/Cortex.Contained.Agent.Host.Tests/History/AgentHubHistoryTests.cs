@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using Cortex.Contained.Agent.Host.Agent;
 using Cortex.Contained.Agent.Host.History;
 using Cortex.Contained.Agent.Host.Hubs;
+using Cortex.Contained.Agent.Host.Scheduler;
 using Cortex.Contained.Contracts.Hub;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -195,6 +196,50 @@ public sealed class AgentHubHistoryTests : IAsyncDisposable
         Assert.True(messages.Success, messages.Error);
         Assert.Single(created);
         Assert.Single(await this.h.Store.ReadQuarantineWindowsAsync(CancellationToken.None));
+        Assert.Empty(await quarantine.GetQuarantinedIdsAsync(CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task ImportAll_ReplacesEverythingWithoutQuarantiningTheImportedMemories()
+    {
+        var created = new Dictionary<string, DateTimeOffset>();
+        var memoryService = Substitute.For<Cortex.Contained.Agent.Host.Memory.IMemoryManagementService>();
+        memoryService.ListAsync(Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(new MemoryListResult { Items = [], TotalCount = 0 });
+        memoryService.CreateAsync(Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<List<string>?>(), Arg.Any<bool>(), Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                var id = "imported-" + created.Count;
+                created[id] = DateTimeOffset.UtcNow;
+                return new MemoryItem { MemoryId = id, Content = call.ArgAt<string>(0) };
+            });
+        var times = Substitute.For<Cortex.Contained.Agent.Host.Memory.IMemoryCreationTimes>();
+        times.ListCreationTimesAsync(Arg.Any<CancellationToken>()).Returns(_ =>
+            created.Select(kv => new Cortex.Contained.Agent.Host.Memory.MemoryCreationTime(kv.Key, kv.Value)).ToList());
+        var quarantine = new Cortex.Contained.Agent.Host.Memory.MemoryQuarantine(this.h.Store, times, TimeProvider.System);
+        var schedulerDirectory = Path.Combine(this.h.Root, "scheduler-data");
+        using var scheduler = new SchedulerService(new AgentMessageChannel(), schedulerDirectory, NullLogger<SchedulerService>.Instance);
+        Set("memoryService", memoryService);
+        Set("memoryQuarantine", quarantine);
+        Set("scheduler", scheduler);
+        await this.h.Store.SaveMessageAsync("u", "ch", "user", "recent", DateTimeOffset.UtcNow.AddMinutes(-5));
+        var before = DateTimeOffset.UtcNow;
+
+        var result = await this.hub.ImportAll(new ExportBundle
+        {
+            Memories = new ExportMemoriesPayload { Items = [new MemoryItem { MemoryId = "old", Content = "kept fact" }] },
+            Messages = new ExportMessagesPayload
+            {
+                Items = [new ExportMessageEntry { UserId = "u", ChannelId = "ch", Role = "user", Content = "imported", Timestamp = HistoryHarness.T0 }],
+            },
+            Tasks = new ExportTasksPayload { Items = [] },
+        });
+
+        Assert.True(result.Success, result.Error);
+        Assert.Equal((1, 1), (result.MemoriesImported, result.MessagesImported));
+        Assert.Equal("imported", Assert.Single(await this.h.Store.GetMessagesAsync("ch")).Content);
+        var window = Assert.Single(await this.h.Store.ReadQuarantineWindowsAsync(CancellationToken.None));
+        Assert.True(window.To <= DateTimeOffset.UtcNow && window.To >= before.AddSeconds(-5) && window.To <= created.Values.Min(), "the window must end where the import began, before the first imported memory");
         Assert.Empty(await quarantine.GetQuarantinedIdsAsync(CancellationToken.None));
     }
 
