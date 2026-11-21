@@ -34,16 +34,27 @@ public sealed partial class HistoryProjector
 
         if (this.embedder.UnavailableReason is not null)
         {
-            this.PublishStatus();
+            await this.applyLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                this.PublishStatus();
+            }
+            finally
+            {
+                this.applyLock.Release();
+            }
+
             return HistoryEmbeddingRound.Idle;
         }
 
         HistoryIndexDatabase? database;
         IReadOnlyList<PendingChunk> pending;
+        string embedderFingerprint;
         await this.applyLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             database = this.current;
+            embedderFingerprint = this.embedder.Fingerprint;
             pending = database?.ReadPendingChunks(
                 settings.Dense.EmbedBatchSize,
                 this.time.GetUtcNow(),
@@ -76,7 +87,11 @@ public sealed partial class HistoryProjector
             }
 
             // Fences: same generation, no purge since the source read; PublishVectors checks the revision.
+            // Embedder fence: the vectors belong to the embedder they were made with, and the generation must have
+            // been built for that same embedder (a changed model or dimensions rebuilds it; its vectors must not mix).
             if (!ReferenceEquals(this.current, database)
+                || !string.Equals(this.embedder.Fingerprint, embedderFingerprint, StringComparison.Ordinal)
+                || !string.Equals(database.ReadState().ConfigFingerprint, HistoryConfigFingerprint.Compute(this.options.CurrentValue, embedderFingerprint), StringComparison.Ordinal)
                 || await this.source.ReadPurgeGenerationAsync(cancellationToken).ConfigureAwait(false) != purgeGeneration)
             {
                 this.LogVectorsFenced(vectors.Count);
@@ -154,6 +169,6 @@ public sealed partial class HistoryProjector
         return (vectors, rejected);
     }
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "History vectors for {Count} chunks not published: the generation or purge generation changed while embedding")]
+    [LoggerMessage(Level = LogLevel.Information, Message = "History vectors for {Count} chunks not published: the generation, purge generation or embedder changed while embedding")]
     private partial void LogVectorsFenced(int count);
 }

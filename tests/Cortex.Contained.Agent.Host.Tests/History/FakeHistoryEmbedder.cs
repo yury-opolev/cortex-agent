@@ -57,8 +57,12 @@ internal sealed class FakeHistoryEmbedder : IHistoryEmbedder
         }
 
         this.Queries.Add(query);
-        return Task.FromResult(this.Vector(query));
+        var vector = this.Vector(query);
+        return Task.FromResult(this.QueryDimensions is { } n ? vector[..n] : vector);
     }
+
+    /// <summary>When set, query vectors are cut to this many dimensions (an embedder that changed under a live index).</summary>
+    public int? QueryDimensions { get; set; }
 
     public float[] Vector(string text)
     {

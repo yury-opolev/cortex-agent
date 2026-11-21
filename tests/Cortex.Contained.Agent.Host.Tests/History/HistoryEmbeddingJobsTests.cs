@@ -118,8 +118,56 @@ public sealed class HistoryEmbeddingJobsTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task EmbedPendingAsync_EmbedderChangedWhileEmbedding_FingerprintFenceDiscards()
+    {
+        await this.SeedTwoSegmentsAsync();
+        this.h.Projector.BeforeVectorPublishHook = () =>
+        {
+            this.embedder.Fingerprint = "fake-embedder-v2";
+            return Task.CompletedTask;
+        };
+
+        var round = await this.h.Projector.EmbedPendingAsync(CancellationToken.None);
+
+        Assert.Equal(0, round.Published);
+        Assert.Equal(1, round.Discarded);
+        Assert.DoesNotContain(this.Chunks(), c => c.HasVector);
+    }
+
+    [Fact]
+    public async Task EmbedPendingAsync_EmbedderChangedBeforeRebuild_NeverPublishesIntoTheOldGeneration()
+    {
+        await this.SeedTwoSegmentsAsync();
+        this.embedder.Fingerprint = "fake-embedder-v2";
+
+        var round = await this.h.Projector.EmbedPendingAsync(CancellationToken.None);
+
+        Assert.Equal(0, round.Published);
+        Assert.DoesNotContain(this.Chunks(), c => c.HasVector);
+    }
+
+    [Fact]
+    public async Task EmbedPendingAsync_EmbedderNotAllowed_WaitsForApplyLockBeforeTouchingTheIndex()
+    {
+        this.embedder.UnavailableReason = "endpoint not allowed";
+        await this.SeedTwoSegmentsAsync();
+        var applyLock = (SemaphoreSlim)typeof(HistoryProjector)
+            .GetField("applyLock", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+            .GetValue(this.h.Projector)!;
+        await applyLock.WaitAsync();
+
+        var round = this.h.Projector.EmbedPendingAsync(CancellationToken.None);
+        var finishedWhileLocked = await Task.WhenAny(round, Task.Delay(300)) == round;
+        applyLock.Release();
+        await round;
+
+        Assert.False(finishedWhileLocked);
+    }
+
+    [Fact]
     public async Task EmbedderFingerprintChange_ForcesRebuild()
     {
+
         await this.SeedTwoSegmentsAsync();
         this.embedder.Fingerprint = "fake-embedder-v2";
 

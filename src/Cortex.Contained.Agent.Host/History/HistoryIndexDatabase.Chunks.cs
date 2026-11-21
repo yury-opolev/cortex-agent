@@ -257,6 +257,14 @@ public sealed partial class HistoryIndexReader
         return chunks;
     }
 
+    /// <summary>Dimensions of the stored vectors (from the length of any one), or null when none is stored.</summary>
+    public int? ReadVectorDimensions()
+    {
+        using var cmd = this.connection.CreateCommand();
+        cmd.CommandText = "SELECT length(Vec) / 4 FROM chunks WHERE Vec IS NOT NULL LIMIT 1;";
+        return cmd.ExecuteScalar() is long dimensions ? (int)dimensions : null;
+    }
+
     /// <summary>The stored float32 vector of the first chunk with <paramref name="textHash"/>, or null.</summary>
     public float[]? ReadVector(string textHash)
     {

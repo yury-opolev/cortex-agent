@@ -71,6 +71,11 @@ public sealed partial class HistoryRecallService
         {
             (queryVector, denseNote) = (null, index is null ? "fallback: index withheld" : "fallback: no chunk is embedded yet");
         }
+        else if (queryVector is not null && index!.ReadVectorDimensions() is { } storedDimensions && storedDimensions != queryVector.Length)
+        {
+            // The embedder changed under a live index; the generation is rebuilt on the next apply.
+            (queryVector, denseNote) = (null, "fallback: the embedder's vector dimensions changed; the index is being rebuilt");
+        }
 
         var mode = queryVector is null ? HistorySearchMode.Keyword : HistorySearchMode.Hybrid;
         var binding = HistoryCursorCodec.Binding(request with { Mode = mode }, state?.Generation);

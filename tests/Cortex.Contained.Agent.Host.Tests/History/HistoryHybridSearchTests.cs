@@ -115,6 +115,21 @@ public sealed class HistoryHybridSearchTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task QueryVectorDimensionsDiffer_FallsBackToKeywordWithReason()
+    {
+        await this.SeedAsync();
+        await this.EmbedAllAsync();
+        this.embedder.QueryDimensions = FakeHistoryEmbedder.Dimensions / 2;
+
+        var result = await this.SearchAsync("invoice");
+
+        Assert.Equal(HistorySearchMode.Keyword, result.Mode);
+        Assert.Contains("dimensions", result.Coverage.Dense, StringComparison.Ordinal);
+        Assert.StartsWith("fallback:", result.Coverage.Dense, StringComparison.Ordinal);
+        Assert.Single(result.Hits);
+    }
+
+    [Fact]
     public async Task SourceEditedAfterEmbedding_StaleVectorNeverServed()
     {
         var railway = await this.SeedAsync();
