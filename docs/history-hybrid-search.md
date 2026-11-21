@@ -68,7 +68,7 @@ pending job. Relevance hits carry `match keyword|semantic|both`.
 
 ## Erasure and encryption
 
-Vectors (float32 and int8) live in the `chunks` table of the generation file, so they are encrypted
+Vectors (float32 in `chunks`, the int8 copy in `chunk_q8`) live in the generation file, so they are encrypted
 with it (`Storage:EncryptAtRest`) and erased with it: a purge recomputes the channel inside the index
 transaction (`secure_delete=ON`), then the erasure step optimizes and truncates the WAL. Integrity tests
 check that the vector bytes of a purged or edited chunk are absent from every index file, and that an

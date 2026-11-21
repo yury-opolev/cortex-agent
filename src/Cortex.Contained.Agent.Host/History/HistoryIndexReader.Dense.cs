@@ -41,8 +41,9 @@ public sealed partial class HistoryIndexReader
         using (var cmd = this.connection.CreateCommand())
         {
             cmd.CommandText = $"""
-                SELECT c.ChunkId, c.SegId, c.Ordinal, {(useInt8 ? "c.Q8" : "c.Vec")}
+                SELECT c.ChunkId, c.SegId, c.Ordinal, {(useInt8 ? "q.Q8" : "c.Vec")}
                 FROM chunks c JOIN segments s ON s.SegId = c.SegId
+                {(useInt8 ? "JOIN chunk_q8 q ON q.ChunkId = c.ChunkId" : string.Empty)}
                 WHERE c.Vec IS NOT NULL
                   AND (@channel IS NULL OR s.ChannelId = @channel)
                   AND (@since IS NULL OR s.EndTs >= @since)

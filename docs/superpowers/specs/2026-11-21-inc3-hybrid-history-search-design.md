@@ -61,7 +61,7 @@ evaluation on raw data and the Gate H decision are owner tasks (§12), not part 
 | I3-13 | **Tool contract.** `history_search mode=auto|hybrid|keyword` (default `auto` = hybrid when dense is on, the embedder is allowed and at least one chunk is embedded). The query is embedded **before** the read lease (a slow embedder never delays a purge), with a `QueryTimeoutMs` budget. Any failure falls back to keyword with a stated reason. The cursor binding includes the **effective** mode. Each response states `mode:` and a `dense:` coverage line; relevance hits carry `match keyword|semantic|both`. |
 | I3-14 | **Evaluation as tooling.** Everything the §4.2 protocol needs is code with unit tests; nothing runs on raw data in CI. Outputs contain ids and numbers only (D6) and live under `/app/state/eval/hybrid` (never the repository). The holdout command refuses to run unless the dataset, analysis plan and grid were registered (SHA-256) and are unchanged. |
 
-## 4. Schema (each index generation, `HistoryConfigFingerprint.SchemaVersion = 3`)
+## 4. Schema (each index generation, `HistoryConfigFingerprint.SchemaVersion = 4`)
 
 ```sql
 CREATE VIRTUAL TABLE segments_fts USING fts5(body, stem, content='', contentless_delete=1,
@@ -78,12 +78,19 @@ CREATE TABLE chunks (
   IsOpen INTEGER NOT NULL,              -- chunk of the channel's last segment (debounce)
   QueuedAt TEXT NULL, QueuedMsgCount INTEGER NOT NULL DEFAULT 0, Attempts INTEGER NOT NULL DEFAULT 0,
   Vec BLOB NULL,                        -- unit float32, little-endian
-  Q8  BLOB NULL,                        -- [float32 scale][sbyte x dims]
   UNIQUE(SegId, Ordinal));
 CREATE INDEX ix_chunks_seg ON chunks(SegId);
 CREATE INDEX ix_chunks_hash ON chunks(TextHash);
-CREATE INDEX ix_chunks_pending ON chunks(ChannelId) WHERE Vec IS NULL;
+-- Vec is a key column only so the partial-index predicate does not force a lookup into the vector rows.
+CREATE INDEX ix_chunks_unembedded ON chunks(Attempts, QueuedAt, Vec) WHERE Vec IS NULL;
+CREATE TABLE chunk_q8 (ChunkId INTEGER PRIMARY KEY, Q8 BLOB NOT NULL);   -- [float32 scale][sbyte x dims]
+CREATE TRIGGER chunks_q8_cleanup AFTER DELETE ON chunks BEGIN DELETE FROM chunk_q8 WHERE ChunkId = OLD.ChunkId; END;
 ```
+
+The int8 copy has its own table so the int8 scan never reads the float32 overflow pages, and the
+embedding counters (total / pending / failed / oldest queued) are answered from covering indexes, never
+from the vector rows. A reader holds one read transaction for its whole life, so a recall sees one WAL
+snapshot even while the projector re-projects a channel.
 
 The schema bump rebuilds every generation once on upgrade. The tables exist in every generation;
 whether they are populated depends on the (fingerprinted) configuration.

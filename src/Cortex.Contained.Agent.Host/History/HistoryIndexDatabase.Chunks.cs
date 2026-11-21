@@ -76,11 +76,17 @@ public sealed partial class HistoryIndexDatabase
         foreach (var (hash, vector) in vectors)
         {
             var unit = VectorMath.Normalize(vector);
+            using var q8 = this.writer.CreateCommand();
+            q8.Transaction = transaction;
+            q8.CommandText = "INSERT OR REPLACE INTO chunk_q8 (ChunkId, Q8) SELECT ChunkId, @q8 FROM chunks WHERE TextHash = @hash AND Vec IS NULL;";
+            q8.Parameters.AddWithValue("@q8", VectorMath.QuantizeInt8(unit));
+            q8.Parameters.AddWithValue("@hash", hash);
+            q8.ExecuteNonQuery();
+
             using var cmd = this.writer.CreateCommand();
             cmd.Transaction = transaction;
-            cmd.CommandText = "UPDATE chunks SET Vec = @vec, Q8 = @q8, QueuedAt = NULL WHERE TextHash = @hash AND Vec IS NULL;";
+            cmd.CommandText = "UPDATE chunks SET Vec = @vec, QueuedAt = NULL WHERE TextHash = @hash AND Vec IS NULL;";
             cmd.Parameters.AddWithValue("@vec", VectorMath.ToBlob(unit));
-            cmd.Parameters.AddWithValue("@q8", VectorMath.QuantizeInt8(unit));
             cmd.Parameters.AddWithValue("@hash", hash);
             updated += cmd.ExecuteNonQuery();
         }
@@ -105,25 +111,45 @@ public sealed partial class HistoryIndexDatabase
     /// <summary>Embedding progress.</summary>
     public ChunkCounts ReadChunkCounts() => ReadChunkCounts(this.writer);
 
+    /// <summary>The query plan steps of the chunk-count statement (verifies it never reads vector pages).</summary>
+    internal IReadOnlyList<string> ExplainChunkCounts()
+    {
+        using var cmd = this.writer.CreateCommand();
+        cmd.CommandText = "EXPLAIN QUERY PLAN " + ChunkCountsSql;
+        var steps = new List<string>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            steps.Add(reader.GetString(3));
+        }
+
+        return steps;
+    }
+
+    private static readonly string ChunkCountsSql = $"""
+        SELECT (SELECT COUNT(*) FROM chunks),
+               (SELECT COUNT(*) FROM chunks WHERE Vec IS NULL AND Attempts < {MaxEmbeddingAttempts}),
+               (SELECT COUNT(*) FROM chunks WHERE Vec IS NULL AND Attempts >= {MaxEmbeddingAttempts}),
+               (SELECT MIN(QueuedAt) FROM chunks WHERE Vec IS NULL);
+        """;
+
+    // Every sub-select is answered from a covering index (the partial ix_chunks_unembedded holds only
+    // un-embedded chunks), so counting never reads the vector overflow pages.
     internal static ChunkCounts ReadChunkCounts(SqliteConnection connection)
     {
         using var cmd = connection.CreateCommand();
-        cmd.CommandText = $"""
-            SELECT COUNT(*),
-                   COALESCE(SUM(Vec IS NOT NULL), 0),
-                   COALESCE(SUM(Vec IS NULL AND Attempts < {MaxEmbeddingAttempts}), 0),
-                   COALESCE(SUM(Vec IS NULL AND Attempts >= {MaxEmbeddingAttempts}), 0),
-                   MIN(CASE WHEN Vec IS NULL THEN QueuedAt END)
-            FROM chunks;
-            """;
+        cmd.CommandText = ChunkCountsSql;
         using var reader = cmd.ExecuteReader();
         reader.Read();
+        var total = reader.GetInt64(0);
+        var pending = reader.GetInt64(1);
+        var failed = reader.GetInt64(2);
         return new ChunkCounts(
-            reader.GetInt64(0),
-            reader.GetInt64(1),
-            reader.GetInt64(2),
-            reader.GetInt64(3),
-            reader.IsDBNull(4) ? null : SqliteDateTimeText.Parse(reader.GetString(4)));
+            total,
+            total - pending - failed,
+            pending,
+            failed,
+            reader.IsDBNull(3) ? null : SqliteDateTimeText.Parse(reader.GetString(3)));
     }
 
     // Called by Apply inside the batch transaction, before the channel's segments are deleted.
@@ -132,7 +158,11 @@ public sealed partial class HistoryIndexDatabase
         var state = new ChannelChunkState();
         using var cmd = this.writer.CreateCommand();
         cmd.Transaction = transaction;
-        cmd.CommandText = "SELECT SegFirstMsgId, Ordinal, TextHash, Vec, Q8, QueuedAt, QueuedMsgCount FROM chunks WHERE ChannelId = @c;";
+        cmd.CommandText = """
+            SELECT c.SegFirstMsgId, c.Ordinal, c.TextHash, c.Vec, q.Q8, c.QueuedAt, c.QueuedMsgCount
+            FROM chunks c LEFT JOIN chunk_q8 q ON q.ChunkId = c.ChunkId
+            WHERE c.ChannelId = @c;
+            """;
         cmd.Parameters.AddWithValue("@c", channelId);
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
@@ -161,8 +191,9 @@ public sealed partial class HistoryIndexDatabase
             using var cmd = this.writer.CreateCommand();
             cmd.Transaction = transaction;
             cmd.CommandText = """
-                INSERT INTO chunks (SegId, ChannelId, SegFirstMsgId, Ordinal, MsgIds, Words, AllInternal, TextHash, IsOpen, QueuedAt, QueuedMsgCount, Vec, Q8)
-                VALUES (@seg, @channel, @first, @ordinal, @ids, @words, @internal, @hash, @open, @queuedAt, @queuedCount, @vec, @q8);
+                INSERT INTO chunks (SegId, ChannelId, SegFirstMsgId, Ordinal, MsgIds, Words, AllInternal, TextHash, IsOpen, QueuedAt, QueuedMsgCount, Vec)
+                VALUES (@seg, @channel, @first, @ordinal, @ids, @words, @internal, @hash, @open, @queuedAt, @queuedCount, @vec)
+                RETURNING ChunkId;
                 """;
             cmd.Parameters.AddWithValue("@seg", segId);
             cmd.Parameters.AddWithValue("@channel", segment.ChannelId);
@@ -176,8 +207,11 @@ public sealed partial class HistoryIndexDatabase
             cmd.Parameters.AddWithValue("@queuedAt", vector is null ? queued.Item1 : DBNull.Value);
             cmd.Parameters.AddWithValue("@queuedCount", vector is null ? queued.Item2 : 0);
             cmd.Parameters.AddWithValue("@vec", (object?)vector?.Vec ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@q8", (object?)vector?.Q8 ?? DBNull.Value);
-            cmd.ExecuteNonQuery();
+            var chunkId = (long)cmd.ExecuteScalar()!;
+            if (vector is not null)
+            {
+                this.Execute(transaction, "INSERT INTO chunk_q8 (ChunkId, Q8) VALUES (@id, @q8);", ("@id", chunkId), ("@q8", vector.Q8));
+            }
         }
     }
 
@@ -192,8 +226,8 @@ public sealed partial class HistoryIndexDatabase
 /// <summary>Chunk reads on a query connection.</summary>
 public sealed partial class HistoryIndexReader
 {
-    /// <summary>Embedding progress.</summary>
-    public ChunkCounts ReadChunkCounts() => HistoryIndexDatabase.ReadChunkCounts(this.connection);
+    /// <summary>Embedding progress; read once per reader, whose read snapshot cannot change.</summary>
+    public ChunkCounts ReadChunkCounts() => this.chunkCounts ??= HistoryIndexDatabase.ReadChunkCounts(this.connection);
 
     /// <summary>All chunks, optionally of one channel, in a segment-id independent order (tests and diagnostics).</summary>
     public IReadOnlyList<StoredChunk> ReadChunks(string? channelId = null)

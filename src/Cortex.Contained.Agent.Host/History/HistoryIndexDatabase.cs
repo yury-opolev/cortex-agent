@@ -76,12 +76,20 @@ public sealed partial class HistoryIndexDatabase : IDisposable
               QueuedMsgCount INTEGER NOT NULL DEFAULT 0,
               Attempts       INTEGER NOT NULL DEFAULT 0,
               Vec            BLOB NULL,
-              Q8             BLOB NULL,
               UNIQUE(SegId, Ordinal)
             );
             CREATE INDEX ix_chunks_seg ON chunks(SegId);
             CREATE INDEX ix_chunks_hash ON chunks(TextHash);
-            CREATE INDEX ix_chunks_pending ON chunks(ChannelId) WHERE Vec IS NULL;
+            -- Vec is a key column only so the partial-index predicate does not force a lookup into the vector rows.
+            CREATE INDEX ix_chunks_unembedded ON chunks(Attempts, QueuedAt, Vec) WHERE Vec IS NULL;
+            CREATE TABLE chunk_q8 (
+              ChunkId INTEGER PRIMARY KEY,
+              Q8      BLOB NOT NULL
+            );
+            CREATE TRIGGER chunks_q8_cleanup AFTER DELETE ON chunks
+            BEGIN
+              DELETE FROM chunk_q8 WHERE ChunkId = OLD.ChunkId;
+            END;
             CREATE TABLE projector_state (
               Id INTEGER PRIMARY KEY CHECK (Id=1),
               Generation INTEGER NOT NULL,
@@ -362,6 +370,7 @@ public sealed partial class HistoryIndexReader : IDisposable
         "s.SegId, s.ChannelId, s.StartTs, s.EndTs, s.LocalDate, s.FirstMsgId, s.LastMsgId, s.MsgIds, s.HasInternal, s.HasRecallEcho, s.Fingerprint";
 
     private readonly SqliteConnection connection;
+    private ChunkCounts? chunkCounts;
 
     internal HistoryIndexReader(SqliteConnection connection)
     {

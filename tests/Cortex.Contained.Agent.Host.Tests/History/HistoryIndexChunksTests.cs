@@ -90,6 +90,63 @@ public sealed class HistoryIndexChunksTests : IDisposable
     }
 
     [Fact]
+    public void ReadChunkCounts_AfterApplyPublishFailureAndPurge_MatchesTheRows()
+    {
+        this.database.Apply(Batch(Segments(Row(1, Day, "morning"), Row(2, Day.AddHours(2), "evening"), Row(3, Day.AddHours(5), "night")), Day));
+        var pending = this.database.ReadPendingChunks(10, Day + OpenDelay, OpenDelay, 10);
+        Assert.Equal(new ChunkCounts(3, 0, 3, 0, Day), this.database.ReadChunkCounts());
+
+        this.database.PublishVectors([(pending[0].TextHash, Vector(1, 0))]);
+        Assert.Equal(new ChunkCounts(3, 1, 2, 0, Day), this.database.ReadChunkCounts());
+
+        for (var i = 0; i < HistoryIndexDatabase.MaxEmbeddingAttempts; i++)
+        {
+            this.database.RecordEmbeddingFailure([pending[1].ChunkId]);
+        }
+
+        Assert.Equal(new ChunkCounts(3, 1, 1, 1, Day), this.database.ReadChunkCounts());
+
+        this.database.Apply(Batch([], Day.AddHours(6)));
+        Assert.Equal(new ChunkCounts(0, 0, 0, 0, null), this.database.ReadChunkCounts());
+    }
+
+    [Fact]
+    public void ReadChunkCounts_QueryPlan_NeverReadsChunkRowsWithVectors()
+    {
+        this.database.Apply(Batch(Segments(Row(1, Day, "morning"), Row(2, Day.AddHours(2), "evening")), Day));
+
+        var plan = this.database.ExplainChunkCounts();
+
+        var chunkSteps = plan.Where(step => step.Contains("chunks", StringComparison.Ordinal)).ToList();
+        Assert.NotEmpty(chunkSteps);
+        Assert.All(chunkSteps, step => Assert.Contains("COVERING INDEX", step, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Int8Copy_LivesInItsOwnTable_AndIsDeletedWithItsChunk()
+    {
+        this.database.Apply(Batch(Segments(Row(1, Day, "morning"), Row(2, Day.AddHours(2), "evening")), Day));
+        var pending = this.database.ReadPendingChunks(10, Day + OpenDelay, OpenDelay, 10);
+        this.database.PublishVectors(pending.Select(p => (p.TextHash, Vector(3, 4))).ToList());
+        Assert.Equal(2, this.Q8Rows());
+
+        this.database.Apply(Batch(Segments(Row(1, Day, "morning")), Day.AddHours(3)));
+
+        Assert.Equal(1, this.Q8Rows());
+        this.database.Apply(Batch([], Day.AddHours(4)));
+        Assert.Equal(0, this.Q8Rows());
+    }
+
+    private long Q8Rows()
+    {
+        using var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={this.database.Path};Mode=ReadOnly;Pooling=False");
+        connection.Open();
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM chunk_q8;";
+        return (long)cmd.ExecuteScalar()!;
+    }
+
+    [Fact]
     public void RecordEmbeddingFailure_ThreeTimes_ReportsFailedAndStopsRetrying()
     {
         this.database.Apply(Batch(Segments(Row(1, Day, "morning"), Row(2, Day.AddHours(2), "evening")), Day));
