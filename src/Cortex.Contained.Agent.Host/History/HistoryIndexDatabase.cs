@@ -153,12 +153,16 @@ public sealed partial class HistoryIndexDatabase : IDisposable
 
         foreach (var (channelId, segments) in batch.Channels)
         {
+            // Vectors of unchanged chunk texts and the debounce state of pending ones survive the replacement.
+            var chunkState = this.ReadChannelChunkState(transaction, channelId);
+            this.Execute(transaction, "DELETE FROM chunks WHERE ChannelId = @c;", ("@c", channelId));
             this.Execute(transaction, "DELETE FROM segments_fts WHERE rowid IN (SELECT SegId FROM segments WHERE ChannelId = @c);", ("@c", channelId));
             this.Execute(transaction, "DELETE FROM segments_tri WHERE rowid IN (SELECT SegId FROM segments WHERE ChannelId = @c);", ("@c", channelId));
             this.Execute(transaction, "DELETE FROM segments WHERE ChannelId = @c;", ("@c", channelId));
-            foreach (var segment in segments)
+            for (var i = 0; i < segments.Count; i++)
             {
-                this.Insert(transaction, segment);
+                var segId = this.Insert(transaction, segments[i]);
+                this.InsertChunks(transaction, segId, segments[i], isOpen: i == segments.Count - 1, chunkState, batch);
             }
         }
 
@@ -271,7 +275,7 @@ public sealed partial class HistoryIndexDatabase : IDisposable
         }
     }
 
-    private void Insert(SqliteTransaction transaction, HistorySegment segment)
+    private long Insert(SqliteTransaction transaction, HistorySegment segment)
     {
         using var cmd = this.writer.CreateCommand();
         cmd.Transaction = transaction;
@@ -304,6 +308,8 @@ public sealed partial class HistoryIndexDatabase : IDisposable
         {
             this.Execute(transaction, "INSERT INTO segments_tri(rowid, body) VALUES (@id, @body);", ("@id", segId), ("@body", trigram));
         }
+
+        return segId;
     }
 
     private List<ChannelCoverage> ReadCoverage(SqliteTransaction transaction)

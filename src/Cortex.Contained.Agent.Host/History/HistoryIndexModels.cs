@@ -32,6 +32,9 @@ public sealed record IndexBatch(IReadOnlyDictionary<string, IReadOnlyList<Histor
 
     /// <summary>Purge generation applied by this batch (never lowers the stored value), or null.</summary>
     public long? AppliedPurgeGeneration { get; init; }
+
+    /// <summary>Time recorded on newly queued embedding jobs (debounce); null uses the wall clock.</summary>
+    public DateTimeOffset? Now { get; init; }
 }
 
 /// <summary>A segment row returned by an index query.</summary>
