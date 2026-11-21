@@ -76,7 +76,10 @@ machine that never ran `Build-RerankerImage.ps1` sees no new build step, manifes
   recreates the container because `cortex-reranker:latest` changed. The health gate then waits until the
   container runs the pinned image id and its healthcheck (`/health`) passes; a reranker that never gets
   there fails the gate and triggers the rollback. If the Bridge has `Reranker:Enabled=false` it stops the
-  sidecar instead, and there is nothing to gate.
+  sidecar instead, and there is nothing to gate. The Bridge runs compose against
+  `%LOCALAPPDATA%\Cortex\docker-compose.yml`, which the Launcher refreshes from the package's bundled
+  `docker-compose.yml` on **every** start (not only when it starts containers), so the relaunch after the
+  MSIX install already carries the `reranker` service.
 - **Rollback.** Before deploying, the image of the *running* sidecar is tagged `cortex-reranker:rollback`;
   a rollback restores it as `:latest`, and the last-known-good Bridge recreates the sidecar from it.
 - **Downgrade.** Check out the older commit in the working tree and run `Self-Update.ps1 -Schedule

@@ -290,6 +290,17 @@ public sealed class App : Application
                 return;
             }
 
+            // The Bridge runs sidecar commands against the stable compose file, so refresh it on every start:
+            // a self-update that already recreated the agent skips the container startup below.
+            try
+            {
+                _ = FindComposeFile();
+            }
+            catch (FileNotFoundException)
+            {
+                Log.Warning("No docker-compose.yml bundled or installed; sidecar commands will fail until one exists");
+            }
+
             // Only start/recreate containers if needed
             var needsCompose = true;
             try
@@ -456,18 +467,12 @@ public sealed class App : Application
         var cortexDataDir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Cortex");
         var stablePath = Path.Combine(cortexDataDir, "docker-compose.yml");
-
-        // Copy from the app bundle to the stable location if newer or missing
         var baseDir = AppContext.BaseDirectory;
-        var bundledPath = Path.Combine(baseDir, "docker-compose.yml");
 
-        if (File.Exists(bundledPath))
+        if (ComposeFileSync.Refresh(baseDir, cortexDataDir) is { } refreshed)
         {
-            Directory.CreateDirectory(cortexDataDir);
-            File.Copy(bundledPath, stablePath, overwrite: true);
-            return stablePath;
+            return refreshed;
         }
-
         if (File.Exists(stablePath))
         {
             return stablePath;
