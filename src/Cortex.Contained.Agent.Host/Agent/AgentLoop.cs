@@ -419,6 +419,7 @@ public sealed partial class AgentLoop
                     Role = "tool",
                     Content = toolContent,
                     ToolCallId = toolCall.Id,
+                    EvidenceId = result.EvidenceId,
                 };
                 callbacks.OnToolResultMessage(toolMessage);
             }

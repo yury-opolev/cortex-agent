@@ -501,6 +501,9 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
     {
         this.metrics?.IncrementMessagesProcessed();
 
+        // Every event this turn records (messages, tool calls, deliveries) carries this run's identity.
+        using var runScope = Events.RunScope.Begin(Events.RunProvenance.ForMessage(message));
+
         // Resolve the per-source processing policy once; all source-conditional branches below use it.
         var behavior = MessageSourceBehavior.For(message.Source);
 
@@ -1204,6 +1207,7 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
                 Role = "tool",
                 Content = toolContent,
                 ToolCallId = toolCall.Id,
+                EvidenceId = result.EvidenceId,
             });
 
             // Capture a compact summary entry for this round's tool block (redacted for MCP tools).
