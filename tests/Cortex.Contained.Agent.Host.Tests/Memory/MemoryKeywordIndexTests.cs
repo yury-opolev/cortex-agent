@@ -151,6 +151,65 @@ public sealed class MemoryKeywordIndexTests : IDisposable
         Assert.Null(this.store.KeywordIndexUnavailableReason);
     }
 
+    [Fact]
+    [Trait("Category", "Integrity")]
+    public async Task Initialize_IndexDriftedByWritesThatBypassedIt_RebuildsAndErasesDeletedTokens()
+    {
+        await this.InitializeAsync();
+        await this.StoreAsync("keep", null, "a surviving memory about gardens");
+        await this.StoreAsync("gone", null, "the zqxdriftmarker memory");
+        await this.StoreAsync("fresh", null, "a memory that the index never saw: pelicans");
+        Assert.True(this.DatabaseContains("zqxdrift"));
+
+        // Writes by code that does not maintain memories_fts (a pre-index image, an "unavailable" engine run).
+        this.Execute("""
+            DELETE FROM chunks WHERE MemoryId = 'gone';
+            DELETE FROM memories_fts_map WHERE MemoryId = 'fresh';
+            """);
+        this.Execute("DELETE FROM memories_fts WHERE rowid NOT IN (SELECT FtsRowId FROM memories_fts_map);");
+        this.Execute("INSERT INTO memories_fts(memories_fts) VALUES('optimize');");
+
+        this.Reopen();
+        await this.InitializeAsync();
+
+        Assert.Equal(["fresh"], await this.SearchAsync("pelicans"));
+        Assert.Equal(["keep"], await this.SearchAsync("gardens"));
+        Assert.Empty(await this.SearchAsync("zqxdriftmarker"));
+        Assert.False(this.DatabaseContains("zqxdrift"));
+        Assert.Equal(0, this.ScalarCount("SELECT COUNT(*) FROM memories_fts_map WHERE MemoryId = 'gone'"));
+        Assert.Equal(
+            this.ScalarCount("SELECT COUNT(*) FROM chunks WHERE ChunkIndex = 0"),
+            this.ScalarCount("SELECT COUNT(*) FROM memories_fts_map"));
+    }
+
+    [Fact]
+    public async Task Initialize_ConsistentIndex_DoesNotRebuild()
+    {
+        await this.InitializeAsync();
+        await this.StoreAsync("m1", null, "first memory");
+        Assert.Equal(1, this.store.KeywordIndexRebuildCount);
+
+        this.Reopen();
+        await this.InitializeAsync();
+
+        Assert.Equal(0, this.store.KeywordIndexRebuildCount);
+    }
+
+    [Fact]
+    public async Task Initialize_MemoryWithoutContentFile_DoesNotCountAsDrift()
+    {
+        await this.InitializeAsync();
+        await this.StoreAsync("m1", null, "first memory");
+        await this.StoreAsync("lost", null, "second memory");
+        File.Delete(Directory.GetFiles(this.options.MemoriesDirectory, "lost*").Single());
+        this.Execute("DELETE FROM memories_fts WHERE rowid IN (SELECT FtsRowId FROM memories_fts_map WHERE MemoryId = 'lost'); DELETE FROM memories_fts_map WHERE MemoryId = 'lost';");
+
+        this.Reopen();
+        await this.InitializeAsync();
+
+        Assert.Equal(0, this.store.KeywordIndexRebuildCount);
+    }
+
     private SqliteVecMemoryStore NewStore() =>
         new(Options.Create(this.options), new NullContentEncryptor(), NullLogger<SqliteVecMemoryStore>.Instance);
 
@@ -183,6 +242,15 @@ public sealed class MemoryKeywordIndexTests : IDisposable
         using var cmd = connection.CreateCommand();
         cmd.CommandText = sql;
         cmd.ExecuteNonQuery();
+    }
+
+    private long ScalarCount(string sql)
+    {
+        using var connection = new SqliteConnection($"Data Source={this.options.DatabasePath};Pooling=False");
+        connection.Open();
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = sql;
+        return (long)cmd.ExecuteScalar()!;
     }
 
     // FTS5 leaves prefix-compress sorted terms, so only the first term sharing a prefix is stored whole:
