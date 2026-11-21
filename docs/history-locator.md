@@ -1,6 +1,8 @@
 # History locator (episodic history memory, increment 1)
 
 > Increment 2 adds the event log, `event_get`, purge-generation fencing and encryption at rest: see [event-log.md](event-log.md).
+>
+> Increment 3 adds hybrid (keyword + exact dense) search, the stemmed/trigram keyword variants and the evaluation tooling: see [history-hybrid-search.md](history-hybrid-search.md).
 
 The history locator lets the agent find **when and where** something was said in its own
 conversation history and read the exact source around it. It is a *locator*, not a source of
@@ -44,7 +46,8 @@ fingerprints. The agent always reads the text from `messages.db`.
 | `QuarantineClusterGapHours` | `6` | Purged messages further apart form separate windows. |
 | `VacuumIntervalDays` | `7` | Maintenance `VACUUM` interval. |
 | `VacuumAfterPurgeRows` | `1000` | A larger purge schedules a `VACUUM` immediately. |
-| `SmokeArtifactsDirectory` | `/app/state/eval/smoke` | Local smoke-eval root (destroyed on overlapping purge). |
+| `SmokeArtifactsDirectory` | `/app/state/eval/smoke` | Local smoke-eval workspace; its `runs` are destroyed on overlapping purge. |
+| `EvalArtifactsDirectory` | `/app/state/eval/hybrid` | `history-eval` workspace; its `runs` (raw copies) are destroyed on overlapping purge ([details](history-hybrid-search.md#evaluation-run-artifacts-d3)). |
 
 Changing `TimeZone`, `IdleGapMinutes` or `MaxSegmentWords` (or the schema, segmenter, folder
 or tokenizer versions) changes the config fingerprint and triggers a rebuild; until it cuts
@@ -90,7 +93,7 @@ All delete paths (Bridge history page, channel history, tenant import with *clea
 2. The steps run synchronously: `index` (purge segments from the current generation, drop an
    in-progress build), `messages-wal` (`wal_checkpoint(TRUNCATE)`), `tool-output` (all-channel
    purges delete every `/app/data/tool-output` spill file), `subagents` (terminal subagent tasks
-   overlapping the purged range), `smoke-artifacts` (overlapping run directories), `vacuum`
+   overlapping the purged range), `smoke-artifacts` (overlapping `runs/*` directories of the smoke and `history-eval` workspaces), `vacuum`
    (large purges) and `retired-generation:<n>`.
 3. Steps that cannot finish (a busy WAL reader, an active subagent) stay in `PendingErasure`;
    `HistoryMaintenanceService` retries them. The Bridge reports `erasureComplete` /

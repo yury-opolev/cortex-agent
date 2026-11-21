@@ -77,13 +77,26 @@ Secrets are **never** stored inside the Docker container. LLM credentials are pu
 The Agent Host's history locator stores no message text outside `messages.db`: the FTS5 index
 is contentless with `secure-delete`, and the journal holds ids only. Deleting history runs the
 erasure workflow in [history-locator.md](history-locator.md#deletion-erasure-and-retention)
-(index, WAL checkpoint, tool-output spill files, subagent transcripts, smoke artifacts,
+(index, WAL checkpoint, tool-output spill files, subagent transcripts, smoke and `history-eval` run
+artifacts overlapping the range,
 optional `VACUUM`) and quarantines curated memories created in the deleted window until the
 owner reviews them (D10). Recall output is wrapped in a per-response random boundary token and
 labelled as historical data, never as instructions. Per-channel deletion also removes the
 tool-output spill files its tool results referenced, and the event log is purged in the same
 transaction (see [event-log.md](event-log.md)). Not covered: volume snapshots, host backups and
 provider-side copies.
+
+## Dense history search: embedder exposure and vectors
+
+With `History:Dense:Enabled`, transcript chunks of the history are sent to the embeddings sidecar. Only
+the in-compose `embeddings` service may receive them (no published host port, `OLLAMA_DEBUG=0`, internal
+network only); a remote embedder needs HTTPS and an API key, otherwise nothing is sent and dense search
+reports `unavailable`. Inputs are sent with an explicit `num_ctx` and `truncate=false`. Vectors can leak
+content (embedding inversion), so they are treated like text: they live only in the history index
+generation (encrypted with it, erased with it under `secure_delete`, byte-level tested) and are served
+only while the source segment is unchanged. `history-eval` run directories hold raw copies of
+`messages.db`; purges destroy the ones overlapping the purged range. See
+[history-hybrid-search.md](history-hybrid-search.md).
 
 ## Agent storage encryption and event payloads
 
