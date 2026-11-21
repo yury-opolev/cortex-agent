@@ -879,15 +879,9 @@ var app = builder.Build();
         reason => logSandboxEscapeBlocked(sandboxAuditLogger, reason, null);
 }
 
-// --- Initialize Memory Store (creates SQLite schema + data directories) ---
-using (var scope = app.Services.CreateScope())
-{
-    var memoryStore = scope.ServiceProvider.GetRequiredService<IMemoryStore>();
-    await memoryStore.InitializeAsync().ConfigureAwait(false);
-}
-
 // The process-wide SQLite engine is SQLite3 Multiple Ciphers (SQLite3MC.PCLRaw.bundle). It cannot
-// open a SQLCipher-encrypted memory.db with default settings, so refuse that configuration loudly.
+// open a SQLCipher-encrypted memory.db with default settings, so refuse that configuration loudly
+// before the memory store opens memory.db.
 var sqliteCapabilities = Cortex.Contained.Agent.Host.History.SqliteRuntimeInfo.Capabilities;
 Log.Information(
     "SQLite runtime {SqliteVersion}; history index supported: {Supported}",
@@ -897,6 +891,13 @@ if (app.Services.GetRequiredService<IOptions<MemoryMcpOptions>>().Value.Encrypti
 {
     throw new InvalidOperationException(
         "MemoryMcp:Encryption:Enabled is not supported by the Agent Host: its SQLite engine (SQLite3 Multiple Ciphers) cannot open SQLCipher databases. Encrypt messages and history with Storage:EncryptAtRest; encrypting memory.db is not supported yet.");
+}
+
+// --- Initialize Memory Store (creates SQLite schema + data directories) ---
+using (var scope = app.Services.CreateScope())
+{
+    var memoryStore = scope.ServiceProvider.GetRequiredService<IMemoryStore>();
+    await memoryStore.InitializeAsync().ConfigureAwait(false);
 }
 
         if (app.Services.GetRequiredService<IOptions<MemoryMcpOptions>>().Value.Search.Validate() is { Count: > 0 } memorySearchErrors)
