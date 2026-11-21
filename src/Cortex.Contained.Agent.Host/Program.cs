@@ -759,6 +759,19 @@ using (var scope = app.Services.CreateScope())
     await memoryStore.InitializeAsync().ConfigureAwait(false);
 }
 
+// The process-wide SQLite engine is SQLite3 Multiple Ciphers (SQLite3MC.PCLRaw.bundle). It cannot
+// open a SQLCipher-encrypted memory.db with default settings, so refuse that configuration loudly.
+var sqliteCapabilities = Cortex.Contained.Agent.Host.History.SqliteRuntimeInfo.Capabilities;
+Log.Information(
+    "SQLite runtime {SqliteVersion}; history index supported: {Supported}",
+    sqliteCapabilities.Version,
+    sqliteCapabilities.SupportsHistoryIndex);
+if (app.Services.GetRequiredService<IOptions<MemoryMcpOptions>>().Value.Encryption.Enabled)
+{
+    throw new InvalidOperationException(
+        "MemoryMcp:Encryption:Enabled is not supported by the Agent Host: its SQLite engine (SQLite3 Multiple Ciphers) cannot open SQLCipher databases. Encryption at rest arrives in increment 2.");
+}
+
 // Queued/recovered subagent tasks are now dispatched by SubagentExecutionCoordinator (a hosted
 // service) once Bridge + credentials + MCP-catalog readiness are all signaled — no startup call here.
 
