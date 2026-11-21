@@ -51,4 +51,11 @@ public sealed record MessagePurgeOutcome(
     int Inserted,
     IReadOnlyList<QuarantineWindow> Windows,
     DateTimeOffset? RangeFrom,
-    DateTimeOffset? RangeTo);
+    DateTimeOffset? RangeTo)
+{
+    /// <summary>Events deleted with the rows (tombstones are kept).</summary>
+    public int DeletedEvents { get; init; }
+
+    /// <summary>The <c>Meta.PurgeGeneration</c> this purge committed.</summary>
+    public long PurgeGeneration { get; init; }
+}

@@ -30,9 +30,9 @@ public class HistoryPurgeTypesTests
     }
 
     [Fact]
-    public void ForPurge_ChannelScope_SkipsToolOutputButAllScopeIncludesIt()
+    public void ForPurge_EveryScope_IncludesToolOutput()
     {
-        Assert.DoesNotContain(ErasureSteps.ToolOutput, ErasureSteps.ForPurge(new HistoryPurgeScope("ch", null)));
+        Assert.Contains(ErasureSteps.ToolOutput, ErasureSteps.ForPurge(new HistoryPurgeScope("ch", null)));
         Assert.Equal(
             [ErasureSteps.Index, ErasureSteps.MessagesWal, ErasureSteps.ToolOutput, ErasureSteps.Subagents, ErasureSteps.SmokeArtifacts, ErasureSteps.Vacuum],
             ErasureSteps.ForPurge(HistoryPurgeScope.All));

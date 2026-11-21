@@ -185,7 +185,7 @@ public sealed class MessageStoreJournalTests : IAsyncDisposable
         var task = Assert.Single(await this.store.ReadPendingErasureAsync(CancellationToken.None));
         Assert.Equal(request.ErasureId, task.Id);
         Assert.Equal((T0, T0.AddHours(10)), (task.RangeFrom!.Value, task.RangeTo!.Value));
-        Assert.DoesNotContain(ErasureSteps.ToolOutput, task.Steps);
+        Assert.Contains(ErasureSteps.ToolOutput, task.Steps);
         Assert.Equal(2, outcome.Windows.Count);
     }
 

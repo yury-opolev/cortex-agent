@@ -167,9 +167,9 @@ public sealed partial class MessageStore
             cancellationToken);
 
     private Task<long> AppendUpsertAsync(SqliteTransaction transaction, string channelId, IReadOnlyList<long> ids, CancellationToken cancellationToken) =>
-        this.AppendJournalAsync(transaction, "upsert", channelId, JsonSerializer.Serialize(ids), null, null, cancellationToken);
+        this.AppendJournalAsync(transaction, "upsert", channelId, JsonSerializer.Serialize(ids), null, null, null, cancellationToken);
 
-    private Task<long> AppendPurgeAsync(SqliteTransaction transaction, HistoryPurgeScope scope, CancellationToken cancellationToken) =>
+    private Task<long> AppendPurgeAsync(SqliteTransaction transaction, HistoryPurgeScope scope, long purgeGeneration, CancellationToken cancellationToken) =>
         this.AppendJournalAsync(
             transaction,
             "purge",
@@ -177,6 +177,7 @@ public sealed partial class MessageStore
             null,
             null,
             scope.OlderThan is { } olderThan ? SqliteDateTimeText.Format(olderThan) : null,
+            purgeGeneration,
             cancellationToken);
 
     private async Task<long> AppendJournalAsync(
@@ -186,11 +187,12 @@ public sealed partial class MessageStore
         string? messageIds,
         string? fromTs,
         string? toTs,
+        long? purgeGeneration,
         CancellationToken cancellationToken)
     {
         await using var cmd = this.WriterCommand(transaction, """
-            INSERT INTO HistoryJournal (Op, ChannelId, MessageIds, FromTs, ToTs, At)
-            VALUES (@op, @channelId, @messageIds, @fromTs, @toTs, @at)
+            INSERT INTO HistoryJournal (Op, ChannelId, MessageIds, FromTs, ToTs, At, PurgeGeneration)
+            VALUES (@op, @channelId, @messageIds, @fromTs, @toTs, @at, @purgeGeneration)
             RETURNING Seq;
             """);
         cmd.Parameters.AddWithValue("@op", op);
@@ -199,6 +201,7 @@ public sealed partial class MessageStore
         cmd.Parameters.AddWithValue("@fromTs", (object?)fromTs ?? DBNull.Value);
         cmd.Parameters.AddWithValue("@toTs", (object?)toTs ?? DBNull.Value);
         cmd.Parameters.AddWithValue("@at", SqliteDateTimeText.Format(DateTimeOffset.UtcNow));
+        cmd.Parameters.AddWithValue("@purgeGeneration", (object?)purgeGeneration ?? DBNull.Value);
         var seq = (long)(await cmd.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
         await this.SetMetaAsync(transaction, "JournalHead", seq.ToString(CultureInfo.InvariantCulture), cancellationToken).ConfigureAwait(false);
         return seq;
@@ -230,7 +233,7 @@ public sealed partial class MessageStore
         return this.WriteAsync(
             async transaction =>
             {
-                var (where, bind) = PurgeFilter(request.Scope);
+                var (where, bind) = PurgeFilter(request.Scope, "Timestamp");
 
                 var timestamps = new List<DateTimeOffset>();
                 await using (var select = this.WriterCommand(transaction, $"SELECT Timestamp FROM Messages WHERE {where} ORDER BY Timestamp;"))
@@ -251,7 +254,13 @@ public sealed partial class MessageStore
                 }
 
                 this.FaultInjector?.Invoke("after-purge-delete");
-                await this.AppendPurgeAsync(transaction, request.Scope, cancellationToken).ConfigureAwait(false);
+                var (deletedEvents, spillFiles) = await this.DeleteEventsAsync(transaction, request.Scope, cancellationToken).ConfigureAwait(false);
+                var purgeGeneration = await this.BumpPurgeGenerationAsync(transaction, cancellationToken).ConfigureAwait(false);
+                await this.AppendPurgeAsync(transaction, request.Scope, purgeGeneration, cancellationToken).ConfigureAwait(false);
+                await this.InsertEventAsync(
+                    transaction,
+                    PurgeEvents.Tombstone(request.Scope, deleted, deletedEvents, purgeGeneration, request.Replacement?.Count, request.Now),
+                    cancellationToken).ConfigureAwait(false);
 
                 var windows = QuarantineWindowBuilder.Build(timestamps, request.QuarantineClusterGap, request.QuarantineSlack, request.QuarantineCap is { } cap && cap < request.Now ? cap : request.Now);
                 foreach (var window in windows)
@@ -287,16 +296,21 @@ public sealed partial class MessageStore
                         Deleted = deleted,
                         CreatedAt = request.Now,
                         Steps = steps.ToList(),
+                        SpillFiles = spillFiles,
                     });
                     await this.WritePendingErasureAsync(transaction, tasks, cancellationToken).ConfigureAwait(false);
                 }
 
-                return new MessagePurgeOutcome(deleted, inserted, windows, rangeFrom, rangeTo);
+                return new MessagePurgeOutcome(deleted, inserted, windows, rangeFrom, rangeTo)
+                {
+                    DeletedEvents = deletedEvents,
+                    PurgeGeneration = purgeGeneration,
+                };
             },
             cancellationToken);
     }
 
-    private static (string Where, Action<SqliteCommand> Bind) PurgeFilter(HistoryPurgeScope scope)
+    private static (string Where, Action<SqliteCommand> Bind) PurgeFilter(HistoryPurgeScope scope, string timeColumn)
     {
         var clauses = new List<string>();
         if (scope.ChannelId is not null)
@@ -306,7 +320,7 @@ public sealed partial class MessageStore
 
         if (scope.OlderThan is not null)
         {
-            clauses.Add("Timestamp < @olderThan");
+            clauses.Add($"{timeColumn} < @olderThan");
         }
 
         var where = clauses.Count == 0 ? "1 = 1" : string.Join(" AND ", clauses);

@@ -1,7 +1,9 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using Cortex.Contained.Agent.Host.Events;
+using Cortex.Contained.Agent.Host.History;
 using Microsoft.Data.Sqlite;
 
 namespace Cortex.Contained.Agent.Host.Storage;
@@ -68,8 +70,63 @@ public sealed partial class MessageStore : IEventLog
             CREATE INDEX IF NOT EXISTS ix_events_run        ON Events (RunId);
             CREATE INDEX IF NOT EXISTS ix_events_message    ON Events (MessageRowId);
             CREATE INDEX IF NOT EXISTS ix_events_operation  ON Events (OperationId);
+
+            INSERT OR IGNORE INTO Meta (Key, Value) VALUES ('PurgeGeneration', '0');
             """;
         cmd.ExecuteNonQuery();
+
+        if (!this.ColumnExists("HistoryJournal", "PurgeGeneration"))
+        {
+            using var alter = this.writer.CreateCommand();
+            alter.CommandText = "ALTER TABLE HistoryJournal ADD COLUMN PurgeGeneration INTEGER NULL;";
+            alter.ExecuteNonQuery();
+        }
+    }
+
+    /// <summary>Increments <c>Meta.PurgeGeneration</c> inside the purge transaction and returns the new value.</summary>
+    private async Task<long> BumpPurgeGenerationAsync(SqliteTransaction transaction, CancellationToken cancellationToken)
+    {
+        var current = long.Parse(await this.GetMetaAsync(transaction, "PurgeGeneration", cancellationToken).ConfigureAwait(false) ?? "0", CultureInfo.InvariantCulture);
+        var next = current + 1;
+        await this.SetMetaAsync(transaction, "PurgeGeneration", next.ToString(CultureInfo.InvariantCulture), cancellationToken).ConfigureAwait(false);
+        return next;
+    }
+
+    /// <summary>
+    /// Deletes the events in <paramref name="scope"/> (tombstones excepted) and every event whose
+    /// message row no longer exists. Returns the count and the tool-output spill files the deleted
+    /// tool results referenced, so the erasure workflow can delete exactly those files.
+    /// </summary>
+    private async Task<(int Deleted, IReadOnlyList<string> SpillFiles)> DeleteEventsAsync(
+        SqliteTransaction transaction,
+        HistoryPurgeScope scope,
+        CancellationToken cancellationToken)
+    {
+        var (where, bind) = PurgeFilter(scope, "Ts");
+        var spillFiles = new List<string>();
+        await using (var select = this.WriterCommand(transaction, $"SELECT json_extract(Payload, '$.spill') FROM Events WHERE Type = 'tool_result' AND json_extract(Payload, '$.spill') IS NOT NULL AND {where};"))
+        {
+            bind(select);
+            await using var reader = await select.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                spillFiles.Add(reader.GetString(0));
+            }
+        }
+
+        int deleted;
+        await using (var delete = this.WriterCommand(transaction, $"DELETE FROM Events WHERE Type <> 'history_purged' AND {where};"))
+        {
+            bind(delete);
+            deleted = await delete.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await using (var orphans = this.WriterCommand(transaction, "DELETE FROM Events WHERE MessageRowId IS NOT NULL AND MessageRowId NOT IN (SELECT Id FROM Messages);"))
+        {
+            deleted += await orphans.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        return (deleted, spillFiles);
     }
 
     /// <summary>Appends one event inside <paramref name="transaction"/>; idempotent on <see cref="EventDraft.IdempotencyKey"/>.</summary>

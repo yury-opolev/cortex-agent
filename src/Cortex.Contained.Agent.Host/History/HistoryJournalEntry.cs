@@ -25,11 +25,19 @@ public sealed record HistoryJournalEntry(
     IReadOnlyList<long> MessageIds,
     DateTimeOffset? FromTs,
     DateTimeOffset? ToTs,
-    DateTimeOffset At);
+    DateTimeOffset At)
+{
+    /// <summary>The <c>Meta.PurgeGeneration</c> a purge entry committed; null for upserts.</summary>
+    public long? PurgeGeneration { get; init; }
+}
 
 /// <summary>Source identity and journal bounds stored in <c>messages.db</c> <c>Meta</c>.</summary>
 public sealed record HistorySourceMeta(
     string DbInstanceId,
     long RestoreGeneration,
     long JournalHead,
-    long JournalPrunedThrough);
+    long JournalPrunedThrough)
+{
+    /// <summary>Durable purge counter, incremented inside every purge transaction.</summary>
+    public long PurgeGeneration { get; init; }
+}

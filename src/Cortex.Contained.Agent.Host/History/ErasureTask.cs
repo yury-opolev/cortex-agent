@@ -9,7 +9,7 @@ public static class ErasureSteps
     /// <summary><c>wal_checkpoint(TRUNCATE)</c> on <c>messages.db</c>.</summary>
     public const string MessagesWal = "messages-wal";
 
-    /// <summary>Delete <c>/app/data/tool-output</c> spill files (all-channel purges only).</summary>
+    /// <summary>Delete <c>/app/data/tool-output</c> spill files (all of them for all-channel purges, the referenced ones otherwise).</summary>
     public const string ToolOutput = "tool-output";
 
     /// <summary>Delete overlapping <c>subagents.db</c> entries.</summary>
@@ -32,16 +32,7 @@ public static class ErasureSteps
     public static IReadOnlyList<string> ForPurge(HistoryPurgeScope scope)
     {
         ArgumentNullException.ThrowIfNull(scope);
-        var steps = new List<string> { Index, MessagesWal };
-        if (!scope.IsChannelScoped)
-        {
-            steps.Add(ToolOutput);
-        }
-
-        steps.Add(Subagents);
-        steps.Add(SmokeArtifacts);
-        steps.Add(Vacuum);
-        return steps;
+        return [Index, MessagesWal, ToolOutput, Subagents, SmokeArtifacts, Vacuum];
     }
 }
 
@@ -68,6 +59,9 @@ public sealed record ErasureTask
 
     /// <summary>Steps still to run.</summary>
     public required IReadOnlyList<string> Steps { get; init; }
+
+    /// <summary>Tool-output spill files referenced by the purged tool results (channel-scoped purges delete exactly these).</summary>
+    public IReadOnlyList<string> SpillFiles { get; init; } = [];
 }
 
 /// <summary>Outcome of <c>PRAGMA wal_checkpoint(TRUNCATE)</c>.</summary>

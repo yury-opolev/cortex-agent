@@ -52,7 +52,12 @@ public sealed partial class HistorySourceSnapshot : IAsyncDisposable
             values["DbInstanceId"],
             long.Parse(values["RestoreGeneration"], CultureInfo.InvariantCulture),
             long.Parse(values["JournalHead"], CultureInfo.InvariantCulture),
-            long.Parse(values["JournalPrunedThrough"], CultureInfo.InvariantCulture));
+            long.Parse(values["JournalPrunedThrough"], CultureInfo.InvariantCulture))
+        {
+            PurgeGeneration = values.TryGetValue("PurgeGeneration", out var purgeGeneration)
+                ? long.Parse(purgeGeneration, CultureInfo.InvariantCulture)
+                : 0,
+        };
     }
 
     /// <summary>Distinct channels that have at least one indexed-category row.</summary>
@@ -172,7 +177,7 @@ public sealed partial class HistorySourceSnapshot : IAsyncDisposable
     public async Task<IReadOnlyList<HistoryJournalEntry>> ReadJournalAsync(long afterSeq, int max, CancellationToken cancellationToken)
     {
         var entries = new List<HistoryJournalEntry>();
-        await using var cmd = this.Command("SELECT Seq, Op, ChannelId, MessageIds, FromTs, ToTs, At FROM HistoryJournal WHERE Seq > @after ORDER BY Seq LIMIT @max;");
+        await using var cmd = this.Command("SELECT Seq, Op, ChannelId, MessageIds, FromTs, ToTs, At, PurgeGeneration FROM HistoryJournal WHERE Seq > @after ORDER BY Seq LIMIT @max;");
         cmd.Parameters.AddWithValue("@after", afterSeq);
         cmd.Parameters.AddWithValue("@max", max);
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
@@ -185,7 +190,10 @@ public sealed partial class HistorySourceSnapshot : IAsyncDisposable
                 reader.IsDBNull(3) ? [] : JsonSerializer.Deserialize<List<long>>(reader.GetString(3)) ?? [],
                 reader.IsDBNull(4) ? null : SqliteDateTimeText.Parse(reader.GetString(4)),
                 reader.IsDBNull(5) ? null : SqliteDateTimeText.Parse(reader.GetString(5)),
-                SqliteDateTimeText.Parse(reader.GetString(6))));
+                SqliteDateTimeText.Parse(reader.GetString(6)))
+            {
+                PurgeGeneration = reader.IsDBNull(7) ? null : reader.GetInt64(7),
+            });
         }
 
         return entries;

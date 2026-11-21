@@ -67,9 +67,9 @@ internal static class WalCheckpointRetry
 }
 
 /// <summary>
-/// Deletes every <c>/app/data/tool-output</c> spill file. Spill files can hold copies of any
-/// earlier history, so all-channel purges remove all of them; per-channel purges skip this step
-/// (documented gap until increment 2).
+/// Deletes <c>/app/data/tool-output</c> spill files. Spill files can hold copies of any earlier
+/// history, so all-channel purges remove all of them; channel-scoped purges remove the files the
+/// purged <c>tool_result</c> events referenced (<see cref="ErasureTask.SpillFiles"/>).
 /// </summary>
 public sealed class ToolOutputErasureStep(string directory) : IErasureStep
 {
@@ -79,13 +79,17 @@ public sealed class ToolOutputErasureStep(string directory) : IErasureStep
     /// <inheritdoc />
     public Task<bool> RunAsync(ErasureTask task, CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(task);
         if (!Directory.Exists(directory))
         {
             return Task.FromResult(true);
         }
 
+        var files = task.ChannelId is null
+            ? Directory.EnumerateFiles(directory, "*.txt").ToList()
+            : task.SpillFiles.Select(name => Path.Combine(directory, Path.GetFileName(name))).ToList();
         var allGone = true;
-        foreach (var file in Directory.EnumerateFiles(directory, "*.txt"))
+        foreach (var file in files)
         {
             try
             {
