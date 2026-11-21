@@ -2,6 +2,7 @@ using Cortex.Contained.Agent.Host.History;
 using Cortex.Contained.Agent.Host.Storage;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Cortex.Contained.Agent.Host.Tests.History;
 
@@ -13,8 +14,9 @@ internal sealed class HistoryHarness : IAsyncDisposable
 {
     public static readonly DateTimeOffset T0 = new(2026, 5, 4, 8, 0, 0, TimeSpan.Zero);
 
-    public HistoryHarness(HistoryOptions? options = null)
+    public HistoryHarness(HistoryOptions? options = null, IHistoryEmbedder? embedder = null)
     {
+        this.Embedder = embedder;
         this.Root = Path.Combine(Path.GetTempPath(), $"history-harness-{Guid.NewGuid():N}");
         this.Options = options ?? new HistoryOptions { Enabled = true, TimeZone = "UTC" };
         this.Monitor = Substitute.For<IOptionsMonitor<HistoryOptions>>();
@@ -40,11 +42,17 @@ internal sealed class HistoryHarness : IAsyncDisposable
 
     public HistoryProjector Projector { get; private set; }
 
+    /// <summary>The embedder handed to every projector, or null (dense retrieval without vectors).</summary>
+    public IHistoryEmbedder? Embedder { get; }
+
+    /// <summary>Clock of the projector (embedding debounce).</summary>
+    public FakeTimeProvider Time { get; } = new(T0);
+
     /// <summary>Simulates a process restart: disposes the previous projector, then creates a new one.</summary>
     public HistoryProjector NewProjector()
     {
         this.Projector?.Dispose();
-        var projector = new HistoryProjector(this.Store, this.Store, this.Generations, this.Gate, this.Monitor, this.Status, NullLogger<HistoryProjector>.Instance);
+        var projector = new HistoryProjector(this.Store, this.Store, this.Generations, this.Gate, this.Monitor, this.Status, NullLogger<HistoryProjector>.Instance, this.Embedder, this.Time);
         this.Projector = projector;
         return projector;
     }

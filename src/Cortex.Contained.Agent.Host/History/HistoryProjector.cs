@@ -39,6 +39,8 @@ public sealed partial class HistoryProjector : IDisposable
     private readonly IOptionsMonitor<HistoryOptions> options;
     private readonly HistoryStatus status;
     private readonly ILogger<HistoryProjector> logger;
+    private readonly IHistoryEmbedder? embedder;
+    private readonly TimeProvider time;
     private readonly SemaphoreSlim applyLock = new(1, 1);
     private readonly ConcurrentDictionary<string, byte> recomputeRequests = new(StringComparer.Ordinal);
 
@@ -54,8 +56,12 @@ public sealed partial class HistoryProjector : IDisposable
         HistoryAccessGate gate,
         IOptionsMonitor<HistoryOptions> options,
         HistoryStatus status,
-        ILogger<HistoryProjector> logger)
+        ILogger<HistoryProjector> logger,
+        IHistoryEmbedder? embedder = null,
+        TimeProvider? time = null)
     {
+        this.embedder = embedder;
+        this.time = time ?? TimeProvider.System;
         this.source = source;
         this.erasure = erasure;
         this.generations = generations;
@@ -89,7 +95,7 @@ public sealed partial class HistoryProjector : IDisposable
         await this.applyLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            var fingerprint = HistoryConfigFingerprint.Compute(this.options.CurrentValue);
+            var fingerprint = this.Fingerprint();
             HistorySourceMeta meta;
             await using (var snapshot = await this.source.OpenSnapshotAsync(cancellationToken).ConfigureAwait(false))
             {
@@ -219,7 +225,7 @@ public sealed partial class HistoryProjector : IDisposable
                     segments[channelId] = HistorySegmenter.Segment(channelId, rows, settings);
                 }
 
-                if (!await this.WriteBuildBatchAsync(state, new IndexBatch(segments) { BuildProgress = batch }, cancellationToken).ConfigureAwait(false))
+                if (!await this.WriteBuildBatchAsync(state, new IndexBatch(segments) { BuildProgress = batch, Now = this.time.GetUtcNow() }, cancellationToken).ConfigureAwait(false))
                 {
                     return;
                 }
@@ -417,6 +423,8 @@ public sealed partial class HistoryProjector : IDisposable
         this.applyLock.Dispose();
     }
 
+    private string Fingerprint() => HistoryConfigFingerprint.Compute(this.options.CurrentValue, this.embedder?.Fingerprint);
+
     private static bool IsResumable(HistorySourceMeta meta, ProjectorState state, string fingerprint) =>
         string.Equals(state.SourceInstanceId, meta.DbInstanceId, StringComparison.Ordinal)
         && state.SourceRestoreGeneration == meta.RestoreGeneration
@@ -455,7 +463,7 @@ public sealed partial class HistoryProjector : IDisposable
         var gen = this.generations.Next();
         var database = this.generations.Create(
             gen,
-            new ProjectorState(gen, meta.JournalHead, meta.DbInstanceId, meta.RestoreGeneration, HistoryConfigFingerprint.Compute(this.options.CurrentValue), false, "[]")
+            new ProjectorState(gen, meta.JournalHead, meta.DbInstanceId, meta.RestoreGeneration, this.Fingerprint(), false, "[]")
             {
                 AppliedPurgeGeneration = meta.PurgeGeneration,
             });
@@ -532,7 +540,7 @@ public sealed partial class HistoryProjector : IDisposable
     private async Task<bool> ApplyJournalOnceAsync(HistoryIndexDatabase database, bool includeRecompute, CancellationToken cancellationToken)
     {
         var settings = SegmenterSettings.From(this.options.CurrentValue);
-        var fingerprint = HistoryConfigFingerprint.Compute(this.options.CurrentValue);
+        var fingerprint = this.Fingerprint();
         var state = database.ReadState();
 
         await using var snapshot = await this.source.OpenSnapshotAsync(cancellationToken).ConfigureAwait(false);
@@ -593,7 +601,7 @@ public sealed partial class HistoryProjector : IDisposable
                 throw new PublicationFencedException();
             }
 
-            database.Apply(new IndexBatch(segments) { CheckpointSeq = newCheckpoint, AppliedPurgeGeneration = appliedPurge });
+            database.Apply(new IndexBatch(segments) { CheckpointSeq = newCheckpoint, AppliedPurgeGeneration = appliedPurge, Now = this.time.GetUtcNow() });
             checkpoint = newCheckpoint ?? checkpoint;
             if (entries.Count < JournalBatch)
             {
@@ -641,8 +649,16 @@ public sealed partial class HistoryProjector : IDisposable
             BuildComplete = state?.BuildComplete ?? false,
             BuildInProgress = this.build is not null,
             Checkpoint = state?.CheckpointJournalSeq ?? 0,
+            DenseState = this.DenseState(),
+            Chunks = database?.ReadChunkCounts(),
         });
     }
+
+    private string DenseState() =>
+        !this.options.CurrentValue.Dense.Enabled ? "off"
+        : this.embedder is null ? "unavailable: no embedder configured"
+        : this.embedder.UnavailableReason is { } reason ? "unavailable: " + reason
+        : "on";
 
     private sealed record BuildState(HistoryIndexDatabase Database, long Generation, long Watermark);
 

@@ -37,7 +37,17 @@ public sealed record HistoryStatusSnapshot(
     bool BuildInProgress,
     bool Halted,
     string? LastError,
-    long Checkpoint);
+    long Checkpoint)
+{
+    /// <summary><c>off</c>, <c>on</c>, or <c>unavailable: reason</c> (dense retrieval, §4.2).</summary>
+    public string DenseState { get; init; } = "off";
+
+    /// <summary>Embedding progress of the current generation, or null.</summary>
+    public ChunkCounts? Chunks { get; init; }
+
+    /// <summary>Last embedding failure (the embedder never halts the projector), or null.</summary>
+    public string? LastEmbeddingError { get; init; }
+}
 
 /// <summary>Points at which a test can interrupt the cut-over (§14.1 crash at each step).</summary>
 public enum CutOverStep
