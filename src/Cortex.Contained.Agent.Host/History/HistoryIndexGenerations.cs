@@ -15,12 +15,14 @@ public sealed class HistoryIndexGenerations
     public const string PasswordPurpose = "history-index";
 
     private readonly Storage.StorageKeyRing? keys;
+    private readonly ILogger? logger;
 
     /// <summary>Creates the manager; the directory is created if missing. With <paramref name="keys"/> every generation is encrypted (D4).</summary>
-    public HistoryIndexGenerations(string directory, Storage.StorageKeyRing? keys = null)
+    public HistoryIndexGenerations(string directory, Storage.StorageKeyRing? keys = null, ILogger? logger = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(directory);
         this.keys = keys;
+        this.logger = logger;
         this.Directory = directory;
         System.IO.Directory.CreateDirectory(directory);
     }
@@ -30,11 +32,11 @@ public sealed class HistoryIndexGenerations
 
     /// <summary>Creates generation <paramref name="generation"/> (encrypted when keys are configured).</summary>
     public HistoryIndexDatabase Create(long generation, ProjectorState state) =>
-        HistoryIndexDatabase.Create(this.PathFor(generation), state, this.keys?.PasswordFor(PasswordPurpose));
+        HistoryIndexDatabase.Create(this.PathFor(generation), state, this.keys?.PasswordFor(PasswordPurpose), this.logger);
 
     /// <summary>Opens generation <paramref name="generation"/> (encrypted when keys are configured).</summary>
     public HistoryIndexDatabase Open(long generation) =>
-        HistoryIndexDatabase.Open(this.PathFor(generation), this.keys?.PasswordFor(PasswordPurpose));
+        HistoryIndexDatabase.Open(this.PathFor(generation), this.keys?.PasswordFor(PasswordPurpose), this.logger);
 
     /// <summary>Path of generation <paramref name="generation"/>.</summary>
     public string PathFor(long generation) =>

@@ -147,7 +147,8 @@ builder.Services.AddSingleton<HistoryStatus>();
 builder.Services.AddSingleton<HistoryToolsSwitch>();
 builder.Services.AddSingleton(sp => new HistoryIndexGenerations(
     Path.Combine(stateRoot, "history"),
-    storageOptions.EncryptAtRest ? sp.GetRequiredService<StorageKeyRing>() : null));
+    storageOptions.EncryptAtRest ? sp.GetRequiredService<StorageKeyRing>() : null,
+    sp.GetRequiredService<ILogger<HistoryIndexGenerations>>()));
 builder.Services.AddSingleton<IHistoryEmbedder, OllamaHistoryEmbedder>();
 builder.Services.AddSingleton<HistoryProjector>();
 builder.Services.AddSingleton<HistoryRecallService>();

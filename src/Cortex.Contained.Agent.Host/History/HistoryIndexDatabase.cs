@@ -14,14 +14,19 @@ public sealed partial class HistoryIndexDatabase : IDisposable
 {
     private readonly SqliteConnection writer;
     private readonly string? password;
+    private readonly ILogger? logger;
     private bool disposed;
 
-    private HistoryIndexDatabase(string path, SqliteConnection writer, string? password)
+    private HistoryIndexDatabase(string path, SqliteConnection writer, string? password, ILogger? logger)
     {
         this.Path = path;
         this.writer = writer;
         this.password = password;
+        this.logger = logger;
     }
+
+    /// <summary>A reader held longer than this logs a warning when it is disposed (see <see cref="OpenReader"/>).</summary>
+    internal TimeSpan ReaderWarnAfter { get; set; } = TimeSpan.FromSeconds(30);
 
     /// <summary>Full path of the generation file.</summary>
     public string Path { get; }
@@ -31,7 +36,7 @@ public sealed partial class HistoryIndexDatabase : IDisposable
     /// The file is built under a temporary name (schema and state in one transaction) and renamed into place,
     /// so a crash never leaves a state-less file under the generation name.
     /// </summary>
-    public static HistoryIndexDatabase Create(string path, ProjectorState state, string? password = null)
+    public static HistoryIndexDatabase Create(string path, ProjectorState state, string? password = null, ILogger? logger = null)
     {
         ArgumentNullException.ThrowIfNull(state);
         var temp = path + CreatingSuffix;
@@ -55,7 +60,7 @@ public sealed partial class HistoryIndexDatabase : IDisposable
             throw;
         }
 
-        return Open(path, password);
+        return Open(path, password, logger);
     }
 
     /// <summary>Suffix of a generation file that is still being created (never a servable generation).</summary>
@@ -165,8 +170,8 @@ public sealed partial class HistoryIndexDatabase : IDisposable
     }
 
     /// <summary>Opens an existing generation file (throws <see cref="SqliteException"/> code 26 when the key does not fit).</summary>
-    public static HistoryIndexDatabase Open(string path, string? password = null) =>
-        new(path, OpenWriter(path, SqliteOpenMode.ReadWrite, password), password);
+    public static HistoryIndexDatabase Open(string path, string? password = null, ILogger? logger = null) =>
+        new(path, OpenWriter(path, SqliteOpenMode.ReadWrite, password), password, logger);
 
     /// <summary>Reads <c>projector_state</c>.</summary>
     public ProjectorState ReadState() => ReadState(this.writer);
@@ -261,7 +266,15 @@ public sealed partial class HistoryIndexDatabase : IDisposable
     /// <summary>Runs <c>VACUUM</c>.</summary>
     public void Vacuum() => this.Execute(null, "VACUUM;");
 
-    /// <summary>Opens a read-only, unpooled connection for queries (no handle outlives disposal).</summary>
+    /// <summary>
+    /// Opens a read-only, unpooled connection for queries (no handle outlives disposal).
+    /// <para>
+    /// Invariant: the reader holds one WAL read transaction until it is disposed, which pins the WAL
+    /// against checkpointing (and so against the erasure step's <c>wal_checkpoint(TRUNCATE)</c>). Use it
+    /// for a single request under the <see cref="HistoryAccessGate"/> read lease and never cache or store it.
+    /// A reader held longer than <see cref="ReaderWarnAfter"/> logs a warning when disposed.
+    /// </para>
+    /// </summary>
     public HistoryIndexReader OpenReader()
     {
         ObjectDisposedException.ThrowIf(this.disposed, this);
@@ -287,8 +300,19 @@ public sealed partial class HistoryIndexDatabase : IDisposable
             throw;
         }
 
-        return new HistoryIndexReader(connection);
+        return new HistoryIndexReader(connection, this.ReaderWarnAfter, held => this.LogLongLivedReader(held.TotalSeconds));
     }
+
+    private void LogLongLivedReader(double seconds)
+    {
+        if (this.logger is { } log)
+        {
+            LogLongLivedReader(log, seconds, System.IO.Path.GetFileName(this.Path));
+        }
+    }
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "A history index reader on {File} was held for {Seconds:F1}s; it pins the WAL snapshot and blocks checkpoints until disposed")]
+    private static partial void LogLongLivedReader(ILogger logger, double seconds, string file);
 
     /// <inheritdoc />
     public void Dispose()
@@ -419,11 +443,17 @@ public sealed partial class HistoryIndexReader : IDisposable
         "s.SegId, s.ChannelId, s.StartTs, s.EndTs, s.LocalDate, s.FirstMsgId, s.LastMsgId, s.MsgIds, s.HasInternal, s.HasRecallEcho, s.Fingerprint";
 
     private readonly SqliteConnection connection;
+    private readonly TimeSpan warnAfter;
+    private readonly Action<TimeSpan>? onLongLived;
+    private readonly long openedAt = System.Diagnostics.Stopwatch.GetTimestamp();
     private ChunkCounts? chunkCounts;
+    private bool disposed;
 
-    internal HistoryIndexReader(SqliteConnection connection)
+    internal HistoryIndexReader(SqliteConnection connection, TimeSpan warnAfter = default, Action<TimeSpan>? onLongLived = null)
     {
         this.connection = connection;
+        this.warnAfter = warnAfter;
+        this.onLongLived = onLongLived;
     }
 
     /// <summary>Reads <c>projector_state</c>.</summary>
@@ -584,7 +614,21 @@ public sealed partial class HistoryIndexReader : IDisposable
     }
 
     /// <inheritdoc />
-    public void Dispose() => this.connection.Dispose();
+    public void Dispose()
+    {
+        if (this.disposed)
+        {
+            return;
+        }
+
+        this.disposed = true;
+        this.connection.Dispose();
+        var held = System.Diagnostics.Stopwatch.GetElapsedTime(this.openedAt);
+        if (this.onLongLived is not null && held > this.warnAfter)
+        {
+            this.onLongLived(held);
+        }
+    }
 
     private static void Bind(SqliteCommand cmd, string match, SegmentFilter filter)
     {

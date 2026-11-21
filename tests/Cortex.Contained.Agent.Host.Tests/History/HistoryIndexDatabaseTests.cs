@@ -1,4 +1,5 @@
 using Cortex.Contained.Agent.Host.History;
+using Microsoft.Extensions.Logging;
 
 namespace Cortex.Contained.Agent.Host.Tests.History;
 
@@ -35,6 +36,40 @@ public sealed class HistoryIndexDatabaseTests : IDisposable
         { CheckpointSeq = 7 });
     }
 
+    [Fact]
+    public void OpenReader_HeldLongerThanTheLimit_LogsAWarningOnDispose()
+    {
+        var logger = new RecordingLogger();
+        using var logged = new HistoryIndexGenerations(Path.Combine(this.dir, "logged"), logger: logger).Create(1, new ProjectorState(1, 0, "instance", 0, "fp", false, "[]"));
+        logged.ReaderWarnAfter = TimeSpan.Zero;
+
+        logged.OpenReader().Dispose();
+
+        Assert.Equal(LogLevel.Warning, Assert.Single(logger.Levels));
+    }
+
+    [Fact]
+    public void OpenReader_ShortLivedReader_LogsNothing()
+    {
+        var logger = new RecordingLogger();
+        using var quiet = new HistoryIndexGenerations(Path.Combine(this.dir, "quiet"), logger: logger).Create(1, new ProjectorState(1, 0, "instance", 0, "fp", false, "[]"));
+
+        quiet.OpenReader().Dispose();
+
+        Assert.Empty(logger.Levels);
+    }
+
+    private sealed class RecordingLogger : ILogger
+    {
+        public List<LogLevel> Levels { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
+            this.Levels.Add(logLevel);
+    }
     [Fact]
     public void Create_FailsMidway_LeavesNoGenerationFileBehind()
     {
