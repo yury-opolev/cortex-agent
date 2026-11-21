@@ -6,8 +6,10 @@ namespace Cortex.Contained.Agent.Host.Memory;
 /// <summary>
 /// <see cref="IMemoryService"/> decorator that hides quarantined memories (D10) from similarity
 /// search. It over-fetches by the number of quarantined memories so callers still get up to
-/// <c>limit</c> visible results. Used by <c>memory_search</c>, subagent seeding, consolidation and
-/// compaction; the memory UI keeps using the undecorated service so the owner can review.
+/// <c>limit</c> visible results. Used by subagent seeding, consolidation and compaction (their
+/// candidate sets are unchanged); <c>memory_search</c> uses <see cref="QuarantineAwareHybridSearch"/>,
+/// which excludes the ids before scoring, and the memory UI keeps using the undecorated service so the
+/// owner can review.
 /// </summary>
 public sealed class QuarantineAwareMemoryService : IMemoryService
 {

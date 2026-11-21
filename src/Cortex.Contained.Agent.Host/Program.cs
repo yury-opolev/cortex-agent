@@ -525,11 +525,15 @@ builder.Services.AddSingleton<IAgentTool>(sp =>
         sp.GetRequiredService<IEmbeddingService>()));
 builder.Services.AddSingleton<IAgentTool>(sp =>
     new MemoryDeleteTool(sp.GetRequiredService<IMemoryService>()));
+builder.Services.AddSingleton(sp =>
+    new Cortex.Contained.Agent.Host.Memory.QuarantineAwareHybridSearch(
+        sp.GetRequiredService<IHybridMemorySearch>(),
+        sp.GetRequiredService<Cortex.Contained.Agent.Host.Memory.MemoryQuarantine>()));
 builder.Services.AddSingleton<IAgentTool>(sp =>
     new MemorySearchTool(
-        sp.GetRequiredService<Cortex.Contained.Agent.Host.Memory.QuarantineAwareMemoryService>(),
+        sp.GetRequiredService<Cortex.Contained.Agent.Host.Memory.QuarantineAwareHybridSearch>(),
         sp.GetRequiredService<IEmbeddingService>(),
-        sp.GetRequiredService<IOptions<MemoryMcp.Core.Configuration.MemoryMcpOptions>>()));
+        sp.GetRequiredService<IOptionsMonitor<MemoryMcp.Core.Configuration.MemoryMcpOptions>>()));
 
 // --- Memory Management (wraps IMemoryService + raw SQLite listing for web UI) ---
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Memory.MemoryManagementService>();
@@ -870,6 +874,10 @@ if (app.Services.GetRequiredService<IOptions<MemoryMcpOptions>>().Value.Encrypti
         "MemoryMcp:Encryption:Enabled is not supported by the Agent Host: its SQLite engine (SQLite3 Multiple Ciphers) cannot open SQLCipher databases. Encryption at rest arrives in increment 2.");
 }
 
+        if (app.Services.GetRequiredService<IOptions<MemoryMcpOptions>>().Value.Search.Validate() is { Count: > 0 } memorySearchErrors)
+        {
+            throw new InvalidOperationException("Invalid memory search configuration: " + string.Join(" ", memorySearchErrors));
+        }
 // Queued/recovered subagent tasks are now dispatched by SubagentExecutionCoordinator (a hosted
 // service) once Bridge + credentials + MCP-catalog readiness are all signaled — no startup call here.
 
