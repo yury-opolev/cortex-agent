@@ -7,11 +7,19 @@ namespace Cortex.Contained.Agent.Host.History;
 /// apply the journal about once a second. Three consecutive failures halt the projector with a
 /// health warning; it never skips a batch. Recall keeps working through verification and the
 /// unindexed tail while halted.
+/// <para>
+/// With dense retrieval on, each tick then runs embedding rounds. An embedder failure never halts the
+/// projector: it is reported as <see cref="HistoryStatusSnapshot.LastEmbeddingError"/> and embedding
+/// pauses for <see cref="EmbeddingBackoffTicks"/> ticks while keyword search keeps working.
+/// </para>
 /// </summary>
 public sealed partial class HistoryProjectorService : BackgroundService
 {
     private const int MaxConsecutiveFailures = 3;
+   private const int MaxEmbeddingRoundsPerTick = 8;
 
+   /// <summary>Ticks skipped after an embedder failure.</summary>
+   internal const int EmbeddingBackoffTicks = 30;
     private readonly HistoryProjector projector;
     private readonly HistoryStatus status;
     private readonly IOptionsMonitor<HistoryOptions> options;
@@ -90,6 +98,7 @@ public sealed partial class HistoryProjectorService : BackgroundService
         }
 
         var failures = 0;
+        var embeddingBackoff = 0;
         while (!stoppingToken.IsCancellationRequested)
         {
             try
@@ -127,6 +136,11 @@ public sealed partial class HistoryProjectorService : BackgroundService
                 }
             }
 
+            if (failures == 0 && !this.projector.NeedsRebuild)
+            {
+                embeddingBackoff = await this.EmbedAsync(embeddingBackoff, stoppingToken).ConfigureAwait(false);
+            }
+
             try
             {
                 await Task.Delay(this.pollInterval, stoppingToken).ConfigureAwait(false);
@@ -138,6 +152,39 @@ public sealed partial class HistoryProjectorService : BackgroundService
         }
     }
 
+    private async Task<int> EmbedAsync(int backoff, CancellationToken stoppingToken)
+    {
+        if (backoff > 0)
+        {
+            return backoff - 1;
+        }
+
+        try
+        {
+            for (var round = 0; round < MaxEmbeddingRoundsPerTick; round++)
+            {
+                var result = await this.projector.EmbedPendingAsync(stoppingToken).ConfigureAwait(false);
+                this.status.Update(s => s with { LastEmbeddingError = null });
+                if (result.Published == 0)
+                {
+                    break;
+                }
+            }
+
+            return 0;
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            this.status.Update(s => s with { LastEmbeddingError = ex.Message });
+            this.LogEmbeddingFailed(ex.Message);
+            return EmbeddingBackoffTicks;
+        }
+    }
+
     [LoggerMessage(Level = LogLevel.Information, Message = "History locator disabled (History:Enabled=false); projector not started")]
     private partial void LogDisabled();
 
@@ -146,4 +193,7 @@ public sealed partial class HistoryProjectorService : BackgroundService
 
     [LoggerMessage(Level = LogLevel.Error, Message = "History projector halted: {Error}")]
     private partial void LogHalted(string error);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "History embedding failed; keyword search continues and embedding retries later: {Error}")]
+    private partial void LogEmbeddingFailed(string error);
 }
