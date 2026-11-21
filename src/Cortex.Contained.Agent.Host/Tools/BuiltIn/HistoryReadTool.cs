@@ -34,14 +34,17 @@ internal sealed class HistoryReadTool : IAgentTool
     private readonly HistoryToolsSwitch? toolsSwitch;
     private readonly IOptionsMonitor<HistoryOptions>? historyOptions;
     private readonly Func<string> boundaryFactory;
+    private readonly HistoryAccessGate? gate;
 
     public HistoryReadTool(
         MessageStore messageStore,
         HistoryRecallService? recall = null,
         HistoryToolsSwitch? toolsSwitch = null,
         IOptionsMonitor<HistoryOptions>? historyOptions = null,
-        Func<string>? boundaryFactory = null)
+        Func<string>? boundaryFactory = null,
+        HistoryAccessGate? gate = null)
     {
+        this.gate = gate;
         this.messageStore = messageStore;
         this.recall = recall;
         this.toolsSwitch = toolsSwitch;
@@ -191,6 +194,10 @@ internal sealed class HistoryReadTool : IAgentTool
                 return AgentToolResult.Ok(string.Empty);
             }
 
+            // Same read barrier as recall mode (§10): a purge neither interleaves with the read nor completes before the text is formatted.
+            await using var lease = this.gate is null
+                ? null
+                : await this.gate.AcquireReadAsync(cancellationToken).ConfigureAwait(false);
             var records = await this.messageStore.GetMessagesAsync(
                 channelId!,
                 limit,
@@ -282,7 +289,12 @@ internal sealed class HistoryReadTool : IAgentTool
             return AgentToolResult.Fail($"Invalid JSON arguments: {ex.Message}");
         }
 
-        var result = await this.recall!.ReadAsync(request, cancellationToken).ConfigureAwait(false);
+        // Rendering happens under the recall read lease, so a purge cannot complete before the text is assembled.
+        return await this.recall!.ReadAsync(request, this.RenderRecall, cancellationToken).ConfigureAwait(false);
+    }
+
+    private AgentToolResult RenderRecall(HistoryReadResult result)
+    {
         if (result.Error is not null)
         {
             return AgentToolResult.Fail(result.Error);

@@ -48,13 +48,27 @@ public sealed partial class HistoryRecallService
     internal Func<Task>? AfterSnapshotHook { get; set; }
 
     /// <summary>Runs one <c>history_search</c> page.</summary>
-    public async Task<HistorySearchResult> SearchAsync(HistorySearchRequest request, CancellationToken cancellationToken)
+    public Task<HistorySearchResult> SearchAsync(HistorySearchRequest request, CancellationToken cancellationToken) =>
+        this.SearchAsync(request, static result => result, cancellationToken);
+
+    /// <summary>
+    /// Runs one <c>history_search</c> page and hands it to <paramref name="project"/> (rendering) while the read lease
+    /// is still held, so a purge cannot complete between the read and the assembled response (§10).
+    /// </summary>
+    public async Task<T> SearchAsync<T>(HistorySearchRequest request, Func<HistorySearchResult, T> project, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(project);
 
         // The query is embedded before the read lease, so a slow embedder never delays a purge.
         var (queryVector, denseNote) = await this.EmbedQueryAsync(request, cancellationToken).ConfigureAwait(false);
         await using var lease = await this.gate.AcquireReadAsync(cancellationToken).ConfigureAwait(false);
+        return project(await this.SearchLeasedAsync(request, queryVector, denseNote, cancellationToken).ConfigureAwait(false));
+    }
+
+    // Must run under a read lease.
+    private async Task<HistorySearchResult> SearchLeasedAsync(HistorySearchRequest request, float[]? queryVector, string? denseNote, CancellationToken cancellationToken)
+    {
         await using var snapshot = await this.source.OpenSnapshotAsync(cancellationToken).ConfigureAwait(false);
         if (this.AfterSnapshotHook is { } hook)
         {
@@ -147,10 +161,21 @@ public sealed partial class HistoryRecallService
     }
 
     /// <summary>Runs a recall-mode <c>history_read</c>.</summary>
-    public async Task<HistoryReadResult> ReadAsync(HistoryReadRequest request, CancellationToken cancellationToken)
+    public Task<HistoryReadResult> ReadAsync(HistoryReadRequest request, CancellationToken cancellationToken) =>
+        this.ReadAsync(request, static result => result, cancellationToken);
+
+    /// <summary>Runs a recall-mode <c>history_read</c> and hands it to <paramref name="project"/> (rendering) while the read lease is still held.</summary>
+    public async Task<T> ReadAsync<T>(HistoryReadRequest request, Func<HistoryReadResult, T> project, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(project);
         await using var lease = await this.gate.AcquireReadAsync(cancellationToken).ConfigureAwait(false);
+        return project(await this.ReadLeasedAsync(request, cancellationToken).ConfigureAwait(false));
+    }
+
+    // Must run under a read lease.
+    private async Task<HistoryReadResult> ReadLeasedAsync(HistoryReadRequest request, CancellationToken cancellationToken)
+    {
         await using var snapshot = await this.source.OpenSnapshotAsync(cancellationToken).ConfigureAwait(false);
 
         var meta = await snapshot.ReadMetaAsync(cancellationToken).ConfigureAwait(false);

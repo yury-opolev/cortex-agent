@@ -97,7 +97,12 @@ internal sealed class HistorySearchTool : IAgentTool
             return AgentToolResult.Fail($"Invalid JSON arguments: {ex.Message}");
         }
 
-        var result = await this.recall.SearchAsync(request, cancellationToken).ConfigureAwait(false);
+        // Rendering happens under the recall read lease, so a purge cannot complete before the text is assembled.
+        return await this.recall.SearchAsync(request, result => this.Render(request, result), cancellationToken).ConfigureAwait(false);
+    }
+
+    private AgentToolResult Render(HistorySearchRequest request, HistorySearchResult result)
+    {
         if (result.Error is not null)
         {
             return AgentToolResult.Fail(result.Error);

@@ -43,9 +43,20 @@ public sealed class EventRecallService
     }
 
     /// <summary>Reads event <paramref name="eventId"/> with its source row and links.</summary>
-    public async Task<EventRecallResult> GetAsync(string eventId, bool includeInternal, CancellationToken cancellationToken)
+    public Task<EventRecallResult> GetAsync(string eventId, bool includeInternal, CancellationToken cancellationToken) =>
+        this.GetAsync(eventId, includeInternal, static result => result, cancellationToken);
+
+    /// <summary>Reads event <paramref name="eventId"/> and hands the result to <paramref name="project"/> (rendering) while the read lease is still held.</summary>
+    public async Task<T> GetAsync<T>(string eventId, bool includeInternal, Func<EventRecallResult, T> project, CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(project);
         await using var lease = await this.gate.AcquireReadAsync(cancellationToken).ConfigureAwait(false);
+        return project(await this.GetLeasedAsync(eventId, includeInternal, cancellationToken).ConfigureAwait(false));
+    }
+
+    // Must run under a read lease.
+    private async Task<EventRecallResult> GetLeasedAsync(string eventId, bool includeInternal, CancellationToken cancellationToken)
+    {
         await using var snapshot = await this.source.OpenSnapshotAsync(cancellationToken).ConfigureAwait(false);
         var record = await snapshot.ReadEventAsync(eventId, cancellationToken).ConfigureAwait(false);
         if (record is null)

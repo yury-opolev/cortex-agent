@@ -80,7 +80,12 @@ internal sealed class EventGetTool : IAgentTool
             return AgentToolResult.Fail("id must be an evidence ID of the form ev_ followed by 32 hex characters.");
         }
 
-        var result = await this.recall.GetAsync(id, includeInternal, cancellationToken).ConfigureAwait(false);
+        // Rendering happens under the recall read lease, so a purge cannot complete before the text is assembled.
+        return await this.recall.GetAsync(id, includeInternal, this.Render, cancellationToken).ConfigureAwait(false);
+    }
+
+    private AgentToolResult Render(EventRecallResult result)
+    {
         if (result.Error is not null)
         {
             return AgentToolResult.Fail(result.Error);

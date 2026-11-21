@@ -1,4 +1,4 @@
-﻿using System.Globalization;
+using System.Globalization;
 using Cortex.Contained.Agent.Host.Agent;
 using Cortex.Contained.Agent.Host.Agent.Autonomy;
 using Cortex.Contained.Agent.Host.History;
@@ -272,7 +272,8 @@ builder.Services.AddSingleton<IAgentTool>(sp =>
         sp.GetRequiredService<MessageStore>(),
         sp.GetRequiredService<HistoryRecallService>(),
         sp.GetRequiredService<HistoryToolsSwitch>(),
-        sp.GetRequiredService<IOptionsMonitor<HistoryOptions>>()));
+        sp.GetRequiredService<IOptionsMonitor<HistoryOptions>>(),
+        gate: sp.GetRequiredService<HistoryAccessGate>()));
 builder.Services.AddSingleton<IAgentTool>(sp =>
     new HistorySearchTool(
         sp.GetRequiredService<HistoryRecallService>(),
