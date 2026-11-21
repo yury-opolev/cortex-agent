@@ -152,6 +152,7 @@ builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Events.KnownSecrets>()
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Events.IEventLog>(sp => sp.GetRequiredService<MessageStore>());
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Events.ToolEventPayloads>();
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Events.IToolEventRecorder, Cortex.Contained.Agent.Host.Events.ToolEventRecorder>();
+builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Events.DeliveryRecorder>();
 
 // --- Operational metrics (thread-safe singleton; surfaced via health/ping) ---
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Agent.AgentMetrics>();
@@ -430,7 +431,8 @@ builder.Services.AddSingleton<IProactiveMessageDispatcher>(sp =>
     new ProactiveMessageDispatcher(
         sp.GetRequiredService<BridgeClientAccessor>(),
         sp.GetRequiredService<MessageStore>(),
-        sp.GetRequiredService<ILogger<ProactiveMessageDispatcher>>()));
+        sp.GetRequiredService<ILogger<ProactiveMessageDispatcher>>(),
+        sp.GetRequiredService<Cortex.Contained.Agent.Host.Events.DeliveryRecorder>()));
 
 builder.Services.AddSingleton<IAgentTool>(sp =>
     new SendMessageTool(

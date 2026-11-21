@@ -67,6 +67,12 @@ public sealed record ProactiveMessageRecord
 
     /// <summary>The message text that was sent.</summary>
     public required string Text { get; init; }
+
+    /// <summary>The send operation (<c>op_…</c>) whose events back the delivery report, when recorded.</summary>
+    public string? OperationId { get; init; }
+
+    /// <summary>When the send was attempted.</summary>
+    public DateTimeOffset? DeliveredAt { get; init; }
 }
 
 /// <summary>
