@@ -76,6 +76,7 @@ public sealed partial class MessageStore
     private async Task<T> WriteAsync<T>(Func<SqliteTransaction, Task<T>> work, CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(this.disposed, this);
+        await this.EnsureOpenAsync(cancellationToken).ConfigureAwait(false);
         await this.writeSerializer.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -397,6 +398,7 @@ public sealed partial class MessageStore
     public async Task<WalCheckpointResult> CheckpointWalAsync(CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(this.disposed, this);
+        await this.EnsureOpenAsync(cancellationToken).ConfigureAwait(false);
         await this.writeSerializer.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -416,6 +418,7 @@ public sealed partial class MessageStore
     public async Task VacuumAsync(DateTimeOffset now, CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(this.disposed, this);
+        await this.EnsureOpenAsync(cancellationToken).ConfigureAwait(false);
         await this.writeSerializer.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {

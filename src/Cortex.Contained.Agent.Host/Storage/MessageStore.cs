@@ -34,9 +34,13 @@ public enum MessageVisibility
 /// </summary>
 public sealed partial class MessageStore : IMessageStore, IHistorySource, IHistoryErasureStore, IAsyncDisposable
 {
-    private readonly SqliteConnection writer;
-    private readonly string readerConnectionString;
+    private readonly string databasePath;
+    private readonly string dataSource;
+    private readonly bool inMemory;
+    private readonly MessageStoreEncryption? encryption;
     private readonly ILogger<MessageStore> logger;
+    private SqliteConnection writer = null!;
+    private string readerConnectionString = string.Empty;
     private bool disposed;
 
     // The writer connection is not safe for concurrent use: barge-in truncation
@@ -44,49 +48,88 @@ public sealed partial class MessageStore : IMessageStore, IHistorySource, IHisto
     // UpdateToolCallsAsync). This semaphore serializes every write transaction.
     private readonly SemaphoreSlim writeSerializer = new(1, 1);
 
+    /// <summary>A plaintext store, opened immediately (tests, encryption at rest disabled).</summary>
     public MessageStore(string databasePath, ILogger<MessageStore> logger)
+        : this(databasePath, logger, encryption: null)
+    {
+    }
+
+    /// <summary>
+    /// A store that, with <paramref name="encryption"/>, opens lazily once the Bridge has provided
+    /// the storage key (see <c>MessageStore.Encryption.cs</c>); without it, opens immediately.
+    /// </summary>
+    public MessageStore(string databasePath, ILogger<MessageStore> logger, MessageStoreEncryption? encryption)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(databasePath);
         this.logger = logger;
+        this.databasePath = databasePath;
+        this.encryption = encryption;
 
         // ":memory:" (tests) becomes a uniquely named shared-cache memory database so the
         // separate reader connections see the writer's data.
-        var inMemory = string.Equals(databasePath, ":memory:", StringComparison.Ordinal);
-        var dataSource = inMemory ? "messages-" + Guid.NewGuid().ToString("N") : databasePath;
+        this.inMemory = string.Equals(databasePath, ":memory:", StringComparison.Ordinal);
+        if (this.inMemory && encryption is not null)
+        {
+            throw new ArgumentException("An in-memory message store cannot be encrypted.", nameof(encryption));
+        }
+
+        this.dataSource = this.inMemory ? "messages-" + Guid.NewGuid().ToString("N") : databasePath;
 
         // Ensure the directory exists
-        var directory = inMemory ? null : Path.GetDirectoryName(databasePath);
+        var directory = this.inMemory ? null : Path.GetDirectoryName(databasePath);
         if (!string.IsNullOrEmpty(directory))
         {
             Directory.CreateDirectory(directory);
         }
 
+        if (encryption is null)
+        {
+            this.Open(password: null);
+        }
+    }
+
+    /// <summary>Opens the writer, builds the reader connection string and initializes the schema.</summary>
+    private void Open(string? password)
+    {
         var writerBuilder = new SqliteConnectionStringBuilder
         {
-            DataSource = dataSource,
-            Mode = inMemory ? SqliteOpenMode.Memory : SqliteOpenMode.ReadWriteCreate,
-            Cache = inMemory ? SqliteCacheMode.Shared : SqliteCacheMode.Private,
+            DataSource = this.dataSource,
+            Mode = this.inMemory ? SqliteOpenMode.Memory : SqliteOpenMode.ReadWriteCreate,
+            Cache = this.inMemory ? SqliteCacheMode.Shared : SqliteCacheMode.Private,
             Pooling = false,
+            Password = password,
         };
 
         this.readerConnectionString = new SqliteConnectionStringBuilder
         {
-            DataSource = dataSource,
-            Mode = inMemory ? SqliteOpenMode.Memory : SqliteOpenMode.ReadOnly,
-            Cache = inMemory ? SqliteCacheMode.Shared : SqliteCacheMode.Private,
+            DataSource = this.dataSource,
+            Mode = this.inMemory ? SqliteOpenMode.Memory : SqliteOpenMode.ReadOnly,
+            Cache = this.inMemory ? SqliteCacheMode.Shared : SqliteCacheMode.Private,
             Pooling = true,
+            Password = password,
         }.ToString();
 
         this.writer = new SqliteConnection(writerBuilder.ToString());
-        this.writer.Open();
+        try
+        {
+            this.writer.Open();
 
-        // WAL lets readers run beside the writer; secure_delete overwrites deleted content.
-        using var pragmaCmd = this.writer.CreateCommand();
-        pragmaCmd.CommandText = "PRAGMA journal_mode=WAL; PRAGMA secure_delete=ON;";
-        pragmaCmd.ExecuteNonQuery();
+            // WAL lets readers run beside the writer; secure_delete overwrites deleted content.
+            using var pragmaCmd = this.writer.CreateCommand();
+            pragmaCmd.CommandText = "PRAGMA journal_mode=WAL; PRAGMA secure_delete=ON;";
+            pragmaCmd.ExecuteNonQuery();
 
-        InitializeSchema();
-        this.LogDatabaseInitialized(databasePath);
+            InitializeSchema();
+        }
+        catch
+        {
+            this.writer.Dispose();
+            this.writer = null!;
+            throw;
+        }
+
+        this.state = StorageState.Open;
+        this.LogDatabaseInitialized(this.databasePath);
     }
 
     /// <summary>
@@ -99,6 +142,7 @@ public sealed partial class MessageStore : IMessageStore, IHistorySource, IHisto
     internal async Task<SqliteConnection> OpenReaderAsync(CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(this.disposed, this);
+        await this.EnsureOpenAsync(cancellationToken).ConfigureAwait(false);
         var connection = new SqliteConnection(this.readerConnectionString);
         await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
         return connection;
@@ -667,6 +711,12 @@ public sealed partial class MessageStore : IMessageStore, IHistorySource, IHisto
         this.disposed = true;
 
         this.writeSerializer.Dispose();
+        this.openGate.Dispose();
+        if (this.writer is null)
+        {
+            return;
+        }
+
         await this.writer.DisposeAsync().ConfigureAwait(false);
 
         // Pooled readers keep file handles open; release them so the files can be deleted.
