@@ -1,6 +1,8 @@
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using Cortex.Contained.Agent.Host.Reranking;
+using Cortex.Contained.Agent.Host.Reranking.Evaluation;
 using Cortex.Contained.Contracts.Config.Yaml;
 using MemoryMcp.Core.Configuration;
 using MemoryMcp.Core.Services;
@@ -13,15 +15,17 @@ namespace Cortex.Contained.Agent.Host.Memory.Evaluation;
 /// <summary>
 /// Evaluation CLI for hybrid memory search (Gate H for memory), run by the owner inside the agent
 /// container on a private copy of the raw memory store (D6):
-/// <c>dotnet Cortex.Contained.Agent.Host.dll memory-eval &lt;init|sample|validate|guard|pool|register|ablate|holdout|kappa&gt;</c>.
+/// <c>dotnet Cortex.Contained.Agent.Host.dll memory-eval &lt;init|sample|validate|guard|pool|register|ablate|holdout|kappa|rerank-curve|gate-r&gt;</c>.
 /// Every search runs on a copy that is deleted when the command ends; reports hold ids and numbers
 /// only. The Gate H decision and switching <c>MemoryMcp:Search:DefaultMode</c> are the owner's.
 /// </summary>
 public static class MemoryEvalCli
 {
     private const string Usage =
-        "usage: memory-eval <init|sample|validate|guard|pool|register|ablate|holdout|kappa> [--dir /app/state/eval/memory] " +
-        "[--source /app/state/memory] [--count 300] [--depth 10] [--split dev|test|all] [--embedder http://embeddings:11434] [--labels judge-agreement.csv]";
+        "usage: memory-eval <init|sample|validate|guard|pool|register|ablate|holdout|kappa|rerank-curve|gate-r> [--dir /app/state/eval/memory] " +
+        "[--source /app/state/memory] [--count 300] [--depth 10] [--split dev|test|all] [--embedder http://embeddings:11434] [--labels judge-agreement.csv]\n" +
+        "rerank-curve [--condition normal|embedder-busy|cold] [--base CONFIG] [--reranker http://reranker:8080] [--timeout-ms 30000]; " +
+        "gate-r --config CONFIG [--timeout-ms 2000]; both read the reranker key from Reranker__ApiKey.";
 
     /// <summary>Minimum LLM-vs-human agreement for LLM relevance labels.</summary>
     private const double MinKappa = 0.6;
@@ -120,9 +124,11 @@ public static class MemoryEvalCli
         TextWriter output,
         MemoryMcpOptions live,
         Func<MemoryMcpOptions, IEmbeddingService> embedderFactory,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<RerankerOptions, IReranker>? rerankerFactory = null)
     {
         ArgumentNullException.ThrowIfNull(args);
+        rerankerFactory ??= RerankEvalSetup.LiveReranker;
         ArgumentNullException.ThrowIfNull(output);
         ArgumentNullException.ThrowIfNull(live);
         ArgumentNullException.ThrowIfNull(embedderFactory);
@@ -170,6 +176,10 @@ public static class MemoryEvalCli
                     return await HoldoutAsync(context, cancellationToken).ConfigureAwait(false);
                 case "kappa":
                     return await KappaAsync(Option(args, "--labels") ?? Path.Combine(workspace.Directory, "judge-agreement.csv"), output).ConfigureAwait(false);
+                case "rerank-curve":
+                    return await MemoryRerankEval.CurveAsync(workspace, live, embedderFactory, rerankerFactory, args, output, cancellationToken).ConfigureAwait(false);
+                case "gate-r":
+                    return await MemoryRerankEval.GateAsync(workspace, live, embedderFactory, rerankerFactory, args, output, cancellationToken).ConfigureAwait(false);
                 default:
                     await output.WriteLineAsync(Usage).ConfigureAwait(false);
                     return 2;

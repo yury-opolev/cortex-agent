@@ -1,3 +1,5 @@
+using Cortex.Contained.Agent.Host.Reranking;
+
 namespace Cortex.Contained.Agent.Host.Memory.Evaluation;
 
 /// <summary>One returned memory and its word count (reading cost).</summary>
@@ -7,7 +9,11 @@ public sealed record ReturnedMemory(string MemoryId, int Words);
 /// <param name="Memories">Returned memories, best first.</param>
 /// <param name="Confidence">Confidence that an answer exists (best semantic similarity; 0 for keyword-only).</param>
 /// <param name="LatencyMs">Search latency in milliseconds.</param>
-public sealed record MemoryRetrievalRun(IReadOnlyList<ReturnedMemory> Memories, double Confidence, double LatencyMs);
+public sealed record MemoryRetrievalRun(IReadOnlyList<ReturnedMemory> Memories, double Confidence, double LatencyMs)
+{
+    /// <summary>The rerank stage's outcome, or null when the configuration does not rerank.</summary>
+    public RerankOutcome? Rerank { get; init; }
+}
 
 /// <summary>
 /// Runs every configuration on every query, scores memory-level metrics with the shared

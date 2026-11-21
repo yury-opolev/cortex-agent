@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Cortex.Contained.Agent.Host.Reranking;
 using MemoryMcp.Core.Configuration;
 
 namespace Cortex.Contained.Agent.Host.Memory.Evaluation;
@@ -32,6 +33,15 @@ public sealed record MemoryAblationConfig
 
     /// <summary>Use the model-written query and tags instead of the oracle text and tags.</summary>
     public bool UseModelQuery { get; init; }
+
+    /// <summary>Fused candidates reranked (§4.3); 0 = no reranking. Evaluated with <c>rerank-curve</c> and <c>gate-r</c>.</summary>
+    public int RerankTopN { get; init; }
+
+    /// <summary>Characters of raw best-matching lines per reranked candidate.</summary>
+    public int RerankMaxDocChars { get; init; } = 1200;
+
+    /// <summary>The rerank budget of this configuration, or null when it does not rerank.</summary>
+    public RerankBudget? RerankBudget() => this.RerankTopN > 0 ? new RerankBudget(this.RerankTopN, this.RerankMaxDocChars) : null;
 
     /// <summary>A copy of <paramref name="baseline"/> with this configuration applied.</summary>
     public MemorySearchOptions Apply(MemorySearchOptions baseline)

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Cortex.Contained.Agent.Host.Reranking;
 using MemoryMcp.Core.Configuration;
 using MemoryMcp.Core.Security;
 using MemoryMcp.Core.Services;
@@ -28,9 +29,11 @@ public sealed class MemoryEvalCorpus : IAsyncDisposable
     private readonly MemoryMcpOptions options;
     private readonly SqliteVecMemoryStore store;
     private readonly HybridMemorySearch search;
+    private readonly IRerankStage? reranker;
 
-    private MemoryEvalCorpus(string corpusDirectory, FileStream runLock, MemoryMcpOptions options, SqliteVecMemoryStore store, IEmbeddingService embedding)
+    private MemoryEvalCorpus(string corpusDirectory, FileStream runLock, MemoryMcpOptions options, SqliteVecMemoryStore store, IEmbeddingService embedding, IRerankStage? reranker)
     {
+        this.reranker = reranker;
         this.corpusDirectory = corpusDirectory;
         this.runLock = runLock;
         this.options = options;
@@ -43,7 +46,7 @@ public sealed class MemoryEvalCorpus : IAsyncDisposable
     /// <paramref name="runDirectory"/><c>/corpus</c> and opens it. Fails when the keyword index cannot be built.
     /// </summary>
     public static async Task<MemoryEvalCorpus> CreateAsync(
-        string sourceDirectory, string runDirectory, MemoryMcpOptions live, IEmbeddingService embedding, CancellationToken cancellationToken)
+        string sourceDirectory, string runDirectory, MemoryMcpOptions live, IEmbeddingService embedding, CancellationToken cancellationToken, IRerankStage? reranker = null)
     {
         ArgumentNullException.ThrowIfNull(live);
         ArgumentNullException.ThrowIfNull(embedding);
@@ -95,7 +98,7 @@ public sealed class MemoryEvalCorpus : IAsyncDisposable
         }
 
         var store = new SqliteVecMemoryStore(Options.Create(options), new NullContentEncryptor(), NullLogger<SqliteVecMemoryStore>.Instance);
-        var corpus = new MemoryEvalCorpus(corpusDirectory, runLock, options, store, embedding);
+        var corpus = new MemoryEvalCorpus(corpusDirectory, runLock, options, store, embedding, reranker);
         try
         {
             await store.InitializeAsync(cancellationToken).ConfigureAwait(false);
@@ -118,18 +121,31 @@ public sealed class MemoryEvalCorpus : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(config);
         ArgumentNullException.ThrowIfNull(query);
+        var rerank = config.RerankBudget();
+        if (rerank is not null && this.reranker is null)
+        {
+            throw new InvalidOperationException($"Configuration '{config.Name}' reranks, but this run has no reranker: evaluate rerank configurations with 'rerank-curve' or 'gate-r'.");
+        }
+
         var model = config.UseModelQuery ? query.ModelQuery : null;
+        var text = model?.Text ?? query.Text;
         var watch = Stopwatch.StartNew();
         var result = await this.search.SearchAsync(
             new HybridSearchRequest
             {
-                Query = model?.Text ?? query.Text,
+                Query = text,
                 Mode = config.Mode,
-                Limit = ResultLimit,
+                Limit = HybridMemoryReranking.CandidateLimit(ResultLimit, rerank),
                 Filter = new MemorySearchFilter { Tags = model is not null ? model.Tags : query.Tags },
                 Settings = config.Apply(this.options.Search),
             },
             cancellationToken).ConfigureAwait(false);
+        RerankOutcome? outcome = null;
+        if (rerank is not null)
+        {
+            (result, outcome, _) = await HybridMemoryReranking.ApplyAsync(this.reranker, text, result, ResultLimit, rerank, cancellationToken).ConfigureAwait(false);
+        }
+
         var latency = watch.Elapsed.TotalMilliseconds;
         if (result.Fallback is { } fallback)
         {
@@ -139,7 +155,7 @@ public sealed class MemoryEvalCorpus : IAsyncDisposable
         var returned = result.Hits
             .Select(h => new ReturnedMemory(h.Memory.MemoryId, WordsShown(h.Memory.Content, this.options.SearchMaxContentLength)))
             .ToList();
-        return new MemoryRetrievalRun(returned, result.TopSimilarity ?? 0, latency);
+        return new MemoryRetrievalRun(returned, result.TopSimilarity ?? 0, latency) { Rerank = outcome };
     }
 
     /// <summary>Every memory with its title, tags and content (query seeds and the paraphrase guard; never written to reports).</summary>
