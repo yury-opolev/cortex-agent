@@ -99,7 +99,17 @@ public sealed partial class HistoryProjector : IDisposable
             var currentGen = this.generations.ReadCurrent();
             foreach (var gen in this.generations.List())
             {
-                var database = HistoryIndexDatabase.Open(this.generations.PathFor(gen));
+                HistoryIndexDatabase database;
+                try
+                {
+                    database = this.generations.Open(gen);
+                }
+                catch (Microsoft.Data.Sqlite.SqliteException ex) when (ex.SqliteErrorCode == 26)
+                {
+                    // Plaintext from before encryption at rest, or another key: unusable, so erased and rebuilt.
+                    await this.DeleteTrackedAsync(gen, cancellationToken).ConfigureAwait(false);
+                    continue;
+                }
                 var state = database.ReadState();
                 if (gen == currentGen && ProjectorStartupDecision.RebuildReason(meta, state, fingerprint) is null)
                 {
@@ -443,8 +453,8 @@ public sealed partial class HistoryProjector : IDisposable
         await using var snapshot = await this.source.OpenSnapshotAsync(cancellationToken).ConfigureAwait(false);
         var meta = await snapshot.ReadMetaAsync(cancellationToken).ConfigureAwait(false);
         var gen = this.generations.Next();
-        var database = HistoryIndexDatabase.Create(
-            this.generations.PathFor(gen),
+        var database = this.generations.Create(
+            gen,
             new ProjectorState(gen, meta.JournalHead, meta.DbInstanceId, meta.RestoreGeneration, HistoryConfigFingerprint.Compute(this.options.CurrentValue), false, "[]")
             {
                 AppliedPurgeGeneration = meta.PurgeGeneration,

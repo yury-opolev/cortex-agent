@@ -11,16 +11,30 @@ public sealed class HistoryIndexGenerations
     private const string Prefix = "history-index.";
     private const string PointerFile = "history-index.current";
 
-    /// <summary>Creates the manager; the directory is created if missing.</summary>
-    public HistoryIndexGenerations(string directory)
+    /// <summary>Purpose label the index passphrase is derived for.</summary>
+    public const string PasswordPurpose = "history-index";
+
+    private readonly Storage.StorageKeyRing? keys;
+
+    /// <summary>Creates the manager; the directory is created if missing. With <paramref name="keys"/> every generation is encrypted (D4).</summary>
+    public HistoryIndexGenerations(string directory, Storage.StorageKeyRing? keys = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(directory);
+        this.keys = keys;
         this.Directory = directory;
         System.IO.Directory.CreateDirectory(directory);
     }
 
     /// <summary>The directory holding the generation files.</summary>
     public string Directory { get; }
+
+    /// <summary>Creates generation <paramref name="generation"/> (encrypted when keys are configured).</summary>
+    public HistoryIndexDatabase Create(long generation, ProjectorState state) =>
+        HistoryIndexDatabase.Create(this.PathFor(generation), state, this.keys?.PasswordFor(PasswordPurpose));
+
+    /// <summary>Opens generation <paramref name="generation"/> (encrypted when keys are configured).</summary>
+    public HistoryIndexDatabase Open(long generation) =>
+        HistoryIndexDatabase.Open(this.PathFor(generation), this.keys?.PasswordFor(PasswordPurpose));
 
     /// <summary>Path of generation <paramref name="generation"/>.</summary>
     public string PathFor(long generation) =>

@@ -13,22 +13,24 @@ namespace Cortex.Contained.Agent.Host.History;
 public sealed class HistoryIndexDatabase : IDisposable
 {
     private readonly SqliteConnection writer;
+    private readonly string? password;
     private bool disposed;
 
-    private HistoryIndexDatabase(string path, SqliteConnection writer)
+    private HistoryIndexDatabase(string path, SqliteConnection writer, string? password)
     {
         this.Path = path;
         this.writer = writer;
+        this.password = password;
     }
 
     /// <summary>Full path of the generation file.</summary>
     public string Path { get; }
 
-    /// <summary>Creates a new generation file with the given initial state.</summary>
-    public static HistoryIndexDatabase Create(string path, ProjectorState state)
+    /// <summary>Creates a new generation file with the given initial state, encrypted when <paramref name="password"/> is set.</summary>
+    public static HistoryIndexDatabase Create(string path, ProjectorState state, string? password = null)
     {
         ArgumentNullException.ThrowIfNull(state);
-        var database = new HistoryIndexDatabase(path, OpenWriter(path, SqliteOpenMode.ReadWriteCreate));
+        var database = new HistoryIndexDatabase(path, OpenWriter(path, SqliteOpenMode.ReadWriteCreate, password), password);
         using var cmd = database.writer.CreateCommand();
         cmd.CommandText = $"""
             CREATE TABLE segments (
@@ -77,9 +79,9 @@ public sealed class HistoryIndexDatabase : IDisposable
         return database;
     }
 
-    /// <summary>Opens an existing generation file.</summary>
-    public static HistoryIndexDatabase Open(string path) =>
-        new(path, OpenWriter(path, SqliteOpenMode.ReadWrite));
+    /// <summary>Opens an existing generation file (throws <see cref="SqliteException"/> code 26 when the key does not fit).</summary>
+    public static HistoryIndexDatabase Open(string path, string? password = null) =>
+        new(path, OpenWriter(path, SqliteOpenMode.ReadWrite, password), password);
 
     /// <summary>Reads <c>projector_state</c>.</summary>
     public ProjectorState ReadState() => ReadState(this.writer);
@@ -178,6 +180,7 @@ public sealed class HistoryIndexDatabase : IDisposable
             DataSource = this.Path,
             Mode = SqliteOpenMode.ReadOnly,
             Pooling = false,
+            Password = this.password,
         }.ToString());
         connection.Open();
         return new HistoryIndexReader(connection);
@@ -214,19 +217,29 @@ public sealed class HistoryIndexDatabase : IDisposable
         };
     }
 
-    private static SqliteConnection OpenWriter(string path, SqliteOpenMode mode)
+    private static SqliteConnection OpenWriter(string path, SqliteOpenMode mode, string? password)
     {
         var connection = new SqliteConnection(new SqliteConnectionStringBuilder
         {
             DataSource = path,
             Mode = mode,
             Pooling = false,
+            Password = password,
         }.ToString());
-        connection.Open();
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = "PRAGMA journal_mode=WAL; PRAGMA secure_delete=ON;";
-        cmd.ExecuteNonQuery();
-        return connection;
+        try
+        {
+            connection.Open();
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "PRAGMA journal_mode=WAL; PRAGMA secure_delete=ON;";
+            cmd.ExecuteNonQuery();
+            return connection;
+        }
+        catch
+        {
+            // A wrong key (or a plaintext file opened with one) must not leave a handle that blocks the unlink.
+            connection.Dispose();
+            throw;
+        }
     }
 
     private void Insert(SqliteTransaction transaction, HistorySegment segment)
