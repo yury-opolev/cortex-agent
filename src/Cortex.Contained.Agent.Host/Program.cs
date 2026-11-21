@@ -28,6 +28,14 @@ if (args.Length > 0 && string.Equals(args[0], "history-smoke", StringComparison.
     return;
 }
 
+// Hybrid-search evaluation protocol CLI (increment 3, §4.2): history-eval <init|validate|guard|register|ablate|holdout|kappa>
+if (args.Length > 0 && string.Equals(args[0], "history-eval", StringComparison.Ordinal))
+{
+    Environment.ExitCode = await Cortex.Contained.Agent.Host.History.Evaluation.HistoryEvalCli
+        .RunAsync(args[1..], Console.Out, CancellationToken.None).ConfigureAwait(false);
+    return;
+}
+
 var builder = WebApplication.CreateBuilder(args);
 
 // --- YAML Configuration Source ---
