@@ -372,7 +372,7 @@ A delete request (per channel, older than, per channel older than, all, or a ten
   | `includeInternal` | bool, default false |
   | `includeEchoes` | bool, default false |
   | `limit` | default 8, max 30 |
-  | `cursor` | optional, bound to (query, filters, generation, checkpoint); a stale cursor returns an error asking for a restart |
+  | `cursor` | optional, bound to (query, filters, generation) — not the checkpoint, which advances constantly in live use; time-order cursors are `(Ts, Id)` keysets and stay valid, relevance-order pages are at-least-once and may repeat or skip a hit when the index is re-projected between pages; a stale cursor (query, filter or generation change) returns an error asking for a restart |
 
 - **Output** (within `searchTokenCap`, default ~1,500 tokens):
   - A per-response random boundary token wraps the data block, and any occurrence of that token in source text is escaped.

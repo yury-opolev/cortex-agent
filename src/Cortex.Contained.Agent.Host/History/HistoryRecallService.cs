@@ -52,7 +52,7 @@ public sealed class HistoryRecallService
         using var reader = this.projector.Current?.OpenReader();
         var state = reader?.ReadState();
         var checkpoint = state?.CheckpointJournalSeq ?? 0;
-        var binding = HistoryCursorCodec.Binding(request, state?.Generation, checkpoint);
+        var binding = HistoryCursorCodec.Binding(request, state?.Generation);
 
         var position = HistoryCursorPosition.Start;
         if (request.Cursor is { } cursor)
@@ -64,7 +64,7 @@ public sealed class HistoryRecallService
                 {
                     Coverage = Empty(state),
                     Binding = binding,
-                    Error = "This cursor is stale or invalid: the query, filters or index changed since it was issued. Run the search again without a cursor.",
+                    Error = "This cursor is stale or invalid: the query, filters or index generation changed since it was issued. Run the search again without a cursor.",
                 };
             }
         }

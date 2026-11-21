@@ -7,13 +7,16 @@ using System.Text.Json;
 namespace Cortex.Contained.Agent.Host.History;
 
 /// <summary>
-/// Opaque <c>history_search</c> cursors. A cursor is bound to the query, filters, index
-/// generation and checkpoint; any change makes it stale (§12).
+/// Opaque <c>history_search</c> cursors. A cursor is bound to the query, filters and index
+/// generation; any change makes it stale (§12). It is deliberately not bound to the checkpoint,
+/// which advances constantly in live use: time order resumes from a <c>(Ts, Id)</c> keyset that stays
+/// valid across checkpoints, and relevance order may repeat or skip a hit when the index is
+/// re-projected between pages.
 /// </summary>
 public static class HistoryCursorCodec
 {
-    /// <summary>The binding of <paramref name="request"/> on an index state.</summary>
-    public static string Binding(HistorySearchRequest request, long? generation, long checkpoint)
+    /// <summary>The binding of <paramref name="request"/> on an index generation.</summary>
+    public static string Binding(HistorySearchRequest request, long? generation)
     {
         ArgumentNullException.ThrowIfNull(request);
         var text = string.Join(
@@ -26,8 +29,7 @@ public static class HistoryCursorCodec
             request.IncludeInternal ? "1" : "0",
             request.IncludeEchoes ? "1" : "0",
             request.Limit.ToString(CultureInfo.InvariantCulture),
-            generation?.ToString(CultureInfo.InvariantCulture) ?? "none",
-            checkpoint.ToString(CultureInfo.InvariantCulture));
+            generation?.ToString(CultureInfo.InvariantCulture) ?? "none");
         return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(text)))[..16];
     }
 

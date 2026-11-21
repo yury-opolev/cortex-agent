@@ -170,7 +170,7 @@ public sealed class HistoryRecallServiceTests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task SearchAsync_CursorFromDifferentIndexState_IsRejected()
+    public async Task SearchAsync_CursorStaysValidAcrossCheckpointAdvance_AndGoesStaleOnlyOnGenerationChange()
     {
         for (var i = 0; i < 5; i++)
         {
@@ -181,13 +181,31 @@ public sealed class HistoryRecallServiceTests : IAsyncDisposable
         var first = await this.SearchAsync("budget", HistoryOrder.Time, limit: 2);
         var cursor = HistoryCursorCodec.Encode(first.Binding, first.Next);
 
-        await this.h.SayAsync("budget new", 999);
+        var added = await this.h.SayAsync("budget new", 999);
         await this.h.Projector.ApplyPendingAsync(CancellationToken.None);
 
+        var seen = Ids(first).ToList();
+        var page = await this.SearchAsync("budget", HistoryOrder.Time, limit: 2, cursor: cursor);
+        while (true)
+        {
+            Assert.Null(page.Error);
+            seen.AddRange(Ids(page));
+            if (!page.HasMore)
+            {
+                break;
+            }
+
+            page = await this.SearchAsync("budget", HistoryOrder.Time, limit: 2, cursor: HistoryCursorCodec.Encode(page.Binding, page.Next));
+        }
+
+        Assert.Equal(6, seen.Count);
+        Assert.Equal(added, seen[^1]);
+        Assert.NotNull((await this.SearchAsync("budget", HistoryOrder.Time, limit: 2, cursor: "garbage")).Error);
+
+        await this.h.Projector.RebuildAsync(CancellationToken.None);
         var stale = await this.SearchAsync("budget", HistoryOrder.Time, limit: 2, cursor: cursor);
         Assert.NotNull(stale.Error);
         Assert.Contains("stale", stale.Error, StringComparison.Ordinal);
-        Assert.NotNull((await this.SearchAsync("budget", HistoryOrder.Time, limit: 2, cursor: "garbage")).Error);
     }
 
     [Fact]

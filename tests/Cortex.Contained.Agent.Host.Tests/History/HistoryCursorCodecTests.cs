@@ -26,15 +26,14 @@ public class HistoryCursorCodecTests
     }
 
     [Fact]
-    public void Binding_ChangesWithQueryFiltersGenerationAndCheckpoint()
+    public void Binding_ChangesWithQueryFiltersAndGeneration_NotCheckpoint()
     {
-        var baseline = HistoryCursorCodec.Binding(Request, 1, 10);
+        var baseline = HistoryCursorCodec.Binding(Request, 1);
 
-        Assert.Equal(baseline, HistoryCursorCodec.Binding(Request, 1, 10));
-        Assert.NotEqual(baseline, HistoryCursorCodec.Binding(Request with { Query = "bergen" }, 1, 10));
-        Assert.NotEqual(baseline, HistoryCursorCodec.Binding(Request with { IncludeInternal = true }, 1, 10));
-        Assert.NotEqual(baseline, HistoryCursorCodec.Binding(Request, 2, 10));
-        Assert.NotEqual(baseline, HistoryCursorCodec.Binding(Request, 1, 11));
-        Assert.Equal(baseline, HistoryCursorCodec.Binding(Request with { Cursor = "x" }, 1, 10));
+        Assert.Equal(baseline, HistoryCursorCodec.Binding(Request, 1));
+        Assert.NotEqual(baseline, HistoryCursorCodec.Binding(Request with { Query = "bergen" }, 1));
+        Assert.NotEqual(baseline, HistoryCursorCodec.Binding(Request with { IncludeInternal = true }, 1));
+        Assert.NotEqual(baseline, HistoryCursorCodec.Binding(Request, 2));
+        Assert.Equal(baseline, HistoryCursorCodec.Binding(Request with { Cursor = "x" }, 1));
     }
 }

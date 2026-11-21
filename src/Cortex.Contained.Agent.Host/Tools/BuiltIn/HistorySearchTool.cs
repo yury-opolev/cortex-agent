@@ -65,7 +65,7 @@ internal sealed class HistorySearchTool : IAgentTool
             "includeInternal": { "type": "boolean", "description": "Include internal rows (scheduled-task instructions, worker summaries) — not necessarily delivered to the user. Default false." },
             "includeEchoes": { "type": "boolean", "description": "Include your own earlier replies that quoted recall results. Default false." },
             "limit": { "type": "integer", "description": "Hits per page, 1-{{MaxLimit}}. Default {{DefaultLimit}}." },
-            "cursor": { "type": "string", "description": "Cursor from the previous page of the same search." }
+            "cursor": { "type": "string", "description": "Cursor from the previous page of the same search. Pages are at-least-once: a hit may repeat if history was re-indexed between pages." }
           },
           "required": ["query"]
         }
