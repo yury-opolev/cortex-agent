@@ -37,6 +37,7 @@
 | DELETE | `/api/tenants/{tenantId}/history` | Yes | Delete all (or `?olderThan=`) history through the erasure workflow. Returns `{ deletedCount, erasureComplete, cleanupPending, quarantinedMemories, message }` |
 | DELETE | `/api/tenants/{tenantId}/channels/{channelId}/history` | Yes | Same for one channel (previously `204`; now returns the same body) |
 | PUT | `/api/tenants/{tenantId}/history/recall-tools` | Yes | Body `{ enabled }`: show/hide `history_search` / recall-mode `history_read` at runtime (no effect unless `History:Enabled`) |
+| POST | `/api/tenants/{tenantId}/history/event-backfill` | Yes | Run the explicit event backfill (maintenance window). Returns `{ scanned, inserted, elapsedMs }`. Driven by `scripts/Invoke-HistoryBackfill.ps1` |
 | GET | `/api/tenants/{tenantId}/memories/quarantine` | Yes | Memories quarantined after a history deletion (D10), awaiting review |
 | POST | `/api/tenants/{tenantId}/memories/{memoryId}/keep` | Yes | Keep a quarantined memory (visible to the agent again) |
 | POST | `/api/channels/{type}` | Yes | Update channel configuration |
@@ -153,6 +154,15 @@ same workflow.
 #### `SetHistoryRecallTools(enabled)` -> `bool`
 
 Show or hide the history recall tools at runtime; returns the effective state.
+
+#### `BackfillHistoryEvents()` -> `EventBackfillResultDto`
+
+`legacy_import` events for messages stored before the event log; idempotent.
+
+#### `ProvideStorageKey(StorageKeyGrant)` -> `bool`
+
+The tenant storage master key (Base64, 256-bit), pushed before `ProvideCredentials`. `false` when
+malformed or different from the key already in use.
 
 ### Hub Callbacks (Agent -> Bridge)
 
@@ -271,3 +281,4 @@ server, the action resolves to `outcome_unknown`, never `cancelled`.
 | `history_list_channels` | List channels with message counts and last activity |
 | `history_search` | Find when/where something was said (keyword, phrase, `stem*`; `order=relevance\|time`; coverage-limited, verified hits with honest labels) |
 | `history_read` | Read the exact source: `channelId` window, or `aroundMessageId` from a `history_search` hit |
+| `event_get` | Read one recorded event by evidence ID (`ev_…`): tool calls and result digests, deliveries and their evidence, or a message with its current text |

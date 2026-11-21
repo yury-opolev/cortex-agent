@@ -80,9 +80,20 @@ erasure workflow in [history-locator.md](history-locator.md#deletion-erasure-and
 (index, WAL checkpoint, tool-output spill files, subagent transcripts, smoke artifacts,
 optional `VACUUM`) and quarantines curated memories created in the deleted window until the
 owner reviews them (D10). Recall output is wrapped in a per-response random boundary token and
-labelled as historical data, never as instructions. Not yet covered (increment 2): encryption at
-rest inside the container, per-channel deletion of tool-output spill files, volume snapshots and
-host backups.
+labelled as historical data, never as instructions. Per-channel deletion also removes the
+tool-output spill files its tool results referenced, and the event log is purged in the same
+transaction (see [event-log.md](event-log.md)). Not covered: volume snapshots, host backups and
+provider-side copies.
+
+## Agent storage encryption and event payloads
+
+With `Storage:EncryptAtRest`, `messages.db` and the history index generations inside the container
+are encrypted with SQLite3 Multiple Ciphers. The per-tenant key is DPAPI-protected on the Bridge,
+never regenerated, pushed before credentials and held in memory only; the agent fails closed
+without it. `subagents.db`, `/app/data/tool-output` spill files and the memory database are not
+covered by this key. Tool payloads are persisted under an exact allowlist with
+`SensitiveDataRedactor.RedactForPersistence`; `mcp__*` payloads, file/page/mail bodies and
+attachment bytes are never persisted.
 
 ## Content security
 

@@ -1,5 +1,7 @@
 # History locator (episodic history memory, increment 1)
 
+> Increment 2 adds the event log, `event_get`, purge-generation fencing and encryption at rest: see [event-log.md](event-log.md).
+
 The history locator lets the agent find **when and where** something was said in its own
 conversation history and read the exact source around it. It is a *locator*, not a source of
 truth: a hit proves that something was said at a time, never that it is still true.
