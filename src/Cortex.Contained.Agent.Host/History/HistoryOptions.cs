@@ -50,6 +50,15 @@ public sealed class HistoryOptions
     /// <summary>Local smoke-evaluation artifact root; overlapping runs are destroyed on purge.</summary>
     public string SmokeArtifactsDirectory { get; set; } = "/app/state/eval/smoke";
 
+    /// <summary>Keyword index variant; part of the index fingerprint (§4.2 stemming ablation).</summary>
+    public HistoryKeywordVariant KeywordVariant { get; set; } = HistoryKeywordVariant.Plain;
+
+    /// <summary>Dense retrieval settings (<c>History:Dense</c>).</summary>
+    public HistoryDenseOptions Dense { get; set; } = new();
+
+    /// <summary>Hybrid ranking settings (<c>History:Ranking</c>).</summary>
+    public HistoryRankingOptions Ranking { get; set; } = new();
+
     /// <summary>Resolves <see cref="TimeZone"/>.</summary>
     public TimeZoneInfo ResolveTimeZone() => TimeZoneInfo.FindSystemTimeZoneById(this.TimeZone);
 
@@ -96,6 +105,8 @@ public sealed class HistoryOptions
             errors.Add("History:BuildBatchMessages must be at least 100.");
         }
 
+        errors.AddRange(this.Dense.Validate());
+        errors.AddRange(this.Ranking.Validate());
         return errors;
     }
 }
