@@ -36,6 +36,15 @@ if (args.Length > 0 && string.Equals(args[0], "history-eval", StringComparison.O
     return;
 }
 
+// Hybrid memory-search evaluation CLI (increment 4, Gate H for memory):
+// memory-eval <init|sample|validate|guard|pool|register|ablate|holdout|kappa>
+if (args.Length > 0 && string.Equals(args[0], "memory-eval", StringComparison.Ordinal))
+{
+    Environment.ExitCode = await Cortex.Contained.Agent.Host.Memory.Evaluation.MemoryEvalCli
+        .RunAsync(args[1..], Console.Out, CancellationToken.None).ConfigureAwait(false);
+    return;
+}
+
 var builder = WebApplication.CreateBuilder(args);
 
 // --- YAML Configuration Source ---
