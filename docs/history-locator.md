@@ -72,7 +72,9 @@ was never said". `HistoryToolsSwitch` can hide the tools at runtime (`PUT
 `GET /health` (Agent Host) includes `subsystems.history`: `status` (`ok` / `degraded` when the
 projector halted or erasure is pending), `enabled`, `toolsEnabled`, `sqliteVersion`,
 `generation`, `buildComplete`, `buildInProgress`, `checkpointLag`, `journalBacklog`, `halted`,
-`lastError`, `pendingErasureTasks`, `pendingErasureSteps`. History never flips the top-level
+`lastError`, `pendingErasureTasks`, `pendingErasureSteps`, `maintenancePendingTasks` (routine
+weekly `VACUUM` work; it never degrades `status`, and it only runs while `history.enabled` is
+true — pending erasure steps always resume). History never flips the top-level
 `healthy` flag.
 
 ## Deletion, erasure and retention

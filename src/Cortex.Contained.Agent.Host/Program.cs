@@ -920,6 +920,7 @@ app.MapGet("/health", async (ToolRegistry toolRegistry, AgentSessionStore sessio
                 history.LastError,
                 history.PendingErasureTasks,
                 history.PendingErasureSteps,
+                history.MaintenancePendingTasks,
             },
         },
     });

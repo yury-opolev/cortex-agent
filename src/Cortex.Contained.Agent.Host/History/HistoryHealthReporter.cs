@@ -15,7 +15,8 @@ public sealed record HistoryHealth(
     bool Halted,
     string? LastError,
     int PendingErasureTasks,
-    IReadOnlyList<string> PendingErasureSteps);
+    IReadOnlyList<string> PendingErasureSteps,
+    int MaintenancePendingTasks);
 
 /// <summary>Builds <see cref="HistoryHealth"/> from options, projector status and <c>messages.db</c> Meta.</summary>
 public sealed class HistoryHealthReporter
@@ -49,7 +50,8 @@ public sealed class HistoryHealthReporter
             meta = await snapshot.ReadMetaAsync(cancellationToken).ConfigureAwait(false);
         }
 
-        var pending = await this.erasure.ReadPendingErasureAsync(cancellationToken).ConfigureAwait(false);
+        var allPending = await this.erasure.ReadPendingErasureAsync(cancellationToken).ConfigureAwait(false);
+        var pending = allPending.Where(t => !IsMaintenance(t)).ToList();
         var state = this.status.Snapshot();
         return new HistoryHealth(
             this.options.CurrentValue.Enabled,
@@ -63,6 +65,11 @@ public sealed class HistoryHealthReporter
             state.Halted,
             state.LastError,
             pending.Count,
-            pending.SelectMany(t => t.Steps).Distinct(StringComparer.Ordinal).ToList());
+            pending.SelectMany(t => t.Steps).Distinct(StringComparer.Ordinal).ToList(),
+            allPending.Count - pending.Count);
     }
+
+    // Routine maintenance (weekly VACUUM) is housekeeping, not an erasure gap.
+    private static bool IsMaintenance(ErasureTask task) =>
+        task.Id.StartsWith(VacuumErasureStep.MaintenanceTaskPrefix, StringComparison.Ordinal);
 }

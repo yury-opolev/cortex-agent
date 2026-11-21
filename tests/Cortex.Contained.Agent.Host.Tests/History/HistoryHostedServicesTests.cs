@@ -53,9 +53,108 @@ public sealed class HistoryHostedServicesTests : IAsyncDisposable
         Assert.True(this.h.Status.Snapshot().BuildComplete);
     }
 
+    private HistoryMaintenanceService NewMaintenance(IErasureStep vacuumStep)
+    {
+        var purge = new HistoryPurgeService(
+            this.h.Store, this.h.Gate, this.h.Projector, [new MessagesWalErasureStep(this.h.Store), vacuumStep],
+            this.h.Monitor, TimeProvider.System, NullLogger<HistoryPurgeService>.Instance);
+        return new HistoryMaintenanceService(purge, this.h.Store, this.h.Monitor, TimeProvider.System, NullLogger<HistoryMaintenanceService>.Instance);
+    }
+
+    private static IErasureStep SpyVacuumStep()
+    {
+        var step = Substitute.For<IErasureStep>();
+        step.Name.Returns(ErasureSteps.Vacuum);
+        step.RunAsync(Arg.Any<ErasureTask>(), Arg.Any<CancellationToken>()).Returns(true);
+        return step;
+    }
+
+    [Fact]
+    public async Task MaintenanceRunOnce_FreshDatabase_DoesNotVacuumUntilTheIntervalElapses()
+    {
+        var vacuum = SpyVacuumStep();
+
+        var pending = await this.NewMaintenance(vacuum).RunOnceAsync(CancellationToken.None);
+
+        Assert.Empty(pending);
+        await vacuum.DidNotReceive().RunAsync(Arg.Any<ErasureTask>(), Arg.Any<CancellationToken>());
+        Assert.NotNull(await this.h.Store.ReadLastVacuumAsync(CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task MaintenanceRunOnce_VacuumOlderThanInterval_Vacuums()
+    {
+        await this.h.Store.VacuumAsync(DateTimeOffset.UtcNow.AddDays(-30), CancellationToken.None);
+        var vacuum = SpyVacuumStep();
+
+        await this.NewMaintenance(vacuum).RunOnceAsync(CancellationToken.None);
+
+        await vacuum.Received(1).RunAsync(Arg.Is<ErasureTask>(t => t.Id.StartsWith(VacuumErasureStep.MaintenanceTaskPrefix, StringComparison.Ordinal)), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task MaintenanceRunOnce_HistoryDisabled_SkipsTheRoutineVacuumButStillResumesErasure()
+    {
+        this.h.Options = new HistoryOptions { Enabled = false };
+        await this.h.Store.VacuumAsync(DateTimeOffset.UtcNow.AddDays(-30), CancellationToken.None);
+        await this.h.Store.AppendErasureTaskAsync(
+            new ErasureTask { Id = "left-over", CreatedAt = HistoryHarness.T0, Steps = [ErasureSteps.MessagesWal] }, CancellationToken.None);
+        var vacuum = SpyVacuumStep();
+
+        await this.NewMaintenance(vacuum).RunOnceAsync(CancellationToken.None);
+
+        await vacuum.DidNotReceive().RunAsync(Arg.Any<ErasureTask>(), Arg.Any<CancellationToken>());
+        Assert.Empty(await this.h.Store.ReadPendingErasureAsync(CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task HealthReporter_MaintenanceOnlyPending_IsNotAnErasureGap()
+    {
+        await this.h.Store.AppendErasureTaskAsync(
+            new ErasureTask { Id = VacuumErasureStep.MaintenanceTaskPrefix + "x", CreatedAt = HistoryHarness.T0, Steps = [ErasureSteps.Vacuum] }, CancellationToken.None);
+        var reporter = new HistoryHealthReporter(this.h.Store, this.h.Store, this.h.Status, new HistoryToolsSwitch(this.h.Monitor), this.h.Monitor);
+
+        var health = await reporter.SnapshotAsync(CancellationToken.None);
+
+        Assert.Equal(0, health.PendingErasureTasks);
+        Assert.Empty(health.PendingErasureSteps);
+        Assert.Equal(1, health.MaintenancePendingTasks);
+    }
+
+    [Fact]
+    public async Task VacuumStep_BusyCheckpoint_RetriesWithoutRepeatingTheVacuum()
+    {
+        var store = Substitute.For<IHistoryErasureStore>();
+        store.CheckpointWalAsync(Arg.Any<CancellationToken>()).Returns(
+            new WalCheckpointResult(1, 5, 0), new WalCheckpointResult(1, 5, 0), new WalCheckpointResult(0, 0, 0));
+        var step = new VacuumErasureStep(store, this.h.Projector, this.h.Monitor, TimeProvider.System);
+        var task = new ErasureTask { Id = VacuumErasureStep.MaintenanceTaskPrefix + "y", CreatedAt = HistoryHarness.T0, Steps = [ErasureSteps.Vacuum] };
+
+        Assert.True(await step.RunAsync(task, CancellationToken.None));
+
+        await store.Received(1).VacuumAsync(Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>());
+        await store.Received(3).CheckpointWalAsync(Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task VacuumStep_CheckpointStaysBusy_FailsThenResumesWithoutVacuumingAgain()
+    {
+        var store = Substitute.For<IHistoryErasureStore>();
+        store.CheckpointWalAsync(Arg.Any<CancellationToken>()).Returns(new WalCheckpointResult(1, 5, 0));
+        var step = new VacuumErasureStep(store, this.h.Projector, this.h.Monitor, TimeProvider.System);
+        var task = new ErasureTask { Id = VacuumErasureStep.MaintenanceTaskPrefix + "z", CreatedAt = HistoryHarness.T0, Steps = [ErasureSteps.Vacuum] };
+
+        Assert.False(await step.RunAsync(task, CancellationToken.None));
+        store.CheckpointWalAsync(Arg.Any<CancellationToken>()).Returns(new WalCheckpointResult(0, 0, 0));
+        Assert.True(await step.RunAsync(task, CancellationToken.None));
+
+        await store.Received(1).VacuumAsync(Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>());
+    }
+
     [Fact]
     public async Task MaintenanceRunOnce_ResumesPendingAndVacuumsWhenDue()
     {
+        await this.h.Store.VacuumAsync(DateTimeOffset.UtcNow.AddDays(-30), CancellationToken.None);
         var purge = new HistoryPurgeService(
             this.h.Store, this.h.Gate, this.h.Projector,
             [new MessagesWalErasureStep(this.h.Store), new VacuumErasureStep(this.h.Store, this.h.Projector, this.h.Monitor, TimeProvider.System)],

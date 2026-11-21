@@ -45,6 +45,12 @@ public sealed partial class HistoryMaintenanceService : BackgroundService
     public async Task<IReadOnlyList<string>> RunOnceAsync(CancellationToken cancellationToken)
     {
         var pending = await this.purge.ResumePendingAsync(cancellationToken).ConfigureAwait(false);
+        if (!this.options.CurrentValue.Enabled)
+        {
+            // Erasure above always resumes; the routine VACUUM only runs for installs that use the history feature.
+            return pending;
+        }
+
         var last = await this.store.ReadLastVacuumAsync(cancellationToken).ConfigureAwait(false);
         var due = last is null || this.time.GetUtcNow() - last.Value >= TimeSpan.FromDays(this.options.CurrentValue.VacuumIntervalDays);
         return due ? await this.purge.RunMaintenanceVacuumAsync(cancellationToken).ConfigureAwait(false) : pending;

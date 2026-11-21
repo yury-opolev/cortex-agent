@@ -30,14 +30,24 @@ public sealed class IndexErasureStep(HistoryProjector projector) : IErasureStep
 /// </summary>
 public sealed class MessagesWalErasureStep(IHistoryErasureStore store) : IErasureStep
 {
-    private const int Attempts = 5;
-    private static readonly TimeSpan RetryDelay = TimeSpan.FromMilliseconds(200);
-
     /// <inheritdoc />
     public string Name => ErasureSteps.MessagesWal;
 
     /// <inheritdoc />
-    public async Task<bool> RunAsync(ErasureTask task, CancellationToken cancellationToken)
+    public Task<bool> RunAsync(ErasureTask task, CancellationToken cancellationToken) =>
+        WalCheckpointRetry.TruncateAsync(store, cancellationToken);
+}
+
+/// <summary>
+/// <c>wal_checkpoint(TRUNCATE)</c> reports "busy" as a result column rather than failing, so every
+/// caller checks <see cref="WalCheckpointResult.Complete"/> and retries while readers drain.
+/// </summary>
+internal static class WalCheckpointRetry
+{
+    private const int Attempts = 5;
+    private static readonly TimeSpan RetryDelay = TimeSpan.FromMilliseconds(200);
+
+    public static async Task<bool> TruncateAsync(IHistoryErasureStore store, CancellationToken cancellationToken)
     {
         for (var attempt = 1; attempt <= Attempts; attempt++)
         {
@@ -192,6 +202,9 @@ public sealed class VacuumErasureStep(IHistoryErasureStore store, HistoryProject
     /// <inheritdoc />
     public string Name => ErasureSteps.Vacuum;
 
+    // Tasks whose VACUUMs finished but whose checkpoint was still busy: a retry only re-runs the checkpoint.
+    private readonly HashSet<string> vacuumed = [];
+
     /// <inheritdoc />
     public async Task<bool> RunAsync(ErasureTask task, CancellationToken cancellationToken)
     {
@@ -203,8 +216,32 @@ public sealed class VacuumErasureStep(IHistoryErasureStore store, HistoryProject
             return true;
         }
 
-        await store.VacuumAsync(time.GetUtcNow(), cancellationToken).ConfigureAwait(false);
-        await projector.VacuumAsync(cancellationToken).ConfigureAwait(false);
-        return (await store.CheckpointWalAsync(cancellationToken).ConfigureAwait(false)).Complete;
+        bool alreadyVacuumed;
+        lock (this.vacuumed)
+        {
+            alreadyVacuumed = this.vacuumed.Contains(task.Id);
+        }
+
+        if (!alreadyVacuumed)
+        {
+            await store.VacuumAsync(time.GetUtcNow(), cancellationToken).ConfigureAwait(false);
+            await projector.VacuumAsync(cancellationToken).ConfigureAwait(false);
+            lock (this.vacuumed)
+            {
+                this.vacuumed.Add(task.Id);
+            }
+        }
+
+        if (!await WalCheckpointRetry.TruncateAsync(store, cancellationToken).ConfigureAwait(false))
+        {
+            return false;
+        }
+
+        lock (this.vacuumed)
+        {
+            this.vacuumed.Remove(task.Id);
+        }
+
+        return true;
     }
 }

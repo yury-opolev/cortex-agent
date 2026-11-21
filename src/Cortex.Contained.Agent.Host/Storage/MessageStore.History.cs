@@ -56,9 +56,11 @@ public sealed partial class MessageStore
                 ('RestoreGeneration', '0'),
                 ('JournalHead', '0'),
                 ('JournalPrunedThrough', '0'),
-                ('PendingErasure', '[]');
+                ('PendingErasure', '[]'),
+                ('LastVacuumAt', @now);
             """;
         cmd.Parameters.AddWithValue("@instanceId", Guid.NewGuid().ToString("N"));
+        cmd.Parameters.AddWithValue("@now", SqliteDateTimeText.Format(DateTimeOffset.UtcNow));
         cmd.ExecuteNonQuery();
     }
 
