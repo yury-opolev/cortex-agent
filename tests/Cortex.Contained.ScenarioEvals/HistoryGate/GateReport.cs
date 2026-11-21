@@ -1,4 +1,4 @@
-using Cortex.Contained.Agent.Host.History.Evaluation;
+using MemoryMcp.Core.Evaluation;
 
 namespace Cortex.Contained.ScenarioEvals.HistoryGate;
 

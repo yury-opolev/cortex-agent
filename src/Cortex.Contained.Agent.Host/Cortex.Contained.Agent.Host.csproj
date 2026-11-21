@@ -29,6 +29,7 @@
   <!-- Engine-agnostic retrieval primitives shared with curated memory (MemoryMcp.Core). -->
   <ItemGroup>
     <Using Include="MemoryMcp.Core.Retrieval" />
+    <Using Include="MemoryMcp.Core.Evaluation" />
   </ItemGroup>
 
 </Project>

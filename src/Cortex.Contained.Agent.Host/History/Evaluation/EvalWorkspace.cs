@@ -1,4 +1,3 @@
-using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -79,45 +78,22 @@ public sealed class EvalWorkspace
     /// <summary>Records SHA-256 of the dataset, the analysis plan and the ablation plan. Never overwrites.</summary>
     public void Register()
     {
-        if (File.Exists(this.PreregistrationPath))
-        {
-            throw new InvalidOperationException("Already registered. Start a new workspace for a new, separately reported evaluation.");
-        }
-
-        if (this.ReadPlan().Holdout is null)
+        var registration = this.Registration();
+        if (!registration.IsRegistered && this.ReadPlan().Holdout is null)
         {
             throw new InvalidOperationException("ablation.json has no holdout section: choose the configuration on the dev split before registering.");
         }
 
-        WriteJson(this.PreregistrationPath, this.CurrentHashes());
+        registration.Register();
     }
 
     /// <summary>Throws unless the registered hashes match the current files.</summary>
-    public void VerifyRegistration()
+    public void VerifyRegistration() => this.Registration().Verify();
+
+    private Preregistration Registration() => new(this.PreregistrationPath, new Dictionary<string, string>(StringComparer.Ordinal)
     {
-        if (!File.Exists(this.PreregistrationPath))
-        {
-            throw new InvalidOperationException("Run 'register' before 'holdout': the analysis plan must be fixed before the first held-out run.");
-        }
-
-        var registered = JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(this.PreregistrationPath), Json) ?? [];
-        var changed = this.CurrentHashes()
-            .Where(kv => !registered.TryGetValue(kv.Key, out var hash) || !string.Equals(hash, kv.Value, StringComparison.Ordinal))
-            .Select(kv => kv.Key)
-            .ToList();
-        if (changed.Count > 0)
-        {
-            throw new InvalidOperationException($"Pre-registered files changed since 'register': {string.Join(", ", changed)}.");
-        }
-    }
-
-    private static string Hash(string path) =>
-        File.Exists(path) ? Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(path))) : "missing";
-
-    private Dictionary<string, string> CurrentHashes() => new(StringComparer.Ordinal)
-    {
-        ["dataset.jsonl"] = Hash(this.DatasetPath),
-        ["analysis-plan.md"] = Hash(this.AnalysisPlanPath),
-        ["ablation.json"] = Hash(this.AblationPlanPath),
-    };
+        ["dataset.jsonl"] = this.DatasetPath,
+        ["analysis-plan.md"] = this.AnalysisPlanPath,
+        ["ablation.json"] = this.AblationPlanPath,
+    });
 }
