@@ -123,7 +123,7 @@ public sealed class HistorySmokeCliTests : IAsyncDisposable
             this.workspace, this.source, new HistoryOptions { Enabled = true, TimeZone = "UTC" }, CancellationToken.None);
         SqliteConnectionPools.Clear();
         var monitor = Substitute.For<Microsoft.Extensions.Options.IOptionsMonitor<HistoryOptions>>();
-        monitor.CurrentValue.Returns(new HistoryOptions { SmokeArtifactsDirectory = this.workspace.RunsDirectory });
+        monitor.CurrentValue.Returns(new HistoryOptions { SmokeArtifactsDirectory = this.workspace.Directory });
 
         var done = await new SmokeArtifactErasureStep(monitor).RunAsync(
             new ErasureTask { Id = "t", CreatedAt = T0, RangeFrom = T0, RangeTo = T0, Steps = [ErasureSteps.SmokeArtifacts] },

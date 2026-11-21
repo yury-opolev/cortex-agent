@@ -40,7 +40,8 @@ public sealed class ErasureStepTests : IDisposable
     [Fact]
     public async Task SmokeArtifacts_DestroysOverlappingAndUnreadableRuns()
     {
-        var runs = Path.Combine(this.dir, "smoke");
+        var root = Path.Combine(this.dir, "smoke");
+        var runs = Path.Combine(root, "runs");
         var overlapping = Path.Combine(runs, "run-1");
         var disjoint = Path.Combine(runs, "run-2");
         var noManifest = Path.Combine(runs, "run-3");
@@ -52,13 +53,63 @@ public sealed class ErasureStepTests : IDisposable
         await File.WriteAllTextAsync(Path.Combine(overlapping, "manifest.json"), """{"corpusFrom":"2026-05-01T00:00:00Z","corpusTo":"2026-05-10T00:00:00Z"}""");
         await File.WriteAllTextAsync(Path.Combine(disjoint, "manifest.json"), """{"corpusFrom":"2026-06-01T00:00:00Z","corpusTo":"2026-06-10T00:00:00Z"}""");
         var monitor = Substitute.For<IOptionsMonitor<HistoryOptions>>();
-        monitor.CurrentValue.Returns(new HistoryOptions { SmokeArtifactsDirectory = runs });
+        monitor.CurrentValue.Returns(new HistoryOptions { SmokeArtifactsDirectory = root, EvalArtifactsDirectory = Path.Combine(this.dir, "none") });
 
         Assert.True(await new SmokeArtifactErasureStep(monitor).RunAsync(Task(T0, T0.AddDays(1)), CancellationToken.None));
 
         Assert.False(Directory.Exists(overlapping));
         Assert.False(Directory.Exists(noManifest));
         Assert.True(Directory.Exists(disjoint));
+    }
+
+    [Fact]
+    public async Task EvaluationArtifacts_DestroysOverlappingRunsInBothWorkspacesAndKeepsOwnerFiles()
+    {
+        var smoke = Path.Combine(this.dir, "smoke");
+        var eval = Path.Combine(this.dir, "eval");
+        var evalOverlap = Path.Combine(eval, "runs", "ablate-dev-1");
+        var evalDisjoint = Path.Combine(eval, "runs", "holdout-test-1");
+        var evalUnreadable = Path.Combine(eval, "runs", "guard-1");
+        var smokeOverlap = Path.Combine(smoke, "runs", "run-1");
+        var pool = Path.Combine(eval, "pool");
+        foreach (var d in new[] { evalOverlap, evalDisjoint, evalUnreadable, smokeOverlap, pool })
+        {
+            Directory.CreateDirectory(d);
+        }
+
+        const string Overlapping = """{"corpusFrom":"2026-05-01T00:00:00Z","corpusTo":"2026-05-10T00:00:00Z"}""";
+        await File.WriteAllTextAsync(Path.Combine(evalOverlap, "manifest.json"), Overlapping);
+        await File.WriteAllTextAsync(Path.Combine(evalOverlap, "messages.db"), "raw copy");
+        await File.WriteAllTextAsync(Path.Combine(smokeOverlap, "manifest.json"), Overlapping);
+        await File.WriteAllTextAsync(Path.Combine(evalDisjoint, "manifest.json"), """{"corpusFrom":"2026-07-01T00:00:00Z","corpusTo":"2026-07-10T00:00:00Z"}""");
+        await File.WriteAllTextAsync(Path.Combine(evalUnreadable, "manifest.json"), "not json");
+        await File.WriteAllTextAsync(Path.Combine(eval, "dataset.jsonl"), "owner labels");
+        await File.WriteAllTextAsync(Path.Combine(pool, "keep.txt"), "owner file");
+        var monitor = Substitute.For<IOptionsMonitor<HistoryOptions>>();
+        monitor.CurrentValue.Returns(new HistoryOptions { SmokeArtifactsDirectory = smoke, EvalArtifactsDirectory = eval });
+
+        Assert.True(await new SmokeArtifactErasureStep(monitor).RunAsync(Task(T0, T0.AddDays(1)), CancellationToken.None));
+
+        Assert.False(Directory.Exists(evalOverlap));
+        Assert.False(Directory.Exists(evalUnreadable));
+        Assert.False(Directory.Exists(smokeOverlap));
+        Assert.True(Directory.Exists(evalDisjoint));
+        Assert.True(File.Exists(Path.Combine(eval, "dataset.jsonl")));
+        Assert.True(File.Exists(Path.Combine(pool, "keep.txt")));
+    }
+
+    [Fact]
+    public async Task SmokeArtifacts_RootWithoutRunsDirectory_DeletesNothing()
+    {
+        var root = Path.Combine(this.dir, "smoke");
+        var other = Path.Combine(root, "pool");
+        Directory.CreateDirectory(other);
+        var monitor = Substitute.For<IOptionsMonitor<HistoryOptions>>();
+        monitor.CurrentValue.Returns(new HistoryOptions { SmokeArtifactsDirectory = root, EvalArtifactsDirectory = Path.Combine(this.dir, "none") });
+
+        Assert.True(await new SmokeArtifactErasureStep(monitor).RunAsync(Task(T0, T0.AddDays(1)), CancellationToken.None));
+
+        Assert.True(Directory.Exists(other));
     }
 
     [Fact]

@@ -19,7 +19,7 @@ public sealed class HistoryPurgeServiceTests : IAsyncDisposable
     {
         this.toolOutput = Path.Combine(this.h.Root, "tool-output");
         Directory.CreateDirectory(this.toolOutput);
-        this.h.Options = new HistoryOptions { Enabled = true, TimeZone = "UTC", SmokeArtifactsDirectory = Path.Combine(this.h.Root, "smoke") };
+        this.h.Options = new HistoryOptions { Enabled = true, TimeZone = "UTC", SmokeArtifactsDirectory = Path.Combine(this.h.Root, "smoke"), EvalArtifactsDirectory = Path.Combine(this.h.Root, "eval") };
         this.subagents = new SubagentSessionStore(this.h.Root, NullLogger<SubagentSessionStore>.Instance);
         this.recall = new HistoryRecallService(this.h.Store, this.h.Projector, this.h.Gate, this.h.Status, this.h.Monitor);
         this.purge = new HistoryPurgeService(
@@ -182,7 +182,7 @@ public sealed class HistoryPurgeServiceTests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task PurgeAsync_AllScope_CleansToolOutputSubagentsAndSmokeArtifacts()
+    public async Task PurgeAsync_AllScope_CleansToolOutputSubagentsAndEvaluationArtifacts()
     {
         await this.h.SayAsync("old", 0);
         await File.WriteAllTextAsync(Path.Combine(this.toolOutput, "20260504-spill.txt"), "zqf spill");
@@ -196,10 +196,13 @@ public sealed class HistoryPurgeServiceTests : IAsyncDisposable
             TaskId = "sa-later", ParentConversation = "c", ParentChannel = "ch", Description = "d", Prompt = "p",
             State = SubagentTaskState.Completed, CreatedAt = HistoryHarness.T0.AddDays(3), CompletedAt = HistoryHarness.T0.AddDays(3),
         });
-        var overlapping = Path.Combine(this.h.Options.SmokeArtifactsDirectory, "run-1");
-        var disjoint = Path.Combine(this.h.Options.SmokeArtifactsDirectory, "run-2");
+        var overlapping = Path.Combine(this.h.Options.SmokeArtifactsDirectory, "runs", "run-1");
+        var disjoint = Path.Combine(this.h.Options.SmokeArtifactsDirectory, "runs", "run-2");
+        var evalOverlapping = Path.Combine(this.h.Options.EvalArtifactsDirectory, "runs", "ablate-dev-1");
         Directory.CreateDirectory(overlapping);
         Directory.CreateDirectory(disjoint);
+        Directory.CreateDirectory(evalOverlapping);
+        await File.WriteAllTextAsync(Path.Combine(evalOverlapping, "manifest.json"), $$"""{"corpusFrom":"2026-05-01T00:00:00Z","corpusTo":"2026-05-10T00:00:00Z"}""");
         await File.WriteAllTextAsync(Path.Combine(overlapping, "manifest.json"), $$"""{"corpusFrom":"2026-05-01T00:00:00Z","corpusTo":"2026-05-10T00:00:00Z"}""");
         await File.WriteAllTextAsync(Path.Combine(disjoint, "manifest.json"), $$"""{"corpusFrom":"2026-06-01T00:00:00Z","corpusTo":"2026-06-10T00:00:00Z"}""");
         await this.IndexAsync();
@@ -211,6 +214,7 @@ public sealed class HistoryPurgeServiceTests : IAsyncDisposable
         Assert.Null(this.subagents.GetById("sa-done"));
         Assert.NotNull(this.subagents.GetById("sa-later"));
         Assert.False(Directory.Exists(overlapping));
+        Assert.False(Directory.Exists(evalOverlapping));
         Assert.True(Directory.Exists(disjoint));
     }
 

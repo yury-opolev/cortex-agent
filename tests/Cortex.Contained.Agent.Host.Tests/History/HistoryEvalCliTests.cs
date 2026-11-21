@@ -61,9 +61,40 @@ public sealed class HistoryEvalCliTests : IAsyncDisposable
     {
         Assert.Equal(0, await this.RunAsync("init"));
 
+        Assert.Contains("not covered by purge erasure", this.output.ToString(), StringComparison.Ordinal);
         Assert.True(File.Exists(Path.Combine(this.workspace, "analysis-plan.md")));
         Assert.Contains("pre-registered", await File.ReadAllTextAsync(Path.Combine(this.workspace, "analysis-plan.md")), StringComparison.Ordinal);
         Assert.Equal(AblationGrid.Default().Count, new EvalWorkspace(this.workspace).ReadPlan().Configs.Count);
+    }
+
+    [Fact]
+    public async Task Ablate_RunDirectory_HasManifestAndIsDestroyedOnlyByAnOverlappingPurge()
+    {
+        var (railway, invoice) = await this.SeedAsync();
+        await this.RunAsync("init");
+        this.WriteDataset(railway, invoice);
+        new EvalWorkspace(this.workspace).WritePlan(new AblationPlan
+        {
+            Configs = [new AblationConfig { Name = AblationGrid.Baseline, Mode = HistorySearchMode.Keyword }],
+        });
+        Assert.Equal(0, await this.RunAsync("ablate", "--split", "all"));
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        var runDir = Directory.GetDirectories(Path.Combine(this.workspace, "runs")).Single();
+        var manifest = System.Text.Json.JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(runDir, "manifest.json"))).RootElement;
+        Assert.Equal(T0, manifest.GetProperty("corpusFrom").GetDateTimeOffset());
+        Assert.Equal(T0.AddHours(5), manifest.GetProperty("corpusTo").GetDateTimeOffset());
+        var monitor = Substitute.For<Microsoft.Extensions.Options.IOptionsMonitor<HistoryOptions>>();
+        monitor.CurrentValue.Returns(new HistoryOptions { EvalArtifactsDirectory = this.workspace, SmokeArtifactsDirectory = Path.Combine(this.root, "none") });
+        var step = new SmokeArtifactErasureStep(monitor);
+
+        Assert.True(await step.RunAsync(
+            new ErasureTask { Id = "t", CreatedAt = T0, RangeFrom = T0.AddDays(30), RangeTo = T0.AddDays(31), Steps = [ErasureSteps.SmokeArtifacts] }, CancellationToken.None));
+        Assert.True(Directory.Exists(runDir));
+
+        Assert.True(await step.RunAsync(
+            new ErasureTask { Id = "t", CreatedAt = T0, RangeFrom = T0.AddHours(4), RangeTo = T0.AddHours(6), Steps = [ErasureSteps.SmokeArtifacts] }, CancellationToken.None));
+        Assert.False(Directory.Exists(runDir));
+        Assert.True(File.Exists(Path.Combine(this.workspace, "dataset.jsonl")));
     }
 
     [Fact]

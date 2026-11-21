@@ -47,8 +47,11 @@ public sealed class HistoryOptions
     /// <summary>A purge that deletes more rows than this schedules a <c>VACUUM</c> immediately.</summary>
     public int VacuumAfterPurgeRows { get; set; } = 1000;
 
-    /// <summary>Local smoke-evaluation artifact root; overlapping runs are destroyed on purge.</summary>
+    /// <summary>Local smoke-evaluation workspace root; overlapping <c>runs</c> are destroyed on purge.</summary>
     public string SmokeArtifactsDirectory { get; set; } = "/app/state/eval/smoke";
+
+    /// <summary><c>history-eval</c> workspace root; its overlapping <c>runs</c> are destroyed on purge too (they hold raw copies).</summary>
+    public string EvalArtifactsDirectory { get; set; } = "/app/state/eval/hybrid";
 
     /// <summary>Keyword index variant; part of the index fingerprint (§4.2 stemming ablation).</summary>
     public HistoryKeywordVariant KeywordVariant { get; set; } = HistoryKeywordVariant.Plain;

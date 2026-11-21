@@ -73,10 +73,17 @@ public static class HistoryEvalCli
             return 2;
         }
 
-        var workspace = new EvalWorkspace(Option(args, "--dir") ?? "/app/state/eval/hybrid");
+        var defaultDirectory = new HistoryOptions().EvalArtifactsDirectory;
+        var workspace = new EvalWorkspace(Option(args, "--dir") ?? defaultDirectory);
         var source = Option(args, "--source") ?? "/app/state/messages.db";
         var baseline = new HistoryOptions { Enabled = true, TimeZone = Option(args, "--tz") ?? "Europe/Copenhagen" };
         Directory.CreateDirectory(workspace.Directory);
+        if (!string.Equals(Path.GetFullPath(workspace.Directory), Path.GetFullPath(defaultDirectory), StringComparison.Ordinal))
+        {
+            await output.WriteLineAsync(
+                $"warning: {workspace.Directory} is not the configured History:EvalArtifactsDirectory ({defaultDirectory}); its runs hold raw copies of messages.db and are not covered by purge erasure. Delete them yourself after use.")
+                .ConfigureAwait(false);
+        }
         try
         {
             switch (args[0])

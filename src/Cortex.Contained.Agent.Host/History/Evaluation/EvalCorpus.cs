@@ -9,8 +9,10 @@ namespace Cortex.Contained.Agent.Host.History.Evaluation;
 /// <summary>
 /// A private copy of <c>messages.db</c> with one fully embedded index generation per keyword variant
 /// (§4.2 ablations). The live database and index are never touched; everything stays in the run
-/// directory, which holds raw message text (D6): outputs beside it are numbers only, and the owner
-/// deletes the whole run directory after use (purge erasure covers only the smoke directory).
+/// directory, which holds raw message text (D6): outputs beside it are numbers only. A
+/// <c>manifest.json</c> with the copied corpus's time range is written first, so a purge overlapping
+/// that range destroys the run directory (purge erasure covers the <c>runs</c> of the configured
+/// <c>History:EvalArtifactsDirectory</c>); the owner otherwise deletes the run directory after use.
 /// </summary>
 public sealed class EvalCorpus : IAsyncDisposable
 {
@@ -52,6 +54,9 @@ public sealed class EvalCorpus : IAsyncDisposable
             target.Open();
             source.BackupDatabase(target);
         }
+
+        var manifest = ReadCorpusRange(copyPath);
+        EvalWorkspace.WriteJson(Path.Combine(runDirectory, "manifest.json"), manifest);
 
         var monitor = new MutableOptionsMonitor(baseline);
         var embedder = embedderFactory(monitor);
@@ -162,6 +167,19 @@ public sealed class EvalCorpus : IAsyncDisposable
         }
 
         await this.store.DisposeAsync().ConfigureAwait(false);
+    }
+
+    private static SmokeRunManifest ReadCorpusRange(string copyPath)
+    {
+        using var connection = new SqliteConnection($"Data Source={copyPath};Mode=ReadOnly;Pooling=False");
+        connection.Open();
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT MIN(Timestamp), MAX(Timestamp) FROM Messages;";
+        using var reader = cmd.ExecuteReader();
+        reader.Read();
+        return reader.IsDBNull(0)
+            ? new SmokeRunManifest(DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch)
+            : new SmokeRunManifest(SqliteDateTimeText.Parse(reader.GetString(0)), SqliteDateTimeText.Parse(reader.GetString(1)));
     }
 
     private sealed class MutableOptionsMonitor(HistoryOptions baseline) : IOptionsMonitor<HistoryOptions>

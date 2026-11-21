@@ -130,9 +130,13 @@ public sealed class SubagentErasureStep(SubagentSessionStore store) : IErasureSt
 }
 
 /// <summary>
-/// Destroys smoke-evaluation run directories whose corpus overlaps the purged range (D3). A run
-/// directory without a readable <c>manifest.json</c> is destroyed too. Owner-authored files at the
-/// root (queries, analysis plan) are kept.
+/// Destroys evaluation run directories whose corpus overlaps the purged range (D3): the
+/// <c>runs</c> subdirectory of the smoke workspace (<c>SmokeArtifactsDirectory</c>) and of the
+/// <c>history-eval</c> workspace (<c>EvalArtifactsDirectory</c>). Both hold raw copies of
+/// <c>messages.db</c> and index copies. A run directory without a readable <c>manifest.json</c> is
+/// destroyed too (the overlap cannot be determined). Only the children of <c>runs</c> are ever
+/// enumerated, so owner-authored files and directories in the workspace root (queries, dataset,
+/// analysis plan, pool) are kept.
 /// </summary>
 public sealed class SmokeArtifactErasureStep(IOptionsMonitor<HistoryOptions> options) : IErasureStep
 {
@@ -145,31 +149,40 @@ public sealed class SmokeArtifactErasureStep(IOptionsMonitor<HistoryOptions> opt
     public Task<bool> RunAsync(ErasureTask task, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(task);
-        var root = options.CurrentValue.SmokeArtifactsDirectory;
-        if (task.RangeTo is not { } to || !Directory.Exists(root))
+        if (task.RangeTo is not { } to)
         {
             return Task.FromResult(true);
         }
 
+        var current = options.CurrentValue;
         var allGone = true;
-        foreach (var run in Directory.EnumerateDirectories(root))
+        foreach (var workspace in new[] { current.SmokeArtifactsDirectory, current.EvalArtifactsDirectory })
         {
-            if (!Overlaps(Path.Combine(run, "manifest.json"), task.RangeFrom, to))
+            var runs = Path.Combine(workspace, "runs");
+            if (!Directory.Exists(runs))
             {
                 continue;
             }
 
-            try
+            foreach (var run in Directory.EnumerateDirectories(runs))
             {
-                Directory.Delete(run, recursive: true);
-            }
-            catch (IOException)
-            {
-                allGone = false;
-            }
-            catch (UnauthorizedAccessException)
-            {
-                allGone = false;
+                if (!Overlaps(Path.Combine(run, "manifest.json"), task.RangeFrom, to))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    Directory.Delete(run, recursive: true);
+                }
+                catch (IOException)
+                {
+                    allGone = false;
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    allGone = false;
+                }
             }
         }
 
@@ -191,7 +204,7 @@ public sealed class SmokeArtifactErasureStep(IOptionsMonitor<HistoryOptions> opt
     }
 }
 
-/// <summary>Corpus range recorded by the smoke-evaluation harness in each run directory.</summary>
+/// <summary>Corpus range recorded by the smoke and history-eval harnesses in each run directory.</summary>
 public sealed record SmokeRunManifest(DateTimeOffset CorpusFrom, DateTimeOffset CorpusTo);
 
 /// <summary>
