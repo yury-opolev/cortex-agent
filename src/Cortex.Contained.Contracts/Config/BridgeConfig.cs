@@ -55,6 +55,20 @@ public sealed class BridgeConfig
 
     /// <summary>Connector plugin-system settings.</summary>
     public ConnectorSettingsConfig Connectors { get; set; } = new();
+
+    /// <summary>Reranker sidecar for history and memory search (episodic history, increment 5).</summary>
+    public RerankerSettingsConfig Reranker { get; set; } = new();
+}
+
+/// <summary>Reranker settings persisted on the Bridge host.</summary>
+public sealed class RerankerSettingsConfig
+{
+    /// <summary>
+    /// Master reranker switch (<c>Reranker:Enabled</c>, default false). When true the Bridge starts the
+    /// <c>cortex-reranker</c> sidecar with its DPAPI-held API key and pushes the switch and the key to the
+    /// agents, which then rerank hybrid history and memory results. Enable only after Gate R passed.
+    /// </summary>
+    public bool Enabled { get; set; }
 }
 
 /// <summary>Memory service settings persisted on the Bridge host.</summary>

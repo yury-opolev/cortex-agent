@@ -304,6 +304,40 @@ public sealed partial class SecretManager
     }
 
     /// <summary>
+    /// The API key of the <c>cortex-reranker</c> sidecar (64 hex characters, 256-bit), created on first use
+    /// and kept DPAPI-encrypted. The Bridge passes it to the sidecar when starting it and pushes it to the
+    /// agents. If it cannot be decrypted a new one is generated: the next sidecar start recreates the
+    /// container with it (the key is part of its configuration) and the next push updates the agents.
+    /// </summary>
+    public string GetOrCreateRerankerKey()
+    {
+        lock (this.fileLock)
+        {
+            EnsureSecretsDirectory();
+
+            var filePath = Path.Combine(this.secretsDir, SecretsFileName);
+            var secrets = LoadSecrets(filePath);
+            if (secrets.RerankerKey is not null)
+            {
+                try
+                {
+                    return this.store.Unprotect(secrets.RerankerKey);
+                }
+                catch (Exception ex)
+                {
+                    this.LogRerankerKeyDecryptionFailed(ex.Message);
+                }
+            }
+
+            var key = Convert.ToHexStringLower(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32));
+            secrets.RerankerKey = this.store.Protect(key);
+            SaveSecrets(filePath, secrets);
+            this.LogRerankerKeyGenerated();
+            return key;
+        }
+    }
+
+    /// <summary>
     /// Regenerates the hub token, encrypts and saves the new one. Returns the plaintext.
     /// </summary>
     public string RegenerateHubToken()
@@ -558,6 +592,12 @@ public sealed partial class SecretManager
     [LoggerMessage(Level = LogLevel.Information, Message = "Discord bot token stored in encrypted storage")]
     private partial void LogDiscordBotTokenStored();
 
+    [LoggerMessage(Level = LogLevel.Information, Message = "Reranker API key generated and saved to encrypted storage")]
+    private partial void LogRerankerKeyGenerated();
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to decrypt the reranker API key: {ErrorMessage}. Regenerating...")]
+    private partial void LogRerankerKeyDecryptionFailed(string errorMessage);
+
     [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to decrypt Discord bot token: {ErrorMessage}")]
     private partial void LogDiscordBotTokenDecryptionFailed(string errorMessage);
 
@@ -578,5 +618,7 @@ public sealed partial class SecretManager
         public string? DiscordBotToken { get; set; }
         /// <summary>DPAPI-encrypted per-tenant storage master keys (Base64-encoded 256-bit), keyed by tenant ID.</summary>
         public Dictionary<string, string>? TenantStorageKeys { get; set; }
+        /// <summary>DPAPI-encrypted API key of the cortex-reranker sidecar (hex, 256-bit).</summary>
+        public string? RerankerKey { get; set; }
     }
 }

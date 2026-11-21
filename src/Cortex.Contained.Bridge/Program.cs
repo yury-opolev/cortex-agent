@@ -1087,6 +1087,8 @@ builder.Services.AddSingleton<Cortex.Contained.Bridge.Speech.IEmbeddingsComposeR
     sp => sp.GetRequiredService<Cortex.Contained.Bridge.Speech.DockerComposeCommandRunner>());
 builder.Services.AddSingleton<Cortex.Contained.Bridge.Speech.IVoiceIdComposeRunner>(
     sp => sp.GetRequiredService<Cortex.Contained.Bridge.Speech.DockerComposeCommandRunner>());
+builder.Services.AddSingleton<Cortex.Contained.Bridge.Speech.IRerankerComposeRunner>(
+    sp => sp.GetRequiredService<Cortex.Contained.Bridge.Speech.DockerComposeCommandRunner>());
 builder.Services.AddSingleton<Cortex.Contained.Bridge.Speech.DanishTtsLifecycle>();
 // Restarts uni-voices / whisper-stt when they report healthy but fail every request
 // (poisoned CUDA context) — otherwise voice stays dead until someone notices by ear.
@@ -1094,6 +1096,10 @@ builder.Services.AddSingleton<Cortex.Contained.Bridge.Speech.SpeechSidecarFaultR
 builder.Services.AddSingleton<Cortex.Contained.Bridge.Speech.SttSidecarLifecycle>();
 builder.Services.AddSingleton<Cortex.Contained.Bridge.Speech.EmbeddingsSidecarLifecycle>();
 builder.Services.AddSingleton<Cortex.Contained.Bridge.Speech.VoiceIdSidecarLifecycle>();
+builder.Services.AddSingleton(sp => new Cortex.Contained.Bridge.Speech.RerankerSidecarLifecycle(
+    sp.GetRequiredService<Cortex.Contained.Bridge.Speech.IRerankerComposeRunner>(),
+    secretManager.GetOrCreateRerankerKey,
+    sp.GetRequiredService<ILogger<Cortex.Contained.Bridge.Speech.RerankerSidecarLifecycle>>()));
 
 var app = builder.Build();
 
@@ -1136,6 +1142,13 @@ _ = modelCatalog.InitializeAsync(); // Fire-and-forget; data will be ready befor
     var embeddingsLifecycle = app.Services.GetRequiredService<Cortex.Contained.Bridge.Speech.EmbeddingsSidecarLifecycle>();
     var memEnabled = app.Services.GetRequiredService<BridgeConfig>().Memory.Enabled;
     _ = Task.Run(() => embeddingsLifecycle.ReconcileAsync(memEnabled, CancellationToken.None));
+}
+
+// --- Reranker sidecar lifecycle: converge with Reranker:Enabled at startup (also picks up a new image) ---
+{
+    var rerankerLifecycle = app.Services.GetRequiredService<Cortex.Contained.Bridge.Speech.RerankerSidecarLifecycle>();
+    var rerankerEnabled = app.Services.GetRequiredService<BridgeConfig>().Reranker.Enabled;
+    _ = Task.Run(() => rerankerLifecycle.ReconcileAsync(rerankerEnabled, CancellationToken.None));
 }
 
 // --- Voice-id sidecar lifecycle: converge with effective voice-id flag at startup ---

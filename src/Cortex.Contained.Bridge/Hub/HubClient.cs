@@ -299,6 +299,16 @@ public sealed partial class HubClient : IAsyncDisposable
             cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>Push the reranker switch and the sidecar API key (increment 5).</summary>
+    public async Task ProvideRerankerGrantAsync(RerankerGrant grant, CancellationToken cancellationToken)
+    {
+        EnsureConnected();
+        await this.connection!.InvokeAsync(
+            nameof(IAgentHub.ProvideRerankerGrant),
+            grant,
+            cancellationToken).ConfigureAwait(false);
+    }
+
     /// <summary>Push LLM provider credentials to the agent.</summary>
     public async Task ProvideCredentialsAsync(LlmCredentials credentials, CancellationToken cancellationToken)
     {

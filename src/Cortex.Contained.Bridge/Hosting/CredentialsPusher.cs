@@ -56,6 +56,7 @@ public sealed partial class CredentialsPusher : ICredentialReplisher
     {
         // The storage key goes first: the agent's encrypted stores open only once it arrives.
         await this.PushStorageKeysAsync(cancellationToken).ConfigureAwait(false);
+        await this.PushRerankerGrantAsync(cancellationToken).ConfigureAwait(false);
 
         var providers = await this.BuildProviderCredentialsAsync(cancellationToken).ConfigureAwait(false);
 
@@ -148,6 +149,58 @@ public sealed partial class CredentialsPusher : ICredentialReplisher
             catch (Exception ex)
             {
                 this.LogStorageKeyPushFailed(tenantId, ex.Message);
+            }
+#pragma warning restore CA1031
+        }
+    }
+
+    /// <summary>
+    /// Pushes the reranker switch (<c>Reranker:Enabled</c>) and, when enabled, the sidecar's DPAPI-held API
+    /// key to every connected tenant's agent. A disabled switch is pushed too, so a running agent turns
+    /// reranking off when the owner disables it.
+    /// </summary>
+    private async Task PushRerankerGrantAsync(CancellationToken cancellationToken)
+    {
+        RerankerGrant grant;
+        try
+        {
+            grant = this.BuildRerankerGrant();
+        }
+#pragma warning disable CA1031 // A secrets-file problem must not block the credential push
+        catch (Exception ex)
+        {
+            this.LogRerankerGrantPushFailed("*", ex.Message);
+            return;
+        }
+#pragma warning restore CA1031
+
+        var targets = this.tenantRouter.GetConnectedTenantIds()
+            .Select(tenantId => (tenantId, client: this.tenantRouter.GetClient(tenantId)))
+            .Where(t => t.client?.IsConnected == true)
+            .Select(t => (IRerankerGrantPushTarget)new RerankerGrantPushTarget(t.tenantId, t.client!))
+            .ToList();
+        await this.PushRerankerGrantToTargetsAsync(grant, targets, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>The grant for the current configuration: the key only when reranking is enabled.</summary>
+    internal RerankerGrant BuildRerankerGrant() => this.config.Reranker.Enabled
+        ? new RerankerGrant { Enabled = true, ApiKey = this.secretManager.GetOrCreateRerankerKey() }
+        : new RerankerGrant { Enabled = false };
+
+    /// <summary>Pushes <paramref name="grant"/> to each target, isolating per-tenant failures (testable seam).</summary>
+    internal async Task PushRerankerGrantToTargetsAsync(
+        RerankerGrant grant, IReadOnlyList<IRerankerGrantPushTarget> targets, CancellationToken cancellationToken)
+    {
+        foreach (var target in targets)
+        {
+            try
+            {
+                await target.ProvideRerankerGrantAsync(grant, cancellationToken).ConfigureAwait(false);
+            }
+#pragma warning disable CA1031 // Individual tenant failures should not block others
+            catch (Exception ex)
+            {
+                this.LogRerankerGrantPushFailed(target.TenantId, ex.Message);
             }
 #pragma warning restore CA1031
         }
@@ -569,6 +622,9 @@ public sealed partial class CredentialsPusher : ICredentialReplisher
     [LoggerMessage(Level = LogLevel.Error, Message = "Could not push the storage key to tenant {TenantId}: {Error}")]
     private partial void LogStorageKeyPushFailed(string tenantId, string error);
 
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Could not push the reranker grant to tenant {TenantId}: {Error}")]
+    private partial void LogRerankerGrantPushFailed(string tenantId, string error);
+
     [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to push credentials to tenant '{TenantId}': {Error}")]
     private partial void LogCredentialPushToTenantFailed(string tenantId, string error);
 
@@ -607,6 +663,36 @@ public sealed partial class CredentialsPusher : ICredentialReplisher
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to push agent config to tenant '{TenantId}': {Error}")]
     private partial void LogAgentConfigPushToTenantFailed(string tenantId, string error);
+}
+
+/// <summary>
+/// One connected tenant the reranker grant is pushed to. Abstracted so the multi-tenant push loop can
+/// be unit-tested without the sealed <c>TenantRouter</c>/<c>HubClient</c>.
+/// </summary>
+internal interface IRerankerGrantPushTarget
+{
+    /// <summary>The tenant ID, used for per-tenant failure logging.</summary>
+    string TenantId { get; }
+
+    /// <summary>Pushes the grant to this tenant's agent.</summary>
+    Task ProvideRerankerGrantAsync(RerankerGrant grant, CancellationToken cancellationToken);
+}
+
+/// <summary>Adapts a connected <see cref="Hub.HubClient"/> to <see cref="IRerankerGrantPushTarget"/>.</summary>
+internal sealed class RerankerGrantPushTarget : IRerankerGrantPushTarget
+{
+    private readonly Hub.HubClient client;
+
+    public RerankerGrantPushTarget(string tenantId, Hub.HubClient client)
+    {
+        this.TenantId = tenantId;
+        this.client = client;
+    }
+
+    public string TenantId { get; }
+
+    public Task ProvideRerankerGrantAsync(RerankerGrant grant, CancellationToken cancellationToken)
+        => this.client.ProvideRerankerGrantAsync(grant, cancellationToken);
 }
 
 /// <summary>

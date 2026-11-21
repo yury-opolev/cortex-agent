@@ -9,12 +9,16 @@ namespace Cortex.Contained.Bridge.Speech;
 /// <see cref="Tenants.DockerContainerManager"/>. The compose file is resolved to
 /// <c>%LOCALAPPDATA%\Cortex\docker-compose.yml</c>.
 /// </summary>
-public sealed partial class DockerComposeCommandRunner : IComposeCommandRunner, ISttComposeRunner, IEmbeddingsComposeRunner, IVoiceIdComposeRunner
+public sealed partial class DockerComposeCommandRunner : IComposeCommandRunner, ISttComposeRunner, IEmbeddingsComposeRunner, IVoiceIdComposeRunner, IRerankerComposeRunner
 {
     private const string DanishContainerName = "cortex-uni-voices";
     private const string SttContainerName = "cortex-stt";
     private const string EmbeddingsContainerName = "cortex-embeddings";
     private const string VoiceIdContainerName = "cortex-voice-id";
+    private const string RerankerContainerName = "cortex-reranker";
+
+    /// <summary>Environment variable compose interpolates into the reranker's <c>LLAMA_API_KEY</c>.</summary>
+    internal const string RerankerKeyVariable = "CORTEX_RERANKER_API_KEY";
 
     /// <summary>Image pull/start can be slow on first run, so allow a generous window.</summary>
     private static readonly TimeSpan StartTimeout = TimeSpan.FromSeconds(60);
@@ -128,6 +132,28 @@ public sealed partial class DockerComposeCommandRunner : IComposeCommandRunner, 
     public Task<bool> IsVoiceIdRunningAsync(CancellationToken cancellationToken)
         => this.IsContainerRunningAsync(VoiceIdContainerName, cancellationToken);
 
+    /// <inheritdoc />
+    public Task<bool> StartRerankerAsync(string apiKey, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(apiKey);
+        return this.RunCommandAsync(
+            $"compose -f \"{this.composeFilePath}\" --profile reranker up -d reranker",
+            StartTimeout,
+            cancellationToken,
+            new Dictionary<string, string> { [RerankerKeyVariable] = apiKey });
+    }
+
+    /// <inheritdoc />
+    public Task<bool> StopRerankerAsync(CancellationToken cancellationToken)
+        => this.RunCommandAsync(
+            $"compose -f \"{this.composeFilePath}\" --profile reranker stop reranker",
+            ShortTimeout,
+            cancellationToken);
+
+    /// <inheritdoc />
+    public Task<bool> IsRerankerRunningAsync(CancellationToken cancellationToken)
+        => this.IsContainerRunningAsync(RerankerContainerName, cancellationToken);
+
     private async Task<bool> IsContainerRunningAsync(string containerName, CancellationToken cancellationToken)
     {
         try
@@ -167,7 +193,8 @@ public sealed partial class DockerComposeCommandRunner : IComposeCommandRunner, 
         }
     }
 
-    private async Task<bool> RunCommandAsync(string arguments, TimeSpan timeout, CancellationToken cancellationToken)
+    private async Task<bool> RunCommandAsync(
+        string arguments, TimeSpan timeout, CancellationToken cancellationToken, IReadOnlyDictionary<string, string>? environment = null)
     {
         try
         {
@@ -185,6 +212,12 @@ public sealed partial class DockerComposeCommandRunner : IComposeCommandRunner, 
                     CreateNoWindow = true,
                 },
             };
+
+            // Secrets travel in the child's environment only: never on the command line, never logged.
+            foreach (var (name, value) in environment ?? new Dictionary<string, string>())
+            {
+                process.StartInfo.Environment[name] = value;
+            }
 
             process.Start();
 
