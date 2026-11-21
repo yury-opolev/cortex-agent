@@ -379,14 +379,19 @@ public sealed partial class HistoryIndexReader : IDisposable
     }
 
     /// <summary>Segments matching <paramref name="match"/> by BM25 (best first).</summary>
-    public IReadOnlyList<IndexedSegment> SearchRelevance(string match, SegmentFilter filter, int limit, int offset)
+    public IReadOnlyList<IndexedSegment> SearchRelevance(string match, SegmentFilter filter, int limit, int offset) =>
+        this.SearchRelevance(match, filter, limit, offset, HistoryKeywordVariant.Plain);
+
+    /// <summary>Segments matching <paramref name="match"/> in the keyword table of <paramref name="table"/>, by BM25.</summary>
+    public IReadOnlyList<IndexedSegment> SearchRelevance(string match, SegmentFilter filter, int limit, int offset, HistoryKeywordVariant table)
     {
         ArgumentNullException.ThrowIfNull(filter);
+        var fts = table == HistoryKeywordVariant.Trigram ? "segments_tri" : "segments_fts";
         using var cmd = this.connection.CreateCommand();
         cmd.CommandText = $"""
-            SELECT {SegmentColumns}, bm25(segments_fts) AS score
-            FROM segments_fts JOIN segments s ON s.SegId = segments_fts.rowid
-            WHERE segments_fts MATCH @match
+            SELECT {SegmentColumns}, bm25({fts}) AS score
+            FROM {fts} JOIN segments s ON s.SegId = {fts}.rowid
+            WHERE {fts} MATCH @match
               AND (@channel IS NULL OR s.ChannelId = @channel)
               AND (@since IS NULL OR s.EndTs >= @since)
               AND (@until IS NULL OR s.StartTs < @until)

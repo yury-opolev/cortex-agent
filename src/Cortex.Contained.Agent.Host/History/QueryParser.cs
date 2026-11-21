@@ -27,7 +27,14 @@ public sealed record QueryTerm(IReadOnlyList<string> Tokens, bool IsPrefix)
 /// <param name="MatchExpression">The FTS5 expression.</param>
 /// <param name="Terms">Terms kept in the expression.</param>
 /// <param name="DroppedTerms">Plain words dropped by the document-frequency cap.</param>
-public sealed record ParsedHistoryQuery(string MatchExpression, IReadOnlyList<QueryTerm> Terms, IReadOnlyList<QueryTerm> DroppedTerms);
+public sealed record ParsedHistoryQuery(string MatchExpression, IReadOnlyList<QueryTerm> Terms, IReadOnlyList<QueryTerm> DroppedTerms)
+{
+    /// <summary>
+    /// Which keyword table the expression targets: <see cref="HistoryKeywordVariant.Plain"/> and
+    /// <see cref="HistoryKeywordVariant.Stemmed"/> use <c>segments_fts</c>, <see cref="HistoryKeywordVariant.Trigram"/> uses <c>segments_tri</c>.
+    /// </summary>
+    public HistoryKeywordVariant Table { get; init; } = HistoryKeywordVariant.Plain;
+}
 
 /// <summary>
 /// Parses agent queries (§9.3): quoted phrases stay phrases, <c>term*</c> is a prefix
@@ -152,6 +159,43 @@ public static class QueryParser
             string.Join(" OR ", kept.Select(t => t.ToFts())),
             kept,
             dropped.Select(d => d.Term).ToList());
+    }
+
+    /// <summary>
+    /// Adapts a parsed query to the configured keyword variant (§4.2 ablation). Plain is unchanged.
+    /// Stemmed keeps the exact expression on the <c>body</c> column and, for relevance order, adds the
+    /// Snowball stems of every plain word on the <c>stem</c> column. Trigram relevance queries match
+    /// each term of at least three characters as a substring in the trigram table. Time order always
+    /// keeps exact word semantics on <c>body</c>.
+    /// </summary>
+    public static ParsedHistoryQuery ForVariant(ParsedHistoryQuery parsed, HistoryKeywordVariant variant, HistoryOrder order)
+    {
+        ArgumentNullException.ThrowIfNull(parsed);
+        switch (variant)
+        {
+            case HistoryKeywordVariant.Stemmed:
+                var body = "body : (" + parsed.MatchExpression + ")";
+                var stems = parsed.Terms.Where(t => t.IsPlainWord)
+                    .SelectMany(t => HistoryStemmer.Stems(t.Tokens[0]))
+                    .Distinct(StringComparer.Ordinal)
+                    .Select(s => new QueryTerm([s], false).ToFts())
+                    .ToList();
+                var expression = order == HistoryOrder.Relevance && stems.Count > 0
+                    ? body + " OR stem : (" + string.Join(" OR ", stems) + ")"
+                    : body;
+                return parsed with { MatchExpression = expression, Table = HistoryKeywordVariant.Stemmed };
+            case HistoryKeywordVariant.Trigram when order == HistoryOrder.Relevance:
+                var substrings = parsed.Terms
+                    .Select(t => string.Join(' ', t.Tokens))
+                    .Where(s => s.Length >= 3)
+                    .Select(s => "\"" + s.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"")
+                    .ToList();
+                return substrings.Count == 0
+                    ? parsed
+                    : parsed with { MatchExpression = string.Join(" OR ", substrings), Table = HistoryKeywordVariant.Trigram };
+            default:
+                return parsed;
+        }
     }
 
     private static void AddTerm(List<QueryTerm> terms, string text, bool isPrefix)

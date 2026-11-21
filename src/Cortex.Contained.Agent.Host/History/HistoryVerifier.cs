@@ -37,15 +37,27 @@ public sealed record VerifiedSegment(IndexedSegment Segment, IReadOnlyList<Messa
 public static class HistoryVerifier
 {
     /// <summary>Verifies <paramref name="segments"/>; returns them in input order plus the missing-row count.</summary>
-    public static async Task<(IReadOnlyList<VerifiedSegment> Segments, int Unavailable)> VerifyAsync(
+    public static Task<(IReadOnlyList<VerifiedSegment> Segments, int Unavailable)> VerifyAsync(
         HistorySourceSnapshot snapshot,
         IReadOnlyList<IndexedSegment> segments,
         string matchExpression,
         RecallFilter filter,
         bool forTimeOrder,
         Action<string> requestRecompute,
+        CancellationToken cancellationToken) =>
+        VerifyAsync(snapshot, segments, new ParsedHistoryQuery(matchExpression, [], []), filter, forTimeOrder, requestRecompute, cancellationToken);
+
+    /// <summary>Verifies <paramref name="segments"/> against <paramref name="query"/> on its keyword table.</summary>
+    public static async Task<(IReadOnlyList<VerifiedSegment> Segments, int Unavailable)> VerifyAsync(
+        HistorySourceSnapshot snapshot,
+        IReadOnlyList<IndexedSegment> segments,
+        ParsedHistoryQuery query,
+        RecallFilter filter,
+        bool forTimeOrder,
+        Action<string> requestRecompute,
         CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(query);
         ArgumentNullException.ThrowIfNull(snapshot);
         ArgumentNullException.ThrowIfNull(segments);
         ArgumentNullException.ThrowIfNull(filter);
@@ -54,7 +66,7 @@ public static class HistoryVerifier
         var ids = segments.SelectMany(s => s.MsgIds).Distinct().ToList();
         var rows = (await snapshot.ReadByIdsAsync(ids, cancellationToken).ConfigureAwait(false)).ToDictionary(r => r.Id);
         var visible = rows.Values.Where(r => filter.Admits(r, forTimeOrder)).ToList();
-        var matched = visible.Count == 0 ? new HashSet<long>() : FtsRematcher.Match(matchExpression, visible);
+        var matched = visible.Count == 0 ? new HashSet<long>() : FtsRematcher.Match(query.MatchExpression, visible, query.Table);
 
         var unavailable = 0;
         var verified = new List<VerifiedSegment>(segments.Count);

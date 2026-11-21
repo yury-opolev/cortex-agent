@@ -11,7 +11,15 @@ namespace Cortex.Contained.Agent.Host.History;
 public static class FtsRematcher
 {
     /// <summary>Returns the ids of <paramref name="rows"/> whose indexed body matches <paramref name="matchExpression"/>.</summary>
-    public static IReadOnlySet<long> Match(string matchExpression, IEnumerable<MessageRecord> rows)
+    public static IReadOnlySet<long> Match(string matchExpression, IEnumerable<MessageRecord> rows) =>
+        Match(matchExpression, rows, HistoryKeywordVariant.Plain);
+
+    /// <summary>
+    /// Like <see cref="Match(string, IEnumerable{MessageRecord})"/> on the table <paramref name="table"/>
+    /// queries: <c>(body, stem)</c> with stems for <see cref="HistoryKeywordVariant.Stemmed"/>, the
+    /// trigram tokenizer for <see cref="HistoryKeywordVariant.Trigram"/>.
+    /// </summary>
+    public static IReadOnlySet<long> Match(string matchExpression, IEnumerable<MessageRecord> rows, HistoryKeywordVariant table)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(matchExpression);
         ArgumentNullException.ThrowIfNull(rows);
@@ -20,8 +28,9 @@ public static class FtsRematcher
         connection.Open();
         using (var create = connection.CreateCommand())
         {
-            create.CommandText =
-                $"CREATE VIRTUAL TABLE m USING fts5(body, tokenize='{HistoryConfigFingerprint.TokenizerSpec}', prefix='{HistoryConfigFingerprint.PrefixSpec}');";
+            create.CommandText = table == HistoryKeywordVariant.Trigram
+                ? $"CREATE VIRTUAL TABLE m USING fts5(body, stem UNINDEXED, tokenize='{HistoryConfigFingerprint.TrigramTokenizerSpec}');"
+                : $"CREATE VIRTUAL TABLE m USING fts5(body, stem, tokenize='{HistoryConfigFingerprint.TokenizerSpec}', prefix='{HistoryConfigFingerprint.PrefixSpec}');";
             create.ExecuteNonQuery();
         }
 
@@ -29,13 +38,16 @@ public static class FtsRematcher
         using (var insert = connection.CreateCommand())
         {
             insert.Transaction = transaction;
-            insert.CommandText = "INSERT INTO m(rowid, body) VALUES (@id, @body);";
+            insert.CommandText = "INSERT INTO m(rowid, body, stem) VALUES (@id, @body, @stem);";
             var id = insert.Parameters.Add("@id", SqliteType.Integer);
             var body = insert.Parameters.Add("@body", SqliteType.Text);
+            var stem = insert.Parameters.Add("@stem", SqliteType.Text);
             foreach (var row in rows)
             {
+                var indexed = HistoryRowText.IndexedBody(row);
                 id.Value = row.Id;
-                body.Value = HistoryRowText.IndexedBody(row);
+                body.Value = indexed;
+                stem.Value = table == HistoryKeywordVariant.Stemmed ? HistoryStemmer.StemBody(indexed) : string.Empty;
                 insert.ExecuteNonQuery();
             }
 

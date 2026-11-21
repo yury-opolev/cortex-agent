@@ -90,6 +90,7 @@ public sealed class HistoryRecallService
             };
         }
 
+        parsed = QueryParser.ForVariant(parsed, this.options.CurrentValue.KeywordVariant, request.Order);
         var filter = new RecallFilter(request.Channel, request.Since, request.Until, request.IncludeInternal, request.IncludeEchoes);
         var (tailRows, tailCount, tailTruncated) = await this.ReadTailAsync(snapshot, checkpoint, cancellationToken).ConfigureAwait(false);
         var coverage = BuildCoverage(index, state, meta.JournalHead, checkpoint, request.Channel, this.status.Snapshot().Halted, tailCount, tailTruncated) with { PurgeFenced = purgeFenced };
@@ -251,7 +252,7 @@ public sealed class HistoryRecallService
         CancellationToken cancellationToken)
     {
         var visibleTail = tailRows.Where(r => filter.Admits(r, forTimeOrder: false)).ToList();
-        var tailMatched = visibleTail.Count == 0 ? new HashSet<long>() : FtsRematcher.Match(parsed.MatchExpression, visibleTail);
+        var tailMatched = visibleTail.Count == 0 ? new HashSet<long>() : FtsRematcher.Match(parsed.MatchExpression, visibleTail, parsed.Table);
         var tailHits = visibleTail.Where(r => tailMatched.Contains(r.Id))
             .GroupBy(r => r.ChannelId, StringComparer.Ordinal)
             .OrderBy(g => g.Key, StringComparer.Ordinal)
@@ -277,10 +278,10 @@ public sealed class HistoryRecallService
         var pageSize = request.Limit * 3;
         while (!exhausted && hits.Count < request.Limit && scanned < MaxRelevanceCandidates)
         {
-            var batch = reader!.SearchRelevance(parsed.MatchExpression, new SegmentFilter(request.Channel, Format(request.Since), Format(request.Until)), pageSize, offset);
+            var batch = reader!.SearchRelevance(parsed.MatchExpression, new SegmentFilter(request.Channel, Format(request.Since), Format(request.Until)), pageSize, offset, parsed.Table);
             exhausted = batch.Count < pageSize;
             var (verified, missing) = await HistoryVerifier.VerifyAsync(
-                snapshot, batch, parsed.MatchExpression, filter, forTimeOrder: false, this.projector.RequestChannelRecompute, cancellationToken).ConfigureAwait(false);
+                snapshot, batch, parsed, filter, forTimeOrder: false, this.projector.RequestChannelRecompute, cancellationToken).ConfigureAwait(false);
             unavailable += missing;
 
             var consumed = 0;
@@ -350,7 +351,7 @@ public sealed class HistoryRecallService
         var visibleTail = tailRows.Where(r => filter.Admits(r, forTimeOrder: true) && After(r)).ToList();
         if (visibleTail.Count > 0)
         {
-            var matched = FtsRematcher.Match(parsed.MatchExpression, visibleTail);
+            var matched = FtsRematcher.Match(parsed.MatchExpression, visibleTail, parsed.Table);
             foreach (var row in visibleTail.Where(r => matched.Contains(r.Id)))
             {
                 buffer[(SqliteDateTimeText.Format(row.Timestamp), row.Id)] = (row, HistoryHitSource.Unindexed);
@@ -376,7 +377,7 @@ public sealed class HistoryRecallService
                 }
 
                 var (verified, missing) = await HistoryVerifier.VerifyAsync(
-                    snapshot, batch, parsed.MatchExpression, filter, forTimeOrder: true, this.projector.RequestChannelRecompute, cancellationToken).ConfigureAwait(false);
+                    snapshot, batch, parsed, filter, forTimeOrder: true, this.projector.RequestChannelRecompute, cancellationToken).ConfigureAwait(false);
                 unavailable += missing;
                 foreach (var row in verified.SelectMany(v => v.Matched).Where(After))
                 {
