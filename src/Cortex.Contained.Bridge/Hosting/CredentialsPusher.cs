@@ -563,7 +563,7 @@ public sealed partial class CredentialsPusher : ICredentialReplisher
     [LoggerMessage(Level = LogLevel.Information, Message = "LLM credentials pushed to agent: {ProviderCount} providers")]
     private partial void LogCredentialsPushed(int providerCount);
 
-    [LoggerMessage(Level = LogLevel.Error, Message = "Agent of tenant {TenantId} rejected its storage key (it already uses a different key)")]
+    [LoggerMessage(Level = LogLevel.Critical, Message = "ALARM: agent of tenant {TenantId} REJECTED its storage key because it already uses a different key. The tenant's encrypted history may be locked until the correct key is restored; do not delete secrets.json or the tenant's data.")]
     private partial void LogStorageKeyRejected(string tenantId);
 
     [LoggerMessage(Level = LogLevel.Error, Message = "Could not push the storage key to tenant {TenantId}: {Error}")]

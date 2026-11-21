@@ -39,6 +39,56 @@ public sealed class TenantStorageKeyTests : IDisposable
         Assert.Equal(onDisk, File.ReadAllText(Path.Combine(this.tempDir, "secrets.json")));
     }
 
+    [Fact]
+    public async Task GetOrCreateTenantStorageKey_Concurrent_AllCallersGetThePersistedKey()
+    {
+        var store = new InMemorySecretStore();
+        using var gate = new ManualResetEventSlim();
+        var tasks = Enumerable.Range(0, 32).Select(_ => Task.Run(() =>
+        {
+            gate.Wait();
+            return new SecretManager(store, NullLogger<SecretManager>.Instance, this.tempDir).GetOrCreateTenantStorageKey("default");
+        })).ToArray();
+        gate.Set();
+
+        var keys = await Task.WhenAll(tasks);
+
+        Assert.Single(keys.Distinct());
+        Assert.Equal(keys[0], new SecretManager(store, NullLogger<SecretManager>.Instance, this.tempDir).GetOrCreateTenantStorageKey("default"));
+    }
+
+    [Fact]
+    public async Task StoreOAuthTokens_ConcurrentWithKeyCreation_KeepsBoth()
+    {
+        var store = new InMemorySecretStore();
+        for (var round = 0; round < 20; round++)
+        {
+            var dir = Path.Combine(this.tempDir, $"round{round}");
+            using var gate = new ManualResetEventSlim();
+            var keyTask = Task.Run(() =>
+            {
+                gate.Wait();
+                return new SecretManager(store, NullLogger<SecretManager>.Instance, dir).GetOrCreateTenantStorageKey("default");
+            });
+            var oauthTasks = Enumerable.Range(0, 8).Select(i => Task.Run(() =>
+            {
+                gate.Wait();
+                new SecretManager(store, NullLogger<SecretManager>.Instance, dir).StoreOAuthTokens($"p{i}", $"access{i}", $"refresh{i}", 100 + i);
+            })).ToArray();
+            gate.Set();
+
+            var key = await keyTask;
+            await Task.WhenAll(oauthTasks);
+
+            var reader = new SecretManager(store, NullLogger<SecretManager>.Instance, dir);
+            Assert.Equal(key, reader.GetOrCreateTenantStorageKey("default"));
+            for (var i = 0; i < 8; i++)
+            {
+                Assert.Equal($"access{i}", reader.GetApiKey($"p{i}"));
+            }
+        }
+    }
+
     private sealed class BreakableSecretStore : ISecretStore
     {
         public bool Broken { get; set; }
