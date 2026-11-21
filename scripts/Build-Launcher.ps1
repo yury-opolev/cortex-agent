@@ -236,5 +236,7 @@ try {
         }
     }
 } catch { }
+# A missing image makes the probe exit 1; that must not become this script's exit code.
+$global:LASTEXITCODE = 0
 $manifest | ConvertTo-Json -Depth 5 | Set-Content -Path $manifestPath -Encoding UTF8
 Write-Host "Build manifest: $manifestPath" -ForegroundColor Green

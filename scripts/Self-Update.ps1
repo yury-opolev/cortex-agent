@@ -145,6 +145,7 @@ function Test-RerankerAt([string]$expectImageId) {
     while ((Get-Date) -lt $deadline) {
         $state = $null
         try { $state = (& docker inspect cortex-reranker --format '{{.State.Status}}|{{.Image}}|{{if .State.Health}}{{.State.Health.Status}}{{end}}' 2>$null) } catch { }
+        $global:LASTEXITCODE = 0
         if (-not $state) { return 'absent' }
         $status, $image, $health = "$state".Trim() -split '\|'
         if ($status -eq 'exited') { return 'stopped' }
@@ -346,6 +347,7 @@ try {
         $rerankerTag = $m.images.'cortex-reranker'
         $actualId = $null
         try { $actualId = (& docker image inspect $rerankerTag --format '{{.Id}}' 2>$null) } catch { }
+        $global:LASTEXITCODE = 0
         if ("$actualId".Trim() -ne $rerankerPin) { throw "Image $rerankerTag is '$actualId' but the manifest pins $rerankerPin — refusing (rebuilt or retagged since the build?)." }
         Say "image pin verified: cortex-reranker $rerankerPin" 'Green'
     }
@@ -395,10 +397,12 @@ try {
     if ($rerankerPin) {
         try {
             $runningReranker = (& docker inspect cortex-reranker --format '{{if .State.Running}}{{.Image}}{{end}}' 2>$null)
+            $global:LASTEXITCODE = 0
             if ($runningReranker) {
                 $rerankerWasRunning = $true
                 & docker tag $runningReranker $rerankerRollbackImageTag 2>$null
                 $rerankerRollbackSaved = ($LASTEXITCODE -eq 0)
+                $global:LASTEXITCODE = 0
                 Say "snapshotted running reranker image ($runningReranker) as $rerankerRollbackImageTag"
             }
         } catch { Say "could not snapshot reranker image for rollback: $_" 'Yellow' }
@@ -444,6 +448,7 @@ try {
             $rolledBack = Test-HealthAt $fromVersion
             if ($rolledBack -and $rerankerRollbackSaved) {
                 $rollbackId = "$(& docker image inspect $rerankerRollbackImageTag --format '{{.Id}}' 2>$null)".Trim()
+                $global:LASTEXITCODE = 0
                 Say "reranker after rollback: $(Test-RerankerAt $rollbackId)"
             }
             Say ("rollback " + $(if ($rolledBack) { 'HEALTHY on ' + $fromVersion } else { 'did NOT come healthy — MANUAL INTERVENTION NEEDED' })) $(if ($rolledBack) { 'Yellow' } else { 'Red' })

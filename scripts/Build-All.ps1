@@ -72,6 +72,7 @@ if (-not $SkipDocker) {
     # covering it, or when -WithReranker asks for it.
     $hasReranker = $false
     try { & docker image inspect cortex-reranker:latest *> $null; $hasReranker = ($LASTEXITCODE -eq 0) } catch { $hasReranker = $false }
+        $global:LASTEXITCODE = 0
     if ($WithReranker -or $hasReranker) {
         Write-Host "=== Building cortex-reranker Docker image ===" -ForegroundColor Cyan
         & (Join-Path $scriptDir "Build-RerankerImage.ps1") @buildArgs

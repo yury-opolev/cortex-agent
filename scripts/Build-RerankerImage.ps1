@@ -75,5 +75,8 @@ if (-not $NoPrune) {
     Write-Host "Cleanup complete." -ForegroundColor Green
 }
 
+# Best-effort cleanup commands may exit non-zero; Build-All checks this script's exit code.
+$global:LASTEXITCODE = 0
+
 Write-Host ""
 Write-Host "Version: $version" -ForegroundColor Cyan
