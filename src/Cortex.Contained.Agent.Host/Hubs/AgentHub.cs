@@ -41,6 +41,7 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
     private readonly Cortex.Contained.Speech.SpeakerId.IVoiceprintStore voiceprintStore;
     private readonly Cortex.Contained.Agent.Host.SpeakerId.SpeakerIdSettingsStore speakerIdSettingsStore;
     private readonly Cortex.Contained.Agent.Host.SpeakerId.EnrollmentOrchestrator? enrollmentOrchestrator;
+    private readonly Cortex.Contained.Agent.Host.Events.KnownSecrets? knownSecrets;
     private readonly Cortex.Contained.Agent.Host.Mcp.McpToolStore mcpToolStore;
     private readonly IHttpClientFactory httpClientFactory;
     private readonly AgentMetrics metrics;
@@ -73,7 +74,8 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
         SubagentExecutionCoordinator subagentCoordinator,
         SubagentObservabilityService subagentObservability,
         ILogger<AgentHub> logger,
-        Cortex.Contained.Agent.Host.SpeakerId.EnrollmentOrchestrator? enrollmentOrchestrator = null)
+        Cortex.Contained.Agent.Host.SpeakerId.EnrollmentOrchestrator? enrollmentOrchestrator = null,
+        Cortex.Contained.Agent.Host.Events.KnownSecrets? knownSecrets = null)
     {
         this.runtime = runtime;
         this.llmClient = llmClient;
@@ -94,6 +96,7 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
         this.voiceprintStore = voiceprintStore;
         this.speakerIdSettingsStore = speakerIdSettingsStore;
         this.enrollmentOrchestrator = enrollmentOrchestrator;
+        this.knownSecrets = knownSecrets;
         this.mcpToolStore = mcpToolStore;
         this.httpClientFactory = httpClientFactory;
         this.metrics = metrics;
@@ -199,6 +202,9 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
     public Task ProvideCredentials(LlmCredentials credentials)
     {
         this.LogCredentialsReceived(credentials.Providers.Count);
+
+        // The pushed credentials are the known-secret set that persistence redaction replaces exactly.
+        this.knownSecrets?.Load(credentials);
 
         // ConfigureCredentials must be called BEFORE wiring the callback so that any
         // Anthropic OAuth ProviderState objects exist when the callback fires.

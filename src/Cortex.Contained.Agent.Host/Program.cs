@@ -147,6 +147,10 @@ builder.Services.AddHostedService<HistoryProjectorService>();
 builder.Services.AddHostedService<HistoryMaintenanceService>();
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Tools.IConversationToolGate, HistoryToolsGate>();
 
+// --- Event log and provenance (increment 2): events in messages.db, tool payload policy ---
+builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Events.KnownSecrets>();
+builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Events.IEventLog>(sp => sp.GetRequiredService<MessageStore>());
+
 // --- Operational metrics (thread-safe singleton; surfaced via health/ping) ---
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Agent.AgentMetrics>();
 
