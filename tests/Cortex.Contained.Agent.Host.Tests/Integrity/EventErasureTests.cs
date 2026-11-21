@@ -1,14 +1,19 @@
 using System.Text;
 using System.Text.Json.Nodes;
+using Cortex.Contained.Agent.Host.Agent;
 using Cortex.Contained.Agent.Host.Events;
 using Cortex.Contained.Agent.Host.History;
 using Cortex.Contained.Agent.Host.Tests.History;
+using Cortex.Contained.Agent.Host.Tools;
+using Cortex.Contained.Contracts.Hub;
+using Cortex.Contained.Contracts.Llm;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Cortex.Contained.Agent.Host.Tests.Integrity;
 
 /// <summary>Byte-level erasure including the event log and the spill files its tool results reference.</summary>
 [Trait("Category", "Integrity")]
+[Collection("ToolOutputTruncator")]
 public sealed class EventErasureTests : IAsyncDisposable
 {
     private readonly HistoryHarness h = new();
@@ -73,6 +78,41 @@ public sealed class EventErasureTests : IAsyncDisposable
         Assert.False(this.AnyFileContains("zqspillmarker"));
         Assert.True(File.Exists(Path.Combine(this.toolOutput, "20261121-other.txt")));
         await IntegrityAssertions.AssertEventLogConsistentAsync(this.h.Store);
+    }
+
+    [Fact]
+    public async Task ChannelPurge_ErasesSpillFileOfLargeMcpResultRunThroughToolRegistry()
+    {
+        ToolOutputTruncator.Initialize(this.h.Root);
+        var body = "zqmcpspillmarker " + string.Join('\n', Enumerable.Repeat("line of mcp output", ToolOutputTruncator.MaxLines + 10));
+        var tool = Substitute.For<IAgentTool>();
+        tool.Name.Returns("mcp__mail__read");
+        tool.ExecuteAsync(Arg.Any<string>(), Arg.Any<ToolExecutionContext>(), Arg.Any<CancellationToken>()).Returns(AgentToolResult.Ok(body));
+        var secrets = new KnownSecrets();
+        secrets.Load(new LlmCredentials { Providers = [] });
+        var registry = new ToolRegistry(
+            [tool],
+            new ActiveChannelStore(),
+            NullLogger<ToolRegistry>.Instance,
+            eventRecorder: new ToolEventRecorder(this.h.Store, new ToolEventPayloads(secrets), NullLogger<ToolEventRecorder>.Instance));
+        using (RunScope.Begin(new RunProvenance("run_mcp", AuthorKinds.Main, null, "secret", null)))
+        {
+            await registry.ExecuteAsync(
+                new LlmToolCall { Id = "c1", Name = "mcp__mail__read", Arguments = "{}" },
+                new ToolExecutionContext { ConversationId = "secret", ChannelId = "secret" },
+                CancellationToken.None);
+        }
+
+        Assert.True(this.AnyFileContains("zqmcpspillmarker"));
+        await this.h.SayAsync("keep words", 0, channel: "other");
+        await this.h.Projector.InitializeAsync(CancellationToken.None);
+        await this.h.CatchUpAsync();
+
+        var result = await this.purge.PurgeAsync(new HistoryPurgeScope("secret", null), null, CancellationToken.None);
+
+        Assert.True(result.ErasureComplete);
+        Assert.False(this.AnyFileContains("zqmcpspillmarker"));
+        Assert.Empty(Directory.EnumerateFiles(this.toolOutput));
     }
 
     [Fact]

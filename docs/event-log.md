@@ -21,7 +21,8 @@ subagent. A delivery links to the run's tool results (delivery → run → call 
 ## Tool payload policy
 
 Exact tool-name allowlist, default deny (`Events/ToolPayloadPolicy.cs`). `mcp__*` payloads are
-dropped entirely; recall tools store a hash only; file, page and mail bodies are never stored.
+dropped entirely except for the generated spill file name (so a channel purge can delete the
+file); recall tools store a hash only; file, page and mail bodies are never stored.
 Persisted text is redacted (`SensitiveDataRedactor.RedactForPersistence`): known secrets, CPR,
 IBAN, cards, emails, Danish phones, GPS. Until the Bridge has pushed credentials, text is stored
 as `[REDACTION_UNAVAILABLE]`. A test fails when a new tool is not classified.

@@ -42,6 +42,13 @@ public sealed class ToolEventPayloads
             payload["errorClass"] = ErrorClass(result.Error);
         }
 
+        // The spill file name is generated (no content) and is how a channel purge finds the file,
+        // so it is recorded for every payload class, including MCP.
+        if (spillFile is not null)
+        {
+            payload["spill"] = Path.GetFileName(spillFile);
+        }
+
         var policy = ToolPayloadPolicy.Classify(toolName);
         if (policy == ToolPayloadClass.Mcp)
         {
@@ -51,10 +58,6 @@ public sealed class ToolEventPayloads
         var body = result.Success ? result.Content : result.Error ?? string.Empty;
         payload["bytes"] = Encoding.UTF8.GetByteCount(body);
         payload["sha256"] = EventHashing.Sha256Hex(body);
-        if (spillFile is not null)
-        {
-            payload["spill"] = Path.GetFileName(spillFile);
-        }
 
         if (conversationKnown && policy == ToolPayloadClass.Allowlisted)
         {

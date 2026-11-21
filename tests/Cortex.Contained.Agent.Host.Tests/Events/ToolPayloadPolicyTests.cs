@@ -104,6 +104,16 @@ public sealed class ToolPayloadPolicyTests
     }
 
     [Fact]
+    public void ForResult_McpWithSpill_RecordsOnlyTheSpillFileName()
+    {
+        var payload = Payloads().ForResult("mcp__mail__read", "c1", AgentToolResult.Ok("zqmailbody"), "/app/data/tool-output/2026-m.txt", conversationKnown: true);
+
+        Assert.Equal("2026-m.txt", (string?)payload["spill"]);
+        Assert.Null(payload["sha256"]);
+        Assert.DoesNotContain("zqmailbody", payload.ToJsonString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ForCall_NoConversation_StoresNoArgs()
     {
         var payload = Payloads().ForCall("date_time", "c1", "{\"tz\":\"x\"}", conversationKnown: false);
