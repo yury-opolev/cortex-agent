@@ -936,6 +936,27 @@ public static class TenantEndpoints
             }
         }).RequireAuthorization();
 
+        // POST /api/tenants/{tenantId}/history/event-backfill — explicit event backfill (maintenance window).
+        // Driven by scripts/Invoke-HistoryBackfill.ps1.
+        app.MapPost("/api/tenants/{tenantId}/history/event-backfill", async (
+            string tenantId, TenantRouter router) =>
+        {
+            var client = router.GetClient(tenantId);
+            if (client is null || !client.IsConnected)
+            {
+                return Results.NotFound(new { error = $"Tenant '{tenantId}' not available" });
+            }
+
+            try
+            {
+                return Results.Ok(await client.BackfillHistoryEventsAsync(CancellationToken.None).ConfigureAwait(false));
+            }
+            catch
+            {
+                return Results.StatusCode(503);
+            }
+        }).RequireAuthorization();
+
         // GET /api/tenants/{tenantId}/memories — list memories
         app.MapGet("/api/tenants/{tenantId}/memories", async (
             string tenantId, int? limit, int? offset, TenantRouter router) =>

@@ -540,6 +540,15 @@ public sealed partial class HubClient : IAsyncDisposable
             cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>Run the agent's explicit event backfill (maintenance window) and return its report.</summary>
+    public async Task<EventBackfillResultDto> BackfillHistoryEventsAsync(CancellationToken cancellationToken)
+    {
+        EnsureConnected();
+        return await this.connection!.InvokeAsync<EventBackfillResultDto>(
+            nameof(IAgentHub.BackfillHistoryEvents),
+            cancellationToken).ConfigureAwait(false);
+    }
+
     /// <summary>Memories quarantined after a history deletion, awaiting review.</summary>
     public async Task<MemoryListResult> ListQuarantinedMemoriesAsync(CancellationToken cancellationToken)
     {
