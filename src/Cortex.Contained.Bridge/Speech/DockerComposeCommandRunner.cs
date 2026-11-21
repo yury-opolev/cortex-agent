@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Cortex.Contained.Common;
 using Microsoft.Extensions.Logging;
 
 namespace Cortex.Contained.Bridge.Speech;
@@ -193,6 +194,22 @@ public sealed partial class DockerComposeCommandRunner : IComposeCommandRunner, 
         }
     }
 
+    /// <summary>
+    /// The compose child's extra environment: the host time zone (so interpolating the agent's
+    /// <c>History__TimeZone</c> never differs from the Launcher's) overlaid with the caller's variables.
+    /// </summary>
+    internal static Dictionary<string, string> BuildEnvironment(
+        IReadOnlyDictionary<string, string>? extra, IReadOnlyDictionary<string, string> hostTimeZone)
+    {
+        var merged = new Dictionary<string, string>(hostTimeZone);
+        foreach (var (name, value) in extra ?? new Dictionary<string, string>())
+        {
+            merged[name] = value;
+        }
+
+        return merged;
+    }
+
     private async Task<bool> RunCommandAsync(
         string arguments, TimeSpan timeout, CancellationToken cancellationToken, IReadOnlyDictionary<string, string>? environment = null)
     {
@@ -214,7 +231,7 @@ public sealed partial class DockerComposeCommandRunner : IComposeCommandRunner, 
             };
 
             // Secrets travel in the child's environment only: never on the command line, never logged.
-            foreach (var (name, value) in environment ?? new Dictionary<string, string>())
+            foreach (var (name, value) in BuildEnvironment(environment, HostTimeZone.ComposeEnvironment()))
             {
                 process.StartInfo.Environment[name] = value;
             }

@@ -40,6 +40,10 @@ Write-Host "Hub token set for both Agent and Bridge." -ForegroundColor Gray
 
 $composeCmd = "docker compose -f docker-compose.yml"
 
+# History day boundaries follow the host's zone: compose maps CORTEX_TIMEZONE to the agent's History__TimeZone.
+. (Join-Path $scriptDir "Set-CortexTimeZone.ps1")
+Set-CortexTimeZoneEnv
+
 # ── Build container image ─────────────────────────────────────
 if ($BridgeOnly) {
     Write-Host ""

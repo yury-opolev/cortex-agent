@@ -10,6 +10,9 @@ services:
       - CORTEX_HUB_TOKEN=${CORTEX_HUB_TOKEN:-dev-token-change-me}
       - ASPNETCORE_URLS=http://+:5100
       - ASPNETCORE_ENVIRONMENT=${ASPNETCORE_ENVIRONMENT:-Production}
+      # Host IANA time zone (exported as CORTEX_TIMEZONE by the Launcher, the Bridge and the scripts) so
+      # history day boundaries follow the owner's zone, not the container's UTC. Empty keeps the container zone.
+      - History__TimeZone=${CORTEX_TIMEZONE:-}
       # NOTE: No API keys here. LLM calls are proxied through the Bridge.
       # Memory service: embeddings (Ollama) endpoint inside the Docker network
       - MemoryMcp__Ollama__Endpoint=http://embeddings:11434

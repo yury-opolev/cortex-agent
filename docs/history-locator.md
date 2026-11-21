@@ -53,6 +53,24 @@ Changing `TimeZone` (or, when it is empty, the machine zone), `IdleGapMinutes` o
 or tokenizer versions) changes the config fingerprint and triggers a rebuild; until it cuts
 over, recall serves only the unindexed tail and reports `buildComplete=false`.
 
+### Time zone in the agent container
+
+The agent runs in Docker, where the zone is UTC, so an empty `TimeZone` alone would cut days at UTC
+midnight. `docker-compose.yml` therefore sets `History__TimeZone=${CORTEX_TIMEZONE:-}` on the agent,
+and every host-side compose call exports `CORTEX_TIMEZONE` as the host's IANA zone id (a Windows
+zone id is converted with `TimeZoneInfo.TryConvertWindowsIdToIanaId`):
+
+- the Launcher (`DockerService` `compose up -d`) and the Bridge's `DockerComposeCommandRunner` via
+  `Cortex.Contained.Common.HostTimeZone`;
+- `scripts/Start-Cortex.ps1` and `scripts/Self-Update.ps1` (deploy and rollback recreate) via `scripts/Set-CortexTimeZone.ps1`.
+
+A `CORTEX_TIMEZONE` you set yourself is never overwritten, and a host zone with no IANA mapping exports
+nothing, which leaves the variable empty and the container's own zone in effect. Set `CORTEX_TIMEZONE`
+(or `History__TimeZone` directly) to pin a different zone. The agent image ships `tzdata`, so any IANA
+id resolves on Linux. Compose recreates the agent container when the value changes, and the changed
+effective zone rebuilds the index (see above). Compose calls you run by hand (`docker compose up`)
+do not export it; set `CORTEX_TIMEZONE` first or the container zone applies.
+
 The Agent Host links SQLite 3.51 (SQLite3 Multiple Ciphers, `SQLite3MC.PCLRaw.bundle`) because
 FTS5 `contentless_delete` needs ≥ 3.43. The startup log prints `SQLite runtime <version>`.
 `MemoryMcp:Encryption:Enabled=true` is refused at startup (SQLite3MC cannot open SQLCipher files).

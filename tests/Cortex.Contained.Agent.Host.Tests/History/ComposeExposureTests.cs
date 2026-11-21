@@ -37,6 +37,13 @@ public sealed class ComposeExposureTests
     }
 
     [Fact]
+    public void Agent_TakesTheHistoryTimeZoneFromTheHostViaCortexTimezone()
+    {
+        // Empty (the default) keeps TimeZoneInfo.Local, i.e. the container's own zone.
+        Assert.Contains("History__TimeZone=${CORTEX_TIMEZONE:-}", Environment(Service("cortex-agent")));
+    }
+
+    [Fact]
     public void Agent_UsesTheInComposeSidecar()
     {
         Assert.Contains("MemoryMcp__Ollama__Endpoint=http://embeddings:11434", Environment(Service("cortex-agent")));

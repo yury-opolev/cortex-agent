@@ -1,3 +1,4 @@
+using Cortex.Contained.Common;
 using Microsoft.Extensions.Logging;
 
 namespace Cortex.Contained.Launcher.Services;
@@ -9,11 +10,21 @@ public sealed partial class DockerService
 {
     private readonly IProcessRunner processRunner;
     private readonly ILogger<DockerService> logger;
+    private readonly Func<IReadOnlyDictionary<string, string>> composeEnvironment;
 
     public DockerService(IProcessRunner processRunner, ILogger<DockerService> logger)
+        : this(processRunner, logger, HostTimeZone.ComposeEnvironment)
+    {
+    }
+
+    internal DockerService(
+        IProcessRunner processRunner,
+        ILogger<DockerService> logger,
+        Func<IReadOnlyDictionary<string, string>> composeEnvironment)
     {
         this.processRunner = processRunner;
         this.logger = logger;
+        this.composeEnvironment = composeEnvironment;
     }
 
     public async Task<bool> IsDockerAvailableAsync(CancellationToken cancellationToken = default)
@@ -22,7 +33,7 @@ public sealed partial class DockerService
             "docker",
             "info",
             timeout: TimeSpan.FromSeconds(15),
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken: cancellationToken).ConfigureAwait(false);
 
         return result.ExitCode == 0;
     }
@@ -35,6 +46,7 @@ public sealed partial class DockerService
             "docker",
             $"compose -f \"{composeFilePath}\" up -d",
             timeout: TimeSpan.FromSeconds(120),
+            this.composeEnvironment(),
             cancellationToken).ConfigureAwait(false);
 
         if (result.ExitCode != 0)
@@ -52,7 +64,7 @@ public sealed partial class DockerService
             "docker",
             $"compose -f \"{composeFilePath}\" down",
             timeout: TimeSpan.FromSeconds(30),
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken: cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<bool> IsContainerImageOutdatedAsync(
@@ -64,7 +76,7 @@ public sealed partial class DockerService
             "docker",
             $"inspect {containerName} --format \"{{{{.Image}}}}\"",
             timeout: TimeSpan.FromSeconds(10),
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken: cancellationToken).ConfigureAwait(false);
 
         if (containerResult.ExitCode != 0)
         {
@@ -75,7 +87,7 @@ public sealed partial class DockerService
             "docker",
             $"inspect {imageName} --format \"{{{{.Id}}}}\"",
             timeout: TimeSpan.FromSeconds(10),
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken: cancellationToken).ConfigureAwait(false);
 
         if (imageResult.ExitCode != 0)
         {

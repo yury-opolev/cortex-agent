@@ -100,6 +100,10 @@ $rollbackImageTag = 'cortex-agent:rollback'
 $rerankerRollbackImageTag = 'cortex-reranker:rollback'
 $log = [System.Collections.Generic.List[string]]::new()
 
+# Compose maps CORTEX_TIMEZONE to the agent's History__TimeZone; recreating the agent must keep the host zone.
+. (Join-Path $PSScriptRoot 'Set-CortexTimeZone.ps1')
+Set-CortexTimeZoneEnv
+
 function Say([string]$msg, [string]$color = 'Cyan') {
     $line = "[self-update] $msg"
     Write-Host $line -ForegroundColor $color
