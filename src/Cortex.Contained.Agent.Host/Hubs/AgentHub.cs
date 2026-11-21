@@ -827,6 +827,7 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
     public async Task<ImportResult> ImportAll(ExportBundle bundle)
     {
         this.LogImportAll();
+        var importStartedAt = DateTimeOffset.UtcNow;
         try
         {
             var memoriesResult = await ImportMemories(new ImportMemoriesRequest
@@ -840,11 +841,11 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
                 ClearExisting = true,
             }).ConfigureAwait(false);
 
-            var messagesResult = await ImportMessages(new ImportMessagesRequest
+            var messagesResult = await this.ImportMessagesCoreAsync(new ImportMessagesRequest
             {
                 Items = bundle.Messages.Items,
                 ClearExisting = true,
-            }).ConfigureAwait(false);
+            }, importStartedAt).ConfigureAwait(false);
 
             var tasksResult = await ImportTasks(new ImportTasksRequest
             {
@@ -885,9 +886,17 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
             var imported = 0;
             foreach (var item in request.Items)
             {
-                await this.memoryService.CreateAsync(
+                var created = await this.memoryService.CreateAsync(
                     item.Content, item.Title, item.Tags,
                     force: true, Context.ConnectionAborted).ConfigureAwait(false);
+
+                // An import is the owner's deliberate content: exempt from the quarantine windows
+                // of the history purge that replaces messages (D10), whichever endpoint runs first.
+                if (created is not null)
+                {
+                    await this.memoryQuarantine.KeepAsync(created.MemoryId, Context.ConnectionAborted).ConfigureAwait(false);
+                }
+
                 imported++;
             }
 
@@ -900,7 +909,10 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
     }
 
     /// <inheritdoc />
-    public async Task<ImportResult> ImportMessages(ImportMessagesRequest request)
+    public Task<ImportResult> ImportMessages(ImportMessagesRequest request)
+        => this.ImportMessagesCoreAsync(request, DateTimeOffset.UtcNow);
+
+    private async Task<ImportResult> ImportMessagesCoreAsync(ImportMessagesRequest request, DateTimeOffset importStartedAt)
     {
         try
         {
@@ -910,8 +922,9 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
 
             // ClearExisting replaces everything in ONE transaction through the erasure workflow
             // (delete-all + insert + restore-generation bump), so the old rows are erased too.
+            // Quarantine windows end where the import began, so memories created by it are not hidden.
             var inserted = request.ClearExisting
-                ? (await this.historyPurge.PurgeAsync(HistoryPurgeScope.All, records, Context.ConnectionAborted).ConfigureAwait(false)).Inserted
+                ? (await this.historyPurge.PurgeAsync(HistoryPurgeScope.All, records, Context.ConnectionAborted, importStartedAt).ConfigureAwait(false)).Inserted
                 : await this.messageStore.BulkInsertAsync(records, Context.ConnectionAborted).ConfigureAwait(false);
 
             // Reset all sessions so they rebuild from the new message data

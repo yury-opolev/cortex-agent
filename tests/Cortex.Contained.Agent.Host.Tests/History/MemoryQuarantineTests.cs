@@ -62,6 +62,19 @@ public sealed class MemoryQuarantineTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task PurgeWithQuarantineCap_WindowsEndAtTheCap()
+    {
+        await this.store.SaveMessageAsync("u", "ch", "user", "a", T0);
+        await this.store.SaveMessageAsync("u", "ch", "user", "b", T0.AddHours(1));
+
+        await this.store.PurgeAsync(
+            new MessagePurgeRequest(new HistoryPurgeScope("ch", null)) { Now = T0.AddDays(2), QuarantineCap = T0.AddHours(3) },
+            CancellationToken.None);
+
+        Assert.Equal(["during"], await this.quarantine.GetQuarantinedIdsAsync(CancellationToken.None));
+    }
+
+    [Fact]
     public async Task Decorator_SearchAndFindSimilar_OverFetchAndHideQuarantined()
     {
         await this.PurgeOneConversationAsync();

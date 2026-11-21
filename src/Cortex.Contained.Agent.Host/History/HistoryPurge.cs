@@ -18,6 +18,12 @@ public sealed record MessagePurgeRequest(HistoryPurgeScope Scope)
     /// <summary>Purge time; caps quarantine windows.</summary>
     public DateTimeOffset Now { get; init; } = DateTimeOffset.UtcNow;
 
+    /// <summary>
+    /// Quarantine windows end no later than this instant when set (tenant import: memories created
+    /// after the import began are the import's own and must not be hidden). Defaults to <see cref="Now"/>.
+    /// </summary>
+    public DateTimeOffset? QuarantineCap { get; init; }
+
     /// <summary>Added after the last purged message of a quarantine window (delayed memory extraction).</summary>
     public TimeSpan QuarantineSlack { get; init; } = TimeSpan.FromHours(24);
 

@@ -51,10 +51,15 @@ public sealed partial class HistoryPurgeService
     }
 
     /// <summary>Deletes history in <paramref name="scope"/>; with <paramref name="replacement"/> this is the tenant-import swap.</summary>
+    /// <param name="scope">Which rows to delete.</param>
+    /// <param name="replacement">Replacement rows inserted in the same transaction, or null.</param>
+    /// <param name="cancellationToken">Cancellation.</param>
+    /// <param name="quarantineCap">Quarantine windows end no later than this (the moment an import began), or null for the purge time.</param>
     public async Task<HistoryPurgeResult> PurgeAsync(
         HistoryPurgeScope scope,
         IReadOnlyList<MessageRecord>? replacement,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        DateTimeOffset? quarantineCap = null)
     {
         ArgumentNullException.ThrowIfNull(scope);
         var settings = this.options.CurrentValue;
@@ -70,6 +75,7 @@ public sealed partial class HistoryPurgeService
                 QuarantineClusterGap = TimeSpan.FromHours(settings.QuarantineClusterGapHours),
                 PendingSteps = ErasureSteps.ForPurge(scope),
                 Replacement = replacement,
+                QuarantineCap = quarantineCap,
             };
             outcome = await this.store.PurgeAsync(request, cancellationToken).ConfigureAwait(false);
             pending = await this.RunPendingLockedAsync(request.ErasureId, cancellationToken).ConfigureAwait(false);

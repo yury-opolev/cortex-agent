@@ -88,6 +88,44 @@ public sealed class AgentHubHistoryTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task ImportMemoriesThenMessages_DoesNotQuarantineTheImportedMemories()
+    {
+        var created = new Dictionary<string, DateTimeOffset>();
+        var memoryService = Substitute.For<Cortex.Contained.Agent.Host.Memory.IMemoryManagementService>();
+        memoryService.CreateAsync(Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<List<string>?>(), Arg.Any<bool>(), Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                var id = "imported-" + created.Count;
+                created[id] = DateTimeOffset.UtcNow;
+                return new MemoryItem { MemoryId = id, Content = call.ArgAt<string>(0) };
+            });
+        var times = Substitute.For<Cortex.Contained.Agent.Host.Memory.IMemoryCreationTimes>();
+        times.ListCreationTimesAsync(Arg.Any<CancellationToken>()).Returns(_ =>
+            created.Select(kv => new Cortex.Contained.Agent.Host.Memory.MemoryCreationTime(kv.Key, kv.Value)).ToList());
+        var quarantine = new Cortex.Contained.Agent.Host.Memory.MemoryQuarantine(this.h.Store, times, TimeProvider.System);
+        Set("memoryService", memoryService);
+        Set("memoryQuarantine", quarantine);
+        await this.h.Store.SaveMessageAsync("u", "ch", "user", "recent", DateTimeOffset.UtcNow.AddMinutes(-5));
+
+        var memories = await this.hub.ImportMemories(new ImportMemoriesRequest
+        {
+            ClearExisting = false,
+            Items = [new MemoryCreateRequest { Content = "kept fact", Tags = [] }],
+        });
+        var messages = await this.hub.ImportMessages(new ImportMessagesRequest
+        {
+            ClearExisting = true,
+            Items = [new ExportMessageEntry { UserId = "u", ChannelId = "ch", Role = "user", Content = "imported", Timestamp = HistoryHarness.T0 }],
+        });
+
+        Assert.True(memories.Success, memories.Error);
+        Assert.True(messages.Success, messages.Error);
+        Assert.Single(created);
+        Assert.Single(await this.h.Store.ReadQuarantineWindowsAsync(CancellationToken.None));
+        Assert.Empty(await quarantine.GetQuarantinedIdsAsync(CancellationToken.None));
+    }
+
+    [Fact]
     public async Task SetHistoryRecallTools_ReturnsEffectiveState()
     {
         Assert.False(await this.hub.SetHistoryRecallTools(false));

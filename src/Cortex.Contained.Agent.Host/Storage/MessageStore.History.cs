@@ -247,7 +247,7 @@ public sealed partial class MessageStore
                 this.FaultInjector?.Invoke("after-purge-delete");
                 await this.AppendPurgeAsync(transaction, request.Scope, cancellationToken).ConfigureAwait(false);
 
-                var windows = QuarantineWindowBuilder.Build(timestamps, request.QuarantineClusterGap, request.QuarantineSlack, request.Now);
+                var windows = QuarantineWindowBuilder.Build(timestamps, request.QuarantineClusterGap, request.QuarantineSlack, request.QuarantineCap is { } cap && cap < request.Now ? cap : request.Now);
                 foreach (var window in windows)
                 {
                     await using var insert = this.WriterCommand(transaction, "INSERT INTO MemoryQuarantineWindows (ErasureId, FromTs, ToTs, CreatedAt) VALUES (@id, @from, @to, @at);");
