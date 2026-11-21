@@ -58,7 +58,7 @@ public sealed class HistoryHostedServicesTests : IAsyncDisposable
         var purge = new HistoryPurgeService(
             this.h.Store, this.h.Gate, this.h.Projector, [new MessagesWalErasureStep(this.h.Store), vacuumStep],
             this.h.Monitor, TimeProvider.System, NullLogger<HistoryPurgeService>.Instance);
-        return new HistoryMaintenanceService(purge, this.h.Store, this.h.Monitor, TimeProvider.System, NullLogger<HistoryMaintenanceService>.Instance);
+        return new HistoryMaintenanceService(purge, this.h.Store, this.h.Store, this.h.Monitor, TimeProvider.System, NullLogger<HistoryMaintenanceService>.Instance);
     }
 
     private static IErasureStep SpyVacuumStep()
@@ -105,6 +105,33 @@ public sealed class HistoryHostedServicesTests : IAsyncDisposable
 
         await vacuum.DidNotReceive().RunAsync(Arg.Any<ErasureTask>(), Arg.Any<CancellationToken>());
         Assert.Empty(await this.h.Store.ReadPendingErasureAsync(CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task MaintenanceRunOnce_HistoryDisabled_PrunesTheJournalUpToItsHead()
+    {
+        this.h.Options = new HistoryOptions { Enabled = false };
+        await this.h.SayAsync("one", 0);
+        await this.h.SayAsync("two", 1);
+
+        await this.NewMaintenance(SpyVacuumStep()).RunOnceAsync(CancellationToken.None);
+
+        await using var snapshot = await this.h.Store.OpenSnapshotAsync(CancellationToken.None);
+        var meta = await snapshot.ReadMetaAsync(CancellationToken.None);
+        Assert.True(meta.JournalHead > 0);
+        Assert.Equal(meta.JournalHead, meta.JournalPrunedThrough);
+    }
+
+    [Fact]
+    public async Task MaintenanceRunOnce_HistoryEnabled_LeavesTheJournalForTheProjector()
+    {
+        await this.h.SayAsync("one", 0);
+
+        await this.NewMaintenance(SpyVacuumStep()).RunOnceAsync(CancellationToken.None);
+
+        await using var snapshot = await this.h.Store.OpenSnapshotAsync(CancellationToken.None);
+        var meta = await snapshot.ReadMetaAsync(CancellationToken.None);
+        Assert.Equal(0, meta.JournalPrunedThrough);
     }
 
     [Fact]
@@ -161,7 +188,7 @@ public sealed class HistoryHostedServicesTests : IAsyncDisposable
             this.h.Monitor, TimeProvider.System, NullLogger<HistoryPurgeService>.Instance);
         await this.h.Store.AppendErasureTaskAsync(
             new ErasureTask { Id = "left-over", CreatedAt = HistoryHarness.T0, Steps = [ErasureSteps.MessagesWal] }, CancellationToken.None);
-        var maintenance = new HistoryMaintenanceService(purge, this.h.Store, this.h.Monitor, TimeProvider.System, NullLogger<HistoryMaintenanceService>.Instance);
+        var maintenance = new HistoryMaintenanceService(purge, this.h.Store, this.h.Store, this.h.Monitor, TimeProvider.System, NullLogger<HistoryMaintenanceService>.Instance);
 
         var pending = await maintenance.RunOnceAsync(CancellationToken.None);
 
