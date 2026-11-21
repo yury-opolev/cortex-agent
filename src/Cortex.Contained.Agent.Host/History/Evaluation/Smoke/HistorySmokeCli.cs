@@ -17,8 +17,9 @@ namespace Cortex.Contained.Agent.Host.History.Evaluation.Smoke;
 public static class HistorySmokeCli
 {
     private const string Usage =
-        "usage: history-smoke <init|generate-queries|pool|register|run> [--dir /app/state/eval/smoke] [--source /app/state/messages.db] [--tz Europe/Copenhagen]\n" +
-        "generate-queries needs SMOKE_LLM_ENDPOINT, SMOKE_LLM_API_KEY, SMOKE_LLM_MODEL and optional SMOKE_LLM_API (default openai-completions).";
+        "usage: history-smoke <init|generate-queries|pool|register|run|embedder-check> [--dir /app/state/eval/smoke] [--source /app/state/messages.db] [--tz Europe/Copenhagen] [--embedder http://embeddings:11434]\n" +
+        "generate-queries needs SMOKE_LLM_ENDPOINT, SMOKE_LLM_API_KEY, SMOKE_LLM_MODEL and optional SMOKE_LLM_API (default openai-completions).\n" +
+        "embedder-check uses MemoryMcp__Ollama__Model / __NumCtx / __Dimensions when set (synthetic text only).";
 
     /// <summary>Entry point; returns a process exit code.</summary>
     public static async Task<int> RunAsync(IReadOnlyList<string> args, TextWriter output, CancellationToken cancellationToken)
@@ -56,6 +57,24 @@ public static class HistorySmokeCli
                     workspace.Register();
                     await output.WriteLineAsync($"Registered: {workspace.PreregistrationPath}").ConfigureAwait(false);
                     return 0;
+                case "embedder-check":
+                    var memory = new MemoryMcp.Core.Configuration.MemoryMcpOptions();
+                    memory.Ollama.Endpoint = Option(args, "--embedder") ?? Environment.GetEnvironmentVariable("MemoryMcp__Ollama__Endpoint") ?? "http://embeddings:11434";
+                    memory.Ollama.Model = Environment.GetEnvironmentVariable("MemoryMcp__Ollama__Model") ?? memory.Ollama.Model;
+                    memory.Ollama.NumCtx = int.TryParse(Environment.GetEnvironmentVariable("MemoryMcp__Ollama__NumCtx"), CultureInfo.InvariantCulture, out var ctx) ? ctx : memory.Ollama.NumCtx;
+                    memory.Ollama.Dimensions = int.TryParse(Environment.GetEnvironmentVariable("MemoryMcp__Ollama__Dimensions"), CultureInfo.InvariantCulture, out var dims) ? dims : memory.Ollama.Dimensions;
+                    memory.Ollama.ApiKey = Environment.GetEnvironmentVariable("MemoryMcp__Ollama__ApiKey");
+                    using (var service = new MemoryMcp.Core.Services.OllamaEmbeddingService(new FixedMemoryOptions(memory), NullLogger<MemoryMcp.Core.Services.OllamaEmbeddingService>.Instance))
+                    {
+                        var check = await EmbedderCheck.RunAsync(service, memory, options, cancellationToken).ConfigureAwait(false);
+                        foreach (var line in check.Lines)
+                        {
+                            await output.WriteLineAsync(line).ConfigureAwait(false);
+                        }
+
+                        return check.Passed ? 0 : 1;
+                    }
+
                 case "run":
                     var (runDir, gate) = await RunEvaluationAsync(workspace, source, options, cancellationToken).ConfigureAwait(false);
                     await output.WriteLineAsync(string.Create(CultureInfo.InvariantCulture,
@@ -215,5 +234,15 @@ public static class HistorySmokeCli
     private sealed class SimpleHttpClientFactory : IHttpClientFactory
     {
         public HttpClient CreateClient(string name) => new();
+    }
+
+    private sealed class FixedMemoryOptions(MemoryMcp.Core.Configuration.MemoryMcpOptions value)
+        : Microsoft.Extensions.Options.IOptionsMonitor<MemoryMcp.Core.Configuration.MemoryMcpOptions>
+    {
+        public MemoryMcp.Core.Configuration.MemoryMcpOptions CurrentValue => value;
+
+        public MemoryMcp.Core.Configuration.MemoryMcpOptions Get(string? name) => value;
+
+        public IDisposable? OnChange(Action<MemoryMcp.Core.Configuration.MemoryMcpOptions, string?> listener) => null;
     }
 }
