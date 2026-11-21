@@ -36,9 +36,10 @@ internal static class ToolCallSummary
         Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
     };
 
-    /// <summary>True for the recall tool family (<c>history_*</c>).</summary>
+    /// <summary>True for the content-returning recall tools (<c>history_*</c>, <c>event_get</c>).</summary>
     public static bool IsRecallTool(string toolName) =>
-        toolName.StartsWith("history_", StringComparison.OrdinalIgnoreCase);
+        toolName.StartsWith("history_", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(toolName, "event_get", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>True when <paramref name="entry"/> is the synthetic recall-turn marker.</summary>
     public static bool IsRecallTurnMarker(ToolCallSummaryEntry entry) =>

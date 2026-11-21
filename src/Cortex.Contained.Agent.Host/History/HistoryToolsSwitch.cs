@@ -18,17 +18,17 @@ public sealed class HistoryToolsSwitch
         this.options = options;
     }
 
-    /// <summary>True when <c>history_search</c> and recall-mode <c>history_read</c> are available.</summary>
+    /// <summary>True when <c>history_search</c>, <c>event_get</c> and recall-mode <c>history_read</c> are available.</summary>
     public bool IsEnabled => this.options.CurrentValue.Enabled && !this.forcedOff;
 
     /// <summary>Runtime override; <c>false</c> hides the recall tools until set back to <c>true</c>.</summary>
     public void SetEnabled(bool enabled) => this.forcedOff = !enabled;
 }
 
-/// <summary>Hides <c>history_search</c> from the main agent while recall tools are off.</summary>
+/// <summary>Hides <c>history_search</c> and <c>event_get</c> from the main agent while recall tools are off.</summary>
 public sealed class HistoryToolsGate : IConversationToolGate
 {
-    private static readonly FrozenSet<string> hidden = FrozenSet.ToFrozenSet(["history_search"], StringComparer.OrdinalIgnoreCase);
+    private static readonly FrozenSet<string> hidden = FrozenSet.ToFrozenSet(["history_search", "event_get"], StringComparer.OrdinalIgnoreCase);
 
     private readonly HistoryToolsSwitch toolsSwitch;
 

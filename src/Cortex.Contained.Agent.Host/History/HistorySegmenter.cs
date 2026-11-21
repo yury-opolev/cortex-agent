@@ -42,7 +42,7 @@ public sealed record SegmenterSettings(TimeZoneInfo TimeZone, TimeSpan IdleGap, 
 public static class HistorySegmenter
 {
     /// <summary>Segmenter version; bump on any behaviour change.</summary>
-    public const int Version = 1;
+    public const int Version = 2;
 
     /// <summary>True for rows the index covers: categories 0–3, excluding tool rows.</summary>
     public static bool IsIndexed(MessageRecord row)

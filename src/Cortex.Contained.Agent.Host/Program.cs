@@ -154,6 +154,7 @@ builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Events.ToolEventPayloa
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Events.IToolEventRecorder, Cortex.Contained.Agent.Host.Events.ToolEventRecorder>();
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Events.DeliveryRecorder>();
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Events.DeliveryReportBuilder>();
+builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Events.EventRecallService>();
 
 // --- Operational metrics (thread-safe singleton; surfaced via health/ping) ---
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Agent.AgentMetrics>();
@@ -231,6 +232,11 @@ builder.Services.AddSingleton<IAgentTool>(sp =>
 builder.Services.AddSingleton<IAgentTool>(sp =>
     new HistorySearchTool(
         sp.GetRequiredService<HistoryRecallService>(),
+        sp.GetRequiredService<HistoryToolsSwitch>(),
+        sp.GetRequiredService<IOptionsMonitor<HistoryOptions>>()));
+builder.Services.AddSingleton<IAgentTool>(sp =>
+    new EventGetTool(
+        sp.GetRequiredService<Cortex.Contained.Agent.Host.Events.EventRecallService>(),
         sp.GetRequiredService<HistoryToolsSwitch>(),
         sp.GetRequiredService<IOptionsMonitor<HistoryOptions>>()));
 // ContextBootstrapTool removed — replaced by self-notes (self_notes_read/write)

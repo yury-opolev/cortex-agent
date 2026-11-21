@@ -28,6 +28,14 @@ public class HistoryLabelsTests
     }
 
     [Fact]
+    public void For_AssistantTurnThatUsedEventGet_IsRecallEcho()
+    {
+        var row = Row(1, Day, "Here is what it said", role: "assistant", toolCalls: ToolCalls("event_get"));
+
+        Assert.Equal(HistoryLineLabel.RecallEcho, HistoryLabels.For(row));
+    }
+
+    [Fact]
     public void IndexedBody_HasFoldedContentAndToolNamesOnly()
     {
         var row = Row(1, Day, "Søren sent a photo\n[image attached: image/png]", role: "assistant", toolCalls: ToolCalls("memory_search"));
