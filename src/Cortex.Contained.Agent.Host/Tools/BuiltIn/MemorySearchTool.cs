@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using Cortex.Contained.Agent.Host.Reranking;
 using MemoryMcp.Core.Configuration;
 using MemoryMcp.Core.Services;
 using MemoryMcp.Core.Storage;
@@ -19,12 +20,14 @@ internal sealed class MemorySearchTool : IAgentTool
     private readonly IHybridMemorySearch search;
     private readonly IEmbeddingService embeddingService;
     private readonly IOptionsMonitor<MemoryMcpOptions> options;
+    private readonly IRerankStage? reranker;
 
-    public MemorySearchTool(IHybridMemorySearch search, IEmbeddingService embeddingService, IOptionsMonitor<MemoryMcpOptions> options)
+    public MemorySearchTool(IHybridMemorySearch search, IEmbeddingService embeddingService, IOptionsMonitor<MemoryMcpOptions> options, IRerankStage? reranker = null)
     {
         this.search = search;
         this.embeddingService = embeddingService;
         this.options = options;
+        this.reranker = reranker;
     }
 
     public string Name => "memory_search";
@@ -124,18 +127,25 @@ internal sealed class MemorySearchTool : IAgentTool
                 }
             }
 
+            var rerank = mode == MemorySearchMode.Hybrid ? this.reranker?.BudgetFor(RerankSurface.Memory) : null;
             var result = await this.search.SearchAsync(
                 new HybridSearchRequest
                 {
                     Query = query,
                     Mode = mode,
-                    Limit = limit,
+                    Limit = HybridMemoryReranking.CandidateLimit(limit, rerank),
                     MinScore = minScore,
                     Filter = new MemorySearchFilter { Tags = tags },
                 },
                 cancellationToken).ConfigureAwait(false);
 
-            return AgentToolResult.Ok(Render(result, fallback ?? result.Fallback, settings.SearchMaxContentLength));
+            string? rerankNote = null;
+            if (rerank is not null)
+            {
+                (result, _, rerankNote) = await HybridMemoryReranking.ApplyAsync(this.reranker, query, result, limit, rerank, cancellationToken).ConfigureAwait(false);
+            }
+
+            return AgentToolResult.Ok(Render(result, fallback ?? result.Fallback, settings.SearchMaxContentLength, rerankNote));
         }
         catch (InvalidOperationException ex) when (ex.InnerException is HttpRequestException)
         {
@@ -173,7 +183,7 @@ internal sealed class MemorySearchTool : IAgentTool
         }
     }
 
-    private static string Footer(MemorySearchMode mode, string? fallback)
+    private static string Footer(MemorySearchMode mode, string? fallback, string? rerankNote)
     {
         var label = mode switch
         {
@@ -181,7 +191,8 @@ internal sealed class MemorySearchTool : IAgentTool
             MemorySearchMode.Keyword => "keyword",
             _ => "semantic",
         };
-        return fallback is null ? $"mode: {label}" : $"mode: {label}; fallback: {fallback}";
+        var footer = fallback is null ? $"mode: {label}" : $"mode: {label}; fallback: {fallback}";
+        return rerankNote is null ? footer : footer + "\nrerank: " + rerankNote;
     }
 
     private static string MatchLabel(MemoryMatchKind match) => match switch
@@ -191,14 +202,14 @@ internal sealed class MemorySearchTool : IAgentTool
         _ => "semantic",
     };
 
-    private static string Render(HybridSearchResult result, string? fallback, int maxContentLength)
+    private static string Render(HybridSearchResult result, string? fallback, int maxContentLength, string? rerankNote)
     {
         // A plain semantic search renders exactly as memory_search always did.
-        var annotated = result.EffectiveMode != MemorySearchMode.Dense || fallback is not null;
+        var annotated = result.EffectiveMode != MemorySearchMode.Dense || fallback is not null || rerankNote is not null;
         if (result.Hits.Count == 0)
         {
             return annotated
-                ? "No matching memories found.\n" + Footer(result.EffectiveMode, fallback)
+                ? "No matching memories found.\n" + Footer(result.EffectiveMode, fallback, rerankNote)
                 : "No matching memories found.";
         }
 
@@ -244,7 +255,7 @@ internal sealed class MemorySearchTool : IAgentTool
 
         if (annotated)
         {
-            sb.AppendLine(Footer(result.EffectiveMode, fallback));
+            sb.AppendLine(Footer(result.EffectiveMode, fallback, rerankNote));
         }
 
         return sb.ToString().TrimEnd();
