@@ -10,7 +10,7 @@ namespace Cortex.Contained.Agent.Host.History;
 /// generation's single writer connection; queries use <see cref="OpenReader"/>.
 /// Not thread-safe: the projector serializes writers.
 /// </summary>
-public sealed class HistoryIndexDatabase : IDisposable
+public sealed partial class HistoryIndexDatabase : IDisposable
 {
     private readonly SqliteConnection writer;
     private readonly string? password;
@@ -47,13 +47,41 @@ public sealed class HistoryIndexDatabase : IDisposable
             );
             CREATE INDEX ix_seg_channel_time ON segments(ChannelId, StartTs);
             CREATE VIRTUAL TABLE segments_fts USING fts5(
-              body,
+              body, stem,
               content='', contentless_delete=1,
               tokenize='{HistoryConfigFingerprint.TokenizerSpec}',
               prefix='{HistoryConfigFingerprint.PrefixSpec}'
             );
             INSERT INTO segments_fts(segments_fts, rank) VALUES('secure-delete', 1);
             CREATE VIRTUAL TABLE segments_vocab USING fts5vocab(segments_fts, 'row');
+            CREATE VIRTUAL TABLE segments_vocab_col USING fts5vocab(segments_fts, 'col');
+            CREATE VIRTUAL TABLE segments_tri USING fts5(
+              body,
+              content='', contentless_delete=1,
+              tokenize='{HistoryConfigFingerprint.TrigramTokenizerSpec}'
+            );
+            INSERT INTO segments_tri(segments_tri, rank) VALUES('secure-delete', 1);
+            CREATE TABLE chunks (
+              ChunkId        INTEGER PRIMARY KEY,
+              SegId          INTEGER NOT NULL,
+              ChannelId      TEXT NOT NULL,
+              SegFirstMsgId  INTEGER NOT NULL,
+              Ordinal        INTEGER NOT NULL,
+              MsgIds         TEXT NOT NULL,
+              Words          INTEGER NOT NULL,
+              AllInternal    INTEGER NOT NULL,
+              TextHash       TEXT NOT NULL,
+              IsOpen         INTEGER NOT NULL,
+              QueuedAt       TEXT NULL,
+              QueuedMsgCount INTEGER NOT NULL DEFAULT 0,
+              Attempts       INTEGER NOT NULL DEFAULT 0,
+              Vec            BLOB NULL,
+              Q8             BLOB NULL,
+              UNIQUE(SegId, Ordinal)
+            );
+            CREATE INDEX ix_chunks_seg ON chunks(SegId);
+            CREATE INDEX ix_chunks_hash ON chunks(TextHash);
+            CREATE INDEX ix_chunks_pending ON chunks(ChannelId) WHERE Vec IS NULL;
             CREATE TABLE projector_state (
               Id INTEGER PRIMARY KEY CHECK (Id=1),
               Generation INTEGER NOT NULL,
@@ -126,6 +154,7 @@ public sealed class HistoryIndexDatabase : IDisposable
         foreach (var (channelId, segments) in batch.Channels)
         {
             this.Execute(transaction, "DELETE FROM segments_fts WHERE rowid IN (SELECT SegId FROM segments WHERE ChannelId = @c);", ("@c", channelId));
+            this.Execute(transaction, "DELETE FROM segments_tri WHERE rowid IN (SELECT SegId FROM segments WHERE ChannelId = @c);", ("@c", channelId));
             this.Execute(transaction, "DELETE FROM segments WHERE ChannelId = @c;", ("@c", channelId));
             foreach (var segment in segments)
             {
@@ -265,7 +294,16 @@ public sealed class HistoryIndexDatabase : IDisposable
         cmd.Parameters.AddWithValue("@fingerprint", segment.Fingerprint);
         var segId = (long)cmd.ExecuteScalar()!;
 
-        this.Execute(transaction, "INSERT INTO segments_fts(rowid, body) VALUES (@id, @body);", ("@id", segId), ("@body", segment.Body));
+        this.Execute(
+            transaction,
+            "INSERT INTO segments_fts(rowid, body, stem) VALUES (@id, @body, @stem);",
+            ("@id", segId),
+            ("@body", segment.Body),
+            ("@stem", (object?)segment.StemBody ?? DBNull.Value));
+        if (segment.TrigramBody is { } trigram)
+        {
+            this.Execute(transaction, "INSERT INTO segments_tri(rowid, body) VALUES (@id, @body);", ("@id", segId), ("@body", trigram));
+        }
     }
 
     private List<ChannelCoverage> ReadCoverage(SqliteTransaction transaction)
@@ -298,7 +336,7 @@ public sealed class HistoryIndexDatabase : IDisposable
 }
 
 /// <summary>Read-only queries over one generation file.</summary>
-public sealed class HistoryIndexReader : IDisposable
+public sealed partial class HistoryIndexReader : IDisposable
 {
     private const string SegmentColumns =
         "s.SegId, s.ChannelId, s.StartTs, s.EndTs, s.LocalDate, s.FirstMsgId, s.LastMsgId, s.MsgIds, s.HasInternal, s.HasRecallEcho, s.Fingerprint";
@@ -321,7 +359,7 @@ public sealed class HistoryIndexReader : IDisposable
     public long DocumentFrequency(string term)
     {
         using var cmd = this.connection.CreateCommand();
-        cmd.CommandText = "SELECT doc FROM segments_vocab WHERE term = @term;";
+        cmd.CommandText = "SELECT doc FROM segments_vocab_col WHERE term = @term AND col = 'body';";
         cmd.Parameters.AddWithValue("@term", term);
         return cmd.ExecuteScalar() is long doc ? doc : 0;
     }

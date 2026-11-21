@@ -21,16 +21,35 @@ public sealed record HistorySegment(
 {
     /// <summary>Number of member messages.</summary>
     public int MsgCount => this.MsgIds.Count;
+
+    /// <summary>Snowball-stemmed shadow body (<see cref="HistoryKeywordVariant.Stemmed"/>), else null.</summary>
+    public string? StemBody { get; init; }
+
+    /// <summary>Body for the trigram table (<see cref="HistoryKeywordVariant.Trigram"/>), else null.</summary>
+    public string? TrigramBody { get; init; }
+
+    /// <summary>Transcript chunks to embed (dense retrieval enabled), else empty.</summary>
+    public IReadOnlyList<HistoryChunk> Chunks { get; init; } = [];
 }
 
 /// <summary>Segmentation parameters derived from <see cref="HistoryOptions"/>.</summary>
 public sealed record SegmenterSettings(TimeZoneInfo TimeZone, TimeSpan IdleGap, int MaxSegmentWords)
 {
+    /// <summary>Which keyword shadow bodies to produce.</summary>
+    public HistoryKeywordVariant KeywordVariant { get; init; } = HistoryKeywordVariant.Plain;
+
+    /// <summary>Chunking for dense retrieval, or null when it is disabled.</summary>
+    public HistoryChunkSettings? Chunking { get; init; }
+
     /// <summary>Builds settings from options.</summary>
     public static SegmenterSettings From(HistoryOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
-        return new SegmenterSettings(options.ResolveTimeZone(), TimeSpan.FromMinutes(options.IdleGapMinutes), options.MaxSegmentWords);
+        return new SegmenterSettings(options.ResolveTimeZone(), TimeSpan.FromMinutes(options.IdleGapMinutes), options.MaxSegmentWords)
+        {
+            KeywordVariant = options.KeywordVariant,
+            Chunking = options.Dense.Enabled ? HistoryChunkSettings.From(options.Dense) : null,
+        };
     }
 }
 
@@ -80,7 +99,7 @@ public static class HistorySegmenter
                 var gap = row.Timestamp - current[^1].Row.Timestamp;
                 if (gap >= settings.IdleGap || localDate != currentDate || currentWords + words > settings.MaxSegmentWords)
                 {
-                    segments.Add(Build(channelId, current, currentDate));
+                    segments.Add(Build(channelId, current, currentDate, settings));
                     current.Clear();
                     currentWords = 0;
                 }
@@ -97,15 +116,16 @@ public static class HistorySegmenter
 
         if (current.Count > 0)
         {
-            segments.Add(Build(channelId, current, currentDate));
+            segments.Add(Build(channelId, current, currentDate, settings));
         }
 
         return segments;
     }
 
-    private static HistorySegment Build(string channelId, List<(MessageRecord Row, string Body, int Words)> members, DateOnly localDate)
+    private static HistorySegment Build(string channelId, List<(MessageRecord Row, string Body, int Words)> members, DateOnly localDate, SegmenterSettings settings)
     {
         var rows = members.Select(m => m.Row).ToList();
+        var body = string.Join('\n', members.Select(m => m.Body));
         return new HistorySegment(
             channelId,
             SqliteDateTimeText.Format(rows[0].Timestamp),
@@ -118,6 +138,11 @@ public static class HistorySegmenter
             rows.Any(r => r.Category == MessageCategory.Internal),
             rows.Any(r => HistoryLabels.For(r) == HistoryLineLabel.RecallEcho),
             HistoryFingerprint.Compute(rows),
-            string.Join('\n', members.Select(m => m.Body)));
+            body)
+        {
+            StemBody = settings.KeywordVariant == HistoryKeywordVariant.Stemmed ? HistoryStemmer.StemBody(body) : null,
+            TrigramBody = settings.KeywordVariant == HistoryKeywordVariant.Trigram ? body : null,
+            Chunks = settings.Chunking is { } chunking ? HistoryChunker.Chunk(rows, chunking).Select(c => c.Chunk).ToList() : [],
+        };
     }
 }
