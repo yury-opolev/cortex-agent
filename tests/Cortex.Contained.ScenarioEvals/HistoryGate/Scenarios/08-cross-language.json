@@ -1,0 +1,24 @@
+{
+  "id": "08-cross-language",
+  "title": "Said in Russian, asked in English",
+  "measure": "answeredCorrectly",
+  "fixture": [
+    { "daysAgo": 15.0, "channel": "discord-dm", "role": "user", "text": "Поезд в TownB отправляется в 21:40 с третьей платформы." },
+    { "daysAgo": 15.0, "channel": "discord-dm", "role": "assistant", "text": "Понял, 21:40, третья платформа." },
+    { "daysAgo": 3.0, "channel": "discord-dm", "role": "user", "text": "Let's talk about weekend plans." },
+    { "daysAgo": 3.0, "channel": "discord-dm", "role": "assistant", "text": "Sure, what do you have in mind?" }
+  ],
+  "prompts": [
+    "What time does the train to TownB leave? I told you a while ago.",
+    "Which platform does my TownB train leave from?",
+    "Did I mention when the TownB train departs?",
+    "Remind me of the TownB train departure time.",
+    "When was the train to TownB again?",
+    "I told you about a train to TownB — what were the details?",
+    "What's the departure time of the TownB train I mentioned?",
+    "Find the train to TownB info I gave you.",
+    "Do you remember my TownB train time and platform?",
+    "What did I say about the TownB train?"
+  ],
+  "rubric": "Ground truth: about 15 days ago, in Russian, the user said the train to TownB leaves at 21:40 from platform 3. Mark answeredCorrectly=true if the reply gives 21:40 (platform 3 is a bonus) without inventing other values."
+}

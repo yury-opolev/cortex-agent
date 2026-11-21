@@ -1,0 +1,23 @@
+{
+  "id": "06-greeting",
+  "title": "Greeting or small talk triggers no recall call",
+  "measure": "recallCalled",
+  "desired": false,
+  "fixture": [
+    { "daysAgo": 1.0, "channel": "{api}", "role": "user", "text": "Thanks for the help with the shopping list yesterday." },
+    { "daysAgo": 1.0, "channel": "{api}", "role": "assistant", "text": "Anytime!" }
+  ],
+  "prompts": [
+    "Hi!",
+    "Good morning",
+    "Hey, how are you?",
+    "Hello there",
+    "Good evening!",
+    "Morning :)",
+    "Hi, what's up?",
+    "Hey hey",
+    "How's it going?",
+    "Nice to talk to you again"
+  ],
+  "rubric": "Greeting only; no recall needed."
+}

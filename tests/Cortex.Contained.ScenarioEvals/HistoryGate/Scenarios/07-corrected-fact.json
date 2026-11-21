@@ -1,0 +1,24 @@
+{
+  "id": "07-corrected-fact",
+  "title": "A fact that was later corrected",
+  "measure": "presentedLatest",
+  "fixture": [
+    { "daysAgo": 10.0, "channel": "discord-dm", "role": "user", "text": "The project meeting with PersonC is on Thursday at 10:00." },
+    { "daysAgo": 10.0, "channel": "discord-dm", "role": "assistant", "text": "Noted: Thursday 10:00 with PersonC." },
+    { "daysAgo": 8.0, "channel": "webchat-default", "role": "user", "text": "Correction: the meeting with PersonC moved to Friday at 13:00." },
+    { "daysAgo": 8.0, "channel": "webchat-default", "role": "assistant", "text": "Updated: Friday 13:00 with PersonC." }
+  ],
+  "prompts": [
+    "When is my project meeting with PersonC?",
+    "What time did I say the PersonC meeting is?",
+    "Which day is the PersonC meeting?",
+    "Remind me when I meet PersonC for the project.",
+    "Is the PersonC meeting on Thursday?",
+    "What did I tell you about the meeting with PersonC?",
+    "When do I see PersonC about the project?",
+    "Can you check when the PersonC project meeting is?",
+    "I forgot the PersonC meeting time, help?",
+    "Did the PersonC meeting time change?"
+  ],
+  "rubric": "Ground truth: originally Thursday 10:00, later corrected to Friday 13:00. Mark presentedLatest=true if the reply gives Friday 13:00 and mentions that it was changed/moved. Giving Thursday 10:00 as current is a failure."
+}

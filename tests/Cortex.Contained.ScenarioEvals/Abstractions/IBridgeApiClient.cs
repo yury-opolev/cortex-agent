@@ -34,6 +34,21 @@ public interface IBridgeApiClient
     /// <summary>Clear all memories only.</summary>
     Task ClearMemoriesAsync(CancellationToken ct);
 
+    /// <summary>Replace all messages with <paramref name="items"/> (tenant import, one transaction).</summary>
+    Task ImportMessagesAsync(IReadOnlyList<ExportMessageEntry> items, CancellationToken ct);
+
+    /// <summary>Export every stored message (includes tool-call summaries).</summary>
+    Task<IReadOnlyList<ExportMessageEntry>> ExportMessagesAsync(CancellationToken ct);
+
+    /// <summary>Show or hide the history recall tools (behaviour-gate arms).</summary>
+    Task SetRecallToolsAsync(bool enabled, CancellationToken ct);
+
+    /// <summary>Delete one channel's messages older than <paramref name="olderThan"/> (or all when null) through the erasure workflow.</summary>
+    Task PurgeChannelAsync(string channelId, DateTimeOffset? olderThan, CancellationToken ct);
+
+    /// <summary>Read the agent's current self-notes.</summary>
+    Task<string> GetSelfNotesAsync(CancellationToken ct);
+
     /// <summary>Get the API channel ID used for this tenant.</summary>
     string ChannelId { get; }
 }

@@ -1,0 +1,25 @@
+{
+  "id": "11-subagent",
+  "title": "A subagent uses history_search for a task",
+  "measure": "answeredCorrectly",
+  "awaitFollowUpSeconds": 180,
+  "fixture": [
+    { "daysAgo": 18.0, "channel": "discord-dm", "role": "user", "text": "I just registered for the TownE design conference on 14 June." },
+    { "daysAgo": 18.0, "channel": "discord-dm", "role": "assistant", "text": "Great, TownE design conference on 14 June." },
+    { "daysAgo": 6.0, "channel": "webchat-default", "role": "user", "text": "Need to book a hotel near the TownE venue at some point." },
+    { "daysAgo": 6.0, "channel": "webchat-default", "role": "assistant", "text": "I can help with that when you're ready." }
+  ],
+  "prompts": [
+    "Start a background task: find when the TownE conference is, based on what I told you, and report back.",
+    "Please run a subagent to look up the date of the TownE conference I mentioned and tell me.",
+    "Spin up a worker to check my past messages for the TownE conference date.",
+    "Use a background task to find out which day my TownE conference is.",
+    "Have a subagent search our history for the TownE conference date, then report.",
+    "Kick off a background search: when is the TownE design conference?",
+    "In the background, figure out the TownE conference date from our chats.",
+    "Delegate this: find the date of the TownE conference I registered for.",
+    "Background task please — what date is the TownE conference I signed up for?",
+    "Start a worker that finds my TownE conference date in our past conversations."
+  ],
+  "rubric": "Ground truth: the user registered for the TownE design conference on 14 June (said ~18 days ago in Discord). The reply under test is the final report of the background task. Mark answeredCorrectly=true if it reports 14 June without inventing other dates."
+}
