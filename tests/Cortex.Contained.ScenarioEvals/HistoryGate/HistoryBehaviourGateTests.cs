@@ -30,8 +30,7 @@ public sealed class HistoryBehaviourGateTests
     public async Task BehaviourGate_ToolsOnVsOff_MeetsOwnerApprovedThresholds()
     {
         var section = _fixture.Configuration.GetSection("ScenarioEval:HistoryGate");
-        var samples = int.TryParse(section["Samples"], out var s) ? s : 3;
-        var settle = TimeSpan.FromSeconds(double.TryParse(section["SettleSeconds"], out var w) ? w : 5);
+        var run = GateRunOptions.From(section);
         var judgeModel = section["JudgeModel"] is { Length: > 0 } m ? m : _fixture.EvalModel;
         var thresholds = section.GetSection("Thresholds").Get<GateThresholds>() ?? new GateThresholds();
 
@@ -39,16 +38,16 @@ public sealed class HistoryBehaviourGateTests
             .Order(StringComparer.Ordinal)
             .Select(f => JsonSerializer.Deserialize<GateScenario>(File.ReadAllText(f), JsonOptions)!)
             .ToList();
-        Assert.Equal(11, scenarios.Count);
+        Assert.Equal(12, scenarios.Count);
         Assert.All(scenarios, sc => Assert.True(sc.Prompts.Length >= 10, $"{sc.Id} needs ≥ 10 paraphrases"));
 
-        var runner = new GateRunner(_fixture.BridgeClient, new GateJudge(_fixture.EvalLlmClient, judgeModel), settle);
-        var trials = await runner.RunAsync(scenarios, samples, CancellationToken.None);
+        var runner = new GateRunner(_fixture.BridgeClient, new GateJudge(_fixture.EvalLlmClient, judgeModel), run.TotalSettle);
+        var trials = await runner.RunAsync(scenarios, run.Samples, CancellationToken.None);
         var rates = GateReport.Rates(trials);
         var checks = GateReport.Checks(trials, thresholds);
 
-        var path = Path.Combine(_fixture.TranscriptDir, $"history-gate-{DateTimeOffset.UtcNow:yyyyMMdd-HHmmss}.json");
-        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(new { trials, rates, checks }, JsonOptions));
+        var path = Path.Combine(_fixture.TranscriptDir, $"        history-gate-{run.SearchMode}-{DateTimeOffset.UtcNow:yyyyMMdd-HHmmss}.json");
+                await File.WriteAllTextAsync(path, JsonSerializer.Serialize(new { run.SearchMode, trials, rates, checks }, JsonOptions));
         foreach (var rate in rates)
         {
             _output.WriteLine($"{rate.ScenarioId} [{rate.Arm}] {rate.Successes}/{rate.Trials} = {rate.Rate:P0} (CI {rate.Low:P0}–{rate.High:P0})");

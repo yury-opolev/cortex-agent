@@ -35,14 +35,14 @@ public sealed class GateReportTests
     }
 
     [Fact]
-    public void ScenarioFiles_AllParse_ElevenScenariosWithTenParaphrases()
+    public void ScenarioFiles_AllParse_TwelveScenariosWithTenParaphrases()
     {
         var options = new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true };
         var scenarios = Directory.GetFiles(Path.Combine(AppContext.BaseDirectory, "HistoryGate", "Scenarios"), "*.json")
             .Select(f => System.Text.Json.JsonSerializer.Deserialize<GateScenario>(File.ReadAllText(f), options)!)
             .ToList();
 
-        Assert.Equal(11, scenarios.Count);
+        Assert.Equal(12, scenarios.Count);
         Assert.All(scenarios, s => Assert.True(s.Prompts.Length >= 10, s.Id));
         Assert.All(scenarios, s => Assert.NotEmpty(s.Fixture));
         Assert.Contains(scenarios, s => s.Fixture.Any(m => m.Category == Cortex.Contained.Contracts.Hub.MessageCategory.Internal));
