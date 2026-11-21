@@ -119,6 +119,7 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
     /// are cheap classification work that gains nothing from longer deliberation.
     /// </summary>
     private readonly string? reasoningEffort;
+    private readonly Events.DeliveryRecorder? deliveries;
 
     /// <summary>
     /// Safety-net round limit. The real termination signals are: model stops calling tools,
@@ -192,8 +193,10 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
         Memory.MemorySettingsStore? memorySettingsStore = null,
         SubagentRunnerRegistry? subagentRegistry = null,
         Action? wakeSubagentCoordinator = null,
-        string? reasoningEffort = null)
+        string? reasoningEffort = null,
+        Events.DeliveryRecorder? deliveries = null)
     {
+        this.deliveries = deliveries;
         this.reasoningEffort = Llm.LlmReasoningEffort.IsLevel(reasoningEffort) ? reasoningEffort : null;
         this.subagentStore = subagentStore;
         this.todoResolver = todoResolver;
@@ -873,7 +876,7 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
         string? finalText = null;
 
         var delivery = new TurnResponseDelivery(
-            client, this.messageStore, replyConversationId, channelId, correlationId, useProactiveDelivery, this.logger);
+            client, this.messageStore, replyConversationId, channelId, correlationId, useProactiveDelivery, this.logger, this.deliveries);
 
         // Per-turn latency profiling (queue-wait, TTFT, LLM, tools, e2e).
         var latency = new TurnLatencyTracker(TimeProvider.System);
