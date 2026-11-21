@@ -166,6 +166,19 @@ public sealed class AgentHubHistoryTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task BackfillHistoryEvents_ReportsScannedAndInserted()
+    {
+        await this.h.SayAsync("a", 0);
+        Set("eventBackfill", new Cortex.Contained.Agent.Host.Events.EventBackfillService(
+            this.h.Store, this.h.Gate, TimeProvider.System, NullLogger<Cortex.Contained.Agent.Host.Events.EventBackfillService>.Instance));
+
+        var result = await this.hub.BackfillHistoryEvents();
+
+        Assert.Equal(1, result.Scanned);
+        Assert.Equal(0, result.Inserted);
+    }
+
+    [Fact]
     public async Task SetHistoryRecallTools_ReturnsEffectiveState()
     {
         Assert.False(await this.hub.SetHistoryRecallTools(false));

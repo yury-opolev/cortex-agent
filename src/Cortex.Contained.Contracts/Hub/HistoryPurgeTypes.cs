@@ -25,3 +25,16 @@ public sealed record HistoryPurgeResultDto
     /// <summary>Curated memories created in the deleted period that are now hidden until reviewed.</summary>
     public int QuarantinedMemories { get; init; }
 }
+
+/// <summary>Outcome of the explicit event backfill (legacy_import events for rows stored before the event log).</summary>
+public sealed record EventBackfillResultDto
+{
+    /// <summary>Messages scanned.</summary>
+    public int Scanned { get; init; }
+
+    /// <summary>Messages that received a legacy_import event (0 on a repeated run).</summary>
+    public int Inserted { get; init; }
+
+    /// <summary>Duration of the maintenance window, in milliseconds.</summary>
+    public long ElapsedMs { get; init; }
+}

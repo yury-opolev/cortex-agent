@@ -12,7 +12,7 @@ namespace Cortex.Contained.Agent.Host.Storage;
 /// The event log in <c>messages.db</c> (inc 2 spec §4): schema, the in-transaction append used by
 /// every <c>Messages</c> mutation, and <see cref="IEventLog"/>.
 /// </summary>
-public sealed partial class MessageStore : IEventLog
+public sealed partial class MessageStore : IEventLog, IEventBackfillStore
 {
     /// <summary>Largest allowed serialized payload.</summary>
     internal const int MaxEventPayloadBytes = 8192;
@@ -55,6 +55,39 @@ public sealed partial class MessageStore : IEventLog
         cmd.CommandText = "SELECT Value FROM Meta WHERE Key = 'PurgeGeneration';";
         return long.Parse(await cmd.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) as string ?? "0", CultureInfo.InvariantCulture);
     }
+
+    /// <inheritdoc />
+    public Task<EventBackfillBatch> BackfillLegacyEventsAsync(long afterId, int batchSize, CancellationToken cancellationToken) =>
+        this.WriteAsync(
+            async transaction =>
+            {
+                var rows = new List<MessageRecord>();
+                await using (var select = this.WriterCommand(transaction, "SELECT Id, UserId, ChannelId, Role, Content, Timestamp, MessageId, Category, ToolCalls FROM Messages WHERE Id > @after ORDER BY Id LIMIT @batch;"))
+                {
+                    select.Parameters.AddWithValue("@after", afterId);
+                    select.Parameters.AddWithValue("@batch", batchSize);
+                    await using var reader = await select.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+                    while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                    {
+                        rows.Add(ReadRecord(reader));
+                    }
+                }
+
+                var inserted = 0;
+                foreach (var row in rows)
+                {
+                    if (await this.FirstMessageEventIdAsync(transaction, row.Id, cancellationToken).ConfigureAwait(false) is not null)
+                    {
+                        continue;
+                    }
+
+                    await this.InsertEventAsync(transaction, MessageEvents.ForImport(row), cancellationToken).ConfigureAwait(false);
+                    inserted++;
+                }
+
+                return new EventBackfillBatch(rows.Count == 0 ? afterId : rows[^1].Id, rows.Count, inserted);
+            },
+            cancellationToken);
 
     private void InitializeEventsSchema()
     {

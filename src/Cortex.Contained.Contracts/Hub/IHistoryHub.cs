@@ -38,6 +38,12 @@ public interface IHistoryHub
     Task<bool> SetHistoryRecallTools(bool enabled);
 
     /// <summary>
+    /// Run the explicit event backfill in a maintenance window: legacy_import events for messages
+    /// stored before the event log existed. Idempotent; never resurrects purged rows.
+    /// </summary>
+    Task<EventBackfillResultDto> BackfillHistoryEvents();
+
+    /// <summary>
     /// List distinct channels that have at least one message, along with each channel's
     /// message count and last-activity timestamp. Ordered by most recent activity first.
     /// </summary>

@@ -155,6 +155,8 @@ builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Events.IToolEventRecor
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Events.DeliveryRecorder>();
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Events.DeliveryReportBuilder>();
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Events.EventRecallService>();
+builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Events.IEventBackfillStore>(sp => sp.GetRequiredService<MessageStore>());
+builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Events.EventBackfillService>();
 
 // --- Operational metrics (thread-safe singleton; surfaced via health/ping) ---
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Agent.AgentMetrics>();

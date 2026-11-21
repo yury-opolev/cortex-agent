@@ -42,6 +42,7 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
     private readonly Cortex.Contained.Agent.Host.SpeakerId.SpeakerIdSettingsStore speakerIdSettingsStore;
     private readonly Cortex.Contained.Agent.Host.SpeakerId.EnrollmentOrchestrator? enrollmentOrchestrator;
     private readonly Cortex.Contained.Agent.Host.Events.KnownSecrets? knownSecrets;
+    private readonly Cortex.Contained.Agent.Host.Events.EventBackfillService? eventBackfill;
     private readonly Cortex.Contained.Agent.Host.Mcp.McpToolStore mcpToolStore;
     private readonly IHttpClientFactory httpClientFactory;
     private readonly AgentMetrics metrics;
@@ -75,7 +76,8 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
         SubagentObservabilityService subagentObservability,
         ILogger<AgentHub> logger,
         Cortex.Contained.Agent.Host.SpeakerId.EnrollmentOrchestrator? enrollmentOrchestrator = null,
-        Cortex.Contained.Agent.Host.Events.KnownSecrets? knownSecrets = null)
+        Cortex.Contained.Agent.Host.Events.KnownSecrets? knownSecrets = null,
+        Cortex.Contained.Agent.Host.Events.EventBackfillService? eventBackfill = null)
     {
         this.runtime = runtime;
         this.llmClient = llmClient;
@@ -97,6 +99,7 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
         this.speakerIdSettingsStore = speakerIdSettingsStore;
         this.enrollmentOrchestrator = enrollmentOrchestrator;
         this.knownSecrets = knownSecrets;
+        this.eventBackfill = eventBackfill;
         this.mcpToolStore = mcpToolStore;
         this.httpClientFactory = httpClientFactory;
         this.metrics = metrics;
@@ -515,6 +518,23 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
     {
         this.historyTools.SetEnabled(enabled);
         return Task.FromResult(this.historyTools.IsEnabled);
+    }
+
+    /// <inheritdoc />
+    public async Task<EventBackfillResultDto> BackfillHistoryEvents()
+    {
+        if (this.eventBackfill is null)
+        {
+            throw new HubException("The event backfill is not available on this agent.");
+        }
+
+        var report = await this.eventBackfill.RunAsync(Context.ConnectionAborted).ConfigureAwait(false);
+        return new EventBackfillResultDto
+        {
+            Scanned = report.Scanned,
+            Inserted = report.Inserted,
+            ElapsedMs = (long)report.Elapsed.TotalMilliseconds,
+        };
     }
 
     /// <inheritdoc />
