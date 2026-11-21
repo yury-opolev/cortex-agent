@@ -65,9 +65,10 @@
     <PackageVersion Include="StreamJsonRpc" Version="2.24.92" />
     <PackageVersion Include="Nerdbank.Streams" Version="2.13.16" />
     <PackageVersion Include="Nerdbank.MessagePack" Version="1.2.4" />
-    <!-- Transitive (via StreamJsonRpc). Pinned to the patched 2.5.301 to fix
-         CVE-2026-48109 / GHSA-hv8m-jj95-wg3x (MessagePack LZ4 OOB read). -->
-    <PackageVersion Include="MessagePack" Version="2.5.301" />
+    <!-- Transitive (via StreamJsonRpc). Pinned to a patched 2.5.x to fix
+         CVE-2026-48109 / GHSA-hv8m-jj95-wg3x (MessagePack LZ4 OOB read) and
+         GHSA-qhrr-8q5h-9q3h (nested arrays exceed buffer limits, fixed in 2.5.303). -->
+    <PackageVersion Include="MessagePack" Version="2.5.307" />
     <!-- Testing -->
     <PackageVersion Include="coverlet.collector" Version="6.0.4" />
     <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.13" />
