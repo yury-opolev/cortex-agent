@@ -43,6 +43,7 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
     private readonly Cortex.Contained.Agent.Host.SpeakerId.EnrollmentOrchestrator? enrollmentOrchestrator;
     private readonly Cortex.Contained.Agent.Host.Events.KnownSecrets? knownSecrets;
     private readonly Cortex.Contained.Agent.Host.Events.EventBackfillService? eventBackfill;
+    private readonly Storage.StorageKeyRing? storageKeys;
     private readonly Cortex.Contained.Agent.Host.Mcp.McpToolStore mcpToolStore;
     private readonly IHttpClientFactory httpClientFactory;
     private readonly AgentMetrics metrics;
@@ -77,7 +78,8 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
         ILogger<AgentHub> logger,
         Cortex.Contained.Agent.Host.SpeakerId.EnrollmentOrchestrator? enrollmentOrchestrator = null,
         Cortex.Contained.Agent.Host.Events.KnownSecrets? knownSecrets = null,
-        Cortex.Contained.Agent.Host.Events.EventBackfillService? eventBackfill = null)
+        Cortex.Contained.Agent.Host.Events.EventBackfillService? eventBackfill = null,
+        Storage.StorageKeyRing? storageKeys = null)
     {
         this.runtime = runtime;
         this.llmClient = llmClient;
@@ -100,6 +102,7 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
         this.enrollmentOrchestrator = enrollmentOrchestrator;
         this.knownSecrets = knownSecrets;
         this.eventBackfill = eventBackfill;
+        this.storageKeys = storageKeys;
         this.mcpToolStore = mcpToolStore;
         this.httpClientFactory = httpClientFactory;
         this.metrics = metrics;
@@ -199,6 +202,15 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
     {
         this.LogConfigUpdate();
         return this.runtime.UpdateConfigAsync(config, Context.ConnectionAborted);
+    }
+
+    /// <inheritdoc />
+    public Task<bool> ProvideStorageKey(StorageKeyGrant grant)
+    {
+        ArgumentNullException.ThrowIfNull(grant);
+        var outcome = this.storageKeys?.Provide(grant.Key) ?? Storage.StorageKeyAcceptance.Rejected;
+        this.LogStorageKeyReceived(outcome);
+        return Task.FromResult(outcome != Storage.StorageKeyAcceptance.Rejected);
     }
 
     /// <inheritdoc />
@@ -1044,6 +1056,9 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
 
     [LoggerMessage(Level = LogLevel.Information, Message = "LLM credentials received: {ProviderCount} providers")]
     private partial void LogCredentialsReceived(int providerCount);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Storage key received: {Outcome}")]
+    private partial void LogStorageKeyReceived(Storage.StorageKeyAcceptance outcome);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Seeding history for channel {ChannelId}: {MessageCount} messages")]
     private partial void LogSeedHistory(string channelId, int messageCount);

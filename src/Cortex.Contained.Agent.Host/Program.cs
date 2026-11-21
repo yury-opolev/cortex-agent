@@ -149,6 +149,7 @@ builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Tools.IConversationToo
 
 // --- Event log and provenance (increment 2): events in messages.db, tool payload policy ---
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Events.KnownSecrets>();
+builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Storage.StorageKeyRing>();
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Events.IEventLog>(sp => sp.GetRequiredService<MessageStore>());
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Events.ToolEventPayloads>();
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Events.IToolEventRecorder, Cortex.Contained.Agent.Host.Events.ToolEventRecorder>();

@@ -21,6 +21,13 @@ public interface ISystemHub
     Task ProvideCredentials(LlmCredentials credentials);
 
     /// <summary>
+    /// Push the tenant's storage master key (D4). Called before <see cref="ProvideCredentials"/>
+    /// on every connect. Held in memory only. Returns false when the key is malformed or differs
+    /// from the key the agent already uses (it is never switched at runtime).
+    /// </summary>
+    Task<bool> ProvideStorageKey(StorageKeyGrant grant);
+
+    /// <summary>
     /// Tell the agent which channels are currently active on the Bridge.
     /// Tools use this list to validate channel targets and to inform the LLM
     /// which channels are available for message delivery.
