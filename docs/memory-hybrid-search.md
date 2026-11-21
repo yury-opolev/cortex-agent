@@ -66,7 +66,8 @@ to dense with a stated reason, and nothing else changes.
 ## Evaluation (owner tasks, local raw data only — Gate H for memory)
 
 Nothing below runs in CI. Every search runs on a private copy of `/app/state/memory` that is deleted when
-the command ends; reports contain ids and numbers only (D6). Run inside the agent container:
+the command ends (also on Ctrl+C and SIGTERM; every `memory-eval` command first removes copies left by a
+run that was killed outright); reports contain ids and numbers only (D6). Run inside the agent container:
 
 ```bash
 dotnet Cortex.Contained.Agent.Host.dll memory-eval init                 # /app/state/eval/memory: templates, guide, default grid

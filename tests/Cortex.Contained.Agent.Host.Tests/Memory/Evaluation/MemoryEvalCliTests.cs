@@ -101,6 +101,50 @@ public sealed class MemoryEvalCliTests : IDisposable
     }
 
     [Fact]
+    public async Task Init_SweepsCopiesLeftByAKilledRun()
+    {
+        var leftover = Path.Combine(this.workspace.RunsDirectory, "ablate-dev-killed", "corpus");
+        Directory.CreateDirectory(leftover);
+        File.WriteAllText(Path.Combine(leftover, "memory.db"), "raw copy");
+
+        var init = await this.RunAsync("init");
+
+        Assert.Equal(0, init.Code);
+        Assert.False(Directory.Exists(leftover));
+        Assert.Contains("leftover", init.Output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Pool_CancelledMidRun_DeletesTheCopyAndReportsCancellation()
+    {
+        await this.SeedAsync();
+        await this.RunAsync("init");
+        this.WriteDataset(lookups: 1);
+        using var cancellation = new CancellationTokenSource();
+        using var output = new StringWriter();
+
+        var code = await MemoryEvalCli.RunAsync(
+            ["pool", "--dir", this.workspace.Directory], output, this.live, _ => new CancellingEmbedder(cancellation), cancellation.Token);
+
+        Assert.Equal(130, code);
+        Assert.Contains("cancelled", output.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(Directory.GetDirectories(this.workspace.RunsDirectory, "corpus", SearchOption.AllDirectories));
+    }
+
+    private sealed class CancellingEmbedder(CancellationTokenSource cancellation) : MemoryMcp.Core.Services.IEmbeddingService
+    {
+        public Task<float[]> EmbedAsync(string text, CancellationToken cancellationToken = default)
+        {
+            cancellation.Cancel();
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(FakeMemoryEmbedder.Embed(text));
+        }
+
+        public Task<IReadOnlyList<float[]>> EmbedBatchAsync(IEnumerable<string> texts, CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<float[]>>(texts.Select(FakeMemoryEmbedder.Embed).ToList());
+    }
+
+    [Fact]
     public async Task Register_FewerThan250Queries_Refuses()
     {
         await this.RunAsync("init");

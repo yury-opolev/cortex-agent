@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using Cortex.Contained.Contracts.Config.Yaml;
 using MemoryMcp.Core.Configuration;
@@ -82,12 +83,35 @@ public static class MemoryEvalCli
           `MemoryMcp:Search` values) and restart.
         """;
 
-    /// <summary>Entry point with the live embedder from the agent configuration; returns a process exit code.</summary>
-    public static Task<int> RunAsync(IReadOnlyList<string> args, TextWriter output, CancellationToken cancellationToken)
+    /// <summary>
+    /// Entry point with the live embedder from the agent configuration; returns a process exit code. Ctrl+C and
+    /// SIGTERM cancel the run instead of killing the process, so the private raw copy is deleted on the way out.
+    /// </summary>
+    public static async Task<int> RunAsync(IReadOnlyList<string> args, TextWriter output, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(args);
         var live = LiveOptions(args);
-        return RunAsync(args, output, live, options => new OllamaEmbeddingService(new StaticOptionsMonitor(options), NullLogger<OllamaEmbeddingService>.Instance), cancellationToken);
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        void Interrupt() => cancellation.Cancel();
+        ConsoleCancelEventHandler onCancelKey = (_, e) =>
+        {
+            e.Cancel = true;
+            Interrupt();
+        };
+        Console.CancelKeyPress += onCancelKey;
+        using var termination = PosixSignalRegistration.Create(PosixSignal.SIGTERM, context =>
+        {
+            context.Cancel = true;
+            Interrupt();
+        });
+        try
+        {
+            return await RunAsync(args, output, live, options => new OllamaEmbeddingService(new StaticOptionsMonitor(options), NullLogger<OllamaEmbeddingService>.Instance), cancellation.Token).ConfigureAwait(false);
+        }
+        finally
+        {
+            Console.CancelKeyPress -= onCancelKey;
+        }
     }
 
     /// <summary>Entry point with explicit options and an injected embedder (tests use a deterministic fake).</summary>
@@ -110,6 +134,12 @@ public static class MemoryEvalCli
 
         var workspace = new MemoryEvalWorkspace(Option(args, "--dir") ?? MemoryEvalWorkspace.DefaultDirectory);
         Directory.CreateDirectory(workspace.Directory);
+        if (MemoryEvalCorpus.SweepAbandoned(workspace.RunsDirectory) is var swept and > 0)
+        {
+            await output.WriteLineAsync(string.Create(CultureInfo.InvariantCulture,
+                $"Removed {swept} leftover raw evaluation copies from interrupted runs.")).ConfigureAwait(false);
+        }
+
         var context = new CommandContext(workspace, live, embedderFactory, output);
         try
         {
@@ -149,6 +179,11 @@ public static class MemoryEvalCli
         {
             await output.WriteLineAsync("error: " + ex.Message).ConfigureAwait(false);
             return 2;
+        }
+        catch (OperationCanceledException)
+        {
+            await output.WriteLineAsync("cancelled: the raw evaluation copy was deleted.").ConfigureAwait(false);
+            return 130;
         }
     }
 

@@ -21,14 +21,18 @@ public sealed class MemoryEvalCorpus : IAsyncDisposable
     /// <summary>Memories returned per query (the metrics read the first 10).</summary>
     public const int ResultLimit = 10;
 
+    private const string LockFileName = "corpus.lock";
+
     private readonly string corpusDirectory;
+    private readonly FileStream runLock;
     private readonly MemoryMcpOptions options;
     private readonly SqliteVecMemoryStore store;
     private readonly HybridMemorySearch search;
 
-    private MemoryEvalCorpus(string corpusDirectory, MemoryMcpOptions options, SqliteVecMemoryStore store, IEmbeddingService embedding)
+    private MemoryEvalCorpus(string corpusDirectory, FileStream runLock, MemoryMcpOptions options, SqliteVecMemoryStore store, IEmbeddingService embedding)
     {
         this.corpusDirectory = corpusDirectory;
+        this.runLock = runLock;
         this.options = options;
         this.store = store;
         this.search = new HybridMemorySearch(embedding, store, new StaticOptionsMonitor(options));
@@ -60,6 +64,9 @@ public sealed class MemoryEvalCorpus : IAsyncDisposable
             Search = live.Search,
         };
 
+        // Held for the life of the copy: a later command sweeps a copy only when nobody holds this lock.
+        Directory.CreateDirectory(runDirectory);
+        var runLock = new FileStream(Path.Combine(runDirectory, LockFileName), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.DeleteOnClose);
         try
         {
             Directory.CreateDirectory(options.MemoriesDirectory);
@@ -83,11 +90,12 @@ public sealed class MemoryEvalCorpus : IAsyncDisposable
         catch
         {
             DeleteCopy(corpusDirectory);
+            runLock.Dispose();
             throw;
         }
 
         var store = new SqliteVecMemoryStore(Options.Create(options), new NullContentEncryptor(), NullLogger<SqliteVecMemoryStore>.Instance);
-        var corpus = new MemoryEvalCorpus(corpusDirectory, options, store, embedding);
+        var corpus = new MemoryEvalCorpus(corpusDirectory, runLock, options, store, embedding);
         try
         {
             await store.InitializeAsync(cancellationToken).ConfigureAwait(false);
@@ -162,7 +170,48 @@ public sealed class MemoryEvalCorpus : IAsyncDisposable
     {
         this.store.Dispose();
         DeleteCopy(this.corpusDirectory);
+        this.runLock.Dispose();
         return ValueTask.CompletedTask;
+    }
+
+    /// <summary>
+    /// Deletes the raw copies (<c>runs/*/corpus</c>) that runs killed before disposal (SIGKILL, power loss)
+    /// left behind. A copy whose run still holds its lock is in use and is kept; reports and verdicts beside
+    /// the copy are kept too. Returns the number of copies removed.
+    /// </summary>
+    public static int SweepAbandoned(string runsDirectory)
+    {
+        if (!Directory.Exists(runsDirectory))
+        {
+            return 0;
+        }
+
+        var removed = 0;
+        foreach (var run in Directory.EnumerateDirectories(runsDirectory))
+        {
+            var corpus = Path.Combine(run, "corpus");
+            if (!Directory.Exists(corpus))
+            {
+                continue;
+            }
+
+            try
+            {
+                using var gate = new FileStream(Path.Combine(run, LockFileName), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.DeleteOnClose);
+                DeleteCopy(corpus);
+                removed++;
+            }
+            catch (IOException)
+            {
+                // in use by a running command, or not deletable now: left for the next sweep
+            }
+            catch (UnauthorizedAccessException)
+            {
+                // same: left for the next sweep
+            }
+        }
+
+        return removed;
     }
 
     private static void DeleteCopy(string directory)

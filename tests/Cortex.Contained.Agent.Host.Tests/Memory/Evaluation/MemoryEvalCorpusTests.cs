@@ -104,6 +104,40 @@ public sealed class MemoryEvalCorpusTests : IDisposable
     }
 
     [Fact]
+    public async Task SweepAbandoned_RemovesCopiesLeftByKilledRuns_KeepsOpenOnesAndOutputs()
+    {
+        await this.SeedLiveAsync();
+        var runs = Path.Combine(this.root, "runs");
+        var abandoned = Path.Combine(runs, "ablate-dev-old", "corpus", "memories");
+        Directory.CreateDirectory(abandoned);
+        File.WriteAllText(Path.Combine(abandoned, "x.memory.data"), "raw text");
+        File.WriteAllText(Path.Combine(runs, "ablate-dev-old", "report.md"), "numbers only");
+        Directory.CreateDirectory(Path.Combine(runs, "holdout-test-old"));
+        File.WriteAllText(Path.Combine(runs, "holdout-test-old", "verdict.json"), "{}");
+        var runningDirectory = Path.Combine(runs, "ablate-dev-running");
+
+        await using (var running = await MemoryEvalCorpus.CreateAsync(this.live.DataDirectory, runningDirectory, this.live, new FakeMemoryEmbedder(), CancellationToken.None))
+        {
+            Assert.Equal(1, MemoryEvalCorpus.SweepAbandoned(runs));
+
+            Assert.True(Directory.Exists(Path.Combine(runningDirectory, "corpus")));
+            Assert.Equal(3, (await running.ListMemoriesAsync(CancellationToken.None)).Count);
+        }
+
+        Assert.False(Directory.Exists(Path.Combine(runs, "ablate-dev-old", "corpus")));
+        Assert.True(File.Exists(Path.Combine(runs, "ablate-dev-old", "report.md")));
+        Assert.True(File.Exists(Path.Combine(runs, "holdout-test-old", "verdict.json")));
+        Assert.False(Directory.Exists(Path.Combine(runningDirectory, "corpus")));
+        Assert.Equal(0, MemoryEvalCorpus.SweepAbandoned(runs));
+    }
+
+    [Fact]
+    public void SweepAbandoned_NoRunsDirectory_ReturnsZero()
+    {
+        Assert.Equal(0, MemoryEvalCorpus.SweepAbandoned(Path.Combine(this.root, "nothing")));
+    }
+
+    [Fact]
     public async Task CreateAsync_NoDatabase_Fails()
     {
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
