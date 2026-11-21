@@ -138,6 +138,48 @@ public sealed class MemoryEvalCorpusTests : IDisposable
     }
 
     [Fact]
+    public async Task SearchAsync_HybridQueryEmbeddingFails_FailsLoudlyInsteadOfScoringKeywordOnly()
+    {
+        await this.SeedLiveAsync();
+        await using var corpus = await MemoryEvalCorpus.CreateAsync(
+            this.live.DataDirectory, Path.Combine(this.root, "run"), this.live, new QueryEmbedder((_, _) => throw new HttpRequestException("embedder down")), CancellationToken.None);
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => corpus.SearchAsync(
+            new MemoryAblationConfig { Name = "hybrid-rrf60" }, new MemoryEvalQuery { Id = "m1", Text = "INV-2041", Category = "identifier" }, CancellationToken.None));
+
+        Assert.Contains("hybrid-rrf60", error.Message, StringComparison.Ordinal);
+        Assert.Contains("embedding failed", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SearchAsync_EmbedderSlowerThanTheLiveQueryTimeout_StillRunsHybrid()
+    {
+        this.live.Search.QueryTimeoutMs = 100;
+        await this.SeedLiveAsync();
+        await using var corpus = await MemoryEvalCorpus.CreateAsync(
+            this.live.DataDirectory, Path.Combine(this.root, "run"), this.live,
+            new QueryEmbedder(async (text, token) =>
+            {
+                await Task.Delay(400, token);
+                return FakeMemoryEmbedder.Embed(text);
+            }),
+            CancellationToken.None);
+
+        var run = await corpus.SearchAsync(
+            new MemoryAblationConfig { Name = "hybrid-rrf60" }, new MemoryEvalQuery { Id = "m1", Text = "railway journey", Category = "paraphrase" }, CancellationToken.None);
+
+        Assert.Equal("mem-train", run.Memories[0].MemoryId);
+    }
+
+    private sealed class QueryEmbedder(Func<string, CancellationToken, Task<float[]>> embed) : MemoryMcp.Core.Services.IEmbeddingService
+    {
+        public Task<float[]> EmbedAsync(string text, CancellationToken cancellationToken = default) => embed(text, cancellationToken);
+
+        public Task<IReadOnlyList<float[]>> EmbedBatchAsync(IEnumerable<string> texts, CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<float[]>>(texts.Select(FakeMemoryEmbedder.Embed).ToList());
+    }
+
+    [Fact]
     public async Task CreateAsync_NoDatabase_Fails()
     {
         await Assert.ThrowsAsync<InvalidOperationException>(() =>

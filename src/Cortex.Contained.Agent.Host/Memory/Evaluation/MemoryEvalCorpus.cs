@@ -131,6 +131,11 @@ public sealed class MemoryEvalCorpus : IAsyncDisposable
             },
             cancellationToken).ConfigureAwait(false);
         var latency = watch.Elapsed.TotalMilliseconds;
+        if (result.Fallback is { } fallback)
+        {
+            // A degraded run would score a different configuration than the one named in the report.
+            throw new InvalidOperationException($"Configuration '{config.Name}' fell back to {result.EffectiveMode} for query '{query.Id}': {fallback}. Fix the cause and run again.");
+        }
         var returned = result.Hits
             .Select(h => new ReturnedMemory(h.Memory.MemoryId, WordsShown(h.Memory.Content, this.options.SearchMaxContentLength)))
             .ToList();

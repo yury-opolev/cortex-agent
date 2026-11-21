@@ -104,6 +104,9 @@ dotnet Cortex.Contained.Agent.Host.dll history-eval register                   #
 dotnet Cortex.Contained.Agent.Host.dll history-eval holdout                     # one confirmatory run on the test split
 ```
 
+Evaluation runs disable the 3 s query-embedding budget, and a hybrid configuration that would run
+keyword-only (embedder down, index withheld) fails the run instead of being scored as keyword.
+
 Then re-run the behaviour gate with `ScenarioEval:HistoryGate:SearchMode=hybrid` on a staging agent
 with `History:Dense:Enabled=true` and `History:Dense:OpenSegmentDebounceSeconds=0`. The Gate H decision
 is the owner's; a result on a mostly-legacy snapshot is provisional (re-run after ≥ 4 weeks of events).

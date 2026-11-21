@@ -85,6 +85,8 @@ dotnet Cortex.Contained.Agent.Host.dll memory-eval holdout              # one co
 ```
 
 `--source` selects another copy of the memory directory, `--embedder` another embeddings endpoint.
+Evaluation runs disable the 3 s query-embedding budget, and a hybrid configuration that would fall back
+(embedder down, keyword index unavailable) fails the run instead of being scored as another mode.
 `seeds.jsonl` and `dataset.jsonl` hold memory or query text and stay in the workspace; the owner deletes
 `seeds.jsonl` once the dataset is written.
 

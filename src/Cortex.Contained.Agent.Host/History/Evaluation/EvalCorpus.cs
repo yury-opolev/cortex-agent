@@ -116,6 +116,12 @@ public sealed class EvalCorpus : IAsyncDisposable
             {
                 latency = watch.Elapsed.TotalMilliseconds;
                 confidence = result.TopSimilarity ?? 0;
+                if (config.Mode != HistorySearchMode.Keyword && result.Error is null && result.Mode != HistorySearchMode.Hybrid)
+                {
+                    // A degraded run would score a different configuration than the one named in the report.
+                    throw new InvalidOperationException(
+                        $"Configuration '{config.Name}' ran keyword-only for query '{query.Id}' ({result.Coverage.Dense}). Fix the cause and run again.");
+                }
             }
 
             if (result.Error is not null)

@@ -52,8 +52,15 @@ public sealed record AblationConfig
         options.Ranking.DenseWeight = this.DenseWeight;
         options.Ranking.CollapseWorkerDuplicates = this.CollapseWorkerDuplicates;
         options.Ranking.RecencyWeight = this.RecencyWeight;
+        options.Dense.QueryTimeoutMs = EvaluationQueryTimeoutMs;
         return options;
     }
+
+    /// <summary>
+    /// Query-embedding budget of evaluation runs: effectively unlimited, so a slow embedder never turns a
+    /// hybrid configuration into keyword-only (the live 3 s budget is a latency guard, not a quality setting).
+    /// </summary>
+    public const int EvaluationQueryTimeoutMs = 600_000;
 }
 
 /// <summary>The default ablation grid, fixed before the first dev run (pre-registered with the plan).</summary>
