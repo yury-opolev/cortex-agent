@@ -1002,9 +1002,11 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
                 }
                 else
                 {
+                    // Built without the generation token: the text was already sent, so a cancelled
+                    // generation must not drop it from the target conversation.
                     var report = this.deliveryReports is null
                         ? Events.DeliveryReportBuilder.Unrecorded(proactive, Events.RunScope.Current)
-                        : await this.deliveryReports.BuildAsync(proactive, Events.RunScope.Current, cancellationToken).ConfigureAwait(false);
+                        : await this.deliveryReports.BuildAsync(proactive, Events.RunScope.Current, CancellationToken.None).ConfigureAwait(false);
                     targetSession.AppendMessageGroup(BuildProactiveDeliveryGroup(proactive, report, this.historyTools?.IsEnabled ?? false));
                 }
 
