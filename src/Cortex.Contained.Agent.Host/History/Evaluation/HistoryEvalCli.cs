@@ -1,4 +1,6 @@
 using System.Globalization;
+using Cortex.Contained.Agent.Host.Reranking;
+using Cortex.Contained.Agent.Host.Reranking.Evaluation;
 using MemoryMcp.Core.Configuration;
 using MemoryMcp.Core.Services;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -9,14 +11,16 @@ namespace Cortex.Contained.Agent.Host.History.Evaluation;
 /// <summary>
 /// Evaluation-protocol CLI for hybrid history search (§4.2), run inside the agent container on a copy
 /// of the raw <c>messages.db</c> (D6): <c>dotnet Cortex.Contained.Agent.Host.dll history-eval
-/// &lt;init|validate|guard|register|ablate|holdout|kappa&gt; [--dir D] [--source DB] [--tz ZONE] [--split dev|test|all] [--embedder URL]</c>.
+/// &lt;init|validate|guard|register|ablate|holdout|kappa|rerank-curve|gate-r&gt; [--dir D] [--source DB] [--tz ZONE] [--split dev|test|all] [--embedder URL]</c>.
 /// Outputs hold ids and numbers only and stay under the workspace. The Gate H decision is the owner's.
 /// </summary>
 public static class HistoryEvalCli
 {
     private const string Usage =
-        "usage: history-eval <init|validate|guard|register|ablate|holdout|kappa> [--dir /app/state/eval/hybrid] [--source /app/state/messages.db] " +
-        "[--tz Europe/Copenhagen] [--split dev|test|all] [--embedder http://embeddings:11434] [--labels judge-agreement.csv]";
+        "usage: history-eval <init|validate|guard|register|ablate|holdout|kappa|rerank-curve|gate-r> [--dir /app/state/eval/hybrid] [--source /app/state/messages.db] " +
+        "[--tz Europe/Copenhagen] [--split dev|test|all] [--embedder http://embeddings:11434] [--labels judge-agreement.csv]\n" +
+        "rerank-curve [--condition normal|embedder-busy|cold] [--base CONFIG] [--reranker http://reranker:8080] [--timeout-ms 30000]; " +
+        "gate-r --config CONFIG [--timeout-ms 2000]; both read the reranker key from Reranker__ApiKey.";
 
     /// <summary>Minimum LLM-vs-human agreement for LLM relevance labels (§4.2).</summary>
     private const double MinKappa = 0.6;
@@ -64,7 +68,8 @@ public static class HistoryEvalCli
         TextWriter output,
         Func<IOptionsMonitor<HistoryOptions>, IHistoryEmbedder> embedderFactory,
         CancellationToken cancellationToken,
-        HistoryOptions? configured = null)
+        HistoryOptions? configured = null,
+        Func<RerankerOptions, IReranker>? rerankerFactory = null)
     {
         ArgumentNullException.ThrowIfNull(args);
         ArgumentNullException.ThrowIfNull(output);
@@ -75,6 +80,7 @@ public static class HistoryEvalCli
         }
 
         configured ??= HistoryCliConfiguration.Load();
+        rerankerFactory ??= RerankEvalSetup.LiveReranker;
         var workspace = new EvalWorkspace(Option(args, "--dir") ?? configured.EvalArtifactsDirectory);
         var source = Option(args, "--source") ?? "/app/state/messages.db";
         var baseline = new HistoryOptions { Enabled = true, TimeZone = Option(args, "--tz") ?? "Europe/Copenhagen" };
@@ -109,6 +115,10 @@ public static class HistoryEvalCli
                     return await HoldoutAsync(workspace, source, baseline, embedderFactory, output, cancellationToken).ConfigureAwait(false);
                 case "kappa":
                     return await KappaAsync(Option(args, "--labels") ?? Path.Combine(workspace.Directory, "judge-agreement.csv"), output).ConfigureAwait(false);
+                case "rerank-curve":
+                    return await HistoryRerankEval.CurveAsync(workspace, source, baseline, embedderFactory, rerankerFactory, args, output, cancellationToken).ConfigureAwait(false);
+                case "gate-r":
+                    return await HistoryRerankEval.GateAsync(workspace, source, baseline, embedderFactory, rerankerFactory, args, output, cancellationToken).ConfigureAwait(false);
                 default:
                     await output.WriteLineAsync(Usage).ConfigureAwait(false);
                     return 2;

@@ -4,7 +4,11 @@ namespace Cortex.Contained.Agent.Host.History.Evaluation;
 /// <param name="Hits">The hits in reading order.</param>
 /// <param name="Confidence">Confidence that an answer exists (the best dense similarity; 0 for keyword-only).</param>
 /// <param name="LatencyMs">First-page latency in milliseconds.</param>
-public sealed record RetrievalRun(IReadOnlyList<ReturnedHit> Hits, double Confidence, double LatencyMs);
+public sealed record RetrievalRun(IReadOnlyList<ReturnedHit> Hits, double Confidence, double LatencyMs)
+{
+    /// <summary>The rerank stage's outcome on the first page, or null when the configuration does not rerank.</summary>
+    public Reranking.RerankOutcome? Rerank { get; init; }
+}
 
 /// <summary>
 /// Runs every configuration on every query, scores message-level metrics and compares each

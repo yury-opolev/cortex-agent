@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Cortex.Contained.Agent.Host.Reranking;
 using Cortex.Contained.Agent.Host.Storage;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -21,18 +22,21 @@ public sealed class EvalCorpus : IAsyncDisposable
 
     private readonly MessageStore store;
     private readonly MutableOptionsMonitor monitor;
+    private readonly IRerankStage? reranker;
     private readonly Dictionary<HistoryKeywordVariant, (HistoryProjector Projector, HistoryRecallService Recall)> variants = [];
 
-    private EvalCorpus(MessageStore store, MutableOptionsMonitor monitor)
+    private EvalCorpus(MessageStore store, MutableOptionsMonitor monitor, IRerankStage? reranker)
     {
         this.store = store;
         this.monitor = monitor;
+        this.reranker = reranker;
     }
 
     /// <summary>
     /// Copies <paramref name="sourceDb"/> and builds an embedded generation for every keyword variant in
     /// <paramref name="configs"/>. <paramref name="embedderFactory"/> receives the options monitor the
     /// corpus switches per configuration (so the query-instruction ablation reaches the embedder).
+    /// <paramref name="reranker"/> serves configurations with a rerank budget (§4.3).
     /// </summary>
     public static async Task<EvalCorpus> CreateAsync(
         string sourceDb,
@@ -40,7 +44,8 @@ public sealed class EvalCorpus : IAsyncDisposable
         HistoryOptions baseline,
         IReadOnlyList<AblationConfig> configs,
         Func<IOptionsMonitor<HistoryOptions>, IHistoryEmbedder> embedderFactory,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IRerankStage? reranker = null)
     {
         ArgumentNullException.ThrowIfNull(baseline);
         ArgumentNullException.ThrowIfNull(configs);
@@ -60,7 +65,7 @@ public sealed class EvalCorpus : IAsyncDisposable
 
         var monitor = new MutableOptionsMonitor(baseline);
         var embedder = embedderFactory(monitor);
-        var corpus = new EvalCorpus(new MessageStore(copyPath, NullLogger<MessageStore>.Instance), monitor);
+        var corpus = new EvalCorpus(new MessageStore(copyPath, NullLogger<MessageStore>.Instance), monitor, reranker);
         foreach (var variant in configs.Select(c => c.KeywordVariant).Distinct())
         {
             monitor.CurrentValue = new AblationConfig { Name = "build", KeywordVariant = variant }.Apply(baseline);
@@ -77,7 +82,7 @@ public sealed class EvalCorpus : IAsyncDisposable
             {
             }
 
-            corpus.variants[variant] = (projector, new HistoryRecallService(corpus.store, projector, gate, status, monitor, embedder, clock));
+            corpus.variants[variant] = (projector, new HistoryRecallService(corpus.store, projector, gate, status, monitor, embedder, clock, reranker));
         }
 
         return corpus;
@@ -90,9 +95,16 @@ public sealed class EvalCorpus : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(query);
         var (_, recall) = this.variants[config.KeywordVariant];
         this.monitor.CurrentValue = config.Apply(this.monitor.Baseline);
+        var rerank = config.RerankBudget();
+        if (rerank is not null && this.reranker is null)
+        {
+            throw new InvalidOperationException($"Configuration '{config.Name}' reranks, but this run has no reranker: evaluate rerank configurations with 'rerank-curve' or 'gate-r'.");
+        }
+
         var model = config.UseModelQuery ? query.ModelQuery : null;
         var filters = model is not null ? model.Filters : query.GoldFilters;
         var hits = new List<ReturnedHit>();
+        RerankOutcome? rerankOutcome = null;
         var words = 0;
         string? cursor = null;
         double confidence = 0;
@@ -110,12 +122,14 @@ public sealed class EvalCorpus : IAsyncDisposable
                     Mode = config.Mode,
                     Limit = PageLimit,
                     Cursor = cursor,
+                    Rerank = rerank is null ? RerankRequest.Off : RerankRequest.With(rerank),
                 },
                 cancellationToken).ConfigureAwait(false);
             if (cursor is null)
             {
                 latency = watch.Elapsed.TotalMilliseconds;
                 confidence = result.TopSimilarity ?? 0;
+                rerankOutcome = result.RerankOutcome;
                 if (config.Mode != HistorySearchMode.Keyword && result.Error is null && result.Mode != HistorySearchMode.Hybrid)
                 {
                     // A degraded run would score a different configuration than the one named in the report.
@@ -140,7 +154,7 @@ public sealed class EvalCorpus : IAsyncDisposable
         }
         while (cursor is not null && words < MaxWords);
 
-        return new RetrievalRun(hits, confidence, latency);
+        return new RetrievalRun(hits, confidence, latency) { Rerank = rerankOutcome };
     }
 
     /// <summary>Texts of the given rows (paraphrase guard only; never written out).</summary>
