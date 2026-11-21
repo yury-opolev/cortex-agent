@@ -133,6 +133,12 @@ covered by this key. Tool payloads are persisted under an exact allowlist with
 `SensitiveDataRedactor.RedactForPersistence`; `mcp__*` payloads, file/page/mail bodies and
 attachment bytes are never persisted.
 
+**Downgrades:** after enabling `Storage:EncryptAtRest`, do not downgrade the Bridge below the version
+that introduced tenant storage keys (`TenantStorageKeys` in `secrets.json`). An older Bridge neither
+knows the key nor, before this change, preserved unknown fields when it saved the file, so the
+encrypted `messages.db` could become unreadable. Current Bridges keep unknown `secrets.json` fields
+across load/save for future downgrades.
+
 ## Content security
 
 ### Prompt injection defense

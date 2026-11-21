@@ -620,5 +620,9 @@ public sealed partial class SecretManager
         public Dictionary<string, string>? TenantStorageKeys { get; set; }
         /// <summary>DPAPI-encrypted API key of the cortex-reranker sidecar (hex, 256-bit).</summary>
         public string? RerankerKey { get; set; }
+
+        /// <summary>Fields written by a newer Bridge; kept so a downgrade-and-save does not drop them.</summary>
+        [System.Text.Json.Serialization.JsonExtensionData]
+        public Dictionary<string, JsonElement>? ExtensionData { get; set; }
     }
 }

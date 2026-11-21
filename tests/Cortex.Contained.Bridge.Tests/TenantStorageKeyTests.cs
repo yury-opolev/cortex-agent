@@ -89,6 +89,22 @@ public sealed class TenantStorageKeyTests : IDisposable
         }
     }
 
+    [Fact]
+    public void SaveSecrets_UnknownFieldsFromAnotherVersion_SurviveARoundTrip()
+    {
+        Directory.CreateDirectory(this.tempDir);
+        var path = Path.Combine(this.tempDir, "secrets.json");
+        File.WriteAllText(path, """{"HubToken":"p:abc","FutureSecret":"p:xyz","FutureMap":{"a":1}}""");
+        var manager = new SecretManager(new InMemorySecretStore(), NullLogger<SecretManager>.Instance, this.tempDir);
+
+        manager.GetOrCreateTenantStorageKey("default");
+
+        using var saved = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
+        Assert.Equal("p:xyz", saved.RootElement.GetProperty("FutureSecret").GetString());
+        Assert.Equal(1, saved.RootElement.GetProperty("FutureMap").GetProperty("a").GetInt32());
+        Assert.True(saved.RootElement.TryGetProperty("TenantStorageKeys", out _));
+    }
+
     private sealed class BreakableSecretStore : ISecretStore
     {
         public bool Broken { get; set; }
