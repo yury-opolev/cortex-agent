@@ -1,3 +1,4 @@
+using Cortex.Contained.Agent.Host.History;
 using Cortex.Contained.Contracts.Hub;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
@@ -23,18 +24,23 @@ public enum MessageVisibility
 /// Persistent message store backed by SQLite.
 /// Stores all messages for this tenant container at /app/state/messages.db.
 /// Each tenant container has its own independent MessageStore — full data isolation.
+/// <para>
+/// One exclusive writer connection is used only under <see cref="writeSerializer"/>. Every
+/// mutation runs in one transaction that also appends <c>HistoryJournal</c> rows and advances
+/// <c>Meta.JournalHead</c> (see <c>MessageStore.History.cs</c>). All reads use separate
+/// read-only connections from a small pool.
+/// </para>
 /// </summary>
-public sealed partial class MessageStore : IMessageStore, IAsyncDisposable
+public sealed partial class MessageStore : IMessageStore, IHistorySource, IHistoryErasureStore, IAsyncDisposable
 {
-    private readonly SqliteConnection connection;
+    private readonly SqliteConnection writer;
+    private readonly string readerConnectionString;
     private readonly ILogger<MessageStore> logger;
     private bool disposed;
 
-    // A single SqliteConnection is shared across all methods. SqliteConnection is
-    // not safe for concurrent writers: barge-in truncation (UpdateContentAsync) can
-    // race the session-loop (SaveMessageAsync / UpdateToolCallsAsync). This
-    // semaphore serializes all write operations so only one writer holds the
-    // connection at a time.
+    // The writer connection is not safe for concurrent use: barge-in truncation
+    // (UpdateContentAsync) can race the session loop (SaveMessageAsync /
+    // UpdateToolCallsAsync). This semaphore serializes every write transaction.
     private readonly SemaphoreSlim writeSerializer = new(1, 1);
 
     public MessageStore(string databasePath, ILogger<MessageStore> logger)
@@ -42,30 +48,59 @@ public sealed partial class MessageStore : IMessageStore, IAsyncDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(databasePath);
         this.logger = logger;
 
+        // ":memory:" (tests) becomes a uniquely named shared-cache memory database so the
+        // separate reader connections see the writer's data.
+        var inMemory = string.Equals(databasePath, ":memory:", StringComparison.Ordinal);
+        var dataSource = inMemory ? "messages-" + Guid.NewGuid().ToString("N") : databasePath;
+
         // Ensure the directory exists
-        var directory = Path.GetDirectoryName(databasePath);
+        var directory = inMemory ? null : Path.GetDirectoryName(databasePath);
         if (!string.IsNullOrEmpty(directory))
         {
             Directory.CreateDirectory(directory);
         }
 
-        var csb = new SqliteConnectionStringBuilder
+        var writerBuilder = new SqliteConnectionStringBuilder
         {
-            DataSource = databasePath,
-            Mode = SqliteOpenMode.ReadWriteCreate,
-            Cache = SqliteCacheMode.Shared,
+            DataSource = dataSource,
+            Mode = inMemory ? SqliteOpenMode.Memory : SqliteOpenMode.ReadWriteCreate,
+            Cache = inMemory ? SqliteCacheMode.Shared : SqliteCacheMode.Private,
+            Pooling = false,
         };
 
-        this.connection = new SqliteConnection(csb.ToString());
-        this.connection.Open();
+        this.readerConnectionString = new SqliteConnectionStringBuilder
+        {
+            DataSource = dataSource,
+            Mode = inMemory ? SqliteOpenMode.Memory : SqliteOpenMode.ReadOnly,
+            Cache = inMemory ? SqliteCacheMode.Shared : SqliteCacheMode.Private,
+            Pooling = true,
+        }.ToString();
 
-        // Enable WAL mode for better concurrent read performance
-        using var walCmd = this.connection.CreateCommand();
-        walCmd.CommandText = "PRAGMA journal_mode=WAL;";
-        walCmd.ExecuteNonQuery();
+        this.writer = new SqliteConnection(writerBuilder.ToString());
+        this.writer.Open();
+
+        // WAL lets readers run beside the writer; secure_delete overwrites deleted content.
+        using var pragmaCmd = this.writer.CreateCommand();
+        pragmaCmd.CommandText = "PRAGMA journal_mode=WAL; PRAGMA secure_delete=ON;";
+        pragmaCmd.ExecuteNonQuery();
 
         InitializeSchema();
         this.LogDatabaseInitialized(databasePath);
+    }
+
+    /// <summary>
+    /// Test seam: invoked with a stage name inside write transactions
+    /// (<c>after-row-write</c>, <c>after-purge-delete</c>). Throwing rolls the transaction back.
+    /// </summary>
+    internal Action<string>? FaultInjector { get; set; }
+
+    /// <summary>Opens a new read-only connection (pooled). Callers dispose it.</summary>
+    internal async Task<SqliteConnection> OpenReaderAsync(CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(this.disposed, this);
+        var connection = new SqliteConnection(this.readerConnectionString);
+        await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+        return connection;
     }
 
     // ──────────────────────────────────────────────
@@ -92,31 +127,27 @@ public sealed partial class MessageStore : IMessageStore, IAsyncDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(role);
         ArgumentNullException.ThrowIfNull(content);
 
-        await this.writeSerializer.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
+        var record = new MessageRecord
         {
-            await using var cmd = this.connection.CreateCommand();
-            cmd.CommandText = """
-                INSERT INTO Messages (UserId, ChannelId, Role, Content, Timestamp, MessageId, Category, ToolCalls)
-                VALUES (@userId, @channelId, @role, @content, @timestamp, @messageId, @category, @toolCalls);
-                SELECT last_insert_rowid();
-                """;
-            cmd.Parameters.AddWithValue("@userId", userId);
-            cmd.Parameters.AddWithValue("@channelId", channelId);
-            cmd.Parameters.AddWithValue("@role", role);
-            cmd.Parameters.AddWithValue("@content", content);
-            cmd.Parameters.AddWithValue("@timestamp", SqliteDateTimeText.Format(timestamp));
-            cmd.Parameters.AddWithValue("@messageId", (object?)messageId ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@category", (int)category);
-            cmd.Parameters.AddWithValue("@toolCalls", (object?)toolCalls ?? DBNull.Value);
+            UserId = userId,
+            ChannelId = channelId,
+            Role = role,
+            Content = content,
+            Timestamp = timestamp,
+            MessageId = messageId,
+            Category = category,
+            ToolCalls = toolCalls,
+        };
 
-            var rowId = (long)(await cmd.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
-            return rowId;
-        }
-        finally
-        {
-            this.writeSerializer.Release();
-        }
+        return await this.WriteAsync(
+            async transaction =>
+            {
+                var rowId = await this.InsertRowAsync(transaction, record, cancellationToken).ConfigureAwait(false);
+                this.FaultInjector?.Invoke("after-row-write");
+                await this.AppendUpsertAsync(transaction, channelId, [rowId], cancellationToken).ConfigureAwait(false);
+                return rowId;
+            },
+            cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -129,21 +160,7 @@ public sealed partial class MessageStore : IMessageStore, IAsyncDisposable
         CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(this.disposed, this);
-
-        await this.writeSerializer.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            await using var cmd = this.connection.CreateCommand();
-            cmd.CommandText = "UPDATE Messages SET ToolCalls = @toolCalls WHERE Id = @id;";
-            cmd.Parameters.AddWithValue("@toolCalls", (object?)toolCallsJson ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@id", messageId);
-
-            await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-        }
-        finally
-        {
-            this.writeSerializer.Release();
-        }
+        await this.UpdateColumnAsync("ToolCalls", messageId, toolCallsJson, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -158,21 +175,7 @@ public sealed partial class MessageStore : IMessageStore, IAsyncDisposable
     {
         ObjectDisposedException.ThrowIf(this.disposed, this);
         ArgumentNullException.ThrowIfNull(content);
-
-        await this.writeSerializer.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            await using var cmd = this.connection.CreateCommand();
-            cmd.CommandText = "UPDATE Messages SET Content = @content WHERE Id = @id;";
-            cmd.Parameters.AddWithValue("@content", content);
-            cmd.Parameters.AddWithValue("@id", recordId);
-
-            await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-        }
-        finally
-        {
-            this.writeSerializer.Release();
-        }
+        await this.UpdateColumnAsync("Content", recordId, content, cancellationToken).ConfigureAwait(false);
     }
 
     // ──────────────────────────────────────────────
@@ -195,7 +198,8 @@ public sealed partial class MessageStore : IMessageStore, IAsyncDisposable
         ObjectDisposedException.ThrowIf(this.disposed, this);
         ArgumentException.ThrowIfNullOrWhiteSpace(channelId);
 
-        await using var cmd = this.connection.CreateCommand();
+        await using var connection = await this.OpenReaderAsync(cancellationToken).ConfigureAwait(false);
+        await using var cmd = connection.CreateCommand();
 
         var sql = "SELECT Id, UserId, ChannelId, Role, Content, Timestamp, MessageId, Category, ToolCalls FROM Messages WHERE ChannelId = @channelId";
 
@@ -255,7 +259,8 @@ public sealed partial class MessageStore : IMessageStore, IAsyncDisposable
     {
         ObjectDisposedException.ThrowIf(this.disposed, this);
 
-        await using var cmd = this.connection.CreateCommand();
+        await using var connection = await this.OpenReaderAsync(cancellationToken).ConfigureAwait(false);
+        await using var cmd = connection.CreateCommand();
 
         var sql = """
             SELECT ChannelId,
@@ -307,7 +312,8 @@ public sealed partial class MessageStore : IMessageStore, IAsyncDisposable
         ObjectDisposedException.ThrowIf(this.disposed, this);
         ArgumentException.ThrowIfNullOrWhiteSpace(query);
 
-        await using var cmd = this.connection.CreateCommand();
+        await using var connection = await this.OpenReaderAsync(cancellationToken).ConfigureAwait(false);
+        await using var cmd = connection.CreateCommand();
         cmd.CommandText = """
             SELECT Id, UserId, ChannelId, Role, Content, Timestamp, MessageId, Category, ToolCalls
             FROM Messages
@@ -335,7 +341,8 @@ public sealed partial class MessageStore : IMessageStore, IAsyncDisposable
     {
         ObjectDisposedException.ThrowIf(this.disposed, this);
 
-        await using var cmd = this.connection.CreateCommand();
+        await using var connection = await this.OpenReaderAsync(cancellationToken).ConfigureAwait(false);
+        await using var cmd = connection.CreateCommand();
         cmd.CommandText = "SELECT DISTINCT ChannelId FROM Messages ORDER BY ChannelId;";
 
         var channels = new List<string>();
@@ -356,7 +363,8 @@ public sealed partial class MessageStore : IMessageStore, IAsyncDisposable
     {
         ObjectDisposedException.ThrowIf(this.disposed, this);
 
-        await using var cmd = this.connection.CreateCommand();
+        await using var connection = await this.OpenReaderAsync(cancellationToken).ConfigureAwait(false);
+        await using var cmd = connection.CreateCommand();
         cmd.CommandText = """
             SELECT ChannelId,
                    COUNT(*) AS MessageCount,
@@ -390,7 +398,8 @@ public sealed partial class MessageStore : IMessageStore, IAsyncDisposable
     {
         ObjectDisposedException.ThrowIf(this.disposed, this);
 
-        await using var cmd = this.connection.CreateCommand();
+        await using var connection = await this.OpenReaderAsync(cancellationToken).ConfigureAwait(false);
+        await using var cmd = connection.CreateCommand();
 
         if (!string.IsNullOrWhiteSpace(channelId))
         {
@@ -416,7 +425,8 @@ public sealed partial class MessageStore : IMessageStore, IAsyncDisposable
         ObjectDisposedException.ThrowIf(this.disposed, this);
         ArgumentException.ThrowIfNullOrWhiteSpace(channelId);
 
-        await using var cmd = this.connection.CreateCommand();
+        await using var connection = await this.OpenReaderAsync(cancellationToken).ConfigureAwait(false);
+        await using var cmd = connection.CreateCommand();
         cmd.CommandText = "SELECT COUNT(*) FROM Messages WHERE ChannelId = @channelId;";
         cmd.Parameters.AddWithValue("@channelId", channelId);
 
@@ -431,7 +441,8 @@ public sealed partial class MessageStore : IMessageStore, IAsyncDisposable
     {
         ObjectDisposedException.ThrowIf(this.disposed, this);
 
-        await using var cmd = this.connection.CreateCommand();
+        await using var connection = await this.OpenReaderAsync(cancellationToken).ConfigureAwait(false);
+        await using var cmd = connection.CreateCommand();
         cmd.CommandText = "SELECT COUNT(*) FROM Messages;";
 
         var result = await cmd.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
@@ -451,7 +462,8 @@ public sealed partial class MessageStore : IMessageStore, IAsyncDisposable
     {
         ObjectDisposedException.ThrowIf(this.disposed, this);
 
-        await using var cmd = this.connection.CreateCommand();
+        await using var connection = await this.OpenReaderAsync(cancellationToken).ConfigureAwait(false);
+        await using var cmd = connection.CreateCommand();
 
         var sql = "SELECT Id, UserId, ChannelId, Role, Content, Timestamp, MessageId, Category, ToolCalls FROM Messages";
 
@@ -492,36 +504,17 @@ public sealed partial class MessageStore : IMessageStore, IAsyncDisposable
             return 0;
         }
 
-        await using var transaction = this.connection.BeginTransaction();
-
-        var count = 0;
-        foreach (var record in records)
-        {
-            await using var cmd = this.connection.CreateCommand();
-            cmd.Transaction = transaction;
-            cmd.CommandText = """
-                INSERT INTO Messages (UserId, ChannelId, Role, Content, Timestamp, MessageId, Category, ToolCalls)
-                VALUES (@userId, @channelId, @role, @content, @timestamp, @messageId, @category, @toolCalls);
-                """;
-            cmd.Parameters.AddWithValue("@userId", record.UserId);
-            cmd.Parameters.AddWithValue("@channelId", record.ChannelId);
-            cmd.Parameters.AddWithValue("@role", record.Role);
-            cmd.Parameters.AddWithValue("@content", record.Content);
-            cmd.Parameters.AddWithValue("@timestamp", SqliteDateTimeText.Format(record.Timestamp));
-            cmd.Parameters.AddWithValue("@messageId", (object?)record.MessageId ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@category", (int)record.Category);
-            cmd.Parameters.AddWithValue("@toolCalls", (object?)record.ToolCalls ?? DBNull.Value);
-
-            await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-            count++;
-        }
-
-        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-        return count;
+        return await this.WriteAsync(
+            async transaction =>
+            {
+                var inserted = await this.InsertRowsAsync(transaction, records, cancellationToken).ConfigureAwait(false);
+                return inserted.Values.Sum(ids => ids.Count);
+            },
+            cancellationToken).ConfigureAwait(false);
     }
 
     // ──────────────────────────────────────────────
-    //  Delete operations
+    //  Delete operations (each is one purge transaction, see MessageStore.History.cs)
     // ──────────────────────────────────────────────
 
     /// <summary>
@@ -534,13 +527,9 @@ public sealed partial class MessageStore : IMessageStore, IAsyncDisposable
         ObjectDisposedException.ThrowIf(this.disposed, this);
         ArgumentException.ThrowIfNullOrWhiteSpace(channelId);
 
-        await using var cmd = this.connection.CreateCommand();
-        cmd.CommandText = "DELETE FROM Messages WHERE ChannelId = @channelId;";
-        cmd.Parameters.AddWithValue("@channelId", channelId);
-
-        var deleted = await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-        this.LogMessagesDeleted(channelId, deleted);
-        return deleted;
+        var outcome = await this.PurgeAsync(new MessagePurgeRequest(new HistoryPurgeScope(channelId, null)), cancellationToken).ConfigureAwait(false);
+        this.LogMessagesDeleted(channelId, outcome.Deleted);
+        return outcome.Deleted;
     }
 
     /// <summary>
@@ -554,14 +543,9 @@ public sealed partial class MessageStore : IMessageStore, IAsyncDisposable
         ObjectDisposedException.ThrowIf(this.disposed, this);
         ArgumentException.ThrowIfNullOrWhiteSpace(channelId);
 
-        await using var cmd = this.connection.CreateCommand();
-        cmd.CommandText = "DELETE FROM Messages WHERE ChannelId = @channelId AND Timestamp < @olderThan;";
-        cmd.Parameters.AddWithValue("@channelId", channelId);
-        cmd.Parameters.AddWithValue("@olderThan", SqliteDateTimeText.Format(olderThan));
-
-        var deleted = await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-        this.LogMessagesDeleted(channelId, deleted);
-        return deleted;
+        var outcome = await this.PurgeAsync(new MessagePurgeRequest(new HistoryPurgeScope(channelId, olderThan)), cancellationToken).ConfigureAwait(false);
+        this.LogMessagesDeleted(channelId, outcome.Deleted);
+        return outcome.Deleted;
     }
 
     /// <summary>
@@ -573,13 +557,9 @@ public sealed partial class MessageStore : IMessageStore, IAsyncDisposable
     {
         ObjectDisposedException.ThrowIf(this.disposed, this);
 
-        await using var cmd = this.connection.CreateCommand();
-        cmd.CommandText = "DELETE FROM Messages WHERE Timestamp < @olderThan;";
-        cmd.Parameters.AddWithValue("@olderThan", SqliteDateTimeText.Format(olderThan));
-
-        var deleted = await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-        this.LogAllMessagesDeleted(deleted);
-        return deleted;
+        var outcome = await this.PurgeAsync(new MessagePurgeRequest(new HistoryPurgeScope(null, olderThan)), cancellationToken).ConfigureAwait(false);
+        this.LogAllMessagesDeleted(outcome.Deleted);
+        return outcome.Deleted;
     }
 
     /// <summary>
@@ -589,12 +569,9 @@ public sealed partial class MessageStore : IMessageStore, IAsyncDisposable
     {
         ObjectDisposedException.ThrowIf(this.disposed, this);
 
-        await using var cmd = this.connection.CreateCommand();
-        cmd.CommandText = "DELETE FROM Messages;";
-
-        var deleted = await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-        this.LogAllMessagesDeleted(deleted);
-        return deleted;
+        var outcome = await this.PurgeAsync(new MessagePurgeRequest(HistoryPurgeScope.All), cancellationToken).ConfigureAwait(false);
+        this.LogAllMessagesDeleted(outcome.Deleted);
+        return outcome.Deleted;
     }
 
     // ──────────────────────────────────────────────
@@ -603,7 +580,7 @@ public sealed partial class MessageStore : IMessageStore, IAsyncDisposable
 
     private void InitializeSchema()
     {
-        using (var cmd = this.connection.CreateCommand())
+        using (var cmd = this.writer.CreateCommand())
         {
             cmd.CommandText = """
                 CREATE TABLE IF NOT EXISTS Messages (
@@ -630,15 +607,17 @@ public sealed partial class MessageStore : IMessageStore, IAsyncDisposable
         // Idempotent migration for pre-existing databases that lack ToolCalls.
         if (!this.ColumnExists("Messages", "ToolCalls"))
         {
-            using var alter = this.connection.CreateCommand();
+            using var alter = this.writer.CreateCommand();
             alter.CommandText = "ALTER TABLE Messages ADD COLUMN ToolCalls TEXT;";
             alter.ExecuteNonQuery();
         }
+
+        this.InitializeHistorySchema();
     }
 
     private bool ColumnExists(string table, string column)
     {
-        using var cmd = this.connection.CreateCommand();
+        using var cmd = this.writer.CreateCommand();
         cmd.CommandText = $"PRAGMA table_info({table});";
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
@@ -656,7 +635,7 @@ public sealed partial class MessageStore : IMessageStore, IAsyncDisposable
     //  Helpers
     // ──────────────────────────────────────────────
 
-    private static MessageRecord ReadRecord(SqliteDataReader reader)
+    internal static MessageRecord ReadRecord(SqliteDataReader reader)
     {
         return new MessageRecord
         {
@@ -685,7 +664,11 @@ public sealed partial class MessageStore : IMessageStore, IAsyncDisposable
         this.disposed = true;
 
         this.writeSerializer.Dispose();
-        await this.connection.DisposeAsync().ConfigureAwait(false);
+        await this.writer.DisposeAsync().ConfigureAwait(false);
+
+        // Pooled readers keep file handles open; release them so the files can be deleted.
+        using var pooled = new SqliteConnection(this.readerConnectionString);
+        SqliteConnection.ClearPool(pooled);
     }
 
     // ──────────────────────────────────────────────
