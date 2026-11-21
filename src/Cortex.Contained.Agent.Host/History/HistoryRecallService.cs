@@ -249,20 +249,26 @@ public sealed partial class HistoryRecallService
     {
         var max = this.options.CurrentValue.UnindexedTailMax;
         var ids = new HashSet<long>();
+        var window = new Queue<long>();
         var truncated = false;
         var after = checkpoint;
-        while (!truncated)
+        while (true)
         {
             var entries = await snapshot.ReadJournalAsync(after, 500, cancellationToken).ConfigureAwait(false);
             foreach (var id in entries.SelectMany(e => e.MessageIds))
             {
-                if (ids.Count >= max)
+                if (!ids.Add(id))
                 {
-                    truncated = true;
-                    break;
+                    continue;
                 }
 
-                ids.Add(id);
+                window.Enqueue(id);
+                if (window.Count > max)
+                {
+                    // Keep the newest rows: the journal is read oldest-first, so evict from the front.
+                    ids.Remove(window.Dequeue());
+                    truncated = true;
+                }
             }
 
             if (entries.Count < 500)

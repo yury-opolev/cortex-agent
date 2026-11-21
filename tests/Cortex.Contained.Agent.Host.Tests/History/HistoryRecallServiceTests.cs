@@ -74,6 +74,23 @@ public sealed class HistoryRecallServiceTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task SearchAsync_UnindexedTailLargerThanCap_KeepsTheNewestRows()
+    {
+        this.h.Options = new HistoryOptions { Enabled = true, TimeZone = "UTC", UnindexedTailMax = 2 };
+        await this.IndexAsync();
+        await this.h.SayAsync("kayak one", 1);
+        await this.h.SayAsync("kayak two", 2);
+        var third = await this.h.SayAsync("kayak three", 3);
+        var fourth = await this.h.SayAsync("kayak four", 4);
+
+        var result = await this.SearchAsync("kayak");
+
+        Assert.Equal([third, fourth], Ids(result).Order());
+        Assert.True(result.Coverage.UnindexedTailTruncated);
+        Assert.Equal(2, result.Coverage.UnindexedTail);
+    }
+
+    [Fact]
     public async Task SearchAsync_RecentRowsNotYetIndexed_FoundViaUnindexedTail()
     {
         await this.IndexAsync();
