@@ -25,6 +25,7 @@ public sealed partial class MemoryCompactionService : BackgroundService
     private readonly MemorySettingsStore memorySettingsStore;
     private readonly MemoryCompactionOptions options;
     private readonly ILogger<MemoryCompactionService> logger;
+    private readonly MemoryQuarantine? quarantine;
 
     /// <summary>Task name used for maintenance store tracking.</summary>
     internal const string TaskName = "memory-compaction";
@@ -47,7 +48,8 @@ public sealed partial class MemoryCompactionService : BackgroundService
         MaintenanceStore maintenanceStore,
         MemorySettingsStore memorySettingsStore,
         IOptions<MemoryCompactionOptions> options,
-        ILogger<MemoryCompactionService> logger)
+        ILogger<MemoryCompactionService> logger,
+        MemoryQuarantine? quarantine = null)
     {
         this.management = management;
         this.memoryService = memoryService;
@@ -58,6 +60,7 @@ public sealed partial class MemoryCompactionService : BackgroundService
         this.memorySettingsStore = memorySettingsStore;
         this.options = options.Value;
         this.logger = logger;
+        this.quarantine = quarantine;
     }
 
     /// <inheritdoc />
@@ -203,7 +206,12 @@ public sealed partial class MemoryCompactionService : BackgroundService
 
         // Track which memory IDs have already been processed (merged or checked)
         // to avoid processing them again as part of a different cluster.
+        // Quarantined memories (D10) are never merged into or out of until reviewed.
         var processedIds = new HashSet<string>(StringComparer.Ordinal);
+        if (this.quarantine is not null)
+        {
+            processedIds.UnionWith(await this.quarantine.GetQuarantinedIdsAsync(cancellationToken).ConfigureAwait(false));
+        }
         var totalMerged = 0;
         var totalChecked = 0;
 

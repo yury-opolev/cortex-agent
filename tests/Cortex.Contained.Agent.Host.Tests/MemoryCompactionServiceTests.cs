@@ -164,6 +164,39 @@ public class MemoryCompactionServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task CompactionSweep_QuarantinedMemory_IsNeverCheckedOrMerged()
+    {
+        var items = new List<MemoryItem>
+        {
+            new() { MemoryId = "m-q", Content = "Quarantined content", Tags = [] },
+            new() { MemoryId = "m-ok", Content = "Visible content", Tags = [] },
+        };
+        _management.ListAsync(Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(new MemoryListResult { Items = items, TotalCount = 2 });
+        _memoryService.FindSimilarAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<float>(), Arg.Any<CancellationToken>())
+            .Returns(new List<SearchResult>());
+        var day = new DateTimeOffset(2026, 5, 4, 0, 0, 0, TimeSpan.Zero);
+        var source = Substitute.For<IMemoryQuarantineSource>();
+        source.ReadQuarantineWindowsAsync(default).ReturnsForAnyArgs([new Cortex.Contained.Agent.Host.History.QuarantineWindow(day, day.AddDays(1))]);
+        source.ReadKeptMemoryIdsAsync(default).ReturnsForAnyArgs(new HashSet<string>());
+        var times = Substitute.For<IMemoryCreationTimes>();
+        times.ListCreationTimesAsync(default).ReturnsForAnyArgs(
+            [new MemoryCreationTime("m-q", day.AddHours(1)), new MemoryCreationTime("m-ok", day.AddDays(-9))]);
+        var service = new MemoryCompactionService(
+            _management, _memoryService, _consolidation, _extraction, _modelProvider, _maintenanceStore,
+            _memorySettingsStore, Options.Create(_options), NullLogger<MemoryCompactionService>.Instance,
+            new MemoryQuarantine(source, times, TimeProvider.System));
+        var method = typeof(MemoryCompactionService).GetMethod(
+            "RunCompactionAsync",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+
+        await (Task)method!.Invoke(service, [CancellationToken.None])!;
+
+        await _memoryService.DidNotReceive().FindSimilarAsync("Quarantined content", Arg.Any<int>(), Arg.Any<float>(), Arg.Any<CancellationToken>());
+        await _memoryService.Received(1).FindSimilarAsync("Visible content", Arg.Any<int>(), Arg.Any<float>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task CompactionSweep_NoDuplicates_DoesNotMerge()
     {
         var items = new List<MemoryItem>
