@@ -20,6 +20,36 @@ public sealed record HistoryHealth(
 {
     /// <summary><c>open</c>, <c>awaitingKey</c> (no storage key from the Bridge yet) or <c>failed</c> (wrong key).</summary>
     public string Storage { get; init; } = "open";
+
+    /// <summary>Dense retrieval state and embedding lag (§4.2).</summary>
+    public HistoryDenseHealth Dense { get; init; } = new("off", 0, 0, 0, 0, null, null);
+}
+
+/// <summary>The <c>history.dense</c> block of <c>/health</c>.</summary>
+/// <param name="State"><c>off</c>, <c>on</c> or <c>unavailable: reason</c>.</param>
+/// <param name="Embedded">Chunks with a vector.</param>
+/// <param name="Total">All chunks of the served generation.</param>
+/// <param name="Pending">Chunks waiting for a vector (embedding lag).</param>
+/// <param name="Failed">Chunks the embedder rejected after the attempt limit.</param>
+/// <param name="OldestPendingQueuedAt">When the oldest pending chunk was queued, or null.</param>
+/// <param name="LastError">Last embedding failure, or null.</param>
+public sealed record HistoryDenseHealth(
+    string State, long Embedded, long Total, long Pending, long Failed, DateTimeOffset? OldestPendingQueuedAt, string? LastError)
+{
+    /// <summary>Builds the block from a projector status snapshot.</summary>
+    public static HistoryDenseHealth From(HistoryStatusSnapshot status)
+    {
+        ArgumentNullException.ThrowIfNull(status);
+        var chunks = status.Chunks;
+        return new HistoryDenseHealth(
+            status.DenseState,
+            chunks?.Embedded ?? 0,
+            chunks?.Total ?? 0,
+            chunks?.Pending ?? 0,
+            chunks?.Failed ?? 0,
+            chunks?.OldestPendingQueuedAt,
+            status.LastEmbeddingError);
+    }
 }
 
 /// <summary>Builds <see cref="HistoryHealth"/> from options, projector status and <c>messages.db</c> Meta.</summary>
@@ -71,6 +101,7 @@ public sealed class HistoryHealthReporter
                 0)
             {
                 Storage = locked.State == Storage.StorageState.Failed ? "failed" : "awaitingKey",
+                Dense = HistoryDenseHealth.From(lockedState),
             };
         }
 
@@ -96,7 +127,10 @@ public sealed class HistoryHealthReporter
             state.LastError,
             pending.Count,
             pending.SelectMany(t => t.Steps).Distinct(StringComparer.Ordinal).ToList(),
-            allPending.Count - pending.Count);
+            allPending.Count - pending.Count)
+        {
+            Dense = HistoryDenseHealth.From(state),
+        };
     }
 
     // Routine maintenance (weekly VACUUM) is housekeeping, not an erasure gap.

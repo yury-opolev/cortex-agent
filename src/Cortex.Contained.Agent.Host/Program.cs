@@ -951,6 +951,7 @@ app.MapGet("/health", async (ToolRegistry toolRegistry, AgentSessionStore sessio
                 history.PendingErasureTasks,
                 history.PendingErasureSteps,
                 history.MaintenancePendingTasks,
+                dense = history.Dense,
             },
         },
     });
