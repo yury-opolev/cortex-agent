@@ -119,6 +119,7 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
     private readonly string? reasoningEffort;
     private readonly Events.DeliveryRecorder? deliveries;
     private readonly Events.DeliveryReportBuilder? deliveryReports;
+    private readonly History.HistoryToolsSwitch? historyTools;
 
     /// <summary>
     /// Safety-net round limit. The real termination signals are: model stops calling tools,
@@ -194,8 +195,10 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
         Action? wakeSubagentCoordinator = null,
         string? reasoningEffort = null,
         Events.DeliveryRecorder? deliveries = null,
-        Events.DeliveryReportBuilder? deliveryReports = null)
+        Events.DeliveryReportBuilder? deliveryReports = null,
+        History.HistoryToolsSwitch? historyTools = null)
     {
+        this.historyTools = historyTools;
         this.deliveries = deliveries;
         this.deliveryReports = deliveryReports;
         this.reasoningEffort = Llm.LlmReasoningEffort.IsLevel(reasoningEffort) ? reasoningEffort : null;
@@ -256,7 +259,8 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
             subagentStore,
             todoResolver,
             imageDescriber,
-            systemPromptStore);
+            systemPromptStore,
+            historyTools);
         this.slashCommandHandler = new SlashCommandHandler(
             bridgeClientAccessor,
             this.messageStore,
@@ -1001,7 +1005,7 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
                     var report = this.deliveryReports is null
                         ? Events.DeliveryReportBuilder.Unrecorded(proactive, Events.RunScope.Current)
                         : await this.deliveryReports.BuildAsync(proactive, Events.RunScope.Current, cancellationToken).ConfigureAwait(false);
-                    targetSession.AppendMessageGroup(BuildProactiveDeliveryGroup(proactive, report));
+                    targetSession.AppendMessageGroup(BuildProactiveDeliveryGroup(proactive, report, this.historyTools?.IsEnabled ?? false));
                 }
 
                 this.LogProactiveMessageInjected(proactive.ChannelId, proactive.Text.Length);
@@ -1326,12 +1330,12 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
     /// are rejected by the OpenAI and Copilot APIs.
     /// </para>
     /// </summary>
-    internal static IReadOnlyList<LlmMessage> BuildProactiveDeliveryGroup(ProactiveMessageRecord proactive, Events.DeliveryReport report) =>
+    internal static IReadOnlyList<LlmMessage> BuildProactiveDeliveryGroup(ProactiveMessageRecord proactive, Events.DeliveryReport report, bool eventGetAvailable = false) =>
     [
         new LlmMessage
         {
             Role = "user",
-            Content = Events.DeliveryReportRenderer.Render(report),
+            Content = Events.DeliveryReportRenderer.Render(report, eventGetAvailable),
             MessageType = LlmMessageType.ProactiveDeliveryTrace,
         },
         new LlmMessage

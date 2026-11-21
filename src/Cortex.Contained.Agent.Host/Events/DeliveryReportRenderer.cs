@@ -16,8 +16,8 @@ public static class DeliveryReportRenderer
 
     private const int DigestChars = 160;
 
-    /// <summary>The report text.</summary>
-    public static string Render(DeliveryReport report)
+    /// <summary>The report text; <paramref name="eventGetAvailable"/> says whether the model can actually call <c>event_get</c>.</summary>
+    public static string Render(DeliveryReport report, bool eventGetAvailable = false)
     {
         ArgumentNullException.ThrowIfNull(report);
         var text = new StringBuilder();
@@ -52,7 +52,9 @@ public static class DeliveryReportRenderer
         }
         else
         {
-            text.Append("Evidence recorded by that run before sending (event_get returns the full record):\n");
+            text.Append(eventGetAvailable
+                ? "Evidence recorded by that run before sending (event_get returns the full record):\n"
+                : "Evidence recorded by that run before sending:\n");
             foreach (var item in report.Evidence)
             {
                 text.Append(CultureInfo.InvariantCulture, $"- {item.Tool} {(item.Ok ? "ok" : "failed")} {item.EventId}");

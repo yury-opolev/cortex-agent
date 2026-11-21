@@ -68,6 +68,26 @@ public class ProactiveDeliveryTraceTests
     }
 
     [Fact]
+    public void The_report_mentions_event_get_only_when_the_tool_is_available()
+    {
+        var withTool = DeliveryReportRenderer.Render(Report(), eventGetAvailable: true);
+        var withoutTool = DeliveryReportRenderer.Render(Report(), eventGetAvailable: false);
+
+        Assert.Contains("event_get", withTool, StringComparison.Ordinal);
+        Assert.DoesNotContain("event_get", withoutTool, StringComparison.Ordinal);
+        Assert.Contains("ev_sleep", withoutTool, StringComparison.Ordinal);
+        Assert.Contains("do not retract", withoutTool, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void The_group_passes_the_event_get_availability_to_the_report()
+    {
+        var group = AgentRuntime.BuildProactiveDeliveryGroup(Sleep, Report(), eventGetAvailable: true);
+
+        Assert.Contains("event_get", Assert.Single(group, m => m.Role == "user").Content!, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void An_unacknowledged_send_is_not_presented_as_certainly_delivered()
     {
         var report = Assert.Single(Group(Report("unknown")), m => m.Role == "user").Content!;

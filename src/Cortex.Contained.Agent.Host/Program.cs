@@ -812,7 +812,8 @@ builder.Services.AddSingleton(sp =>
         wakeSubagentCoordinator: sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.SubagentExecutionCoordinator>().SignalWorkAvailable,
         reasoningEffort: sp.GetRequiredService<IOptions<AgentConfig>>().Value.ReasoningEffort,
         deliveries: sp.GetRequiredService<Cortex.Contained.Agent.Host.Events.DeliveryRecorder>(),
-        deliveryReports: sp.GetRequiredService<Cortex.Contained.Agent.Host.Events.DeliveryReportBuilder>()));
+        deliveryReports: sp.GetRequiredService<Cortex.Contained.Agent.Host.Events.DeliveryReportBuilder>(),
+        historyTools: sp.GetRequiredService<Cortex.Contained.Agent.Host.History.HistoryToolsSwitch>()));
 builder.Services.AddSingleton<IAgentRuntime>(sp => sp.GetRequiredService<AgentRuntime>());
 
 // Bootstrap context store removed — replaced by self-notes

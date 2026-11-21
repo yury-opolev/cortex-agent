@@ -27,11 +27,21 @@ public sealed class PrunedToolResultStubTests
     [Fact]
     public void PruneToolResults_WithEvidenceId_StubNamesTheEvidence()
     {
-        var result = ContextManager.PruneToolResults(Conversation("ev_0123"));
+        var result = ContextManager.PruneToolResults(Conversation("ev_0123"), eventGetAvailable: true);
 
         Assert.Contains("evidence ev_0123", result[2].Content, StringComparison.Ordinal);
         Assert.Contains("event_get", result[2].Content, StringComparison.Ordinal);
         Assert.Equal("ev_0123", result[2].EvidenceId);
+    }
+
+    [Fact]
+    public void PruneToolResults_EventGetUnavailable_StubNamesTheEvidenceWithoutEventGet()
+    {
+        var result = ContextManager.PruneToolResults(Conversation("ev_0123"), eventGetAvailable: false);
+
+        Assert.Contains("evidence ev_0123", result[2].Content, StringComparison.Ordinal);
+        Assert.DoesNotContain("event_get", result[2].Content, StringComparison.Ordinal);
+        Assert.Contains("recorded by the system", result[2].Content, StringComparison.Ordinal);
     }
 
     [Fact]
