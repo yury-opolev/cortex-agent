@@ -34,6 +34,11 @@
 | GET | `/api/memory/settings` | Yes | Get memory configuration |
 | PUT | `/api/memory/settings` | Yes | Update memory configuration (runtime) |
 | GET | `/api/messages/{channelId}` | Yes | Get message history for a channel |
+| DELETE | `/api/tenants/{tenantId}/history` | Yes | Delete all (or `?olderThan=`) history through the erasure workflow. Returns `{ deletedCount, erasureComplete, cleanupPending, quarantinedMemories, message }` |
+| DELETE | `/api/tenants/{tenantId}/channels/{channelId}/history` | Yes | Same for one channel (previously `204`; now returns the same body) |
+| PUT | `/api/tenants/{tenantId}/history/recall-tools` | Yes | Body `{ enabled }`: show/hide `history_search` / recall-mode `history_read` at runtime (no effect unless `History:Enabled`) |
+| GET | `/api/tenants/{tenantId}/memories/quarantine` | Yes | Memories quarantined after a history deletion (D10), awaiting review |
+| POST | `/api/tenants/{tenantId}/memories/{memoryId}/keep` | Yes | Keep a quarantined memory (visible to the agent again) |
 | POST | `/api/channels/{type}` | Yes | Update channel configuration |
 | GET | `/api/mcp/actions` | Yes | List approval-gated MCP mutation actions (filter by `serverKey`, `toolName`, `state`, `workerId`; paged with `before`/`limit`) |
 | GET | `/api/mcp/actions/{actionId}` | Yes | One action, including its canonical arguments (for review) and result |
@@ -134,6 +139,20 @@ Update memory settings at runtime. Takes effect immediately (no restart).
 | `UpdateMemory(request)` | Update a memory |
 | `DeleteMemory(memoryId)` | Delete a memory |
 | `SearchMemories(request)` | Semantic search (query, limit, minScore, tags) |
+| `ListQuarantinedMemories()` | Memories hidden by the D10 quarantine, awaiting review |
+| `KeepQuarantinedMemory(memoryId)` | Keep a quarantined memory |
+
+#### `PurgeHistory(HistoryPurgeRequestDto)` -> `HistoryPurgeResultDto`
+
+Delete history (optional `channelId`, optional `olderThan`; neither = everything) through the
+erasure workflow. Returns `{ deleted, erasureComplete, cleanupPending[], quarantinedMemories }`.
+All other delete methods (`DeleteConversation`, `ClearAllMessages`, `DeleteMessagesOlderThan`,
+`DeleteChannelMessagesOlderThan`, `ClearAll`, `ImportMessages` with `clearExisting`) use the
+same workflow.
+
+#### `SetHistoryRecallTools(enabled)` -> `bool`
+
+Show or hide the history recall tools at runtime; returns the effective state.
 
 ### Hub Callbacks (Agent -> Bridge)
 
@@ -244,3 +263,11 @@ server, the action resolves to `outcome_unknown`, never `cancelled`.
 | Tool | Description |
 |------|-------------|
 | `date_time` | Get current date/time in any timezone |
+
+### History (when `History:Enabled`)
+
+| Tool | Description |
+|------|-------------|
+| `history_list_channels` | List channels with message counts and last activity |
+| `history_search` | Find when/where something was said (keyword, phrase, `stem*`; `order=relevance\|time`; coverage-limited, verified hits with honest labels) |
+| `history_read` | Read the exact source: `channelId` window, or `aroundMessageId` from a `history_search` hit |

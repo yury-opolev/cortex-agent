@@ -72,6 +72,18 @@ Secrets are **never** stored inside the Docker container. LLM credentials are pu
 
 `%LOCALAPPDATA%\Cortex\messages.db` is encrypted using SQLite3 Multiple Ciphers. The encryption key is generated on first run and stored in DPAPI.
 
+## Agent history index and erasure
+
+The Agent Host's history locator stores no message text outside `messages.db`: the FTS5 index
+is contentless with `secure-delete`, and the journal holds ids only. Deleting history runs the
+erasure workflow in [history-locator.md](history-locator.md#deletion-erasure-and-retention)
+(index, WAL checkpoint, tool-output spill files, subagent transcripts, smoke artifacts,
+optional `VACUUM`) and quarantines curated memories created in the deleted window until the
+owner reviews them (D10). Recall output is wrapped in a per-response random boundary token and
+labelled as historical data, never as instructions. Not yet covered (increment 2): encryption at
+rest inside the container, per-channel deletion of tool-output spill files, volume snapshots and
+host backups.
+
 ## Content security
 
 ### Prompt injection defense

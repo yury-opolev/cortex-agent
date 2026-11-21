@@ -60,6 +60,8 @@ ASP.NET Core app running inside Docker. Key subsystems:
 | `SchedulerService` | One-shot and recurring task scheduling (SQLite-backed) |
 | `ModelProvider` | Shared model name provider (avoids circular DI with `IAgentRuntime`) |
 | `MemorySettingsStore` | Runtime-mutable memory settings with `IOptionsMonitor` change tokens |
+| `HistoryProjector` / `HistoryRecallService` | Episodic history locator: journal-fed contentless FTS5 index, verified `history_search` / `history_read` (see [history-locator.md](history-locator.md)) |
+| `HistoryPurgeService` | History erasure workflow (index, WAL, tool output, subagents, smoke artifacts) and D10 memory quarantine |
 
 ### Cortex.Contained.Bridge
 
@@ -218,7 +220,9 @@ SQLite-backed (`/app/state/scheduler/tasks.db`). Tick interval: 15 seconds. Recu
 
 | Data | Path | Format |
 |------|------|--------|
-| Messages | `/app/state/messages.db` | SQLite |
+| Messages | `/app/state/messages.db` | SQLite (WAL, `secure_delete`), incl. `HistoryJournal`, `Meta`, memory-quarantine tables |
+| History index | `/app/state/history/history-index.<gen>.db` + `history-index.current` | Contentless FTS5 (derived, no message text) |
+| Smoke-eval workspace | `/app/state/eval/smoke` | Local only, never committed |
 | Memories (encrypted DB) | `/app/state/memory/memory.db` | SQLite (SQLCipher) + sqlite-vec |
 | Maintenance state | `/app/state/maintenance/maintenance.db` | SQLite |
 | Scheduled tasks | `/app/state/scheduler/tasks.db` | SQLite |

@@ -134,6 +134,7 @@ scripts/
 - [Design reference](docs/design-reference.md) — design patterns and conventions
 - [Setup guide](docs/setup-guide.md) — installation and configuration
 - [Self-update](docs/self-update.md) — how to deploy a cortex change to the running install (MSIX + agent image), detached from a coda session
+- [History locator](docs/history-locator.md) — episodic history search (`history_search`/`history_read`), journal + FTS5 index, erasure workflow, D10 memory quarantine, smoke eval and behaviour gate
 
 ## Build configuration
 
