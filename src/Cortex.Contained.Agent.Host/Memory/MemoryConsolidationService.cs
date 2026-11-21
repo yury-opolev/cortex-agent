@@ -146,12 +146,12 @@ public sealed partial class MemoryConsolidationService : IDisposable
         List<BatchMemoryEntry>? batchMemories,
         CancellationToken cancellationToken)
     {
-        // Search for semantically similar existing memories
-        var similarMemories = await this.memoryService.SearchAsync(
+        // Dense-only lookup: the threshold is a cosine similarity and must stay one.
+        var similarMemories = await this.memoryService.FindSimilarAsync(
             fact.Content,
             SimilarMemoryLimit,
             SimilarityThreshold,
-            cancellationToken: cancellationToken).ConfigureAwait(false);
+            cancellationToken).ConfigureAwait(false);
 
         // Combine search results with memories added earlier in this batch.
         // This ensures the LLM sees recently-added facts even if the embedding

@@ -229,12 +229,12 @@ public sealed partial class MemoryCompactionService : BackgroundService
                 processedIds.Add(memory.MemoryId);
                 totalChecked++;
 
-                // Search for similar memories
-                var similar = await this.memoryService.SearchAsync(
+                // Dense-only near-duplicate lookup (pure cosine threshold)
+                var similar = await this.memoryService.FindSimilarAsync(
                     memory.Content,
                     CompactionSearchLimit,
                     this.options.SimilarityThreshold,
-                    cancellationToken: cancellationToken).ConfigureAwait(false);
+                    cancellationToken).ConfigureAwait(false);
 
                 // Filter out the memory itself and already-processed memories
                 var duplicates = similar

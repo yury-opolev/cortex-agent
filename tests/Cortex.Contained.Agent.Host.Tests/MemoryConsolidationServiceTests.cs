@@ -40,17 +40,15 @@ public class MemoryConsolidationServiceTests : IDisposable
 
     private void SetupSearchEmpty()
     {
-        _memoryService.SearchAsync(
-            Arg.Any<string>(), Arg.Any<int>(), Arg.Any<float?>(),
-            Arg.Any<List<string>?>(), Arg.Any<CancellationToken>())
+        _memoryService.FindSimilarAsync(
+            Arg.Any<string>(), Arg.Any<int>(), Arg.Any<float>(), Arg.Any<CancellationToken>())
             .Returns(new List<SearchResult>());
     }
 
     private void SetupSearchWithResults(params SearchResult[] results)
     {
-        _memoryService.SearchAsync(
-            Arg.Any<string>(), Arg.Any<int>(), Arg.Any<float?>(),
-            Arg.Any<List<string>?>(), Arg.Any<CancellationToken>())
+        _memoryService.FindSimilarAsync(
+            Arg.Any<string>(), Arg.Any<int>(), Arg.Any<float>(), Arg.Any<CancellationToken>())
             .Returns(results.ToList());
     }
 
@@ -64,6 +62,22 @@ public class MemoryConsolidationServiceTests : IDisposable
     {
         _llmClient.CompleteAsync(Arg.Any<LlmCompletionRequest>(), Arg.Any<CancellationToken>())
             .Returns(new LlmCompletionResult { Success = false, ErrorMessage = "connection error" });
+    }
+
+    // ── Candidate lookup ───────────────────────────────────────────────
+
+    [Fact]
+    public async Task ConsolidateAsync_LooksUpCandidatesWithDenseFindSimilar()
+    {
+        SetupSearchEmpty();
+        SetupIngest();
+
+        await _sut.ConsolidateAsync(MakeFact("User likes cats"), Model, "conv-1", null, CancellationToken.None);
+
+        await _memoryService.Received(1).FindSimilarAsync(
+            "User likes cats", MemoryConsolidationService.SimilarMemoryLimit,
+            MemoryConsolidationService.SimilarityThreshold, Arg.Any<CancellationToken>());
+        await _memoryService.DidNotReceiveWithAnyArgs().SearchAsync(default!, default, default, default, default);
     }
 
     // ── ADD (no similar memories) ──────────────────────────────────────

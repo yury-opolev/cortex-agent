@@ -55,7 +55,7 @@ public class MemoryCompactionServiceTests : IDisposable
 
     /// <summary>
     /// Sets up safe default returns on the shared <see cref="_memoryService"/> mock so
-    /// that the consolidation service's internal <c>SearchAsync</c> and
+    /// that the consolidation service's internal <c>FindSimilarAsync</c> and
     /// <c>IngestAsync</c> calls don't return null.
     /// <para>
     /// Uses <c>ReturnsForAnyArgs</c> which acts as a true fallback in NSubstitute —
@@ -65,7 +65,7 @@ public class MemoryCompactionServiceTests : IDisposable
     /// </summary>
     private void SetupDefaultMocks()
     {
-        _memoryService.SearchAsync(default!, default, default, default, default)
+        _memoryService.FindSimilarAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<float>(), Arg.Any<CancellationToken>())
             .ReturnsForAnyArgs(new List<SearchResult>());
 
         _memoryService.IngestAsync(default!, default, default, default, default)
@@ -175,9 +175,8 @@ public class MemoryCompactionServiceTests : IDisposable
             .Returns(new MemoryListResult { Items = items, TotalCount = 2 });
 
         // No similar memories found for either
-        _memoryService.SearchAsync(
-            Arg.Any<string>(), Arg.Any<int>(), Arg.Any<float?>(),
-            Arg.Any<List<string>?>(), Arg.Any<CancellationToken>())
+        _memoryService.FindSimilarAsync(
+            Arg.Any<string>(), Arg.Any<int>(), Arg.Any<float>(), Arg.Any<CancellationToken>())
             .Returns(new List<SearchResult>());
 
         var service = CreateService();
@@ -195,7 +194,7 @@ public class MemoryCompactionServiceTests : IDisposable
     [Fact]
     public async Task CompactionSweep_DuplicateCluster_CallsConsolidation()
     {
-        // Default mocks first (consolidation's internal SearchAsync needs a safe return)
+        // Default mocks first (consolidation's internal FindSimilarAsync needs a safe return)
         SetupDefaultMocks();
 
         var items = new List<MemoryItem>
@@ -206,9 +205,8 @@ public class MemoryCompactionServiceTests : IDisposable
             .Returns(new MemoryListResult { Items = items, TotalCount = 1 });
 
         // Compaction search (threshold 0.7) finds a duplicate
-        _memoryService.SearchAsync(
-            "User likes cats", Arg.Any<int>(), 0.7f,
-            Arg.Any<List<string>?>(), Arg.Any<CancellationToken>())
+        _memoryService.FindSimilarAsync(
+            "User likes cats", Arg.Any<int>(), 0.7f, Arg.Any<CancellationToken>())
             .Returns(new List<SearchResult>
             {
                 new() { MemoryId = "m-1", Content = "User likes cats", Score = 1.0f },
@@ -217,9 +215,8 @@ public class MemoryCompactionServiceTests : IDisposable
 
         // Consolidation's internal search (threshold 0.3) for the duplicate's content
         // must find the original memory so the LLM gets called for a decision.
-        _memoryService.SearchAsync(
-            "User loves cats", Arg.Any<int>(), SimilarityThreshold,
-            Arg.Any<List<string>?>(), Arg.Any<CancellationToken>())
+        _memoryService.FindSimilarAsync(
+            "User loves cats", Arg.Any<int>(), SimilarityThreshold, Arg.Any<CancellationToken>())
             .Returns(new List<SearchResult>
             {
                 new() { MemoryId = "m-1", Content = "User likes cats", Score = 0.9f },
@@ -262,9 +259,8 @@ public class MemoryCompactionServiceTests : IDisposable
             .Returns(new MemoryListResult { Items = items, TotalCount = 1 });
 
         // Compaction search finds a duplicate
-        _memoryService.SearchAsync(
-            "Content", Arg.Any<int>(), 0.7f,
-            Arg.Any<List<string>?>(), Arg.Any<CancellationToken>())
+        _memoryService.FindSimilarAsync(
+            "Content", Arg.Any<int>(), 0.7f, Arg.Any<CancellationToken>())
             .Returns(new List<SearchResult>
             {
                 new() { MemoryId = "m-1", Content = "Content", Score = 1.0f },
@@ -273,9 +269,8 @@ public class MemoryCompactionServiceTests : IDisposable
 
         // Consolidation's internal search for the duplicate's content must find the
         // original so that the LLM is invoked for the consolidation decision.
-        _memoryService.SearchAsync(
-            "Same content", Arg.Any<int>(), SimilarityThreshold,
-            Arg.Any<List<string>?>(), Arg.Any<CancellationToken>())
+        _memoryService.FindSimilarAsync(
+            "Same content", Arg.Any<int>(), SimilarityThreshold, Arg.Any<CancellationToken>())
             .Returns(new List<SearchResult>
             {
                 new() { MemoryId = "m-1", Content = "Content", Score = 0.85f },
@@ -318,9 +313,8 @@ public class MemoryCompactionServiceTests : IDisposable
             .Returns(new MemoryListResult { Items = items, TotalCount = 2 });
 
         // Compaction search for m-1 (threshold 0.7) finds m-2 as similar
-        _memoryService.SearchAsync(
-            "Content A", Arg.Any<int>(), 0.7f,
-            Arg.Any<List<string>?>(), Arg.Any<CancellationToken>())
+        _memoryService.FindSimilarAsync(
+            "Content A", Arg.Any<int>(), 0.7f, Arg.Any<CancellationToken>())
             .Returns(new List<SearchResult>
             {
                 new() { MemoryId = "m-1", Content = "Content A", Score = 1.0f },
@@ -329,9 +323,8 @@ public class MemoryCompactionServiceTests : IDisposable
 
         // Consolidation's internal search (threshold 0.3) for the duplicate's content
         // must find the original memory so the LLM gets called for a decision.
-        _memoryService.SearchAsync(
-            "Content A duplicate", Arg.Any<int>(), SimilarityThreshold,
-            Arg.Any<List<string>?>(), Arg.Any<CancellationToken>())
+        _memoryService.FindSimilarAsync(
+            "Content A duplicate", Arg.Any<int>(), SimilarityThreshold, Arg.Any<CancellationToken>())
             .Returns(new List<SearchResult>
             {
                 new() { MemoryId = "m-1", Content = "Content A", Score = 0.85f },
@@ -359,8 +352,7 @@ public class MemoryCompactionServiceTests : IDisposable
 
         // The compaction search for m-2 (at threshold 0.7) should NOT have been
         // called — m-2 was already processed as a duplicate of m-1.
-        await _memoryService.DidNotReceive().SearchAsync(
-            "Content A duplicate", Arg.Any<int>(), 0.7f,
-            Arg.Any<List<string>?>(), Arg.Any<CancellationToken>());
+        await _memoryService.DidNotReceive().FindSimilarAsync(
+            "Content A duplicate", Arg.Any<int>(), 0.7f, Arg.Any<CancellationToken>());
     }
 }
