@@ -1,3 +1,4 @@
+using Cortex.Contained.Agent.Host.Events;
 using Cortex.Contained.Agent.Host.History;
 using Cortex.Contained.Contracts.Hub;
 using Microsoft.Data.Sqlite;
@@ -145,6 +146,7 @@ public sealed partial class MessageStore : IMessageStore, IHistorySource, IHisto
                 var rowId = await this.InsertRowAsync(transaction, record, cancellationToken).ConfigureAwait(false);
                 this.FaultInjector?.Invoke("after-row-write");
                 await this.AppendUpsertAsync(transaction, channelId, [rowId], cancellationToken).ConfigureAwait(false);
+                await this.InsertEventAsync(transaction, MessageEvents.ForInsert(record with { Id = rowId }, RunScope.Current), cancellationToken).ConfigureAwait(false);
                 return rowId;
             },
             cancellationToken).ConfigureAwait(false);

@@ -112,4 +112,12 @@ public sealed partial class MessageStore : IEventLog
         this.FaultInjector?.Invoke("after-event-write");
         return id;
     }
+
+    /// <summary>The first event that describes row <paramref name="messageRowId"/> (the one a correction supersedes), or null.</summary>
+    private async Task<string?> FirstMessageEventIdAsync(SqliteTransaction transaction, long messageRowId, CancellationToken cancellationToken)
+    {
+        await using var cmd = this.WriterCommand(transaction, "SELECT Id FROM Events WHERE MessageRowId = @id ORDER BY Seq LIMIT 1;");
+        cmd.Parameters.AddWithValue("@id", messageRowId);
+        return await cmd.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) as string;
+    }
 }

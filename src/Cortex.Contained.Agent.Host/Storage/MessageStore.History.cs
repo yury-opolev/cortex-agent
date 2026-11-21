@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using Cortex.Contained.Agent.Host.Events;
 using Cortex.Contained.Agent.Host.History;
 using Microsoft.Data.Sqlite;
 
@@ -125,6 +126,7 @@ public sealed partial class MessageStore
         foreach (var record in records)
         {
             var id = await this.InsertRowAsync(transaction, record, cancellationToken).ConfigureAwait(false);
+            await this.InsertEventAsync(transaction, MessageEvents.ForImport(record with { Id = id }), cancellationToken).ConfigureAwait(false);
             if (!byChannel.TryGetValue(record.ChannelId, out var ids))
             {
                 ids = [];
@@ -158,6 +160,8 @@ public sealed partial class MessageStore
 
                 this.FaultInjector?.Invoke("after-row-write");
                 await this.AppendUpsertAsync(transaction, channelId, [id], cancellationToken).ConfigureAwait(false);
+                var original = await this.FirstMessageEventIdAsync(transaction, id, cancellationToken).ConfigureAwait(false);
+                await this.InsertEventAsync(transaction, MessageEvents.ForUpdate(column, id, channelId, value, original, RunScope.Current), cancellationToken).ConfigureAwait(false);
                 return true;
             },
             cancellationToken);
