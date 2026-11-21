@@ -230,6 +230,11 @@ public static class HistoryResultRenderer
             builder.Append('\n');
         }
 
+        if (coverage.Rerank is { } rerank)
+        {
+            builder.Append("rerank: ").Append(rerank).Append('\n');
+        }
+
         return builder.ToString();
     }
 
@@ -248,6 +253,11 @@ public static class HistoryResultRenderer
     private static string RelevanceHit(int number, HistoryHit hit, HistoryRenderOptions options, string boundary, bool hybrid)
     {
         var match = hybrid ? " | match " + hit.MatchedBy.ToString().ToLowerInvariant() : string.Empty;
+        if (hit.RerankScore is { } rerankScore)
+        {
+            match += string.Create(CultureInfo.InvariantCulture, $" | rerank {rerankScore:F2}");
+        }
+
         var from = TimeZoneInfo.ConvertTime(hit.From, options.TimeZone);
         var to = TimeZoneInfo.ConvertTime(hit.To, options.TimeZone);
         var builder = new StringBuilder();

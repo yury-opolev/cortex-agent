@@ -15,8 +15,12 @@ namespace Cortex.Contained.Agent.Host.History;
 /// </summary>
 public static class HistoryCursorCodec
 {
-    /// <summary>The binding of <paramref name="request"/> on an index generation.</summary>
-    public static string Binding(HistorySearchRequest request, long? generation)
+    /// <summary>
+    /// The binding of <paramref name="request"/> on an index generation. <paramref name="rerank"/> (the
+    /// effective rerank budget's label) is part of the binding only when reranking applies, so cursors of
+    /// searches without reranking are unchanged.
+    /// </summary>
+    public static string Binding(HistorySearchRequest request, long? generation, string? rerank = null)
     {
         ArgumentNullException.ThrowIfNull(request);
         var text = string.Join(
@@ -31,6 +35,11 @@ public static class HistoryCursorCodec
             request.Limit.ToString(CultureInfo.InvariantCulture),
             generation?.ToString(CultureInfo.InvariantCulture) ?? "none",
             request.Mode.ToString());
+        if (rerank is not null)
+        {
+            text += "\u001frerank=" + rerank;
+        }
+
         return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(text)))[..16];
     }
 

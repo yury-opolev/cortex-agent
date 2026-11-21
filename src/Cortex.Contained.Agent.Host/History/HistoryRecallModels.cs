@@ -1,3 +1,4 @@
+using Cortex.Contained.Agent.Host.Reranking;
 using Cortex.Contained.Agent.Host.Storage;
 
 namespace Cortex.Contained.Agent.Host.History;
@@ -34,6 +35,9 @@ public sealed record HistorySearchRequest
 
     /// <summary>Retrieval mode for relevance order; time order is always keyword (exhaustive).</summary>
     public HistorySearchMode Mode { get; init; } = HistorySearchMode.Auto;
+
+    /// <summary>Reranking after hybrid fusion: the configured budget unless an evaluation run sets one.</summary>
+    public RerankRequest Rerank { get; init; } = RerankRequest.Configured;
 }
 
 /// <summary>Retrieval mode of <c>history_search</c> (§4.2).</summary>
@@ -111,6 +115,9 @@ public sealed record HistoryHit(
 {
     /// <summary>Which retriever located the hit.</summary>
     public HistoryMatchKind MatchedBy { get; init; } = HistoryMatchKind.Keyword;
+
+    /// <summary>The reranker's relevance score when this hit was among the reranked candidates, else null.</summary>
+    public double? RerankScore { get; init; }
 }
 
 /// <summary>Coverage block reported with every recall response (§10).</summary>
@@ -131,6 +138,9 @@ public sealed record HistoryCoverage(
 
     /// <summary>Embedding progress of the served generation (dense coverage and lag), or null.</summary>
     public ChunkCounts? Chunks { get; init; }
+
+    /// <summary>Reranking of this response (<c>on (…)</c>, <c>skipped: …</c>, <c>failed: …</c>, <c>not used: …</c>), or null when reranking is off.</summary>
+    public string? Rerank { get; init; }
 
     /// <summary>True when "no hits" may be stated without qualification beyond the listed ranges.</summary>
     public bool IsComplete => this.BuildComplete && !this.Halted && !this.UnindexedTailTruncated && !this.PurgeFenced;
@@ -174,6 +184,9 @@ public sealed record HistorySearchResult
 
     /// <summary>Best verified dense similarity (hybrid only): the abstention confidence used by the evaluation.</summary>
     public double? TopSimilarity { get; init; }
+
+    /// <summary>The rerank stage's outcome on this page (evaluation latency), or null when it was not called.</summary>
+    public RerankOutcome? RerankOutcome { get; init; }
 }
 
 /// <summary>A parsed <c>history_read</c> call in recall mode.</summary>

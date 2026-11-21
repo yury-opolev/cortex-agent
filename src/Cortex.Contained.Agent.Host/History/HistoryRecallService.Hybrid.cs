@@ -1,3 +1,5 @@
+using System.Globalization;
+using Cortex.Contained.Agent.Host.Reranking;
 using Cortex.Contained.Agent.Host.Storage;
 
 namespace Cortex.Contained.Agent.Host.History;
@@ -88,6 +90,7 @@ public sealed partial class HistoryRecallService
         HistoryCursorPosition position,
         IReadOnlyList<MessageRecord> tailRows,
         float[] queryVector,
+        RerankBudget? rerank,
         CancellationToken cancellationToken)
     {
         var settings = this.options.CurrentValue;
@@ -162,14 +165,24 @@ public sealed partial class HistoryRecallService
             ranked = Rank(includeEchoes: true); // Only echoes match: show them rather than nothing.
         }
 
+        // Reranking (§4.3) reorders the head of the fused list; every page recomputes the same order.
+        var order = ranked.Order;
+        var rerankScores = new Dictionary<long, double>();
+        RerankOutcome? rerankOutcome = null;
+        string? rerankNote = null;
+        if (rerank is not null)
+        {
+            (order, rerankOutcome, rerankNote, rerankScores) = await this.RerankAsync(request.Query, ranked.Order, Rows, rerank, position, cancellationToken).ConfigureAwait(false);
+        }
+
         var hits = new List<HistoryHit>();
         var takenTail = Math.Min(request.Limit, Math.Max(0, tailHits.Count - position.TailSkip));
         hits.AddRange(tailHits.Skip(position.TailSkip).Take(takenTail));
         var tailNext = position.TailSkip + takenTail;
         var offset = position.IndexOffset;
-        while (hits.Count < request.Limit && offset < ranked.Order.Count)
+        while (hits.Count < request.Limit && offset < order.Count)
         {
-            var segId = ranked.Order[offset++];
+            var segId = order[offset++];
             var segment = segments[segId];
             var rows = Rows(segId);
             var echoOnly = EchoOnly(rows);
@@ -190,20 +203,55 @@ public sealed partial class HistoryRecallService
                 MatchedBy = keyword.ContainsKey(segId) && dense.ContainsKey(segId) ? HistoryMatchKind.Both
                     : keyword.ContainsKey(segId) ? HistoryMatchKind.Keyword
                     : HistoryMatchKind.Semantic,
+                RerankScore = rerankScores.TryGetValue(segId, out var rerankScore) ? rerankScore : null,
             });
         }
 
         return new HistorySearchResult
         {
             Hits = hits,
-            HasMore = offset < ranked.Order.Count || tailNext < tailHits.Count,
+            HasMore = offset < order.Count || tailNext < tailHits.Count,
             Next = new HistoryCursorPosition(offset, tailNext, null, 0),
             Unavailable = keywordMissing + denseMissing,
             CollapsedDuplicates = ranked.Collapsed,
             TopSimilarity = bestChunk.Values.Where(h => dense.ContainsKey(h.SegId)).Select(h => (double?)h.Score).Max() ?? 0,
-            Coverage = Empty(null),
+            Coverage = Empty(null) with { Rerank = rerankNote },
             Binding = string.Empty,
+            RerankOutcome = rerankOutcome,
         };
+    }
+
+    /// <summary>
+    /// Reorders the first <see cref="RerankBudget.TopN"/> fused segments by reranker relevance, using each
+    /// segment's shown rows (the verified matching lines) as raw text. Runs inside the read lease on the
+    /// verified snapshot, bounded by the stage's timeout, so a purge waits at most that long and deleted
+    /// text is never sent. A page that starts after the reranked head keeps the fused order without a call.
+    /// </summary>
+    private async Task<(List<long> Order, RerankOutcome? Outcome, string Note, Dictionary<long, double> Scores)> RerankAsync(
+        string query,
+        List<long> fused,
+        Func<long, IReadOnlyList<MessageRecord>> rows,
+        RerankBudget budget,
+        HistoryCursorPosition position,
+        CancellationToken cancellationToken)
+    {
+        var window = Math.Min(budget.TopN, fused.Count);
+        if (this.reranker is null)
+        {
+            return (fused, null, "skipped: no reranker is configured", []);
+        }
+
+        if (window > 0 && position.IndexOffset >= window)
+        {
+            return (fused, null, string.Create(CultureInfo.InvariantCulture, $"not used: this page starts after the reranked top {window}"), []);
+        }
+
+        var head = fused.Take(window).ToList();
+        var candidates = head.Select(segId => (IReadOnlyList<string>)rows(segId).Select(HistoryRowText.DisplayContent).ToList()).ToList();
+        var outcome = await this.reranker.RerankAsync(query, candidates, budget, cancellationToken).ConfigureAwait(false);
+        var order = outcome.Order.Select(i => head[i]).Concat(fused.Skip(window)).ToList();
+        var scores = outcome.Scores.ToDictionary(s => head[s.Key], s => s.Value);
+        return (order, outcome, outcome.Note, scores);
     }
 
     /// <summary>

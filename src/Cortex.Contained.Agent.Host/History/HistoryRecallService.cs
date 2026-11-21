@@ -1,3 +1,4 @@
+using Cortex.Contained.Agent.Host.Reranking;
 using Cortex.Contained.Agent.Host.Storage;
 using Microsoft.Extensions.Options;
 
@@ -21,6 +22,7 @@ public sealed partial class HistoryRecallService
     private readonly IOptionsMonitor<HistoryOptions> options;
     private readonly IHistoryEmbedder? embedder;
     private readonly TimeProvider time;
+    private readonly IRerankStage? reranker;
 
     public HistoryRecallService(
         IHistorySource source,
@@ -29,7 +31,8 @@ public sealed partial class HistoryRecallService
         HistoryStatus status,
         IOptionsMonitor<HistoryOptions> options,
         IHistoryEmbedder? embedder = null,
-        TimeProvider? time = null)
+        TimeProvider? time = null,
+        IRerankStage? reranker = null)
     {
         this.source = source;
         this.projector = projector;
@@ -38,6 +41,7 @@ public sealed partial class HistoryRecallService
         this.options = options;
         this.embedder = embedder;
         this.time = time ?? TimeProvider.System;
+        this.reranker = reranker;
     }
 
     /// <summary>Test seam: awaited after the read lease and snapshot are taken (simulates a slow recall).</summary>
@@ -79,7 +83,9 @@ public sealed partial class HistoryRecallService
         }
 
         var mode = queryVector is null ? HistorySearchMode.Keyword : HistorySearchMode.Hybrid;
-        var binding = HistoryCursorCodec.Binding(request with { Mode = mode }, state?.Generation);
+        var rerank = request.Order == HistoryOrder.Relevance ? request.Rerank.Resolve(this.reranker, RerankSurface.History) : null;
+        var rerankApplies = rerank is not null && mode == HistorySearchMode.Hybrid;
+        var binding = HistoryCursorCodec.Binding(request with { Mode = mode }, state?.Generation, rerankApplies ? rerank!.Label : null);
 
         var position = HistoryCursorPosition.Start;
         if (request.Cursor is { } cursor)
@@ -125,12 +131,12 @@ public sealed partial class HistoryRecallService
         var result = request.Order == HistoryOrder.Time
             ? await this.SearchTimeOrderAsync(snapshot, index, parsed, request, filter, position, tailRows, cancellationToken).ConfigureAwait(false)
             : mode == HistorySearchMode.Hybrid
-                ? await this.SearchHybridAsync(snapshot, index!, parsed, request, filter, position, tailRows, queryVector!, cancellationToken).ConfigureAwait(false)
+                ? await this.SearchHybridAsync(snapshot, index!, parsed, request, filter, position, tailRows, queryVector!, rerank, cancellationToken).ConfigureAwait(false)
                 : await this.SearchRelevanceAsync(snapshot, index, parsed, request, filter, position, tailRows, cancellationToken).ConfigureAwait(false);
 
         return result with
         {
-            Coverage = coverage,
+            Coverage = coverage with { Rerank = rerank is null ? null : rerankApplies ? result.Coverage.Rerank : "not used: mode=keyword (reranking follows hybrid fusion)" },
             Binding = binding,
             Mode = mode,
             DroppedTerms = parsed.DroppedTerms.Select(t => string.Join(' ', t.Tokens)).ToList(),
