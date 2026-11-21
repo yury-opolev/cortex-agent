@@ -1,4 +1,4 @@
-﻿using System.Globalization;
+using System.Globalization;
 using Cortex.Contained.Contracts.Config;
 using Cortex.Contained.Contracts.Hub;
 using Cortex.Contained.Agent.Host.Agent;
@@ -474,10 +474,15 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
     {
         var result = await this.historyPurge.PurgeAsync(new HistoryPurgeScope(conversationId, null), null, Context.ConnectionAborted)
             .ConfigureAwait(false);
-        // Also reset the in-memory session for this channel
-        await this.runtime.ResetSessionAsync(conversationId, Context.ConnectionAborted)
-            .ConfigureAwait(false);
+        await this.ResetSessionsAfterChannelPurgeAsync(conversationId).ConfigureAwait(false);
         return result.Deleted;
+    }
+
+    // Deleted text also survives as recall-tool output in the context of other channels' sessions.
+    private async Task ResetSessionsAfterChannelPurgeAsync(string channelId)
+    {
+        await this.runtime.ResetSessionAsync(channelId, Context.ConnectionAborted).ConfigureAwait(false);
+        await this.runtime.ResetRecallExposedSessionsAsync(Context.ConnectionAborted).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -506,8 +511,7 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
     {
         var result = await this.historyPurge.PurgeAsync(new HistoryPurgeScope(channelId, olderThan), null, Context.ConnectionAborted)
             .ConfigureAwait(false);
-        await this.runtime.ResetSessionAsync(channelId, Context.ConnectionAborted)
-            .ConfigureAwait(false);
+        await this.ResetSessionsAfterChannelPurgeAsync(channelId).ConfigureAwait(false);
         return result.Deleted;
     }
 
@@ -522,7 +526,7 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
 
         if (request.ChannelId is { Length: > 0 } channelId)
         {
-            await this.runtime.ResetSessionAsync(channelId, Context.ConnectionAborted).ConfigureAwait(false);
+            await this.ResetSessionsAfterChannelPurgeAsync(channelId).ConfigureAwait(false);
         }
         else
         {

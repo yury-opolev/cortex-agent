@@ -41,6 +41,10 @@ internal static class ToolCallSummary
         toolName.StartsWith("history_", StringComparison.OrdinalIgnoreCase)
         || string.Equals(toolName, "event_get", StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>True for every tool whose output can carry stored conversation or memory text into a context (recall tools and <c>memory_search</c>).</summary>
+    public static bool IsRecallSource(string toolName) =>
+        IsRecallTool(toolName) || string.Equals(toolName, "memory_search", StringComparison.OrdinalIgnoreCase);
+
     /// <summary>True when <paramref name="entry"/> is the synthetic recall-turn marker.</summary>
     public static bool IsRecallTurnMarker(ToolCallSummaryEntry entry) =>
         string.Equals(entry.Name, RecallTurnMarkerName, StringComparison.Ordinal)

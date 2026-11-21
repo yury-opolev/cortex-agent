@@ -109,7 +109,10 @@ public sealed class ToolOutputErasureStep(string directory) : IErasureStep
     }
 }
 
-/// <summary>Deletes <c>subagents.db</c> tasks whose run window overlaps the purged range.</summary>
+/// <summary>
+/// Deletes <c>subagents.db</c> tasks whose run window overlaps the purged range: those of the purged
+/// channel, and those of any channel that called a recall tool and may therefore hold copies of the text.
+/// </summary>
 public sealed class SubagentErasureStep(SubagentSessionStore store) : IErasureStep
 {
     /// <inheritdoc />
@@ -125,7 +128,10 @@ public sealed class SubagentErasureStep(SubagentSessionStore store) : IErasureSt
         }
 
         var (_, activeSkipped) = store.PurgeOverlapping(task.RangeFrom, to, task.ChannelId);
-        return Task.FromResult(activeSkipped == 0);
+
+        // A subagent of another channel may have read the purged text through a recall tool.
+        var (_, exposedActive) = store.PurgeRecallExposed(task.RangeFrom, to);
+        return Task.FromResult(activeSkipped == 0 && exposedActive == 0);
     }
 }
 

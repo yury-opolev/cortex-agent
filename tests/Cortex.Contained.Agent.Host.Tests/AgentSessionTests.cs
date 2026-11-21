@@ -867,3 +867,65 @@ public class AgentSessionStoreTests
         Assert.Equal(0, s.LastAssistantRecordId);
     }
 }
+
+public class AgentSessionRecallExposureTests
+{
+    private static AgentSessionStore CreateStore() =>
+        new(new SessionConfig(), new MemorySettingsStore(), NullLogger<AgentSessionStore>.Instance);
+
+    private static LlmMessage ToolCall(string tool) => new()
+    {
+        Role = "assistant",
+        ToolCalls = [new LlmToolCall { Id = "c1", Name = tool, Arguments = "{}" }],
+    };
+
+    [Theory]
+    [InlineData("history_search")]
+    [InlineData("history_read")]
+    [InlineData("event_get")]
+    [InlineData("memory_search")]
+    public void ResetRecallExposed_SessionThatUsedARecallTool_IsResetAndUnflagged(string tool)
+    {
+        var store = CreateStore();
+        var exposed = store.GetOrCreate("exposed");
+        exposed.AddMessage(new LlmMessage { Role = "user", Content = "what did we say?" });
+        exposed.AddMessage(ToolCall(tool));
+        exposed.AddMessage(new LlmMessage { Role = "tool", Content = "deleted text", ToolCallId = "c1" });
+        var untouched = store.GetOrCreate("untouched");
+        untouched.AddMessage(new LlmMessage { Role = "user", Content = "hello" });
+        untouched.AddMessage(ToolCall("file_read"));
+
+        var reset = store.ResetRecallExposed();
+
+        Assert.Equal(["exposed"], reset);
+        Assert.Equal(0, exposed.MessageCount);
+        Assert.Equal(2, untouched.MessageCount);
+        Assert.Empty(store.ResetRecallExposed());
+    }
+
+    [Fact]
+    public void ResetRecallExposed_AfterCompaction_StillResetsBecauseTheSummaryMayQuoteRecalledText()
+    {
+        var store = CreateStore();
+        var session = store.GetOrCreate("c");
+        session.AddMessage(ToolCall("history_search"));
+        session.ClearHistory();
+        session.AddMessage(new LlmMessage { Role = "user", Content = "summary of the earlier conversation" });
+
+        Assert.Equal(["c"], store.ResetRecallExposed());
+        Assert.Equal(0, session.MessageCount);
+    }
+
+    [Fact]
+    public void Reset_ClearsTheExposureFlag()
+    {
+        var store = CreateStore();
+        store.GetOrCreate("c").AddMessage(ToolCall("history_read"));
+
+        store.Reset("c");
+        store.GetOrCreate("c").AddMessage(new LlmMessage { Role = "user", Content = "fresh" });
+
+        Assert.Empty(store.ResetRecallExposed());
+        Assert.Equal(1, store.GetOrCreate("c").MessageCount);
+    }
+}

@@ -1,4 +1,4 @@
-﻿using System.Collections.Concurrent;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
@@ -1979,6 +1979,17 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
         // via a later revert_transfer call.
         this.transferSnapshots.TryRemove(channelId, out _);
         this.LogSessionReset(channelId);
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public Task ResetRecallExposedSessionsAsync(CancellationToken cancellationToken)
+    {
+        foreach (var channelId in this.sessions.ResetRecallExposed())
+        {
+            this.transferSnapshots.TryRemove(channelId, out _);
+        }
+
         return Task.CompletedTask;
     }
 

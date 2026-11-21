@@ -53,6 +53,37 @@ public sealed class AgentHubHistoryTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task DeleteConversation_AlsoResetsSessionsThatUsedRecallTools()
+    {
+        await this.h.SayAsync("a", 0, channel: "x");
+
+        await this.hub.DeleteConversation("x");
+
+        await this.runtime.Received(1).ResetRecallExposedSessionsAsync(Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task PurgeHistory_ChannelScope_AlsoResetsSessionsThatUsedRecallTools()
+    {
+        await this.h.SayAsync("a", 0, channel: "x");
+
+        await this.hub.PurgeHistory(new HistoryPurgeRequestDto { ChannelId = "x" });
+
+        await this.runtime.Received(1).ResetSessionAsync("x", Arg.Any<CancellationToken>());
+        await this.runtime.Received(1).ResetRecallExposedSessionsAsync(Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task DeleteChannelMessagesOlderThan_AlsoResetsSessionsThatUsedRecallTools()
+    {
+        await this.h.SayAsync("a", 0, channel: "x");
+
+        await this.hub.DeleteChannelMessagesOlderThan("x", HistoryHarness.T0.AddDays(1));
+
+        await this.runtime.Received(1).ResetRecallExposedSessionsAsync(Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task PurgeHistory_ReturnsErasureStatus()
     {
         await this.h.SayAsync("a", 0);

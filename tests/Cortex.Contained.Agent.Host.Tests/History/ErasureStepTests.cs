@@ -133,4 +133,51 @@ public sealed class ErasureStepTests : IDisposable
         Assert.NotNull(store.GetById("other-channel"));
         Assert.NotNull(store.GetById("before"));
     }
+
+    [Fact]
+    public async Task Subagents_ChannelPurge_DeletesRecallUsersOfEveryParentChannel()
+    {
+        using var store = new SubagentSessionStore(this.dir, NullLogger<SubagentSessionStore>.Instance);
+        SubagentTask Make(string id, SubagentTaskState state, string channel, string? tool, DateTimeOffset created, DateTimeOffset? completed) => new()
+        {
+            TaskId = id, ParentConversation = channel, ParentChannel = channel, Description = "d", Prompt = "p",
+            State = state, CreatedAt = created, CompletedAt = completed,
+            Messages = tool is null
+                ? [new Cortex.Contained.Contracts.Llm.LlmMessage { Role = "user", Content = "history_search is mentioned here only as text" }]
+                : [new Cortex.Contained.Contracts.Llm.LlmMessage
+                {
+                    Role = "assistant",
+                    ToolCalls = [new Cortex.Contained.Contracts.Llm.LlmToolCall { Id = "c1", Name = tool, Arguments = "{}" }],
+                }],
+        };
+        store.Create(Make("recall-other", SubagentTaskState.Completed, "other", "history_read", T0, T0.AddMinutes(1)));
+        store.Create(Make("memory-other", SubagentTaskState.Completed, "other", "memory_search", T0, T0.AddMinutes(1)));
+        store.Create(Make("no-recall-other", SubagentTaskState.Completed, "other", null, T0, T0.AddMinutes(1)));
+        store.Create(Make("recall-later", SubagentTaskState.Completed, "other", "event_get", T0.AddDays(3), T0.AddDays(3)));
+        store.Create(Make("recall-running", SubagentTaskState.Running, "other", "history_search", T0, null));
+
+        var done = await new SubagentErasureStep(store).RunAsync(Task(T0, T0.AddHours(1), "purged"), CancellationToken.None);
+
+        Assert.False(done);
+        Assert.Null(store.GetById("recall-other"));
+        Assert.Null(store.GetById("memory-other"));
+        Assert.NotNull(store.GetById("no-recall-other"));
+        Assert.NotNull(store.GetById("recall-later"));
+        Assert.NotNull(store.GetById("recall-running"));
+    }
+
+    [Fact]
+    public async Task Subagents_ChannelPurge_DeletesTerminalTasksWhoseMessagesWereAlreadyCleared()
+    {
+        using var store = new SubagentSessionStore(this.dir, NullLogger<SubagentSessionStore>.Instance);
+        store.Create(new SubagentTask
+        {
+            TaskId = "cleared", ParentConversation = "other", ParentChannel = "other", Description = "d", Prompt = "p",
+            State = SubagentTaskState.Completed, CreatedAt = T0, CompletedAt = T0.AddMinutes(1),
+        });
+
+        Assert.True(await new SubagentErasureStep(store).RunAsync(Task(T0, T0.AddHours(1), "purged"), CancellationToken.None));
+
+        Assert.Null(store.GetById("cleared"));
+    }
 }
