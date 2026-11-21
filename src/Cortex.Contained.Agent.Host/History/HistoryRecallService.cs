@@ -87,14 +87,7 @@ public sealed class HistoryRecallService
 
         var filter = new RecallFilter(request.Channel, request.Since, request.Until, request.IncludeInternal, request.IncludeEchoes);
         var (tailRows, tailCount, tailTruncated) = await this.ReadTailAsync(snapshot, checkpoint, cancellationToken).ConfigureAwait(false);
-        var coverage = new HistoryCoverage(
-            (reader?.ReadCoverage() ?? []).Where(c => request.Channel is null || c.ChannelId == request.Channel).ToList(),
-            state?.Generation,
-            state?.BuildComplete ?? false,
-            this.status.Snapshot().Halted,
-            Math.Max(0, meta.JournalHead - checkpoint),
-            tailCount,
-            tailTruncated);
+        var coverage = BuildCoverage(reader, state, meta.JournalHead, checkpoint, request.Channel, this.status.Snapshot().Halted, tailCount, tailTruncated);
 
         var result = request.Order == HistoryOrder.Time
             ? await this.SearchTimeOrderAsync(snapshot, reader, parsed, request, filter, position, tailRows, cancellationToken).ConfigureAwait(false)
@@ -117,6 +110,15 @@ public sealed class HistoryRecallService
         ArgumentNullException.ThrowIfNull(request);
         await using var lease = await this.gate.AcquireReadAsync(cancellationToken).ConfigureAwait(false);
         await using var snapshot = await this.source.OpenSnapshotAsync(cancellationToken).ConfigureAwait(false);
+
+        var meta = await snapshot.ReadMetaAsync(cancellationToken).ConfigureAwait(false);
+        using var reader = this.projector.Current?.OpenReader();
+        var state = reader?.ReadState();
+        var checkpoint = state?.CheckpointJournalSeq ?? 0;
+        var (_, tailCount, tailTruncated) = await this.ReadTailAsync(snapshot, checkpoint, cancellationToken).ConfigureAwait(false);
+        var halted = this.status.Snapshot().Halted;
+        HistoryCoverage CoverageFor(string? channel) =>
+            BuildCoverage(reader, state, meta.JournalHead, checkpoint, channel, halted, tailCount, tailTruncated);
 
         if (request.AroundMessageId is { } anchorId)
         {
@@ -143,6 +145,7 @@ public sealed class HistoryRecallService
                 Lines = rows.Select(HistoryLine.From).ToList(),
                 HasMore = anchorIndex >= request.Window || rows.Count - anchorIndex - 1 >= request.Window,
                 AnchorId = anchorId,
+                Coverage = CoverageFor(anchor.ChannelId),
             };
         }
 
@@ -153,8 +156,19 @@ public sealed class HistoryRecallService
 
         var (range, hasMore) = await snapshot.ReadRangeAsync(
             request.ChannelId, request.Since, request.Until, request.Limit, request.IncludeInternal, cancellationToken).ConfigureAwait(false);
-        return new HistoryReadResult { Lines = range.Select(HistoryLine.From).ToList(), HasMore = hasMore };
+        return new HistoryReadResult { Lines = range.Select(HistoryLine.From).ToList(), HasMore = hasMore, Coverage = CoverageFor(request.ChannelId) };
     }
+
+    private static HistoryCoverage BuildCoverage(
+        HistoryIndexReader? reader, ProjectorState? state, long journalHead, long checkpoint, string? channel, bool halted, int tailCount, bool tailTruncated) =>
+        new(
+            (reader?.ReadCoverage() ?? []).Where(c => channel is null || c.ChannelId == channel).ToList(),
+            state?.Generation,
+            state?.BuildComplete ?? false,
+            halted,
+            Math.Max(0, journalHead - checkpoint),
+            tailCount,
+            tailTruncated);
 
     private static HistoryCoverage Empty(ProjectorState? state) =>
         new([], state?.Generation, state?.BuildComplete ?? false, false, 0, 0, false);

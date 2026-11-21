@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
+using Cortex.Contained.Agent.Host.Storage;
 
 namespace Cortex.Contained.Agent.Host.History;
 
@@ -98,27 +99,20 @@ public static class HistoryResultRenderer
         ArgumentNullException.ThrowIfNull(options);
 
         var header = Header("history_read", boundary);
-        var budget = (int)(options.TokenCap * CharsPerToken) - header.Length - 400;
-        var body = new StringBuilder();
-        var rendered = 0;
-        foreach (var line in result.Lines)
-        {
-            var marker = line.MessageId == result.AnchorId ? "» " : "  ";
-            var text = marker + Line(line, options, boundary, includeDate: true, includeChannel: false);
-            if (body.Length + text.Length > budget && rendered > 0)
-            {
-                break;
-            }
-
-            body.Append(text);
-            rendered++;
-        }
+        var coverage = result.Coverage is { } c ? CoverageBlock(c) : string.Empty;
+        var budget = (int)(options.TokenCap * CharsPerToken) - header.Length - coverage.Length - 500;
+        var texts = result.Lines
+            .Select(line => (line.MessageId == result.AnchorId ? "» " : "  ") + Line(line, options, boundary, includeDate: true, includeChannel: false))
+            .ToList();
+        var anchorIndex = result.AnchorId is { } anchorId ? result.Lines.ToList().FindIndex(l => l.MessageId == anchorId) : -1;
+        var (first, last) = SelectReadWindow(texts, budget, anchorIndex);
+        var rendered = texts.Count == 0 ? 0 : last - first + 1;
 
         var truncated = rendered < result.Lines.Count;
         var output = new StringBuilder(header);
         if (result.Lines.Count > 0)
         {
-            output.Append(CultureInfo.InvariantCulture, $"channel {result.Lines[0].ChannelId}\n");
+            output.Append(CultureInfo.InvariantCulture, $"channel {Escape(result.Lines[0].ChannelId, boundary)}\n");
         }
 
         output.Append("<<<").Append(boundary).Append('\n');
@@ -127,11 +121,103 @@ public static class HistoryResultRenderer
             output.Append("(no messages in this range)\n");
         }
 
-        output.Append(body);
+        for (var i = first; texts.Count > 0 && i <= last; i++)
+        {
+            output.Append(texts[i]);
+        }
+
         output.Append(boundary).Append(">>>\n");
         output.Append(CultureInfo.InvariantCulture, $"source: messages.db (authoritative, read now); lines {rendered} of {result.Lines.Count}\n");
+        if (truncated)
+        {
+            AppendReadContinuation(output, result, boundary, anchorIndex, first, last);
+        }
+
+        output.Append(coverage);
         output.Append(CultureInfo.InvariantCulture, $"flags: truncated={Bool(truncated)} redacted=false unavailable=0 hasMore={Bool(result.HasMore || truncated)}\n");
         return new RenderedHistory(output.ToString(), rendered, truncated);
+    }
+
+    // A range read keeps the newest lines (what just happened matters most); an around read grows
+    // outwards from the anchor so the evidence a hit pointed at is never the part that is cut.
+    private static (int First, int Last) SelectReadWindow(List<string> texts, int budget, int anchorIndex)
+    {
+        if (texts.Count == 0)
+        {
+            return (0, -1);
+        }
+
+        var total = 0;
+        if (anchorIndex < 0)
+        {
+            var first = texts.Count;
+            while (first > 0 && (first == texts.Count || total + texts[first - 1].Length <= budget))
+            {
+                first--;
+                total += texts[first].Length;
+            }
+
+            return (first, texts.Count - 1);
+        }
+
+        int lo = anchorIndex, hi = anchorIndex;
+        total = texts[anchorIndex].Length;
+        var preferNewer = true;
+        while (true)
+        {
+            var canNewer = hi + 1 < texts.Count && total + texts[hi + 1].Length <= budget;
+            var canOlder = lo > 0 && total + texts[lo - 1].Length <= budget;
+            if (!canNewer && !canOlder)
+            {
+                return (lo, hi);
+            }
+
+            if (canNewer && (preferNewer || !canOlder))
+            {
+                total += texts[++hi].Length;
+            }
+            else
+            {
+                total += texts[--lo].Length;
+            }
+
+            preferNewer = !preferNewer;
+        }
+    }
+
+    private static void AppendReadContinuation(StringBuilder output, HistoryReadResult result, string boundary, int anchorIndex, int first, int last)
+    {
+        if (first > 0)
+        {
+            output.Append(anchorIndex < 0
+                ? string.Create(CultureInfo.InvariantCulture,
+                    $"older lines omitted (newest kept): call history_read with channelId={Escape(result.Lines[first].ChannelId, boundary)} until={SqliteDateTimeText.Format(result.Lines[first].Timestamp)}\n")
+                : string.Create(CultureInfo.InvariantCulture,
+                    $"earlier lines omitted: call history_read with aroundMessageId={result.Lines[first].MessageId}\n"));
+        }
+
+        if (last < result.Lines.Count - 1)
+        {
+            output.Append(CultureInfo.InvariantCulture, $"later lines omitted: call history_read with aroundMessageId={result.Lines[last].MessageId}\n");
+        }
+    }
+
+    private static string CoverageBlock(HistoryCoverage coverage)
+    {
+        var builder = new StringBuilder();
+        builder.Append(CultureInfo.InvariantCulture,
+            $"coverage: buildComplete={Bool(coverage.BuildComplete)} halted={Bool(coverage.Halted)} generation={coverage.Generation?.ToString(CultureInfo.InvariantCulture) ?? "none"} lag={coverage.Lag} unindexedTail={coverage.UnindexedTail} unindexedTailTruncated={Bool(coverage.UnindexedTailTruncated)}\n");
+        foreach (var channel in coverage.Channels)
+        {
+            builder.Append(CultureInfo.InvariantCulture, $"  {channel.ChannelId} indexed {channel.From[..10]} → {channel.To[..10]}\n");
+        }
+
+        if (coverage.Channels.Count == 0)
+        {
+            builder.Append("  (no indexed range yet)\n");
+        }
+
+        return builder.ToString();
     }
 
     /// <summary>Replaces every occurrence of <paramref name="boundary"/> in source text.</summary>
@@ -185,17 +271,7 @@ public static class HistoryResultRenderer
     {
         var coverage = result.Coverage;
         var builder = new StringBuilder();
-        builder.Append(CultureInfo.InvariantCulture,
-            $"coverage: buildComplete={Bool(coverage.BuildComplete)} halted={Bool(coverage.Halted)} generation={coverage.Generation?.ToString(CultureInfo.InvariantCulture) ?? "none"} lag={coverage.Lag} unindexedTail={coverage.UnindexedTail} unindexedTailTruncated={Bool(coverage.UnindexedTailTruncated)}\n");
-        foreach (var channel in coverage.Channels)
-        {
-            builder.Append(CultureInfo.InvariantCulture, $"  {channel.ChannelId} indexed {channel.From[..10]} → {channel.To[..10]}\n");
-        }
-
-        if (coverage.Channels.Count == 0)
-        {
-            builder.Append("  (no indexed range yet)\n");
-        }
+        builder.Append(CoverageBlock(coverage));
 
         if (result.DroppedTerms.Count > 0)
         {

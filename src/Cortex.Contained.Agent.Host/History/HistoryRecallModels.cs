@@ -164,4 +164,7 @@ public sealed record HistoryReadResult
 
     /// <summary>Set instead of lines when the request cannot run.</summary>
     public string? Error { get; init; }
+
+    /// <summary>What the index covered when this read ran; null only for errors.</summary>
+    public HistoryCoverage? Coverage { get; init; }
 }
