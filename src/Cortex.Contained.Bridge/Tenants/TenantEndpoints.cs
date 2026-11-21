@@ -831,7 +831,7 @@ public static class TenantEndpoints
             }
         }).RequireAuthorization();
 
-        // DELETE /api/tenants/{tenantId}/history — delete messages older than a date
+        // DELETE /api/tenants/{tenantId}/history — delete messages older than a date (or all)
         app.MapDelete("/api/tenants/{tenantId}/history", async (
             string tenantId, string? olderThan, TenantRouter router) =>
         {
@@ -841,20 +841,18 @@ public static class TenantEndpoints
                 return Results.NotFound(new { error = $"Tenant '{tenantId}' not available" });
             }
 
+            DateTimeOffset? cutoff = null;
+            if (!string.IsNullOrWhiteSpace(olderThan)
+                && DateTimeOffset.TryParse(olderThan, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var olderThanTs))
+            {
+                cutoff = olderThanTs;
+            }
+
             try
             {
-                int deleted;
-                if (!string.IsNullOrWhiteSpace(olderThan)
-                    && DateTimeOffset.TryParse(olderThan, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var olderThanTs))
-                {
-                    deleted = await client.DeleteMessagesOlderThanAsync(olderThanTs, CancellationToken.None).ConfigureAwait(false);
-                }
-                else
-                {
-                    deleted = await client.ClearAllMessagesAsync(CancellationToken.None).ConfigureAwait(false);
-                }
-
-                return Results.Ok(new { deletedCount = deleted });
+                var result = await client.PurgeHistoryAsync(new HistoryPurgeRequestDto { OlderThan = cutoff }, CancellationToken.None)
+                    .ConfigureAwait(false);
+                return Results.Ok(HistoryDeletionResponse.From(result));
             }
             catch
             {
@@ -905,9 +903,10 @@ public static class TenantEndpoints
 
             try
             {
-                await client.DeleteChannelMessagesOlderThanAsync(decodedChannelId!, cutoff, CancellationToken.None)
-                    .ConfigureAwait(false);
-                return Results.NoContent();
+                var result = await client.PurgeHistoryAsync(
+                    new HistoryPurgeRequestDto { ChannelId = decodedChannelId, OlderThan = cutoff == DateTimeOffset.MaxValue ? null : cutoff },
+                    CancellationToken.None).ConfigureAwait(false);
+                return Results.Ok(HistoryDeletionResponse.From(result));
             }
             catch
             {
@@ -915,6 +914,27 @@ public static class TenantEndpoints
             }
         }).RequireAuthorization();
 
+        // PUT /api/tenants/{tenantId}/history/recall-tools — show/hide history_search at runtime
+        // (behaviour-gate "tools off" arm). Body: { "enabled": bool }.
+        app.MapPut("/api/tenants/{tenantId}/history/recall-tools", async (
+            string tenantId, RecallToolsRequest request, TenantRouter router) =>
+        {
+            var client = router.GetClient(tenantId);
+            if (client is null || !client.IsConnected)
+            {
+                return Results.NotFound(new { error = $"Tenant '{tenantId}' not available" });
+            }
+
+            try
+            {
+                var enabled = await client.SetHistoryRecallToolsAsync(request.Enabled, CancellationToken.None).ConfigureAwait(false);
+                return Results.Ok(new { enabled });
+            }
+            catch
+            {
+                return Results.StatusCode(503);
+            }
+        }).RequireAuthorization();
 
         // GET /api/tenants/{tenantId}/memories — list memories
         app.MapGet("/api/tenants/{tenantId}/memories", async (
@@ -931,6 +951,47 @@ public static class TenantEndpoints
                 var result = await client.ListMemoriesAsync(limit ?? 100, offset ?? 0, CancellationToken.None)
                     .ConfigureAwait(false);
                 return Results.Ok(result);
+            }
+            catch
+            {
+                return Results.StatusCode(503);
+            }
+        }).RequireAuthorization();
+
+        // GET /api/tenants/{tenantId}/memories/quarantine — memories hidden after a history deletion (D10)
+        app.MapGet("/api/tenants/{tenantId}/memories/quarantine", async (
+            string tenantId, TenantRouter router) =>
+        {
+            var client = router.GetClient(tenantId);
+            if (client is null || !client.IsConnected)
+            {
+                return Results.NotFound(new { error = $"Tenant '{tenantId}' not available" });
+            }
+
+            try
+            {
+                return Results.Ok(await client.ListQuarantinedMemoriesAsync(CancellationToken.None).ConfigureAwait(false));
+            }
+            catch
+            {
+                return Results.StatusCode(503);
+            }
+        }).RequireAuthorization();
+
+        // POST /api/tenants/{tenantId}/memories/{memoryId}/keep — release a memory from quarantine
+        app.MapPost("/api/tenants/{tenantId}/memories/{memoryId}/keep", async (
+            string tenantId, string memoryId, TenantRouter router) =>
+        {
+            var client = router.GetClient(tenantId);
+            if (client is null || !client.IsConnected)
+            {
+                return Results.NotFound(new { error = $"Tenant '{tenantId}' not available" });
+            }
+
+            try
+            {
+                await client.KeepQuarantinedMemoryAsync(memoryId, CancellationToken.None).ConfigureAwait(false);
+                return Results.Ok(new { kept = memoryId });
             }
             catch
             {
