@@ -176,3 +176,7 @@ Measured warning: full `halfvec` HNSW at 1M on ≤4 GB RAM gave 122 ms p50 at 95
 - Use the frozen evaluation queries from the history-memory design.
 - Apply the same filters and a 4 GB memory cap to both engines.
 - Report: recall@10 vs exact float32, p50/p95 latency (warm and cold), resident memory, index build time, delete-and-erasure behaviour (byte-level check), and operational steps.
+
+**Data handling (privacy review, PS-16):**
+- The bake-off copy of real data stays local and encrypted, and is destroyed at the end of the run, including engine snapshots and WAL.
+- No real-data bake-off runs on an engine that cannot pass the same byte-level erasure test.
