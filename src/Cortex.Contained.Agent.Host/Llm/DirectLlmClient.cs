@@ -72,8 +72,9 @@ public sealed partial class DirectLlmClient : ILlmClient, IDisposable
     public DirectLlmClient(
         IHttpClientFactory httpClientFactory,
         ILogger<DirectLlmClient> logger,
-        Cortex.Contained.Agent.Host.Agent.AgentMetrics? metrics = null)
-        : this(httpClientFactory, logger, Providers.LlmStreamTimeouts.Default, metrics)
+        Cortex.Contained.Agent.Host.Agent.AgentMetrics? metrics = null,
+        Cortex.Contained.Agent.Host.Events.KnownSecrets? knownSecrets = null)
+        : this(httpClientFactory, logger, Providers.LlmStreamTimeouts.Default, metrics, knownSecrets)
     {
     }
 
@@ -81,14 +82,15 @@ public sealed partial class DirectLlmClient : ILlmClient, IDisposable
         IHttpClientFactory httpClientFactory,
         ILogger<DirectLlmClient> logger,
         Providers.LlmStreamTimeouts streamTimeouts,
-        Cortex.Contained.Agent.Host.Agent.AgentMetrics? metrics = null)
+        Cortex.Contained.Agent.Host.Agent.AgentMetrics? metrics = null,
+        Cortex.Contained.Agent.Host.Events.KnownSecrets? knownSecrets = null)
     {
         this.httpClientFactory = httpClientFactory;
         this.logger = logger;
         this.metrics = metrics;
         this.streamTimeouts = streamTimeouts;
         this.stallObserver = new Providers.LlmStreamStallTelemetry(logger, metrics);
-        this.tokenManager = new OAuthTokenManager(logger, metrics);
+        this.tokenManager = new OAuthTokenManager(logger, metrics, knownSecrets);
         this.openAiClient = new OpenAiCompatibleApiClient(httpClientFactory, this.tokenManager, logger);
         this.anthropicClient = new AnthropicApiClient(httpClientFactory, this.tokenManager, logger);
     }

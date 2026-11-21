@@ -212,7 +212,8 @@ builder.Services.AddSingleton(sp =>
             agentConfig.LlmFirstTokenTimeoutSeconds,
             agentConfig.LlmStreamIdleTimeoutSeconds,
             agentConfig.LlmStreamMaxDurationSeconds),
-        sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.AgentMetrics>());
+        sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.AgentMetrics>(),
+        sp.GetRequiredService<Cortex.Contained.Agent.Host.Events.KnownSecrets>());
 });
 builder.Services.AddSingleton<ILlmClient>(sp => sp.GetRequiredService<DirectLlmClient>());
 

@@ -47,6 +47,38 @@ public class OAuthTokenManagerTests
 
     private static long NowMs() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
+    // ── Known secrets (persistence redaction) ───────────────────────────────────
+
+    [Fact]
+    public async Task EnsureFreshTokenAsync_RefreshedTokens_EnterTheKnownSecretSet()
+    {
+        var secrets = new Cortex.Contained.Agent.Host.Events.KnownSecrets();
+        var manager = new OAuthTokenManager(NullLogger.Instance, metrics: null, secrets);
+        var provider = CreateOAuthProvider(NowMs() - 1000);
+        manager.SetRequestTokenRefreshCallback(_ =>
+            Task.FromResult(new TokenRefreshResult { Success = true, AccessToken = "fresh-access", RefreshToken = "fresh-refresh", ExpiresAtMs = NowMs() + (60 * 60 * 1000) }));
+
+        await manager.EnsureFreshTokenAsync(provider, CancellationToken.None);
+
+        Assert.Contains("fresh-access", secrets.Values);
+        Assert.Contains("fresh-refresh", secrets.Values);
+    }
+
+    [Fact]
+    public async Task RequestTokenReloadAsync_ReloadedTokens_EnterTheKnownSecretSet()
+    {
+        var secrets = new Cortex.Contained.Agent.Host.Events.KnownSecrets();
+        var manager = new OAuthTokenManager(NullLogger.Instance, metrics: null, secrets);
+        var provider = CreateOAuthProvider(NowMs() + (60 * 60 * 1000));
+        manager.SetRequestTokenReloadCallback(_ =>
+            Task.FromResult(new TokenRefreshResult { Success = true, AccessToken = "reloaded-access", RefreshToken = "reloaded-refresh" }));
+
+        await manager.RequestTokenReloadAsync(provider, CancellationToken.None);
+
+        Assert.Contains("reloaded-access", secrets.Values);
+        Assert.Contains("reloaded-refresh", secrets.Values);
+    }
+
     // ── Anthropic OAuth ─────────────────────────────────────────────────────────
 
     [Fact]

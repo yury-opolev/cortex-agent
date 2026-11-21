@@ -24,4 +24,15 @@ public sealed class KnownSecretsTests
         Assert.True(secrets.IsLoaded);
         Assert.Equal(["key-aaaaaaaa", "tok-bbbbbbbb", "ref-cccccccc"], secrets.Values);
     }
+
+    [Fact]
+    public void Add_NewSecrets_AreAppendedWithoutDuplicatesOrMarkingLoaded()
+    {
+        var secrets = new KnownSecrets();
+
+        secrets.Add("tok-fresh", null, " ", "tok-fresh", "ref-fresh");
+
+        Assert.Equal(["tok-fresh", "ref-fresh"], secrets.Values);
+        Assert.False(secrets.IsLoaded);
+    }
 }

@@ -9,6 +9,7 @@ namespace Cortex.Contained.Agent.Host.Events;
 /// </summary>
 public sealed class KnownSecrets
 {
+    private readonly Lock addLock = new();
     private volatile string[] values = [];
     private volatile bool loaded;
 
@@ -22,12 +23,32 @@ public sealed class KnownSecrets
     public void Load(LlmCredentials credentials)
     {
         ArgumentNullException.ThrowIfNull(credentials);
-        this.values = credentials.Providers
+        var loadedValues = credentials.Providers
             .SelectMany(p => new[] { p.ApiKey, p.AccessToken, p.RefreshToken })
             .Where(v => !string.IsNullOrWhiteSpace(v))
             .Select(v => v!)
             .Distinct(StringComparer.Ordinal)
             .ToArray();
-        this.loaded = true;
+        lock (this.addLock)
+        {
+            this.values = loadedValues;
+            this.loaded = true;
+        }
+    }
+
+    /// <summary>
+    /// Adds secrets learned outside a credentials push (tokens the Bridge returned from a refresh or
+    /// reload), so persistence redaction replaces them too. Does not mark the set loaded.
+    /// </summary>
+    public void Add(params string?[] secrets)
+    {
+        ArgumentNullException.ThrowIfNull(secrets);
+        lock (this.addLock)
+        {
+            this.values = this.values
+                .Concat(secrets.Where(v => !string.IsNullOrWhiteSpace(v)).Select(v => v!))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+        }
     }
 }
