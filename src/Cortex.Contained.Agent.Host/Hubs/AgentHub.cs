@@ -3,6 +3,7 @@ using Cortex.Contained.Contracts.Config;
 using Cortex.Contained.Contracts.Hub;
 using Cortex.Contained.Agent.Host.Agent;
 using Cortex.Contained.Agent.Host.Coding;
+using Cortex.Contained.Agent.Host.History;
 using Cortex.Contained.Agent.Host.Llm;
 using Cortex.Contained.Agent.Host.Memory;
 using Cortex.Contained.Agent.Host.Scheduler;
@@ -32,6 +33,9 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
     private readonly IOptionsMonitor<ConversationCompactionConfig> conversationCompactionOptions;
     private readonly MemoryCompactionService compactionService;
     private readonly Storage.MessageStore messageStore;
+    private readonly HistoryPurgeService historyPurge;
+    private readonly MemoryQuarantine memoryQuarantine;
+    private readonly HistoryToolsSwitch historyTools;
     private readonly SchedulerService scheduler;
     private readonly CodingAgentEventBus externalAgentBus;
     private readonly Cortex.Contained.Speech.SpeakerId.IVoiceprintStore voiceprintStore;
@@ -56,6 +60,9 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
         IOptionsMonitor<ConversationCompactionConfig> conversationCompactionOptions,
         MemoryCompactionService compactionService,
         Storage.MessageStore messageStore,
+        HistoryPurgeService historyPurge,
+        MemoryQuarantine memoryQuarantine,
+        HistoryToolsSwitch historyTools,
         SchedulerService scheduler,
         CodingAgentEventBus externalAgentBus,
         Cortex.Contained.Speech.SpeakerId.IVoiceprintStore voiceprintStore,
@@ -79,6 +86,9 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
         this.conversationCompactionOptions = conversationCompactionOptions;
         this.compactionService = compactionService;
         this.messageStore = messageStore;
+        this.historyPurge = historyPurge;
+        this.memoryQuarantine = memoryQuarantine;
+        this.historyTools = historyTools;
         this.scheduler = scheduler;
         this.externalAgentBus = externalAgentBus;
         this.voiceprintStore = voiceprintStore;
@@ -428,43 +438,77 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
     /// <inheritdoc />
     public async Task<int> DeleteConversation(string conversationId)
     {
-        var deleted = await this.messageStore.DeleteChannelMessagesAsync(conversationId, Context.ConnectionAborted)
+        var result = await this.historyPurge.PurgeAsync(new HistoryPurgeScope(conversationId, null), null, Context.ConnectionAborted)
             .ConfigureAwait(false);
         // Also reset the in-memory session for this channel
         await this.runtime.ResetSessionAsync(conversationId, Context.ConnectionAborted)
             .ConfigureAwait(false);
-        return deleted;
+        return result.Deleted;
     }
 
     /// <inheritdoc />
     public async Task<int> ClearAllMessages()
     {
-        var deleted = await this.messageStore.DeleteAllMessagesAsync(Context.ConnectionAborted)
+        var result = await this.historyPurge.PurgeAsync(HistoryPurgeScope.All, null, Context.ConnectionAborted)
             .ConfigureAwait(false);
         await this.runtime.ResetAllSessionsAsync(Context.ConnectionAborted)
             .ConfigureAwait(false);
-        return deleted;
+        return result.Deleted;
     }
 
     /// <inheritdoc />
     public async Task<int> DeleteMessagesOlderThan(DateTimeOffset olderThan)
     {
-        var deleted = await this.messageStore.DeleteMessagesOlderThanAsync(olderThan, Context.ConnectionAborted)
+        var result = await this.historyPurge.PurgeAsync(new HistoryPurgeScope(null, olderThan), null, Context.ConnectionAborted)
             .ConfigureAwait(false);
         // Reset all sessions so they rebuild context from remaining messages
         await this.runtime.ResetAllSessionsAsync(Context.ConnectionAborted)
             .ConfigureAwait(false);
-        return deleted;
+        return result.Deleted;
     }
 
     /// <inheritdoc />
     public async Task<int> DeleteChannelMessagesOlderThan(string channelId, DateTimeOffset olderThan)
     {
-        var deleted = await this.messageStore.DeleteChannelMessagesOlderThanAsync(channelId, olderThan, Context.ConnectionAborted)
+        var result = await this.historyPurge.PurgeAsync(new HistoryPurgeScope(channelId, olderThan), null, Context.ConnectionAborted)
             .ConfigureAwait(false);
         await this.runtime.ResetSessionAsync(channelId, Context.ConnectionAborted)
             .ConfigureAwait(false);
-        return deleted;
+        return result.Deleted;
+    }
+
+    /// <inheritdoc />
+    public async Task<HistoryPurgeResultDto> PurgeHistory(HistoryPurgeRequestDto request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var result = await this.historyPurge.PurgeAsync(
+            new HistoryPurgeScope(string.IsNullOrWhiteSpace(request.ChannelId) ? null : request.ChannelId, request.OlderThan),
+            null,
+            Context.ConnectionAborted).ConfigureAwait(false);
+
+        if (request.ChannelId is { Length: > 0 } channelId)
+        {
+            await this.runtime.ResetSessionAsync(channelId, Context.ConnectionAborted).ConfigureAwait(false);
+        }
+        else
+        {
+            await this.runtime.ResetAllSessionsAsync(Context.ConnectionAborted).ConfigureAwait(false);
+        }
+
+        return new HistoryPurgeResultDto
+        {
+            Deleted = result.Deleted,
+            ErasureComplete = result.ErasureComplete,
+            CleanupPending = result.CleanupPending,
+            QuarantinedMemories = result.QuarantinedMemories,
+        };
+    }
+
+    /// <inheritdoc />
+    public Task<bool> SetHistoryRecallTools(bool enabled)
+    {
+        this.historyTools.SetEnabled(enabled);
+        return Task.FromResult(this.historyTools.IsEnabled);
     }
 
     /// <inheritdoc />
@@ -496,8 +540,8 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
     /// <inheritdoc />
     public async Task ClearAll()
     {
-        // Clear messages
-        await this.messageStore.DeleteAllMessagesAsync(Context.ConnectionAborted)
+        // Clear messages through the erasure workflow
+        await this.historyPurge.PurgeAsync(HistoryPurgeScope.All, null, Context.ConnectionAborted)
             .ConfigureAwait(false);
 
         // Clear all memories by listing and deleting each one
@@ -553,6 +597,30 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
     {
         this.LogMemoryDelete(memoryId);
         return await this.memoryService.DeleteAsync(memoryId, Context.ConnectionAborted).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task<MemoryListResult> ListQuarantinedMemories()
+    {
+        var ids = await this.memoryQuarantine.GetQuarantinedIdsAsync(Context.ConnectionAborted).ConfigureAwait(false);
+        var items = new List<MemoryItem>();
+        foreach (var id in ids.Order(StringComparer.Ordinal))
+        {
+            if (await this.memoryService.GetAsync(id, Context.ConnectionAborted).ConfigureAwait(false) is { } item)
+            {
+                items.Add(item);
+            }
+        }
+
+        return new MemoryListResult { Items = items, TotalCount = items.Count };
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> KeepQuarantinedMemory(string memoryId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(memoryId);
+        await this.memoryQuarantine.KeepAsync(memoryId, Context.ConnectionAborted).ConfigureAwait(false);
+        return true;
     }
 
     /// <inheritdoc />
@@ -836,18 +904,15 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
     {
         try
         {
-            if (request.ClearExisting)
-            {
-                await this.messageStore.DeleteAllMessagesAsync(Context.ConnectionAborted)
-                    .ConfigureAwait(false);
-            }
-
             var records = request.Items
                 .Select(ExportImportMapper.MapExportToMessageRecord)
                 .ToList();
 
-            var inserted = await this.messageStore.BulkInsertAsync(records, Context.ConnectionAborted)
-                .ConfigureAwait(false);
+            // ClearExisting replaces everything in ONE transaction through the erasure workflow
+            // (delete-all + insert + restore-generation bump), so the old rows are erased too.
+            var inserted = request.ClearExisting
+                ? (await this.historyPurge.PurgeAsync(HistoryPurgeScope.All, records, Context.ConnectionAborted).ConfigureAwait(false)).Inserted
+                : await this.messageStore.BulkInsertAsync(records, Context.ConnectionAborted).ConfigureAwait(false);
 
             // Reset all sessions so they rebuild from the new message data
             await this.runtime.ResetAllSessionsAsync(Context.ConnectionAborted)

@@ -55,6 +55,9 @@ public sealed record ExportMessageEntry
     public required string Content { get; init; }
     public DateTimeOffset Timestamp { get; init; }
     public MessageCategory Category { get; init; }
+
+    /// <summary>Compact tool-call summary JSON of an assistant message, or null.</summary>
+    public string? ToolCalls { get; init; }
 }
 
 /// <summary>

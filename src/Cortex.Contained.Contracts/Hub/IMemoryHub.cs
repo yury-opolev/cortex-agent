@@ -25,6 +25,12 @@ public interface IMemoryHub
     /// <summary>Delete a memory by ID.</summary>
     Task<bool> DeleteMemory(string memoryId);
 
+    /// <summary>Memories quarantined after a history deletion (D10), awaiting the owner's keep/delete decision.</summary>
+    Task<MemoryListResult> ListQuarantinedMemories();
+
+    /// <summary>Keep a quarantined memory: it becomes visible to search, seeding and consolidation again.</summary>
+    Task<bool> KeepQuarantinedMemory(string memoryId);
+
     /// <summary>Search memories by semantic similarity.</summary>
     Task<IReadOnlyList<MemorySearchItem>> SearchMemories(MemorySearchRequest request);
 

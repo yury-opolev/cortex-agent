@@ -29,6 +29,15 @@ public interface IHistoryHub
     Task<int> DeleteChannelMessagesOlderThan(string channelId, DateTimeOffset olderThan);
 
     /// <summary>
+    /// Delete history through the erasure workflow and report erasure status and how many
+    /// curated memories were quarantined for review.
+    /// </summary>
+    Task<HistoryPurgeResultDto> PurgeHistory(HistoryPurgeRequestDto request);
+
+    /// <summary>Show or hide the history recall tools at runtime (behaviour-gate arms). Returns the effective state.</summary>
+    Task<bool> SetHistoryRecallTools(bool enabled);
+
+    /// <summary>
     /// List distinct channels that have at least one message, along with each channel's
     /// message count and last-activity timestamp. Ordered by most recent activity first.
     /// </summary>
