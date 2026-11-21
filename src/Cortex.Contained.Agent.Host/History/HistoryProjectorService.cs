@@ -17,13 +17,15 @@ public sealed partial class HistoryProjectorService : BackgroundService
     private readonly IOptionsMonitor<HistoryOptions> options;
     private readonly ILogger<HistoryProjectorService> logger;
     private readonly TimeSpan pollInterval;
+    private readonly Storage.IStorageState? storage;
 
     public HistoryProjectorService(
         HistoryProjector projector,
         HistoryStatus status,
         IOptionsMonitor<HistoryOptions> options,
-        ILogger<HistoryProjectorService> logger)
-        : this(projector, status, options, logger, TimeSpan.FromSeconds(1))
+        ILogger<HistoryProjectorService> logger,
+        Storage.IStorageState? storage = null)
+        : this(projector, status, options, logger, TimeSpan.FromSeconds(1), storage)
     {
     }
 
@@ -32,8 +34,10 @@ public sealed partial class HistoryProjectorService : BackgroundService
         HistoryStatus status,
         IOptionsMonitor<HistoryOptions> options,
         ILogger<HistoryProjectorService> logger,
-        TimeSpan pollInterval)
+        TimeSpan pollInterval,
+        Storage.IStorageState? storage = null)
     {
+        this.storage = storage;
         this.projector = projector;
         this.status = status;
         this.options = options;
@@ -64,6 +68,25 @@ public sealed partial class HistoryProjectorService : BackgroundService
             this.status.Update(s => s with { Halted = true, LastError = message });
             this.LogHalted(message);
             return;
+        }
+
+        if (this.storage is not null)
+        {
+            // Encrypted storage opens only once the Bridge pushed the key; wait rather than burn retries.
+            try
+            {
+                await this.storage.WhenOpenAsync(stoppingToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception ex) when (ex is Storage.StorageKeyMismatchException or Storage.StorageLockedException)
+            {
+                this.status.Update(s => s with { Halted = true, LastError = ex.Message });
+                this.LogHalted(ex.Message);
+                return;
+            }
         }
 
         var failures = 0;

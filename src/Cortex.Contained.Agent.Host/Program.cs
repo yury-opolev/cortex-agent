@@ -109,11 +109,16 @@ builder.Services.AddSingleton(sp =>
 
 builder.Services.AddSingleton<AgentSessionStore>();
 
-// --- Message Store (per-tenant SQLite persistence) ---
+// --- Message Store (per-tenant SQLite persistence; encrypted at rest when Storage:EncryptAtRest, D4) ---
+var storageOptions = builder.Configuration.GetSection(StorageOptions.SectionName).Get<StorageOptions>() ?? new StorageOptions();
 builder.Services.AddSingleton(sp =>
     new Cortex.Contained.Agent.Host.Storage.MessageStore(
         Path.Combine(stateRoot, "messages.db"),
-        sp.GetRequiredService<ILoggerFactory>().CreateLogger<Cortex.Contained.Agent.Host.Storage.MessageStore>()));
+        sp.GetRequiredService<ILoggerFactory>().CreateLogger<Cortex.Contained.Agent.Host.Storage.MessageStore>(),
+        storageOptions.EncryptAtRest
+            ? new MessageStoreEncryption(sp.GetRequiredService<StorageKeyRing>(), TimeSpan.FromSeconds(storageOptions.KeyWaitSeconds))
+            : null));
+builder.Services.AddSingleton<IStorageState>(sp => sp.GetRequiredService<MessageStore>());
 
 // --- Episodic history locator (increment 1): journal-fed FTS5 index, recall tools, erasure ---
 builder.Services.Configure<HistoryOptions>(builder.Configuration.GetSection(HistoryOptions.SectionName));
@@ -123,7 +128,9 @@ builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Memory.IMemoryQuaranti
 builder.Services.AddSingleton<HistoryAccessGate>();
 builder.Services.AddSingleton<HistoryStatus>();
 builder.Services.AddSingleton<HistoryToolsSwitch>();
-builder.Services.AddSingleton(new HistoryIndexGenerations(Path.Combine(stateRoot, "history")));
+builder.Services.AddSingleton(sp => new HistoryIndexGenerations(
+    Path.Combine(stateRoot, "history"),
+    storageOptions.EncryptAtRest ? sp.GetRequiredService<StorageKeyRing>() : null));
 builder.Services.AddSingleton<HistoryProjector>();
 builder.Services.AddSingleton<HistoryRecallService>();
 builder.Services.AddSingleton<IErasureStep, IndexErasureStep>();
@@ -927,7 +934,8 @@ app.MapGet("/health", async (ToolRegistry toolRegistry, AgentSessionStore sessio
             sessionStore = new { status = "ok", sessionCount },
             history = new
             {
-                status = history.Halted || history.PendingErasureTasks > 0 ? "degraded" : "ok",
+                status = history.Halted || history.PendingErasureTasks > 0 || history.Storage != "open" ? "degraded" : "ok",
+                history.Storage,
                 history.Enabled,
                 history.ToolsEnabled,
                 history.SqliteVersion,

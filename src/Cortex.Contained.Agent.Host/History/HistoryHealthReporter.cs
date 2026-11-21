@@ -16,7 +16,11 @@ public sealed record HistoryHealth(
     string? LastError,
     int PendingErasureTasks,
     IReadOnlyList<string> PendingErasureSteps,
-    int MaintenancePendingTasks);
+    int MaintenancePendingTasks)
+{
+    /// <summary><c>open</c>, <c>awaitingKey</c> (no storage key from the Bridge yet) or <c>failed</c> (wrong key).</summary>
+    public string Storage { get; init; } = "open";
+}
 
 /// <summary>Builds <see cref="HistoryHealth"/> from options, projector status and <c>messages.db</c> Meta.</summary>
 public sealed class HistoryHealthReporter
@@ -26,14 +30,17 @@ public sealed class HistoryHealthReporter
     private readonly HistoryStatus status;
     private readonly HistoryToolsSwitch toolsSwitch;
     private readonly IOptionsMonitor<HistoryOptions> options;
+    private readonly Storage.IStorageState? storage;
 
     public HistoryHealthReporter(
         IHistorySource source,
         IHistoryErasureStore erasure,
         HistoryStatus status,
         HistoryToolsSwitch toolsSwitch,
-        IOptionsMonitor<HistoryOptions> options)
+        IOptionsMonitor<HistoryOptions> options,
+        Storage.IStorageState? storage = null)
     {
+        this.storage = storage;
         this.source = source;
         this.erasure = erasure;
         this.status = status;
@@ -44,6 +51,29 @@ public sealed class HistoryHealthReporter
     /// <summary>Current health snapshot.</summary>
     public async Task<HistoryHealth> SnapshotAsync(CancellationToken cancellationToken)
     {
+        if (this.storage is { State: not Storage.StorageState.Open } locked)
+        {
+            // Never wait for the key here: health must answer while the store is locked.
+            var lockedState = this.status.Snapshot();
+            return new HistoryHealth(
+                this.options.CurrentValue.Enabled,
+                this.toolsSwitch.IsEnabled,
+                SqliteRuntimeInfo.Capabilities.Version,
+                lockedState.Generation,
+                lockedState.BuildComplete,
+                lockedState.BuildInProgress,
+                0,
+                0,
+                lockedState.Halted,
+                lockedState.LastError,
+                0,
+                [],
+                0)
+            {
+                Storage = locked.State == Storage.StorageState.Failed ? "failed" : "awaitingKey",
+            };
+        }
+
         HistorySourceMeta meta;
         await using (var snapshot = await this.source.OpenSnapshotAsync(cancellationToken).ConfigureAwait(false))
         {
