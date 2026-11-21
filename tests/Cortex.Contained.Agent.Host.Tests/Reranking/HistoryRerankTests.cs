@@ -118,6 +118,44 @@ public sealed class HistoryRerankTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task PagingAfterARerankedFirstPage_KeepsTheSameOrderEvenWhenTheRerankerLaterFails()
+    {
+        await this.SeedAsync();
+        var fused = await this.recall.SearchAsync(new HistorySearchRequest { Query = "trip budget", Rerank = RerankRequest.Off }, CancellationToken.None);
+        var promoted = fused.Hits[1].Lines[0].Text;
+        this.reranker.Score = (_, document) => document == promoted ? 1 : 0;
+        var first = await this.SearchAsync(limit: 1);
+        this.reranker.Failure = new RerankerException("The reranker is unreachable.");
+
+        var second = await this.SearchAsync(limit: 1, cursor: HistoryCursorCodec.Encode(first.Binding, first.Next));
+        var third = await this.SearchAsync(limit: 1, cursor: HistoryCursorCodec.Encode(second.Binding, second.Next));
+
+        Assert.Equal(
+            [fused.Hits[1].FirstMsgId, fused.Hits[0].FirstMsgId, fused.Hits[2].FirstMsgId],
+            new[] { first.Hits[0].FirstMsgId, second.Hits[0].FirstMsgId, third.Hits[0].FirstMsgId });
+        Assert.Single(this.reranker.Calls);
+        Assert.False(third.HasMore);
+    }
+
+    [Fact]
+    public async Task PagingAfterAFailedFirstPage_KeepsTheFusedOrderEvenWhenTheRerankerLaterWorks()
+    {
+        await this.SeedAsync();
+        var fused = await this.recall.SearchAsync(new HistorySearchRequest { Query = "trip budget", Rerank = RerankRequest.Off }, CancellationToken.None);
+        var promoted = fused.Hits[1].Lines[0].Text;
+        this.reranker.Failure = new RerankerException("The reranker is unreachable.");
+        var first = await this.SearchAsync(limit: 1);
+        this.reranker.Failure = null;
+        this.reranker.Score = (_, document) => document == promoted ? 1 : 0;
+
+        var second = await this.SearchAsync(limit: 1, cursor: HistoryCursorCodec.Encode(first.Binding, first.Next));
+
+        Assert.Equal(fused.Hits[0].FirstMsgId, first.Hits[0].FirstMsgId);
+        Assert.Equal(fused.Hits[1].FirstMsgId, second.Hits[0].FirstMsgId);
+        Assert.Single(this.reranker.Calls);
+    }
+
+    [Fact]
     public async Task CursorFromAnUnrerankedSearch_IsStaleWhenRerankingApplies()
     {
         await this.SeedAsync();

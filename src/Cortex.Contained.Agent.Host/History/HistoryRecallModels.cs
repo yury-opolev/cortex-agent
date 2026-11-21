@@ -71,7 +71,12 @@ public enum HistoryMatchKind
 /// <param name="TailSkip">Unindexed-tail hits already returned (relevance).</param>
 /// <param name="AfterTs">Canonical timestamp of the last returned message (time order).</param>
 /// <param name="AfterId">Id of the last returned message (time order).</param>
-public sealed record HistoryCursorPosition(int IndexOffset, int TailSkip, string? AfterTs, long AfterId)
+/// <param name="RerankHead">
+/// Relevance with reranking: null before the first page decided, empty when the fused order was kept,
+/// else the reranked head as segment ids (best first). Later pages reuse it, so paging never repeats or
+/// skips a hit when the reranker answers differently (or fails) on another page.
+/// </param>
+public sealed record HistoryCursorPosition(int IndexOffset, int TailSkip, string? AfterTs, long AfterId, IReadOnlyList<long>? RerankHead = null)
 {
     /// <summary>The start of a result stream.</summary>
     public static HistoryCursorPosition Start { get; } = new(0, 0, null, 0);

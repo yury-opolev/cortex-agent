@@ -165,14 +165,17 @@ public sealed partial class HistoryRecallService
             ranked = Rank(includeEchoes: true); // Only echoes match: show them rather than nothing.
         }
 
-        // Reranking (§4.3) reorders the head of the fused list; every page recomputes the same order.
+        // Reranking (§4.3) reorders the head of the fused list. Page 1 decides the head order (or that the fused order
+        // stays) and the cursor carries it, so later pages never depend on the reranker answering the same way again.
         var order = ranked.Order;
         var rerankScores = new Dictionary<long, double>();
         RerankOutcome? rerankOutcome = null;
         string? rerankNote = null;
+        IReadOnlyList<long>? rerankHead = null;
         if (rerank is not null)
         {
-            (order, rerankOutcome, rerankNote, rerankScores) = await this.RerankAsync(request.Query, ranked.Order, Rows, rerank, position, cancellationToken).ConfigureAwait(false);
+            (order, rerankOutcome, rerankNote, rerankScores, rerankHead) =
+                await this.RerankAsync(request.Query, ranked.Order, Rows, rerank, position, cancellationToken).ConfigureAwait(false);
         }
 
         var hits = new List<HistoryHit>();
@@ -197,7 +200,7 @@ public sealed partial class HistoryRecallService
                 HistoryHitSource.Indexed,
                 echoOnly ? score * 0.5 : score,
                 echoOnly,
-                new HistoryCursorPosition(offset, tailHits.Count, null, 0),
+                new HistoryCursorPosition(offset, tailHits.Count, null, 0, rerankHead),
                 segment.MsgIds)
             {
                 MatchedBy = keyword.ContainsKey(segId) && dense.ContainsKey(segId) ? HistoryMatchKind.Both
@@ -211,7 +214,7 @@ public sealed partial class HistoryRecallService
         {
             Hits = hits,
             HasMore = offset < order.Count || tailNext < tailHits.Count,
-            Next = new HistoryCursorPosition(offset, tailNext, null, 0),
+            Next = new HistoryCursorPosition(offset, tailNext, null, 0, rerankHead),
             Unavailable = keywordMissing + denseMissing,
             CollapsedDuplicates = ranked.Collapsed,
             TopSimilarity = bestChunk.Values.Where(h => dense.ContainsKey(h.SegId)).Select(h => (double?)h.Score).Max() ?? 0,
@@ -225,9 +228,11 @@ public sealed partial class HistoryRecallService
     /// Reorders the first <see cref="RerankBudget.TopN"/> fused segments by reranker relevance, using each
     /// segment's shown rows (the verified matching lines) as raw text. Runs inside the read lease on the
     /// verified snapshot, bounded by the stage's timeout, so a purge waits at most that long and deleted
-    /// text is never sent. A page that starts after the reranked head keeps the fused order without a call.
+    /// text is never sent. The first page decides the head order and returns it as the cursor's
+    /// <see cref="HistoryCursorPosition.RerankHead"/> (empty when the fused order stays); later pages
+    /// apply that stored order without calling the reranker, so pages neither repeat nor skip hits.
     /// </summary>
-    private async Task<(List<long> Order, RerankOutcome? Outcome, string Note, Dictionary<long, double> Scores)> RerankAsync(
+    private async Task<(List<long> Order, RerankOutcome? Outcome, string Note, Dictionary<long, double> Scores, IReadOnlyList<long> Head)> RerankAsync(
         string query,
         List<long> fused,
         Func<long, IReadOnlyList<MessageRecord>> rows,
@@ -238,20 +243,33 @@ public sealed partial class HistoryRecallService
         var window = Math.Min(budget.TopN, fused.Count);
         if (this.reranker is null)
         {
-            return (fused, null, "skipped: no reranker is configured", []);
+            return (fused, null, "skipped: no reranker is configured", [], []);
+        }
+
+        if (position.RerankHead is { } stored)
+        {
+            var known = fused.ToHashSet();
+            var head = stored.Where(known.Contains).Distinct().ToList();
+            var headSet = head.ToHashSet();
+            var order = head.Concat(fused.Where(id => !headSet.Contains(id))).ToList();
+            var note = head.Count == 0 ? "skipped: fused order kept, as on the first page"
+                : window > 0 && position.IndexOffset >= window ? string.Create(CultureInfo.InvariantCulture, $"not used: this page starts after the reranked top {window}")
+                : string.Create(CultureInfo.InvariantCulture, $"on (top {head.Count} reordered on the first page; same order kept)");
+            return (order, null, note, [], stored);
         }
 
         if (window > 0 && position.IndexOffset >= window)
         {
-            return (fused, null, string.Create(CultureInfo.InvariantCulture, $"not used: this page starts after the reranked top {window}"), []);
+            return (fused, null, string.Create(CultureInfo.InvariantCulture, $"not used: this page starts after the reranked top {window}"), [], []);
         }
 
-        var head = fused.Take(window).ToList();
-        var candidates = head.Select(segId => (IReadOnlyList<string>)rows(segId).Select(HistoryRowText.DisplayContent).ToList()).ToList();
+        var candidateIds = fused.Take(window).ToList();
+        var candidates = candidateIds.Select(segId => (IReadOnlyList<string>)rows(segId).Select(HistoryRowText.DisplayContent).ToList()).ToList();
         var outcome = await this.reranker.RerankAsync(query, candidates, budget, cancellationToken).ConfigureAwait(false);
-        var order = outcome.Order.Select(i => head[i]).Concat(fused.Skip(window)).ToList();
-        var scores = outcome.Scores.ToDictionary(s => head[s.Key], s => s.Value);
-        return (order, outcome, outcome.Note, scores);
+        var reordered = outcome.Order.Select(i => candidateIds[i]).Concat(fused.Skip(window)).ToList();
+        var scores = outcome.Scores.ToDictionary(s => candidateIds[s.Key], s => s.Value);
+        IReadOnlyList<long> decided = outcome.Status == RerankStatus.Applied ? reordered.Take(window).ToList() : [];
+        return (reordered, outcome, outcome.Note, scores, decided);
     }
 
     /// <summary>

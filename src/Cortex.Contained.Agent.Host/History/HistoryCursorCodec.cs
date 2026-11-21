@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Cortex.Contained.Agent.Host.History;
 
@@ -46,7 +47,8 @@ public static class HistoryCursorCodec
     /// <summary>Encodes a cursor.</summary>
     public static string Encode(string binding, HistoryCursorPosition position)
     {
-        var payload = JsonSerializer.SerializeToUtf8Bytes(new CursorPayload(binding, position.IndexOffset, position.TailSkip, position.AfterTs, position.AfterId));
+        var payload = JsonSerializer.SerializeToUtf8Bytes(
+            new CursorPayload(binding, position.IndexOffset, position.TailSkip, position.AfterTs, position.AfterId, position.RerankHead?.ToArray()));
         return Base64Url.EncodeToString(payload);
     }
 
@@ -64,7 +66,7 @@ public static class HistoryCursorCodec
             }
 
             binding = payload.B;
-            position = new HistoryCursorPosition(payload.O, payload.T, payload.Ts, payload.Id);
+            position = new HistoryCursorPosition(payload.O, payload.T, payload.Ts, payload.Id, payload.R);
             return true;
         }
         catch (FormatException)
@@ -77,5 +79,6 @@ public static class HistoryCursorCodec
         }
     }
 
-    private sealed record CursorPayload(string? B, int O, int T, string? Ts, long Id);
+    private sealed record CursorPayload(
+        string? B, int O, int T, string? Ts, long Id, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long[]? R = null);
 }
