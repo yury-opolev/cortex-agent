@@ -38,7 +38,9 @@ The gate runs every `tests/*.Tests` project — currently 10, ~4200 tests.
 The live-LLM **evaluation** suites (`Cortex.Contained.Evals`, `Cortex.Contained.ScenarioEvals`) are
 **excluded by default**: they call real providers and require `EVAL_LLM_API_KEY` /
 `SCENARIO_EVAL_BRIDGE_PASSWORD`, so on a machine without those they fail for environmental reasons
-and would block every deploy. Pass `-IncludeEvals` to run them where the credentials exist.
+and would block every deploy. Pass `-IncludeEvals` to run them where the credentials exist. The
+memory evals also need an embeddings endpoint: set `EVAL_OLLAMA_ENDPOINT` (the embeddings container
+publishes no port; see `tests/Cortex.Contained.Evals/README.md` and `docker-compose.eval.yml`).
 
 Selecting `*.Tests` also keeps `Cortex.Contained.Evals.Setup` — a UI app that lives under `tests/`
 but is not a test project — out of the gate, and means a newly added unit-test project is picked up
