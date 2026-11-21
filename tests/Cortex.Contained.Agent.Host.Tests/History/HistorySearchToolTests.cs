@@ -113,6 +113,24 @@ public sealed class HistorySearchToolTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task ExecuteAsync_SingleHitLargerThanCap_CapsItsLinesAndFlagsTruncation()
+    {
+        this.h.Options = new HistoryOptions { Enabled = true, TimeZone = "UTC", SearchTokenCap = 300 };
+        for (var i = 0; i < 12; i++)
+        {
+            await this.h.SayAsync("granola " + new string('x', 400) + $" {i}", i);
+        }
+
+        await this.IndexAsync();
+
+        var result = await this.RunAsync(new { query = "granola", limit = 8 });
+
+        Assert.True(result.Content.Length <= 300 * 3.5 + 200, $"length {result.Content.Length}");
+        Assert.Contains("truncated=true", result.Content, StringComparison.Ordinal);
+        Assert.Contains("more lines omitted", result.Content, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_NoHits_StatesCoverageLimitedAbsence()
     {
         await this.IndexAsync();
