@@ -57,9 +57,10 @@ public static class HistoryLabels
     };
 
     /// <summary>True for the recall tool family (<c>history_*</c>).</summary>
-    public static bool IsRecallTool(string toolName) =>
-        toolName.StartsWith("history_", StringComparison.OrdinalIgnoreCase);
+    public static bool IsRecallTool(string toolName) => ToolCallSummary.IsRecallTool(toolName);
 
+    // Per-turn (§9.2): a row carries either a history_* tool entry itself or the synthetic turn
+    // marker added to every other assistant row of a turn that used one (which also matches here).
     private static bool UsedRecallTool(string? toolCallsJson) =>
         toolCallsJson is not null && ToolCallSummary.ParseJson(toolCallsJson).Any(e => IsRecallTool(e.Name));
 }

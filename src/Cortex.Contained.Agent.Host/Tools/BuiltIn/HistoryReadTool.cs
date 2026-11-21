@@ -235,7 +235,7 @@ internal sealed class HistoryReadTool : IAgentTool
 
             if (string.Equals(record.Role, "assistant", StringComparison.OrdinalIgnoreCase) && record.ToolCalls is not null)
             {
-                var entries = ToolCallSummary.ParseJson(record.ToolCalls);
+                var entries = ToolCallSummary.ParseJson(record.ToolCalls).Where(e => !ToolCallSummary.IsRecallTurnMarker(e)).ToList();
                 if (entries.Count > 0)
                 {
                     sb.AppendLine(ToolCallSummary.RenderBlock(entries));

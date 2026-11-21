@@ -1,4 +1,5 @@
 using Cortex.Contained.Agent.Host.History;
+using Cortex.Contained.Agent.Host.Storage;
 using Cortex.Contained.Contracts.Hub;
 using static Cortex.Contained.Agent.Host.Tests.History.HistoryRows;
 
@@ -32,6 +33,16 @@ public class HistoryLabelsTests
         var row = Row(1, Day, "Søren sent a photo\n[image attached: image/png]", role: "assistant", toolCalls: ToolCalls("memory_search"));
 
         Assert.Equal("soren sent a photo\n[attachment:image/png]\nmemory_search", HistoryRowText.IndexedBody(row));
+    }
+
+    [Fact]
+    public void IndexedBody_IgnoresRecallTurnMarker()
+    {
+        var marker = ToolCallSummary.SerializeJson([ToolCallSummary.CreateRecallTurnMarker()]);
+        var row = Row(1, Day, "You said X", role: "assistant", toolCalls: marker);
+
+        Assert.Equal(HistoryLineLabel.RecallEcho, HistoryLabels.For(row));
+        Assert.Equal("you said x", HistoryRowText.IndexedBody(row));
     }
 
     [Fact]

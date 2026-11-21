@@ -14,7 +14,10 @@ public static partial class HistoryRowText
     {
         ArgumentNullException.ThrowIfNull(row);
         var content = DisplayContent(row);
-        var toolNames = ToolCallSummary.ParseJson(row.ToolCalls).Select(e => e.Name).ToList();
+        var toolNames = ToolCallSummary.ParseJson(row.ToolCalls)
+            .Where(e => !ToolCallSummary.IsRecallTurnMarker(e))
+            .Select(e => e.Name)
+            .ToList();
         return TextFolder.Fold(toolNames.Count == 0 ? content : content + "\n" + string.Join(' ', toolNames));
     }
 
