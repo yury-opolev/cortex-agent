@@ -26,12 +26,61 @@ public sealed partial class HistoryIndexDatabase : IDisposable
     /// <summary>Full path of the generation file.</summary>
     public string Path { get; }
 
-    /// <summary>Creates a new generation file with the given initial state, encrypted when <paramref name="password"/> is set.</summary>
+    /// <summary>
+    /// Creates a new generation file with the given initial state, encrypted when <paramref name="password"/> is set.
+    /// The file is built under a temporary name (schema and state in one transaction) and renamed into place,
+    /// so a crash never leaves a state-less file under the generation name.
+    /// </summary>
     public static HistoryIndexDatabase Create(string path, ProjectorState state, string? password = null)
     {
         ArgumentNullException.ThrowIfNull(state);
-        var database = new HistoryIndexDatabase(path, OpenWriter(path, SqliteOpenMode.ReadWriteCreate, password), password);
-        using var cmd = database.writer.CreateCommand();
+        var temp = path + CreatingSuffix;
+        DeleteWithSidecars(temp);
+        try
+        {
+            using (var creator = OpenWriter(temp, SqliteOpenMode.ReadWriteCreate, password))
+            {
+                WriteSchemaAndState(creator, state);
+                using var checkpoint = creator.CreateCommand();
+                checkpoint.CommandText = "PRAGMA wal_checkpoint(TRUNCATE);";
+                checkpoint.ExecuteNonQuery();
+            }
+
+            DeleteSidecars(temp);
+            File.Move(temp, path, overwrite: false);
+        }
+        catch
+        {
+            DeleteWithSidecars(temp);
+            throw;
+        }
+
+        return Open(path, password);
+    }
+
+    /// <summary>Suffix of a generation file that is still being created (never a servable generation).</summary>
+    internal const string CreatingSuffix = ".creating";
+
+    /// <summary>Unlinks <paramref name="path"/> and its SQLite sidecar files, ignoring missing ones.</summary>
+    internal static void DeleteWithSidecars(string path)
+    {
+        File.Delete(path);
+        DeleteSidecars(path);
+    }
+
+    private static void DeleteSidecars(string path)
+    {
+        foreach (var suffix in new[] { "-wal", "-shm", "-journal" })
+        {
+            File.Delete(path + suffix);
+        }
+    }
+
+    private static void WriteSchemaAndState(SqliteConnection connection, ProjectorState state)
+    {
+        using var transaction = connection.BeginTransaction();
+        using var cmd = connection.CreateCommand();
+        cmd.Transaction = transaction;
         cmd.CommandText = $"""
             CREATE TABLE segments (
               SegId        INTEGER PRIMARY KEY,
@@ -112,7 +161,7 @@ public sealed partial class HistoryIndexDatabase : IDisposable
         cmd.Parameters.AddWithValue("@coverage", state.CoverageJson);
         cmd.Parameters.AddWithValue("@applied", state.AppliedPurgeGeneration);
         cmd.ExecuteNonQuery();
-        return database;
+        transaction.Commit();
     }
 
     /// <summary>Opens an existing generation file (throws <see cref="SqliteException"/> code 26 when the key does not fit).</summary>

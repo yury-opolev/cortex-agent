@@ -102,21 +102,37 @@ public sealed partial class HistoryProjector : IDisposable
                 meta = await snapshot.ReadMetaAsync(cancellationToken).ConfigureAwait(false);
             }
 
+            if (!this.generations.DeleteInterruptedCreations())
+            {
+                this.LogInterruptedCreationDeferred();
+            }
+
             var currentGen = this.generations.ReadCurrent();
             foreach (var gen in this.generations.List())
             {
                 HistoryIndexDatabase database;
+                ProjectorState state;
                 try
                 {
                     database = this.generations.Open(gen);
+                    try
+                    {
+                        state = database.ReadState();
+                    }
+                    catch
+                    {
+                        database.Dispose();
+                        throw;
+                    }
                 }
-                catch (Microsoft.Data.Sqlite.SqliteException ex) when (ex.SqliteErrorCode == 26)
+                catch (Exception ex) when (ex is Microsoft.Data.Sqlite.SqliteException or InvalidOperationException)
                 {
-                    // Plaintext from before encryption at rest, or another key: unusable, so erased and rebuilt.
+                    // Plaintext from before encryption at rest, another key, or a file a crash left without state: unusable, so erased and rebuilt.
+                    this.LogGenerationUnreadable(gen, ex.Message);
                     await this.DeleteTrackedAsync(gen, cancellationToken).ConfigureAwait(false);
                     continue;
                 }
-                var state = database.ReadState();
+
                 if (gen == currentGen && ProjectorStartupDecision.RebuildReason(meta, state, fingerprint) is null)
                 {
                     this.current = database;
@@ -670,6 +686,12 @@ public sealed partial class HistoryProjector : IDisposable
         {
         }
     }
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "History index generation {Generation} is unreadable and is retired: {Error}")]
+    private partial void LogGenerationUnreadable(long generation, string error);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Leftover files of an interrupted history index creation could not be removed yet")]
+    private partial void LogInterruptedCreationDeferred();
 
     [LoggerMessage(Level = LogLevel.Information, Message = "History index batch fenced by a concurrent purge (attempt {Attempt}); recomputing")]
     private partial void LogPublicationFenced(int attempt);

@@ -36,6 +36,17 @@ public sealed class HistoryIndexDatabaseTests : IDisposable
     }
 
     [Fact]
+    public void Create_FailsMidway_LeavesNoGenerationFileBehind()
+    {
+        var failing = new ProjectorState(2, 0, null!, 0, "fp", false, "[]");
+
+        Assert.ThrowsAny<Exception>(() => this.generations.Create(2, failing));
+
+        Assert.Equal([1L], this.generations.List());
+        Assert.Empty(Directory.EnumerateFiles(this.dir, "*creating*"));
+    }
+
+    [Fact]
     public void Apply_UpdatesCheckpointCoverageAndVocabulary()
     {
         this.Seed();

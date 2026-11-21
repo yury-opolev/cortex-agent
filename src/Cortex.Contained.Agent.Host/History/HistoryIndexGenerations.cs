@@ -70,6 +70,25 @@ public sealed class HistoryIndexGenerations
     /// <summary>The next unused generation number.</summary>
     public long Next() => Math.Max(this.List().DefaultIfEmpty(0).Max(), this.ReadCurrent() ?? 0) + 1;
 
+    /// <summary>Unlinks files of generations whose creation was interrupted (never servable); returns true when none remain.</summary>
+    public bool DeleteInterruptedCreations()
+    {
+        var clean = true;
+        foreach (var file in System.IO.Directory.EnumerateFiles(this.Directory, Prefix + "*" + HistoryIndexDatabase.CreatingSuffix + "*"))
+        {
+            try
+            {
+                File.Delete(file);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                clean = false;
+            }
+        }
+
+        return clean;
+    }
+
     /// <summary>Unlinks a generation's database, <c>-wal</c> and <c>-shm</c>. Returns true when all are gone.</summary>
     public bool Delete(long generation)
     {

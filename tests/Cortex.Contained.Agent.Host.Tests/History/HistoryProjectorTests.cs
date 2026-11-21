@@ -160,6 +160,49 @@ public sealed class HistoryProjectorTests : IAsyncDisposable
         Assert.Equal(1, reader.DocumentFrequency("second"));
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Initialize_GenerationFileWithoutState_IsRetiredAndRebuilt(bool emptyFile)
+    {
+        await this.h.SayAsync("survivor", 0);
+        var partial = this.h.Generations.PathFor(1);
+        if (emptyFile)
+        {
+            await File.WriteAllBytesAsync(partial, []);
+        }
+        else
+        {
+            await using var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={partial};Pooling=False");
+            await connection.OpenAsync();
+            await using var cmd = connection.CreateCommand();
+            cmd.CommandText = "CREATE TABLE segments (SegId INTEGER PRIMARY KEY);";
+            await cmd.ExecuteNonQueryAsync();
+        }
+
+        await this.h.Projector.InitializeAsync(CancellationToken.None);
+        await this.h.CatchUpAsync();
+
+        Assert.Single(this.Segments());
+        Assert.True(this.h.Projector.Current!.ReadState().BuildComplete);
+        Assert.Equal([this.h.Projector.Current.ReadState().Generation], this.h.Generations.List());
+    }
+
+    [Fact]
+    public async Task Initialize_LeftoverCreateTempFiles_AreRemovedAndRebuildSucceeds()
+    {
+        await this.h.SayAsync("survivor", 0);
+        var temp = this.h.Generations.PathFor(1) + ".creating";
+        await File.WriteAllTextAsync(temp, "half-written");
+        await File.WriteAllTextAsync(temp + "-wal", "half-written");
+
+        await this.h.Projector.InitializeAsync(CancellationToken.None);
+        await this.h.CatchUpAsync();
+
+        Assert.Empty(Directory.EnumerateFiles(this.h.Generations.Directory, "*.creating*"));
+        Assert.Single(this.Segments());
+    }
+
     [Fact]
     public async Task EraseAsync_DuringInProgressBuild_DeletesBuildFile()
     {
