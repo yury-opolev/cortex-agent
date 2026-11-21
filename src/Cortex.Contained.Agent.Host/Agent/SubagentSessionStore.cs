@@ -1037,6 +1037,46 @@ public sealed partial class SubagentSessionStore : SqliteStoreBase
         }
     }
 
+    /// <summary>
+    /// Erasure (§11): deletes terminal tasks whose run window <c>[created_at, completed_at]</c>
+    /// overlaps <c>[from, to]</c> (optionally only for <paramref name="parentChannel"/>), with
+    /// <c>secure_delete</c> and a truncating WAL checkpoint. Active overlapping tasks are left
+    /// alone and counted so the caller can retry once they finish.
+    /// </summary>
+    public (int Deleted, int ActiveSkipped) PurgeOverlapping(DateTimeOffset? from, DateTimeOffset to, string? parentChannel)
+    {
+        const string overlap = """
+            created_at <= $to
+              AND ($from IS NULL OR completed_at IS NULL OR completed_at >= $from)
+              AND ($channel IS NULL OR parent_channel = $channel)
+            """;
+
+        lock (this.syncLock)
+        {
+            this.ExecuteNonQuery("PRAGMA secure_delete=ON");
+
+            using var count = this.Connection.CreateCommand();
+            count.CommandText = $"SELECT COUNT(*) FROM subagent_tasks WHERE {overlap} AND state NOT IN ('completed', 'failed', 'cancelled')";
+            Bind(count, from, to, parentChannel);
+            var active = Convert.ToInt32(count.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
+
+            using var delete = this.Connection.CreateCommand();
+            delete.CommandText = $"DELETE FROM subagent_tasks WHERE {overlap} AND state IN ('completed', 'failed', 'cancelled')";
+            Bind(delete, from, to, parentChannel);
+            var deleted = delete.ExecuteNonQuery();
+
+            this.ExecuteNonQuery("PRAGMA wal_checkpoint(TRUNCATE)");
+            return (deleted, active);
+        }
+
+        static void Bind(SqliteCommand cmd, DateTimeOffset? from, DateTimeOffset to, string? channel)
+        {
+            cmd.Parameters.AddWithValue("$from", from is { } f ? FormatDto(f) : DBNull.Value);
+            cmd.Parameters.AddWithValue("$to", FormatDto(to));
+            cmd.Parameters.AddWithValue("$channel", (object?)channel ?? DBNull.Value);
+        }
+    }
+
     /// <inheritdoc/>
     public override void Dispose()
     {
