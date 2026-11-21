@@ -21,6 +21,12 @@ public interface IStorageState
 
     /// <summary>Completes once the store is open (waits for the key without a time limit).</summary>
     Task WhenOpenAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// True when a request would not have to wait for the storage key (and the store is not locked
+    /// for good). Best-effort writers check it so they skip instead of stalling a tool call.
+    /// </summary>
+    bool CanServeWithoutWaiting { get; }
 }
 
 /// <summary>Encryption at rest for <c>messages.db</c> (D4).</summary>

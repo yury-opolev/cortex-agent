@@ -1,3 +1,4 @@
+using Cortex.Contained.Agent.Host.Storage;
 using Cortex.Contained.Agent.Host.Tools;
 using Cortex.Contained.Contracts.Llm;
 
@@ -23,12 +24,14 @@ public sealed partial class ToolEventRecorder : IToolEventRecorder
     private readonly IEventLog log;
     private readonly ToolEventPayloads payloads;
     private readonly ILogger<ToolEventRecorder> logger;
+    private readonly IStorageState? storage;
 
-    public ToolEventRecorder(IEventLog log, ToolEventPayloads payloads, ILogger<ToolEventRecorder> logger)
+    public ToolEventRecorder(IEventLog log, ToolEventPayloads payloads, ILogger<ToolEventRecorder> logger, IStorageState? storage = null)
     {
         this.log = log;
         this.payloads = payloads;
         this.logger = logger;
+        this.storage = storage;
     }
 
     /// <inheritdoc />
@@ -59,6 +62,13 @@ public sealed partial class ToolEventRecorder : IToolEventRecorder
 
     private async Task<string?> AppendAsync(EventDraft draft, string toolName, CancellationToken cancellationToken)
     {
+        // Best effort: never make a tool call wait for a storage key that has not arrived.
+        if (this.storage is { CanServeWithoutWaiting: false })
+        {
+            this.LogRecordSkipped(draft.Type, toolName);
+            return null;
+        }
+
         try
         {
             return await this.log.AppendAsync(draft, cancellationToken).ConfigureAwait(false);
@@ -69,6 +79,9 @@ public sealed partial class ToolEventRecorder : IToolEventRecorder
             return null;
         }
     }
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Skipped recording {EventType} for tool {ToolName}: storage is not open")]
+    private partial void LogRecordSkipped(string eventType, string toolName);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Could not record {EventType} for tool {ToolName}: {Error}")]
     private partial void LogRecordFailed(string eventType, string toolName, string error);

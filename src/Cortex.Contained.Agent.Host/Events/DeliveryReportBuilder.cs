@@ -1,3 +1,4 @@
+using Cortex.Contained.Agent.Host.Storage;
 using Cortex.Contained.Agent.Host.Tools;
 
 namespace Cortex.Contained.Agent.Host.Events;
@@ -7,11 +8,13 @@ public sealed partial class DeliveryReportBuilder
 {
     private readonly IEventLog log;
     private readonly ILogger<DeliveryReportBuilder> logger;
+    private readonly IStorageState? storage;
 
-    public DeliveryReportBuilder(IEventLog log, ILogger<DeliveryReportBuilder> logger)
+    public DeliveryReportBuilder(IEventLog log, ILogger<DeliveryReportBuilder> logger, IStorageState? storage = null)
     {
         this.log = log;
         this.logger = logger;
+        this.storage = storage;
     }
 
     /// <summary>
@@ -21,7 +24,7 @@ public sealed partial class DeliveryReportBuilder
     public async Task<DeliveryReport> BuildAsync(ProactiveMessageRecord proactive, RunProvenance? run, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(proactive);
-        if (proactive.OperationId is { } operationId)
+        if (proactive.OperationId is { } operationId && this.storage is not { CanServeWithoutWaiting: false })
         {
             try
             {

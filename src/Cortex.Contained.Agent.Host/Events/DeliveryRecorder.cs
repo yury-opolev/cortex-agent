@@ -1,3 +1,4 @@
+using Cortex.Contained.Agent.Host.Storage;
 using System.Text.Json.Nodes;
 
 namespace Cortex.Contained.Agent.Host.Events;
@@ -22,12 +23,14 @@ public sealed partial class DeliveryRecorder
     private readonly IEventLog log;
     private readonly TimeProvider time;
     private readonly ILogger<DeliveryRecorder> logger;
+    private readonly IStorageState? storage;
 
-    public DeliveryRecorder(IEventLog log, TimeProvider time, ILogger<DeliveryRecorder> logger)
+    public DeliveryRecorder(IEventLog log, TimeProvider time, ILogger<DeliveryRecorder> logger, IStorageState? storage = null)
     {
         this.log = log;
         this.time = time;
         this.logger = logger;
+        this.storage = storage;
     }
 
     /// <summary>Records <c>delivery_attempted</c> to <paramref name="channelId"/>; call before the send.</summary>
@@ -37,6 +40,11 @@ public sealed partial class DeliveryRecorder
     public async Task<DeliveryAttempt> AttemptAsync(string channelId, string via, CancellationToken cancellationToken)
     {
         var attempt = new DeliveryAttempt(EventIds.NewOperationId(), this.time.GetUtcNow());
+        if (this.StorageNotReady(EventTypes.DeliveryAttempted, attempt.OperationId))
+        {
+            return attempt;
+        }
+
         var run = RunScope.Current;
         try
         {
@@ -99,6 +107,11 @@ public sealed partial class DeliveryRecorder
 
     private async Task AppendTerminalAsync(DeliveryAttempt attempt, string channelId, string type, JsonObject payload, CancellationToken cancellationToken)
     {
+        if (this.StorageNotReady(type, attempt.OperationId))
+        {
+            return;
+        }
+
         try
         {
             await this.log.AppendAsync(
@@ -117,6 +130,21 @@ public sealed partial class DeliveryRecorder
             this.LogRecordFailed(type, attempt.OperationId, ex.Message);
         }
     }
+
+    // Best effort: a send never waits for a storage key that has not arrived.
+    private bool StorageNotReady(string eventType, string operationId)
+    {
+        if (this.storage is not { CanServeWithoutWaiting: false })
+        {
+            return false;
+        }
+
+        this.LogRecordSkipped(eventType, operationId);
+        return true;
+    }
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Skipped recording {EventType} for send {OperationId}: storage is not open")]
+    private partial void LogRecordSkipped(string eventType, string operationId);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Could not record {EventType} for send {OperationId}: {Error}")]
     private partial void LogRecordFailed(string eventType, string operationId, string error);

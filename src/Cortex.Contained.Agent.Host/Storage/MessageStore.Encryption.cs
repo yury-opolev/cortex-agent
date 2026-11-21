@@ -20,6 +20,12 @@ public sealed partial class MessageStore : IStorageState
     public StorageState State => this.state;
 
     /// <inheritdoc />
+    public bool CanServeWithoutWaiting =>
+        this.encryption is not { } encryption
+        || this.state == StorageState.Open
+        || (this.state == StorageState.AwaitingKey && encryption.Keys.IsAvailable);
+
+    /// <inheritdoc />
     public async Task WhenOpenAsync(CancellationToken cancellationToken)
     {
         if (this.encryption is { } encryption)

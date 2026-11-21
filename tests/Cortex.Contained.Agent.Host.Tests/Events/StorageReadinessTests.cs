@@ -1,5 +1,10 @@
+using Cortex.Contained.Agent.Host.Agent;
+using Cortex.Contained.Agent.Host.Events;
 using Cortex.Contained.Agent.Host.History;
 using Cortex.Contained.Agent.Host.Storage;
+using Cortex.Contained.Agent.Host.Tools;
+using Cortex.Contained.Contracts.Hub;
+using Cortex.Contained.Contracts.Llm;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -96,5 +101,47 @@ public sealed class StorageReadinessTests : IAsyncDisposable
 
         Assert.True(status.Snapshot().Halted);
         Assert.Equal(StorageState.Failed, wrong.State);
+    }
+
+    [Fact]
+    public async Task ToolExecution_StoreAwaitingKey_CompletesWithoutWaitingForTheKey()
+    {
+        var tool = Substitute.For<IAgentTool>();
+        tool.Name.Returns("date_time");
+        tool.ExecuteAsync(Arg.Any<string>(), Arg.Any<ToolExecutionContext>(), Arg.Any<CancellationToken>()).Returns(AgentToolResult.Ok("now"));
+        var secrets = new KnownSecrets();
+        secrets.Load(new LlmCredentials { Providers = [] });
+        var registry = new ToolRegistry(
+            [tool],
+            new ActiveChannelStore(),
+            NullLogger<ToolRegistry>.Instance,
+            eventRecorder: new ToolEventRecorder(this.store, new ToolEventPayloads(secrets), NullLogger<ToolEventRecorder>.Instance, this.store));
+
+        AgentToolResult result;
+        using (RunScope.Begin(new RunProvenance("run_l", AuthorKinds.Main, null, "ch", null)))
+        {
+            result = await registry
+                .ExecuteAsync(new LlmToolCall { Id = "c1", Name = "date_time", Arguments = "{}" }, new ToolExecutionContext { ConversationId = "ch", ChannelId = "ch" }, CancellationToken.None)
+                .WaitAsync(TimeSpan.FromSeconds(5));
+        }
+
+        Assert.True(result.Success);
+        Assert.Null(result.EvidenceId);
+        Assert.Equal(StorageState.AwaitingKey, this.store.State);
+    }
+
+    [Fact]
+    public async Task DeliveryRecording_StoreAwaitingKey_ReturnsWithoutWaitingForTheKey()
+    {
+        var recorder = new DeliveryRecorder(this.store, TimeProvider.System, NullLogger<DeliveryRecorder>.Instance, this.store);
+        var builder = new DeliveryReportBuilder(this.store, NullLogger<DeliveryReportBuilder>.Instance, this.store);
+
+        var attempt = await recorder.AttemptAsync("discord-dm", "proactive", CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+        await recorder.AcknowledgedAsync(attempt, "discord-dm", delivered: true, messageRowId: null, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+        var report = await builder
+            .BuildAsync(new ProactiveMessageRecord { ChannelId = "discord-dm", Text = "x", OperationId = attempt.OperationId }, null, CancellationToken.None)
+            .WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.False(report.EvidenceAvailable);
     }
 }
