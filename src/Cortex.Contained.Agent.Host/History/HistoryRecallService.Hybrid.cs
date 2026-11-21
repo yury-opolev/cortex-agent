@@ -235,7 +235,12 @@ public sealed partial class HistoryRecallService
                 continue;
             }
 
-            var chunkMembers = bestChunk[segment.SegId].MsgIds.ToHashSet();
+            if (!bestChunk.TryGetValue(segment.SegId, out var best))
+            {
+                continue;
+            }
+
+            var chunkMembers = best.MsgIds.ToHashSet();
             var visible = members.Where(r => chunkMembers.Contains(r.Id) && filter.Admits(r, forTimeOrder: false)).ToList();
             if (visible.Count > 0)
             {

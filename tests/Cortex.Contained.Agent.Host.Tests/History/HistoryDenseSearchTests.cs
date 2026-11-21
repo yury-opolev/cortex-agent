@@ -96,6 +96,25 @@ public sealed class HistoryDenseSearchTests : IDisposable
     }
 
     [Fact]
+    public void SearchDense_ChannelReprojectedBetweenScanAndDetails_ReadsOneSnapshot()
+    {
+        this.Seed("a", 1, [Vec(1, 0), Vec(0.9f, 0.1f), Vec(0.8f, 0.2f)]);
+        using var reader = this.database.OpenReader();
+        reader.AfterDenseScanHook = () =>
+        {
+            // The projector replaces the channel's rows; INTEGER PRIMARY KEY ids are reused for different chunks.
+            var replacement = HistorySegmenter.Segment("a", [Row(500, Day, "replacement message", channel: "a")], Dense);
+            this.database.Apply(new IndexBatch(new Dictionary<string, IReadOnlyList<HistorySegment>> { ["a"] = replacement }));
+        };
+
+        var hits = reader.SearchDense(Vec(1, 0), new DenseFilter(null, null, null, false), 3, int8Threshold: 1, oversample: 4);
+
+        Assert.Equal([1L, 2L, 3L], hits.Select(h => h.MsgIds[0]));
+        using var after = this.database.OpenReader();
+        Assert.Equal([500L], after.ReadSegments("a").Select(s => s.FirstMsgId));
+    }
+
+    [Fact]
     public void SearchDense_AboveInt8Threshold_RescoredOrderMatchesFloat()
     {
         var random = new Random(11);

@@ -216,6 +216,20 @@ public sealed partial class HistoryIndexDatabase : IDisposable
             Password = this.password,
         }.ToString());
         connection.Open();
+        try
+        {
+            // One read transaction for the reader's whole life: state, keyword, dense scan and detail reads
+            // see a single WAL snapshot even while the projector re-projects chunk and segment rows.
+            using var begin = connection.CreateCommand();
+            begin.CommandText = "BEGIN; SELECT 1 FROM projector_state LIMIT 1;";
+            begin.ExecuteNonQuery();
+        }
+        catch
+        {
+            connection.Dispose();
+            throw;
+        }
+
         return new HistoryIndexReader(connection);
     }
 

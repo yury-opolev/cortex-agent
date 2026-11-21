@@ -20,6 +20,9 @@ public sealed record DenseHit(long ChunkId, long SegId, int Ordinal, IReadOnlyLi
 /// </summary>
 public sealed partial class HistoryIndexReader
 {
+    /// <summary>Test seam: runs between the dense scan and the chunk-detail reads (simulates a concurrent re-projection).</summary>
+    internal Action? AfterDenseScanHook { get; set; }
+
     /// <summary>Returns the <paramref name="k"/> chunks most similar to <paramref name="query"/>, best first.</summary>
     public IReadOnlyList<DenseHit> SearchDense(float[] query, DenseFilter filter, int k, int int8Threshold, int oversample)
     {
@@ -65,8 +68,10 @@ public sealed partial class HistoryIndexReader
             candidates.Add((item.ChunkId, item.SegId, item.Ordinal, priority.Score));
         }
 
+        this.AfterDenseScanHook?.Invoke();
         var details = this.ReadChunkDetails(candidates.Select(c => c.ChunkId).ToList(), withVectors: useInt8);
         return candidates
+            .Where(c => details.ContainsKey(c.ChunkId))
             .Select(c => new DenseHit(c.ChunkId, c.SegId, c.Ordinal, details[c.ChunkId].MsgIds,
                 useInt8 ? VectorMath.Dot(unit, details[c.ChunkId].Vector!) : c.Score))
             .OrderByDescending(h => h.Score)
