@@ -1,4 +1,5 @@
 using Cortex.Contained.Agent.Host.Agent;
+using Cortex.Contained.Agent.Host.History;
 using Cortex.Contained.Agent.Host.Tools;
 using Cortex.Contained.Contracts.Llm;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -475,6 +476,71 @@ public class SubagentRunnerTests
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────
+
+    private static ToolRegistry CreateHistoryGatedRegistry(HistoryToolsSwitch toolsSwitch) =>
+        new(
+            [
+                new FakeTool("date_time", "Gets date", "now"),
+                new FakeTool("history_search", "Search history", "x"),
+                new FakeTool("event_get", "Get event", "x"),
+                new FakeTool("history_read", "Read history", "x"),
+            ],
+            new ActiveChannelStore(),
+            NullLogger<ToolRegistry>.Instance,
+            [new HistoryToolsGate(toolsSwitch)]);
+
+    private static HistoryToolsSwitch CreateToolsSwitch(bool enabled)
+    {
+        var monitor = Substitute.For<Microsoft.Extensions.Options.IOptionsMonitor<HistoryOptions>>();
+        monitor.CurrentValue.Returns(new HistoryOptions { Enabled = enabled });
+        return new HistoryToolsSwitch(monitor);
+    }
+
+    private async Task<List<string>> RunAndCaptureToolNamesAsync(SubagentRunner runner)
+    {
+        _mockLlmClient.ClearReceivedCalls();
+        await runner.RunAsync("gpt-4o", "System", "Prompt", "conv-1", CancellationToken.None);
+        var request = (LlmCompletionRequest)_mockLlmClient.ReceivedCalls()
+            .First(c => c.GetMethodInfo().Name == nameof(ILlmClient.StreamCompleteAsync))
+            .GetArguments()[0]!;
+        return request.Tools!.Select(t => t.Name).ToList();
+    }
+
+    [Fact]
+    public async Task RunAsync_HistoryDisabled_HidesRecallToolsButKeepsHistoryRead()
+    {
+        _mockLlmClient.StreamCompleteAsync(Arg.Any<LlmCompletionRequest>(), Arg.Any<CancellationToken>())
+            .Returns(_ => SingleChunkStream("Result"));
+        var runner = new SubagentRunner(_mockLlmClient, CreateHistoryGatedRegistry(CreateToolsSwitch(false)), 0, NullLogger<SubagentRunner>.Instance);
+
+        var names = await RunAndCaptureToolNamesAsync(runner);
+
+        Assert.DoesNotContain("history_search", names);
+        Assert.DoesNotContain("event_get", names);
+        Assert.Contains("history_read", names);
+        Assert.Contains("date_time", names);
+    }
+
+    [Fact]
+    public async Task RunAsync_RecallToolsToggledAtRuntime_ReflectedInNextRun()
+    {
+        _mockLlmClient.StreamCompleteAsync(Arg.Any<LlmCompletionRequest>(), Arg.Any<CancellationToken>())
+            .Returns(_ => SingleChunkStream("Result"));
+        var toolsSwitch = CreateToolsSwitch(true);
+        var runner = new SubagentRunner(_mockLlmClient, CreateHistoryGatedRegistry(toolsSwitch), 0, NullLogger<SubagentRunner>.Instance);
+
+        var enabled = await RunAndCaptureToolNamesAsync(runner);
+        toolsSwitch.SetEnabled(false);
+        var disabled = await RunAndCaptureToolNamesAsync(runner);
+        toolsSwitch.SetEnabled(true);
+        var reenabled = await RunAndCaptureToolNamesAsync(runner);
+
+        Assert.Contains("history_search", enabled);
+        Assert.Contains("event_get", enabled);
+        Assert.DoesNotContain("history_search", disabled);
+        Assert.DoesNotContain("event_get", disabled);
+        Assert.Contains("history_search", reenabled);
+    }
 
     private static async IAsyncEnumerable<LlmStreamChunk> SingleChunkStream(string content)
     {

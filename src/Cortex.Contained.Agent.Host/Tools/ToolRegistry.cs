@@ -92,6 +92,26 @@ public sealed partial class ToolRegistry
     /// </summary>
     public IReadOnlyList<LlmToolDefinition> GetDefinitionsForConversation(string? conversationId)
     {
+        var hidden = this.CollectHiddenTools(conversationId);
+        return hidden.Count == 0
+            ? BuildToolDefinitions(this.AllTools())
+            : BuildToolDefinitions(this.AllTools().Where(t => !hidden.Contains(t.Name)));
+    }
+
+    /// <summary>
+    /// Get tool definitions excluding the specified tool names, and anything the registered
+    /// <see cref="IConversationToolGate"/>s hide for <paramref name="conversationId"/>.
+    /// Used by subagents to get all tools except the task tool (preventing recursion).
+    /// Not cached, so gate state (e.g. the history recall switch) is read on every call.
+    /// </summary>
+    public IReadOnlyList<LlmToolDefinition> GetDefinitionsExcluding(IReadOnlySet<string> excludedNames, string? conversationId = null)
+    {
+        var hidden = this.CollectHiddenTools(conversationId);
+        return BuildToolDefinitions(this.AllTools().Where(t => !excludedNames.Contains(t.Name) && !hidden.Contains(t.Name)));
+    }
+
+    private HashSet<string> CollectHiddenTools(string? conversationId)
+    {
         var hidden = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var gate in this.gates)
         {
@@ -101,18 +121,7 @@ public sealed partial class ToolRegistry
             }
         }
 
-        return hidden.Count == 0
-            ? BuildToolDefinitions(this.AllTools())
-            : BuildToolDefinitions(this.AllTools().Where(t => !hidden.Contains(t.Name)));
-    }
-
-    /// <summary>
-    /// Get tool definitions excluding the specified tool names.
-    /// Used by subagents to get all tools except the task tool (preventing recursion).
-    /// </summary>
-    public IReadOnlyList<LlmToolDefinition> GetDefinitionsExcluding(IReadOnlySet<string> excludedNames)
-    {
-        return BuildToolDefinitions(this.AllTools().Where(t => !excludedNames.Contains(t.Name)));
+        return hidden;
     }
 
     private static LlmToolDefinition[] BuildToolDefinitions(IEnumerable<IAgentTool> tools)
