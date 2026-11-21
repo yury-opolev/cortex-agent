@@ -76,22 +76,3 @@ public static class NearDuplicateCollapse
         return max;
     }
 }
-
-/// <summary>Optional recency prior (§4.2, ablated; off by default).</summary>
-public static class RecencyPrior
-{
-    /// <summary>
-    /// The multiplier for a segment that ended at <paramref name="segmentEnd"/>:
-    /// <c>1 + weight · 2^(−age / halfLife)</c>; exactly 1 when <paramref name="weight"/> is 0.
-    /// </summary>
-    public static double Multiplier(DateTimeOffset segmentEnd, DateTimeOffset now, double weight, double halfLifeDays)
-    {
-        if (weight <= 0)
-        {
-            return 1;
-        }
-
-        var ageDays = Math.Max(0, (now - segmentEnd).TotalDays);
-        return 1 + (weight * Math.Pow(0.5, ageDays / halfLifeDays));
-    }
-}

@@ -145,6 +145,21 @@ public sealed class HistoryRankingOptions
     /// <summary>Half-life of the recency prior in days.</summary>
     public double RecencyHalfLifeDays { get; set; } = 30;
 
+    /// <summary>The fusion parameters of the shared engine (<see cref="RankFusion"/>).</summary>
+    public FusionSettings ToFusionSettings() => new()
+    {
+        Method = this.Fusion switch
+        {
+            HistoryFusionMethod.WeightedRrf => FusionMethod.WeightedRrf,
+            HistoryFusionMethod.Convex => FusionMethod.Convex,
+            _ => FusionMethod.Rrf,
+        },
+        RrfK = this.RrfK,
+        KeywordWeight = this.KeywordWeight,
+        DenseWeight = this.DenseWeight,
+        ExactIntentKeywordBoost = this.ExactIntentKeywordBoost,
+    };
+
     /// <summary>Returns validation errors.</summary>
     public IReadOnlyList<string> Validate()
     {

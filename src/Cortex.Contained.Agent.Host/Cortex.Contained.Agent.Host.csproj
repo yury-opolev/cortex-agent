@@ -18,13 +18,17 @@
 
   <ItemGroup>
     <PackageReference Include="Cronos" />
-    <PackageReference Include="libstemmer.net" />
     <PackageReference Include="Microsoft.Data.Sqlite.Core" />
     <PackageReference Include="SQLite3MC.PCLRaw.bundle" />
     <PackageReference Include="Serilog.Extensions.Hosting" />
     <PackageReference Include="Serilog.Settings.Configuration" />
     <PackageReference Include="Serilog.Sinks.Console" />
     <PackageReference Include="Serilog.Sinks.File" />
+  </ItemGroup>
+
+  <!-- Engine-agnostic retrieval primitives shared with curated memory (MemoryMcp.Core). -->
+  <ItemGroup>
+    <Using Include="MemoryMcp.Core.Retrieval" />
   </ItemGroup>
 
 </Project>
