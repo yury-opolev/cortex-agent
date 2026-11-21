@@ -222,5 +222,19 @@ $manifest = [ordered]@{
     }
     builtAt   = (Get-Date).ToUniversalTime().ToString('o')
 }
+
+# The reranker sidecar is opt-in: only a machine that built it records it, together with an image pin
+# (the id the tag had at build time). Self-Update refuses to deploy when the tag no longer points at
+# the pinned image and gates the sidecar on running exactly it. Manifests without it behave as before.
+try {
+    & docker image inspect cortex-reranker:latest *> $null
+    if ($LASTEXITCODE -eq 0) {
+        $rerankerId = "$(& docker image inspect cortex-reranker:latest --format '{{.Id}}')".Trim()
+        if ($rerankerId) {
+            $manifest.images['cortex-reranker'] = 'cortex-reranker:latest'
+            $manifest['imageIds'] = [ordered]@{ 'cortex-reranker' = $rerankerId }
+        }
+    }
+} catch { }
 $manifest | ConvertTo-Json -Depth 5 | Set-Content -Path $manifestPath -Encoding UTF8
 Write-Host "Build manifest: $manifestPath" -ForegroundColor Green

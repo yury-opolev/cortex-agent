@@ -18,6 +18,10 @@
 .PARAMETER NoPrune
     Skip old Docker image cleanup.
 
+.PARAMETER WithReranker
+    Also build the cortex-reranker sidecar image even if this machine has not built it before
+    (once built, it is rebuilt on every run so Self-Update keeps pinning it).
+
 .PARAMETER CertThumbprint
     Optional exact thumbprint for MSIX signing. Overrides subject lookup. Defaults
     to the CORTEX_SIGNING_THUMBPRINT environment variable. When empty, Build-Launcher
@@ -36,6 +40,7 @@ param(
     [switch]$SkipDocker,
     [switch]$SkipMsix,
     [switch]$NoPrune,
+    [switch]$WithReranker,
     [string]$CertThumbprint = $env:CORTEX_SIGNING_THUMBPRINT,
     [string]$CertSubject = $env:CORTEX_SIGNING_SUBJECT
 )
@@ -61,6 +66,18 @@ if (-not $SkipDocker) {
     & (Join-Path $scriptDir "Build-VoiceIdImage.ps1") @buildArgs
     if ($LASTEXITCODE -ne 0) { throw "voice-id build failed" }
     Write-Host ""
+
+    # The reranker sidecar is opt-in (~4 GB of base image and model on first build): it is rebuilt
+    # (a cache hit unless its pins changed) once this machine has built it, so Self-Update keeps
+    # covering it, or when -WithReranker asks for it.
+    $hasReranker = $false
+    try { & docker image inspect cortex-reranker:latest *> $null; $hasReranker = ($LASTEXITCODE -eq 0) } catch { $hasReranker = $false }
+    if ($WithReranker -or $hasReranker) {
+        Write-Host "=== Building cortex-reranker Docker image ===" -ForegroundColor Cyan
+        & (Join-Path $scriptDir "Build-RerankerImage.ps1") @buildArgs
+        if ($LASTEXITCODE -ne 0) { throw "cortex-reranker build failed" }
+        Write-Host ""
+    }
 
     # NOTE: The unified TTS sidecar (uni-voices) is NOT built here. Its image is
     # large (all weights baked in) and is published to GHCR / pulled via

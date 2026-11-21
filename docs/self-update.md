@@ -46,16 +46,48 @@ automatically.
 
 ## What the deploy does (detached, automatic)
 
-1. re-verify the pinned manifest (sha256 + signature) — refuse on any mismatch;
+1. re-verify the pinned manifest (sha256 + signature) — refuse on any mismatch; when the manifest pins
+   the reranker image, its tag must still point at the recorded image id;
 2. `docker compose up -d --force-recreate cortex-agent voice-id` (new images);
 3. `Add-AppxPackage -ForceUpdateFromAnyVersion -ForceApplicationShutdown` (installs the MSIX; stops
    the old Bridge — this is what kills the coding session);
-4. relaunch the Bridge and poll `/health` until it reports the target version, healthy;
-5. **auto-rollback** to the last-known-good MSIX + previous image if it doesn't come back healthy;
+4. relaunch the Bridge and poll `/health` until it reports the target version, healthy; if the
+   reranker sidecar was running, also wait until the new Bridge has recreated it on the pinned
+   image and its healthcheck passes (see below);
+5. **auto-rollback** to the last-known-good MSIX + previous images (agent, and reranker when it was
+   running) if it doesn't come back healthy;
 6. write `artifacts/update-status.json` with the result.
 
 Check the outcome afterward: `Invoke-RestMethod http://localhost:5080/health` (new `version`) and
 `artifacts/update-status.json`.
+
+## The reranker sidecar (opt-in)
+
+`cortex-reranker` (episodic history increment 5) is covered only once this machine has built it; a
+machine that never ran `Build-RerankerImage.ps1` sees no new build step, manifest entry or gate.
+
+- **Build and pin.** `scripts/Build-RerankerImage.ps1` builds `docker/reranker` (llama.cpp server
+  pinned by digest, Qwen3-Reranker GGUF pinned by sha256) as `cortex-reranker:<version>` + `:latest`.
+  After that first build, `Build-All` (`-WithReranker` forces it) rebuilds it on every run — a cache hit
+  unless a pin changed — and `Build-Launcher` records `images.cortex-reranker` and its image id in the
+  manifest's `imageIds`, which the deploy verifies.
+- **Upgrade.** The deploy does not touch the container itself: the new Bridge runs
+  `docker compose --profile reranker up -d reranker` with the DPAPI-held key on startup, and compose
+  recreates the container because `cortex-reranker:latest` changed. The health gate then waits until the
+  container runs the pinned image id and its healthcheck (`/health`) passes; a reranker that never gets
+  there fails the gate and triggers the rollback. If the Bridge has `Reranker:Enabled=false` it stops the
+  sidecar instead, and there is nothing to gate.
+- **Rollback.** Before deploying, the image of the *running* sidecar is tagged `cortex-reranker:rollback`;
+  a rollback restores it as `:latest`, and the last-known-good Bridge recreates the sidecar from it.
+- **Downgrade.** Check out the older commit in the working tree and run `Self-Update.ps1 -Schedule
+  -SkipPull`: its Dockerfile pins the older server and model, the build produces that image (a cache hit
+  if it still exists), and the manifest pins it. A quick manual downgrade between deploys:
+  `docker tag cortex-reranker:<older version> cortex-reranker:latest`, then restart the Bridge (the build
+  keeps the two newest versioned tags).
+- **Drill.** `Self-Update.ps1 -RollbackDrill -SkipBuild -TargetVersion <installed>` exercises the
+  reranker snapshot/restore together with the rest of the rollback.
+- **Opting out.** `docker image rm cortex-reranker:latest cortex-reranker:<version>`: the next build
+  no longer includes it.
 
 ## Why detached (do NOT deploy inline from coda)
 
@@ -84,5 +116,6 @@ let itself be replaced. Do not run `Self-Update.ps1 -Apply` directly from a coda
 - Runs per-user and needs an interactive logged-on session (per-user `Add-AppxPackage`, the AUMID
   relaunch, and Docker Desktop all require it). The Scheduled Task is registered "run when logged on".
 - Concurrency-guarded: it refuses to schedule/run if an update is already in progress.
-- Only the **MSIX** (Bridge/Launcher/bundled coda) and **Docker images** (agent/voice) are updated;
-  there is no separate step needed — `Build-All` + the deploy cover both.
+- Only the **MSIX** (Bridge/Launcher/bundled coda) and **Docker images** (agent/voice, and the
+  reranker sidecar once this machine built it) are updated; there is no separate step needed —
+  `Build-All` + the deploy cover them.
