@@ -123,6 +123,9 @@ services:
       # pays a cold model reload — the multi-second "slow first reply". Set to
       # "-1" to pin the model permanently, or e.g. "30m" to shorten.
       - OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE:-12h}
+      # History text is embedded here (episodic history, increment 3): keep debug
+      # logging off so request bodies are never logged.
+      - OLLAMA_DEBUG=0
     networks:
       - cortex-internal
     restart: unless-stopped
@@ -135,8 +138,9 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-    ports:
-      - "127.0.0.1:11434:11434"
+    # No published port: only containers on cortex-internal (the agent) reach the
+    # embedder. For a host-side debug session add a compose override that publishes
+    # 127.0.0.1:11434, and remove it again afterwards.
 
 networks:
   cortex-internal:
