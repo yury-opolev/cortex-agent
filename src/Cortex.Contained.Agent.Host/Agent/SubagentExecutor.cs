@@ -149,9 +149,9 @@ internal sealed partial class SubagentExecutor : ISubagentExecutor
             var queries = await this.GenerateContextQueriesAsync(
                 taskPrompt, cancellationToken).ConfigureAwait(false);
 
-            // Step 2: Execute memory searches across the entire memory store (no tag filter)
+            // Step 2: Dense similarity lookups across the entire memory store (no tag filter)
             var memoryCandidates = await this.SearchMemoriesAsync(
-                queries, MaxMemoryResults, MinMemoryScore, tags: null, cancellationToken).ConfigureAwait(false);
+                queries, MaxMemoryResults, MinMemoryScore, cancellationToken).ConfigureAwait(false);
 
             // Log candidates before filtering
             if (memoryCandidates.Count > 0 && this.logger.IsEnabled(LogLevel.Information))
@@ -191,8 +191,7 @@ internal sealed partial class SubagentExecutor : ISubagentExecutor
 
     /// <summary>Execute search queries against the memory store, deduplicating by content.</summary>
     private async Task<List<MemoryMcp.Core.Models.SearchResult>> SearchMemoriesAsync(
-        List<string> queries, int maxResults, float minScore,
-        List<string>? tags, CancellationToken cancellationToken)
+        List<string> queries, int maxResults, float minScore, CancellationToken cancellationToken)
     {
         if (queries.Count == 0 || this.memoryService is null)
         {
@@ -202,8 +201,8 @@ internal sealed partial class SubagentExecutor : ISubagentExecutor
         var allResults = new Dictionary<string, MemoryMcp.Core.Models.SearchResult>(StringComparer.Ordinal);
         foreach (var query in queries)
         {
-            var results = await this.memoryService.SearchAsync(
-                query, 3, minScore, tags, cancellationToken).ConfigureAwait(false);
+            var results = await this.memoryService.FindSimilarAsync(
+                query, 3, minScore, cancellationToken).ConfigureAwait(false);
 
             foreach (var r in results)
             {
