@@ -54,6 +54,42 @@ public sealed class HistorySmokeCliTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task Init_DirIsTheConfiguredDirectory_NoWarning()
+    {
+        using var output = new StringWriter();
+        var configured = new HistoryOptions { SmokeArtifactsDirectory = this.workspace.Directory };
+
+        var code = await HistorySmokeCli.RunAsync(["init", "--dir", this.workspace.Directory], output, configured, CancellationToken.None);
+
+        Assert.Equal(0, code);
+        Assert.DoesNotContain("warning:", output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Init_CustomDirOutsideTheConfiguredDirectory_WarnsNamingTheConfiguredOne()
+    {
+        using var output = new StringWriter();
+        var configured = new HistoryOptions { SmokeArtifactsDirectory = Path.Combine(this.root, "configured-smoke") };
+
+        await HistorySmokeCli.RunAsync(["init", "--dir", this.workspace.Directory], output, configured, CancellationToken.None);
+
+        Assert.Contains("warning:", output.ToString(), StringComparison.Ordinal);
+        Assert.Contains(configured.SmokeArtifactsDirectory, output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Init_NoDir_UsesTheConfiguredDirectory()
+    {
+        using var output = new StringWriter();
+        var configured = new HistoryOptions { SmokeArtifactsDirectory = Path.Combine(this.root, "configured-smoke") };
+
+        await HistorySmokeCli.RunAsync(["init"], output, configured, CancellationToken.None);
+
+        Assert.True(File.Exists(Path.Combine(configured.SmokeArtifactsDirectory, "queries.example.jsonl")));
+        Assert.DoesNotContain("warning:", output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task RunEvaluationAsync_Unregistered_Refuses()
     {
         var (train, ferry) = await this.SeedAsync();

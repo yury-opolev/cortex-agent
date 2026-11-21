@@ -22,7 +22,10 @@ public static class HistorySmokeCli
         "embedder-check uses MemoryMcp__Ollama__Model / __NumCtx / __Dimensions when set (synthetic text only).";
 
     /// <summary>Entry point; returns a process exit code.</summary>
-    public static async Task<int> RunAsync(IReadOnlyList<string> args, TextWriter output, CancellationToken cancellationToken)
+    public static Task<int> RunAsync(IReadOnlyList<string> args, TextWriter output, CancellationToken cancellationToken) =>
+        RunAsync(args, output, null, cancellationToken);
+
+    internal static async Task<int> RunAsync(IReadOnlyList<string> args, TextWriter output, HistoryOptions? configured, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(args);
         ArgumentNullException.ThrowIfNull(output);
@@ -32,10 +35,15 @@ public static class HistorySmokeCli
             return 2;
         }
 
-        var workspace = new SmokeWorkspace(Option(args, "--dir") ?? "/app/state/eval/smoke");
+        configured ??= HistoryCliConfiguration.Load();
+        var workspace = new SmokeWorkspace(Option(args, "--dir") ?? configured.SmokeArtifactsDirectory);
         var source = Option(args, "--source") ?? "/app/state/messages.db";
         var options = new HistoryOptions { Enabled = true, TimeZone = Option(args, "--tz") ?? "Europe/Copenhagen" };
         Directory.CreateDirectory(workspace.Directory);
+        if (HistoryCliConfiguration.ArtifactsWarning(workspace.Directory, configured.SmokeArtifactsDirectory, "History:SmokeArtifactsDirectory") is { } warning)
+        {
+            await output.WriteLineAsync(warning).ConfigureAwait(false);
+        }
 
         try
         {

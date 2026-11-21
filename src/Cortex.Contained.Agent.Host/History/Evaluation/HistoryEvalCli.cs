@@ -63,7 +63,8 @@ public static class HistoryEvalCli
         IReadOnlyList<string> args,
         TextWriter output,
         Func<IOptionsMonitor<HistoryOptions>, IHistoryEmbedder> embedderFactory,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        HistoryOptions? configured = null)
     {
         ArgumentNullException.ThrowIfNull(args);
         ArgumentNullException.ThrowIfNull(output);
@@ -73,16 +74,14 @@ public static class HistoryEvalCli
             return 2;
         }
 
-        var defaultDirectory = new HistoryOptions().EvalArtifactsDirectory;
-        var workspace = new EvalWorkspace(Option(args, "--dir") ?? defaultDirectory);
+        configured ??= HistoryCliConfiguration.Load();
+        var workspace = new EvalWorkspace(Option(args, "--dir") ?? configured.EvalArtifactsDirectory);
         var source = Option(args, "--source") ?? "/app/state/messages.db";
         var baseline = new HistoryOptions { Enabled = true, TimeZone = Option(args, "--tz") ?? "Europe/Copenhagen" };
         Directory.CreateDirectory(workspace.Directory);
-        if (!string.Equals(Path.GetFullPath(workspace.Directory), Path.GetFullPath(defaultDirectory), StringComparison.Ordinal))
+        if (HistoryCliConfiguration.ArtifactsWarning(workspace.Directory, configured.EvalArtifactsDirectory, "History:EvalArtifactsDirectory") is { } warning)
         {
-            await output.WriteLineAsync(
-                $"warning: {workspace.Directory} is not the configured History:EvalArtifactsDirectory ({defaultDirectory}); its runs hold raw copies of messages.db and are not covered by purge erasure. Delete them yourself after use.")
-                .ConfigureAwait(false);
+            await output.WriteLineAsync(warning).ConfigureAwait(false);
         }
         try
         {

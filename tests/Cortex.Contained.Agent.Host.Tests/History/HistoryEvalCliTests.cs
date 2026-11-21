@@ -1,6 +1,7 @@
 using Cortex.Contained.Agent.Host.History;
 using Cortex.Contained.Agent.Host.History.Evaluation;
 using Cortex.Contained.Agent.Host.Storage;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Cortex.Contained.Agent.Host.Tests.History;
@@ -55,6 +56,47 @@ public sealed class HistoryEvalCliTests : IAsyncDisposable
 
     private IEnumerable<string> OutputFiles() => Directory.EnumerateFiles(Path.Combine(this.workspace, "runs"), "*", SearchOption.AllDirectories)
         .Where(f => Path.GetExtension(f) is ".json" or ".md");
+
+    [Fact]
+    public async Task Init_DirIsTheConfiguredDirectory_NoWarning()
+    {
+        var configured = new HistoryOptions { EvalArtifactsDirectory = this.workspace + Path.DirectorySeparatorChar };
+
+        var code = await HistoryEvalCli.RunAsync(
+            ["init", "--dir", this.workspace, "--tz", "UTC"], this.output, _ => new FakeHistoryEmbedder(), CancellationToken.None, configured);
+
+        Assert.Equal(0, code);
+        Assert.DoesNotContain("warning:", this.output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Init_DirOutsideTheConfiguredDirectory_WarnsNamingTheConfiguredOne()
+    {
+        var configured = new HistoryOptions { EvalArtifactsDirectory = Path.Combine(this.root, "configured-eval") };
+
+        await HistoryEvalCli.RunAsync(
+            ["init", "--dir", this.workspace, "--tz", "UTC"], this.output, _ => new FakeHistoryEmbedder(), CancellationToken.None, configured);
+
+        Assert.Contains("warning:", this.output.ToString(), StringComparison.Ordinal);
+        Assert.Contains(configured.EvalArtifactsDirectory, this.output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void From_ReadsTheConfiguredArtifactsDirectories()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["History:EvalArtifactsDirectory"] = "/data/eval",
+                ["History:SmokeArtifactsDirectory"] = "/data/smoke",
+            })
+            .Build();
+
+        var options = HistoryCliConfiguration.From(configuration);
+
+        Assert.Equal("/data/eval", options.EvalArtifactsDirectory);
+        Assert.Equal("/data/smoke", options.SmokeArtifactsDirectory);
+    }
 
     [Fact]
     public async Task Init_WritesTemplatesAndDefaultGrid()
