@@ -898,6 +898,11 @@
                         <div class="modal-body">
                             <p>Delete all messages older than:</p>
                             <input type="datetime-local" class="form-control" x-model="clearOlderThan">
+                            <p class="small text-body-secondary mt-2 mb-0">
+                                Deleted messages are also erased from the agent's search index.
+                                Memories the agent created during that period are hidden until you
+                                review them under Memory → Needs review; they are never deleted automatically.
+                            </p>
                         </div>
                         <div class="modal-footer">
                             <button class="btn btn-outline-secondary btn-sm" @click="showClearModal = false">Cancel</button>
@@ -1005,6 +1010,11 @@
                                     All messages in this channel
                                 </label>
                             </div>
+                            <p class="small text-body-secondary mt-2 mb-0">
+                                Deleted messages are also erased from the agent's search index.
+                                Memories the agent created during that period are hidden until you
+                                review them under Memory → Needs review; they are never deleted automatically.
+                            </p>
                         </div>
                         <div class="modal-footer">
                             <button class="btn btn-outline-secondary btn-sm" @click="showClearModal = false">Cancel</button>
@@ -1035,7 +1045,36 @@
                 <div class="spinner-border spinner-border-sm"></div> Loading...
             </div>
 
-            <!-- Memory List -->
+            <!-- Quarantined memories (D10): hidden from the agent until reviewed -->
+            <div x-show="!loading && quarantined.length > 0" class="card border-warning mb-3">
+                <div class="card-body py-2 px-3">
+                    <div class="fw-semibold mb-1">
+                        <i class="bi bi-shield-exclamation me-1"></i>Needs review (<span x-text="quarantined.length"></span>)
+                    </div>
+                    <small class="text-body-secondary d-block mb-1">
+                        Created while history you deleted was recent. Hidden from the agent until you
+                        keep or delete them. Never deleted automatically.
+                    </small>
+                    <template x-for="m in quarantined" :key="'q-' + m.memoryId">
+                        <div class="d-flex justify-content-between align-items-start border-top pt-2 mt-2">
+                            <div class="flex-grow-1">
+                                <div x-show="m.title" class="fw-semibold" x-text="m.title"></div>
+                                <div style="white-space: pre-wrap; font-size:var(--text-base);" x-text="m.content"></div>
+                                <small class="text-body-secondary" x-text="formatDateTime(m.createdAt)"></small>
+                            </div>
+                            <div class="d-flex gap-1 ms-2 flex-shrink-0">
+                                <button class="btn btn-sm btn-outline-success" @click="keepMemory(m)" title="Keep">
+                                    <i class="bi bi-check-lg"></i> Keep
+                                </button>
+                                <button class="btn btn-sm btn-outline-danger" @click="confirmDelete(m)" title="Delete">
+                                    <i class="bi bi-trash"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </div>
+
             <div x-show="!loading" class="d-flex flex-column gap-2">
                 <template x-for="m in memories" :key="m.memoryId">
                     <div class="card">

@@ -23,10 +23,36 @@ function tenantMemoryPage() {
         showDeleteModal: false,
         deleteTarget: null,
 
+        // Quarantined memories awaiting review (D10)
+        quarantined: [],
+
         get tenantId() { return Alpine.store("router").tenantId; },
 
         async init() {
-            await this.load();
+            await Promise.all([this.load(), this.loadQuarantine()]);
+        },
+
+        async loadQuarantine() {
+            try {
+                const data = await api.get(
+                    `/api/tenants/${encodeURIComponent(this.tenantId)}/memories/quarantine`
+                );
+                this.quarantined = data?.items || [];
+            } catch (e) {
+                this.quarantined = [];
+            }
+        },
+
+        async keepMemory(mem) {
+            try {
+                await api.post(
+                    `/api/tenants/${encodeURIComponent(this.tenantId)}/memories/${encodeURIComponent(mem.memoryId)}/keep`
+                );
+                Alpine.store("toast").success("Memory kept");
+                await this.loadQuarantine();
+            } catch (e) {
+                Alpine.store("toast").error(e.message);
+            }
         },
 
         async load() {
@@ -90,7 +116,7 @@ function tenantMemoryPage() {
                 Alpine.store("toast").success("Memory deleted");
                 this.showDeleteModal = false;
                 this.deleteTarget = null;
-                await this.load();
+                await Promise.all([this.load(), this.loadQuarantine()]);
             } catch (e) {
                 Alpine.store("toast").error(e.message);
             }

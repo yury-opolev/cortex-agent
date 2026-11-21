@@ -70,8 +70,8 @@ function tenantChannelHistoryPage() {
                     const olderThan = new Date(this.clearOlderThan).toISOString();
                     url += `?olderThan=${encodeURIComponent(olderThan)}`;
                 }
-                await api.del(url);
-                Alpine.store("toast").success("Channel history cleared");
+                const resp = await api.del(url);
+                Alpine.store("toast").success(resp?.message ?? "Channel history cleared");
                 this.showClearModal = false;
                 this.msgOffset = 0;
                 await this.loadMessages();

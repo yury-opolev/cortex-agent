@@ -60,7 +60,7 @@ function tenantHistoryPage() {
                 const resp = await api.del(
                     `/api/tenants/${encodeURIComponent(this.tenantId)}/history?olderThan=${encodeURIComponent(olderThan)}`
                 );
-                Alpine.store("toast").success(`Deleted ${resp?.deletedCount ?? 0} messages`);
+                Alpine.store("toast").success(resp?.message ?? `Deleted ${resp?.deletedCount ?? 0} messages`);
                 this.showClearModal = false;
                 await this.loadChannels();
             } catch (e) {
