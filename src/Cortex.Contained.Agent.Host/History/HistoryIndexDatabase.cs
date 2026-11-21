@@ -382,6 +382,23 @@ public sealed partial class HistoryIndexReader : IDisposable
     public IReadOnlyList<IndexedSegment> SearchRelevance(string match, SegmentFilter filter, int limit, int offset) =>
         this.SearchRelevance(match, filter, limit, offset, HistoryKeywordVariant.Plain);
 
+    /// <summary>Segments by id (dense candidates); ids that no longer exist are skipped.</summary>
+    public IReadOnlyList<IndexedSegment> ReadSegmentsById(IReadOnlyCollection<long> segIds)
+    {
+        ArgumentNullException.ThrowIfNull(segIds);
+        var segments = new List<IndexedSegment>();
+        using var cmd = this.connection.CreateCommand();
+        cmd.CommandText = $"SELECT {SegmentColumns}, 0.0 FROM segments s WHERE s.SegId = @id;";
+        var parameter = cmd.Parameters.Add("@id", SqliteType.Integer);
+        foreach (var id in segIds.Distinct())
+        {
+            parameter.Value = id;
+            segments.AddRange(Read(cmd));
+        }
+
+        return segments;
+    }
+
     /// <summary>Segments matching <paramref name="match"/> in the keyword table of <paramref name="table"/>, by BM25.</summary>
     public IReadOnlyList<IndexedSegment> SearchRelevance(string match, SegmentFilter filter, int limit, int offset, HistoryKeywordVariant table)
     {

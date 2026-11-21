@@ -9,7 +9,7 @@ namespace Cortex.Contained.Agent.Host.History;
 /// is assembled, reads the source on one snapshot, verifies every index hit, and merges matches
 /// from the not-yet-indexed journal tail.
 /// </summary>
-public sealed class HistoryRecallService
+public sealed partial class HistoryRecallService
 {
     private const int MaxRelevanceCandidates = 400;
     private const int TimeOrderBatch = 64;
@@ -19,19 +19,25 @@ public sealed class HistoryRecallService
     private readonly HistoryAccessGate gate;
     private readonly HistoryStatus status;
     private readonly IOptionsMonitor<HistoryOptions> options;
+    private readonly IHistoryEmbedder? embedder;
+    private readonly TimeProvider time;
 
     public HistoryRecallService(
         IHistorySource source,
         HistoryProjector projector,
         HistoryAccessGate gate,
         HistoryStatus status,
-        IOptionsMonitor<HistoryOptions> options)
+        IOptionsMonitor<HistoryOptions> options,
+        IHistoryEmbedder? embedder = null,
+        TimeProvider? time = null)
     {
         this.source = source;
         this.projector = projector;
         this.gate = gate;
         this.status = status;
         this.options = options;
+        this.embedder = embedder;
+        this.time = time ?? TimeProvider.System;
     }
 
     /// <summary>Test seam: awaited after the read lease and snapshot are taken (simulates a slow recall).</summary>
@@ -41,6 +47,9 @@ public sealed class HistoryRecallService
     public async Task<HistorySearchResult> SearchAsync(HistorySearchRequest request, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
+
+        // The query is embedded before the read lease, so a slow embedder never delays a purge.
+        var (queryVector, denseNote) = await this.EmbedQueryAsync(request, cancellationToken).ConfigureAwait(false);
         await using var lease = await this.gate.AcquireReadAsync(cancellationToken).ConfigureAwait(false);
         await using var snapshot = await this.source.OpenSnapshotAsync(cancellationToken).ConfigureAwait(false);
         if (this.AfterSnapshotHook is { } hook)
@@ -52,12 +61,19 @@ public sealed class HistoryRecallService
         using var reader = this.projector.Current?.OpenReader();
         var state = reader?.ReadState();
         var checkpoint = state?.CheckpointJournalSeq ?? 0;
-        var binding = HistoryCursorCodec.Binding(request, state?.Generation);
 
         // Fence (§4.1): an index that has not applied the latest purge is withheld; only the
         // not-yet-indexed tail, matched against the source, is searched.
         var purgeFenced = state is not null && state.AppliedPurgeGeneration < meta.PurgeGeneration;
         var index = purgeFenced ? null : reader;
+        var chunks = reader?.ReadChunkCounts();
+        if (queryVector is not null && (index is null || chunks is not { Embedded: > 0 }))
+        {
+            (queryVector, denseNote) = (null, index is null ? "fallback: index withheld" : "fallback: no chunk is embedded yet");
+        }
+
+        var mode = queryVector is null ? HistorySearchMode.Keyword : HistorySearchMode.Hybrid;
+        var binding = HistoryCursorCodec.Binding(request with { Mode = mode }, state?.Generation);
 
         var position = HistoryCursorPosition.Start;
         if (request.Cursor is { } cursor)
@@ -93,16 +109,24 @@ public sealed class HistoryRecallService
         parsed = QueryParser.ForVariant(parsed, this.options.CurrentValue.KeywordVariant, request.Order);
         var filter = new RecallFilter(request.Channel, request.Since, request.Until, request.IncludeInternal, request.IncludeEchoes);
         var (tailRows, tailCount, tailTruncated) = await this.ReadTailAsync(snapshot, checkpoint, cancellationToken).ConfigureAwait(false);
-        var coverage = BuildCoverage(index, state, meta.JournalHead, checkpoint, request.Channel, this.status.Snapshot().Halted, tailCount, tailTruncated) with { PurgeFenced = purgeFenced };
+        var coverage = BuildCoverage(index, state, meta.JournalHead, checkpoint, request.Channel, this.status.Snapshot().Halted, tailCount, tailTruncated) with
+        {
+            PurgeFenced = purgeFenced,
+            Dense = mode == HistorySearchMode.Hybrid ? "on" : denseNote ?? "off",
+            Chunks = chunks,
+        };
 
         var result = request.Order == HistoryOrder.Time
             ? await this.SearchTimeOrderAsync(snapshot, index, parsed, request, filter, position, tailRows, cancellationToken).ConfigureAwait(false)
-            : await this.SearchRelevanceAsync(snapshot, index, parsed, request, filter, position, tailRows, cancellationToken).ConfigureAwait(false);
+            : mode == HistorySearchMode.Hybrid
+                ? await this.SearchHybridAsync(snapshot, index!, parsed, request, filter, position, tailRows, queryVector!, cancellationToken).ConfigureAwait(false)
+                : await this.SearchRelevanceAsync(snapshot, index, parsed, request, filter, position, tailRows, cancellationToken).ConfigureAwait(false);
 
         return result with
         {
             Coverage = coverage,
             Binding = binding,
+            Mode = mode,
             DroppedTerms = parsed.DroppedTerms.Select(t => string.Join(' ', t.Tokens)).ToList(),
             TotalMatches = request.Order == HistoryOrder.Time && request.Cursor is null && !result.HasMore && coverage.IsComplete
                 ? result.Hits.Count
@@ -251,19 +275,7 @@ public sealed class HistoryRecallService
         IReadOnlyList<MessageRecord> tailRows,
         CancellationToken cancellationToken)
     {
-        var visibleTail = tailRows.Where(r => filter.Admits(r, forTimeOrder: false)).ToList();
-        var tailMatched = visibleTail.Count == 0 ? new HashSet<long>() : FtsRematcher.Match(parsed.MatchExpression, visibleTail, parsed.Table);
-        var tailHits = visibleTail.Where(r => tailMatched.Contains(r.Id))
-            .GroupBy(r => r.ChannelId, StringComparer.Ordinal)
-            .OrderBy(g => g.Key, StringComparer.Ordinal)
-            .Select((g, i) =>
-            {
-                var lines = g.OrderBy(r => r.Timestamp.UtcTicks).ThenBy(r => r.Id).ToList();
-                return new HistoryHit(g.Key, lines.Select(HistoryLine.From).ToList(), lines.Min(r => r.Id), lines.Max(r => r.Id),
-                    lines[0].Timestamp, lines[^1].Timestamp, HistoryHitSource.Unindexed, 0, false, new HistoryCursorPosition(0, i + 1, null, 0),
-                    lines.Select(r => r.Id).ToList());
-            })
-            .ToList();
+        var tailHits = TailHits(tailRows, parsed, filter);
 
         var hits = new List<HistoryHit>();
         var deferredEchoes = new List<HistoryHit>();

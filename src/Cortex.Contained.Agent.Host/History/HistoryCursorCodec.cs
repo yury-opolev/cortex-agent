@@ -29,7 +29,8 @@ public static class HistoryCursorCodec
             request.IncludeInternal ? "1" : "0",
             request.IncludeEchoes ? "1" : "0",
             request.Limit.ToString(CultureInfo.InvariantCulture),
-            generation?.ToString(CultureInfo.InvariantCulture) ?? "none");
+            generation?.ToString(CultureInfo.InvariantCulture) ?? "none",
+            request.Mode.ToString());
         return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(text)))[..16];
     }
 

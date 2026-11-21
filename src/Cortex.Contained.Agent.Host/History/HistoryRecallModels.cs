@@ -31,6 +31,35 @@ public sealed record HistorySearchRequest
 
     /// <summary>Opaque cursor from a previous page, or null.</summary>
     public string? Cursor { get; init; }
+
+    /// <summary>Retrieval mode for relevance order; time order is always keyword (exhaustive).</summary>
+    public HistorySearchMode Mode { get; init; } = HistorySearchMode.Auto;
+}
+
+/// <summary>Retrieval mode of <c>history_search</c> (§4.2).</summary>
+public enum HistorySearchMode
+{
+    /// <summary>Hybrid when embeddings are available, otherwise keyword (the default).</summary>
+    Auto,
+
+    /// <summary>Keyword (BM25) fused with exact dense search; falls back to keyword when the embedder is unavailable.</summary>
+    Hybrid,
+
+    /// <summary>Keyword (BM25) only.</summary>
+    Keyword,
+}
+
+/// <summary>Which retriever located a hit.</summary>
+public enum HistoryMatchKind
+{
+    /// <summary>The keyword index.</summary>
+    Keyword,
+
+    /// <summary>Dense (semantic) search only.</summary>
+    Semantic,
+
+    /// <summary>Both retrievers.</summary>
+    Both,
 }
 
 /// <summary>Where the next page continues. Relevance uses offsets; time order uses a message key.</summary>
@@ -78,7 +107,11 @@ public sealed record HistoryHit(
     double Score,
     bool EchoOnly,
     HistoryCursorPosition Resume,
-    IReadOnlyList<long> MemberIds);
+    IReadOnlyList<long> MemberIds)
+{
+    /// <summary>Which retriever located the hit.</summary>
+    public HistoryMatchKind MatchedBy { get; init; } = HistoryMatchKind.Keyword;
+}
 
 /// <summary>Coverage block reported with every recall response (§10).</summary>
 public sealed record HistoryCoverage(
@@ -92,6 +125,12 @@ public sealed record HistoryCoverage(
 {
     /// <summary>True when the index was withheld because it has not applied the latest purge yet.</summary>
     public bool PurgeFenced { get; init; }
+
+    /// <summary>Dense retrieval: <c>off</c>, <c>on</c>, <c>unavailable: …</c> or <c>fallback: …</c> (keyword-only this call).</summary>
+    public string Dense { get; init; } = "off";
+
+    /// <summary>Embedding progress of the served generation (dense coverage and lag), or null.</summary>
+    public ChunkCounts? Chunks { get; init; }
 
     /// <summary>True when "no hits" may be stated without qualification beyond the listed ranges.</summary>
     public bool IsComplete => this.BuildComplete && !this.Halted && !this.UnindexedTailTruncated && !this.PurgeFenced;
@@ -126,6 +165,15 @@ public sealed record HistorySearchResult
 
     /// <summary>Set instead of results when the request cannot run.</summary>
     public string? Error { get; init; }
+
+    /// <summary>The mode this page actually used (<see cref="HistorySearchMode.Keyword"/> or <see cref="HistorySearchMode.Hybrid"/>).</summary>
+    public HistorySearchMode Mode { get; init; } = HistorySearchMode.Keyword;
+
+    /// <summary>Near-duplicate worker segments collapsed away on this page.</summary>
+    public int CollapsedDuplicates { get; init; }
+
+    /// <summary>Best verified dense similarity (hybrid only): the abstention confidence used by the evaluation.</summary>
+    public double? TopSimilarity { get; init; }
 }
 
 /// <summary>A parsed <c>history_read</c> call in recall mode.</summary>
