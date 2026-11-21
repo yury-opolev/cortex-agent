@@ -10,6 +10,9 @@ public interface IHistorySource
 
     /// <summary>Deletes journal rows with <c>Seq ≤ throughSeq</c> and advances <c>JournalPrunedThrough</c>.</summary>
     Task PruneJournalAsync(long throughSeq, CancellationToken cancellationToken);
+
+    /// <summary>The committed <c>Meta.PurgeGeneration</c>, read fresh (outside any snapshot) to fence index publications.</summary>
+    Task<long> ReadPurgeGenerationAsync(CancellationToken cancellationToken);
 }
 
 /// <summary>Write side of <c>messages.db</c> used by the erasure workflow.</summary>

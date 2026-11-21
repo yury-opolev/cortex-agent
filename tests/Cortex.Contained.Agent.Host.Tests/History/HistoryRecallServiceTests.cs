@@ -53,9 +53,10 @@ public sealed class HistoryRecallServiceTests : IAsyncDisposable
 
         await this.h.Store.DeleteAllMessagesAsync();
 
+        // The purge generation fence withholds the stale index before verification is even needed.
         var result = await this.SearchAsync("zqx");
         Assert.Empty(result.Hits);
-        Assert.Equal(1, result.Unavailable);
+        Assert.True(result.Coverage.PurgeFenced);
     }
 
     [Fact]

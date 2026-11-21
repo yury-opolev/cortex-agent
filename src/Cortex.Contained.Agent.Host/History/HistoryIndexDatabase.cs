@@ -59,10 +59,11 @@ public sealed class HistoryIndexDatabase : IDisposable
               SourceInstanceId TEXT NOT NULL, SourceRestoreGeneration INTEGER NOT NULL,
               ConfigFingerprint TEXT NOT NULL,
               BuildComplete INTEGER NOT NULL,
-              CoverageJson TEXT NOT NULL
+              CoverageJson TEXT NOT NULL,
+              AppliedPurgeGeneration INTEGER NOT NULL DEFAULT 0
             );
             CREATE TABLE build_progress (ChannelId TEXT PRIMARY KEY);
-            INSERT INTO projector_state VALUES (1, @gen, @seq, @instance, @restore, @fingerprint, @complete, @coverage);
+            INSERT INTO projector_state VALUES (1, @gen, @seq, @instance, @restore, @fingerprint, @complete, @coverage, @applied);
             """;
         cmd.Parameters.AddWithValue("@gen", state.Generation);
         cmd.Parameters.AddWithValue("@seq", state.CheckpointJournalSeq);
@@ -71,6 +72,7 @@ public sealed class HistoryIndexDatabase : IDisposable
         cmd.Parameters.AddWithValue("@fingerprint", state.ConfigFingerprint);
         cmd.Parameters.AddWithValue("@complete", state.BuildComplete ? 1 : 0);
         cmd.Parameters.AddWithValue("@coverage", state.CoverageJson);
+        cmd.Parameters.AddWithValue("@applied", state.AppliedPurgeGeneration);
         cmd.ExecuteNonQuery();
         return database;
     }
@@ -142,10 +144,11 @@ public sealed class HistoryIndexDatabase : IDisposable
         var coverage = JsonSerializer.Serialize(this.ReadCoverage(transaction));
         this.Execute(
             transaction,
-            "UPDATE projector_state SET CoverageJson = @coverage, CheckpointJournalSeq = COALESCE(@seq, CheckpointJournalSeq), BuildComplete = MAX(BuildComplete, @complete);",
+            "UPDATE projector_state SET CoverageJson = @coverage, CheckpointJournalSeq = COALESCE(@seq, CheckpointJournalSeq), BuildComplete = MAX(BuildComplete, @complete), AppliedPurgeGeneration = MAX(AppliedPurgeGeneration, COALESCE(@applied, 0));",
             ("@coverage", coverage),
             ("@seq", batch.CheckpointSeq is { } seq ? seq : DBNull.Value),
-            ("@complete", batch.MarkBuildComplete ? 1 : 0));
+            ("@complete", batch.MarkBuildComplete ? 1 : 0),
+            ("@applied", batch.AppliedPurgeGeneration is { } applied ? applied : DBNull.Value));
 
         transaction.Commit();
     }
@@ -195,7 +198,7 @@ public sealed class HistoryIndexDatabase : IDisposable
     internal static ProjectorState ReadState(SqliteConnection connection)
     {
         using var cmd = connection.CreateCommand();
-        cmd.CommandText = "SELECT Generation, CheckpointJournalSeq, SourceInstanceId, SourceRestoreGeneration, ConfigFingerprint, BuildComplete, CoverageJson FROM projector_state WHERE Id = 1;";
+        cmd.CommandText = "SELECT Generation, CheckpointJournalSeq, SourceInstanceId, SourceRestoreGeneration, ConfigFingerprint, BuildComplete, CoverageJson, AppliedPurgeGeneration FROM projector_state WHERE Id = 1;";
         using var reader = cmd.ExecuteReader();
         reader.Read();
         return new ProjectorState(
@@ -205,7 +208,10 @@ public sealed class HistoryIndexDatabase : IDisposable
             reader.GetInt64(3),
             reader.GetString(4),
             reader.GetInt64(5) == 1,
-            reader.GetString(6));
+            reader.GetString(6))
+        {
+            AppliedPurgeGeneration = reader.GetInt64(7),
+        };
     }
 
     private static SqliteConnection OpenWriter(string path, SqliteOpenMode mode)

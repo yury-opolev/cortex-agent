@@ -206,7 +206,7 @@ public static class HistoryResultRenderer
     {
         var builder = new StringBuilder();
         builder.Append(CultureInfo.InvariantCulture,
-            $"coverage: buildComplete={Bool(coverage.BuildComplete)} halted={Bool(coverage.Halted)} generation={coverage.Generation?.ToString(CultureInfo.InvariantCulture) ?? "none"} lag={coverage.Lag} unindexedTail={coverage.UnindexedTail} unindexedTailTruncated={Bool(coverage.UnindexedTailTruncated)}\n");
+            $"coverage: buildComplete={Bool(coverage.BuildComplete)} halted={Bool(coverage.Halted)} generation={coverage.Generation?.ToString(CultureInfo.InvariantCulture) ?? "none"} lag={coverage.Lag} unindexedTail={coverage.UnindexedTail} unindexedTailTruncated={Bool(coverage.UnindexedTailTruncated)} purgeFenced={Bool(coverage.PurgeFenced)}\n");
         foreach (var channel in coverage.Channels)
         {
             builder.Append(CultureInfo.InvariantCulture, $"  {channel.ChannelId} indexed {channel.From[..10]} → {channel.To[..10]}\n");

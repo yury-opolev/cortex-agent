@@ -84,6 +84,11 @@ public static class ProjectorStartupDecision
             return "build incomplete";
         }
 
+        if (state.AppliedPurgeGeneration > meta.PurgeGeneration)
+        {
+            return "source purge generation went backwards (restored database)";
+        }
+
         if (state.CheckpointJournalSeq < meta.JournalPrunedThrough || state.CheckpointJournalSeq > meta.JournalHead)
         {
             return "checkpoint outside the journal";

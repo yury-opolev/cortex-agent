@@ -185,7 +185,7 @@ public sealed partial class HistorySourceSnapshot : IAsyncDisposable
         {
             entries.Add(new HistoryJournalEntry(
                 reader.GetInt64(0),
-                string.Equals(reader.GetString(1), "purge", StringComparison.Ordinal) ? HistoryJournalOp.Purge : HistoryJournalOp.Upsert,
+                ParseOp(reader.GetInt64(0), reader.GetString(1)),
                 reader.IsDBNull(2) ? null : reader.GetString(2),
                 reader.IsDBNull(3) ? [] : JsonSerializer.Deserialize<List<long>>(reader.GetString(3)) ?? [],
                 reader.IsDBNull(4) ? null : SqliteDateTimeText.Parse(reader.GetString(4)),
@@ -198,6 +198,17 @@ public sealed partial class HistorySourceSnapshot : IAsyncDisposable
 
         return entries;
     }
+
+    /// <summary>
+    /// Maps a journal op. An unknown op (a tombstone this build cannot interpret) throws, so the
+    /// projector halts instead of skipping it (§4.1).
+    /// </summary>
+    internal static HistoryJournalOp ParseOp(long seq, string op) => op switch
+    {
+        "upsert" => HistoryJournalOp.Upsert,
+        "purge" => HistoryJournalOp.Purge,
+        _ => throw new InvalidDataException(string.Create(CultureInfo.InvariantCulture, $"History journal entry {seq} has unknown op '{op}'; the projector halts rather than skip it.")),
+    };
 
     /// <inheritdoc />
     public async ValueTask DisposeAsync()

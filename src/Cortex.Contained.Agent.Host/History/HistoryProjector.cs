@@ -30,6 +30,7 @@ public enum ProjectorApplyResult
 public sealed partial class HistoryProjector : IDisposable
 {
     private const int JournalBatch = 500;
+    private const int MaxFencedAttempts = 3;
 
     private readonly IHistorySource source;
     private readonly IHistoryErasureStore erasure;
@@ -409,6 +410,7 @@ public sealed partial class HistoryProjector : IDisposable
     private static bool IsResumable(HistorySourceMeta meta, ProjectorState state, string fingerprint) =>
         string.Equals(state.SourceInstanceId, meta.DbInstanceId, StringComparison.Ordinal)
         && state.SourceRestoreGeneration == meta.RestoreGeneration
+        && state.AppliedPurgeGeneration <= meta.PurgeGeneration
         && string.Equals(state.ConfigFingerprint, fingerprint, StringComparison.Ordinal)
         && state.CheckpointJournalSeq >= meta.JournalPrunedThrough
         && state.CheckpointJournalSeq <= meta.JournalHead;
@@ -443,7 +445,10 @@ public sealed partial class HistoryProjector : IDisposable
         var gen = this.generations.Next();
         var database = HistoryIndexDatabase.Create(
             this.generations.PathFor(gen),
-            new ProjectorState(gen, meta.JournalHead, meta.DbInstanceId, meta.RestoreGeneration, HistoryConfigFingerprint.Compute(this.options.CurrentValue), false, "[]"));
+            new ProjectorState(gen, meta.JournalHead, meta.DbInstanceId, meta.RestoreGeneration, HistoryConfigFingerprint.Compute(this.options.CurrentValue), false, "[]")
+            {
+                AppliedPurgeGeneration = meta.PurgeGeneration,
+            });
         return new BuildState(database, gen, meta.JournalHead);
     }
 
@@ -495,9 +500,26 @@ public sealed partial class HistoryProjector : IDisposable
     /// <summary>
     /// Applies journal entries after the generation's checkpoint (whole-channel recomputation).
     /// Returns false when the source identity or configuration no longer matches the generation.
+    /// A batch computed before a purge committed is never published: it is discarded and recomputed
+    /// from a fresh snapshot (up to three times, then the failure halts the projector).
     /// Must run under <c>applyLock</c>.
     /// </summary>
     private async Task<bool> ApplyJournalAsync(HistoryIndexDatabase database, bool includeRecompute, CancellationToken cancellationToken)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                return await this.ApplyJournalOnceAsync(database, includeRecompute, cancellationToken).ConfigureAwait(false);
+            }
+            catch (PublicationFencedException) when (attempt < MaxFencedAttempts)
+            {
+                this.LogPublicationFenced(attempt);
+            }
+        }
+    }
+
+    private async Task<bool> ApplyJournalOnceAsync(HistoryIndexDatabase database, bool includeRecompute, CancellationToken cancellationToken)
     {
         var settings = SegmenterSettings.From(this.options.CurrentValue);
         var fingerprint = HistoryConfigFingerprint.Compute(this.options.CurrentValue);
@@ -553,7 +575,15 @@ public sealed partial class HistoryProjector : IDisposable
             }
 
             long? newCheckpoint = entries.Count > 0 ? entries[^1].Seq : null;
-            database.Apply(new IndexBatch(segments) { CheckpointSeq = newCheckpoint });
+            long? appliedPurge = entries.Where(e => e.Op == HistoryJournalOp.Purge).Select(e => e.PurgeGeneration).Max();
+
+            // Fence: never publish a batch computed from a snapshot that a later purge has superseded.
+            if (await this.source.ReadPurgeGenerationAsync(cancellationToken).ConfigureAwait(false) != meta.PurgeGeneration)
+            {
+                throw new PublicationFencedException();
+            }
+
+            database.Apply(new IndexBatch(segments) { CheckpointSeq = newCheckpoint, AppliedPurgeGeneration = appliedPurge });
             checkpoint = newCheckpoint ?? checkpoint;
             if (entries.Count < JournalBatch)
             {
@@ -605,6 +635,18 @@ public sealed partial class HistoryProjector : IDisposable
     }
 
     private sealed record BuildState(HistoryIndexDatabase Database, long Generation, long Watermark);
+
+    /// <summary>A purge committed after the batch's snapshot was taken; the batch must be recomputed.</summary>
+    private sealed class PublicationFencedException : Exception
+    {
+        public PublicationFencedException()
+            : base("A purge committed while the batch was computed; it was not published.")
+        {
+        }
+    }
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "History index batch fenced by a concurrent purge (attempt {Attempt}); recomputing")]
+    private partial void LogPublicationFenced(int attempt);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "History index build of generation {Generation} started at journal watermark {Watermark}")]
     private partial void LogBuildStarted(long generation, long watermark);

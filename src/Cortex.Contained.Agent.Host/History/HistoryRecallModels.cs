@@ -90,8 +90,11 @@ public sealed record HistoryCoverage(
     int UnindexedTail,
     bool UnindexedTailTruncated)
 {
+    /// <summary>True when the index was withheld because it has not applied the latest purge yet.</summary>
+    public bool PurgeFenced { get; init; }
+
     /// <summary>True when "no hits" may be stated without qualification beyond the listed ranges.</summary>
-    public bool IsComplete => this.BuildComplete && !this.Halted && !this.UnindexedTailTruncated;
+    public bool IsComplete => this.BuildComplete && !this.Halted && !this.UnindexedTailTruncated && !this.PurgeFenced;
 }
 
 /// <summary>Result of <see cref="HistoryRecallService.SearchAsync"/>.</summary>

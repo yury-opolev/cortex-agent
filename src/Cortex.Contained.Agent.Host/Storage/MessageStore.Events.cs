@@ -47,6 +47,15 @@ public sealed partial class MessageStore : IEventLog
         return await snapshot.ReadOperationEventsAsync(operationId, cancellationToken).ConfigureAwait(false);
     }
 
+    /// <inheritdoc />
+    public async Task<long> ReadPurgeGenerationAsync(CancellationToken cancellationToken)
+    {
+        await using var connection = await this.OpenReaderAsync(cancellationToken).ConfigureAwait(false);
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT Value FROM Meta WHERE Key = 'PurgeGeneration';";
+        return long.Parse(await cmd.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) as string ?? "0", CultureInfo.InvariantCulture);
+    }
+
     private void InitializeEventsSchema()
     {
         using var cmd = this.writer.CreateCommand();

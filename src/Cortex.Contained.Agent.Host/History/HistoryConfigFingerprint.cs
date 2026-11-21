@@ -9,7 +9,7 @@ namespace Cortex.Contained.Agent.Host.History;
 public static class HistoryConfigFingerprint
 {
     /// <summary>Version of the generation-file schema.</summary>
-    public const int SchemaVersion = 1;
+    public const int SchemaVersion = 2;
 
     /// <summary>FTS5 tokenizer and prefix configuration shared by the index and the re-matcher.</summary>
     public const string TokenizerSpec = "unicode61 remove_diacritics 2";

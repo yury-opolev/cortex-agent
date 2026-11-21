@@ -8,7 +8,11 @@ public sealed record ProjectorState(
     long SourceRestoreGeneration,
     string ConfigFingerprint,
     bool BuildComplete,
-    string CoverageJson);
+    string CoverageJson)
+{
+    /// <summary>Highest source <c>PurgeGeneration</c> this generation has applied (§4.1 fencing).</summary>
+    public long AppliedPurgeGeneration { get; init; }
+}
 
 /// <summary>Indexed time range of one channel (canonical UTC timestamps).</summary>
 public sealed record ChannelCoverage(string ChannelId, string From, string To);
@@ -25,6 +29,9 @@ public sealed record IndexBatch(IReadOnlyDictionary<string, IReadOnlyList<Histor
 
     /// <summary>Sets <c>BuildComplete=1</c> and clears build progress.</summary>
     public bool MarkBuildComplete { get; init; }
+
+    /// <summary>Purge generation applied by this batch (never lowers the stored value), or null.</summary>
+    public long? AppliedPurgeGeneration { get; init; }
 }
 
 /// <summary>A segment row returned by an index query.</summary>

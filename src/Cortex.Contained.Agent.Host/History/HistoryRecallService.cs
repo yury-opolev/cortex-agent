@@ -54,6 +54,11 @@ public sealed class HistoryRecallService
         var checkpoint = state?.CheckpointJournalSeq ?? 0;
         var binding = HistoryCursorCodec.Binding(request, state?.Generation);
 
+        // Fence (§4.1): an index that has not applied the latest purge is withheld; only the
+        // not-yet-indexed tail, matched against the source, is searched.
+        var purgeFenced = state is not null && state.AppliedPurgeGeneration < meta.PurgeGeneration;
+        var index = purgeFenced ? null : reader;
+
         var position = HistoryCursorPosition.Start;
         if (request.Cursor is { } cursor)
         {
@@ -72,8 +77,8 @@ public sealed class HistoryRecallService
         var parsed = QueryParser.Build(
             QueryParser.Split(request.Query),
             request.Order,
-            term => reader?.DocumentFrequency(term) ?? 0,
-            reader?.SegmentCount() ?? 0,
+            term => index?.DocumentFrequency(term) ?? 0,
+            index?.SegmentCount() ?? 0,
             this.options.CurrentValue.DfCapRatio);
         if (parsed is null)
         {
@@ -87,11 +92,11 @@ public sealed class HistoryRecallService
 
         var filter = new RecallFilter(request.Channel, request.Since, request.Until, request.IncludeInternal, request.IncludeEchoes);
         var (tailRows, tailCount, tailTruncated) = await this.ReadTailAsync(snapshot, checkpoint, cancellationToken).ConfigureAwait(false);
-        var coverage = BuildCoverage(reader, state, meta.JournalHead, checkpoint, request.Channel, this.status.Snapshot().Halted, tailCount, tailTruncated);
+        var coverage = BuildCoverage(index, state, meta.JournalHead, checkpoint, request.Channel, this.status.Snapshot().Halted, tailCount, tailTruncated) with { PurgeFenced = purgeFenced };
 
         var result = request.Order == HistoryOrder.Time
-            ? await this.SearchTimeOrderAsync(snapshot, reader, parsed, request, filter, position, tailRows, cancellationToken).ConfigureAwait(false)
-            : await this.SearchRelevanceAsync(snapshot, reader, parsed, request, filter, position, tailRows, cancellationToken).ConfigureAwait(false);
+            ? await this.SearchTimeOrderAsync(snapshot, index, parsed, request, filter, position, tailRows, cancellationToken).ConfigureAwait(false)
+            : await this.SearchRelevanceAsync(snapshot, index, parsed, request, filter, position, tailRows, cancellationToken).ConfigureAwait(false);
 
         return result with
         {
