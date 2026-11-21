@@ -19,7 +19,7 @@ namespace Cortex.Contained.Agent.Host.History.Evaluation.Smoke;
 public static class HistorySmokeCli
 {
     private const string Usage =
-        "usage: history-smoke <init|generate-queries|pool|register|run|embedder-check|reranker-check> [--dir /app/state/eval/smoke] [--source /app/state/messages.db] [--tz Europe/Copenhagen] [--embedder http://embeddings:11434] [--reranker http://reranker:8080]\n" +
+        "usage: history-smoke <init|generate-queries|pool|register|run|embedder-check|reranker-check> [--dir /app/state/eval/smoke] [--source /app/state/messages.db] [--tz <IANA zone, default: local>] [--embedder http://embeddings:11434] [--reranker http://reranker:8080]\n" +
         "generate-queries needs SMOKE_LLM_ENDPOINT, SMOKE_LLM_API_KEY, SMOKE_LLM_MODEL and optional SMOKE_LLM_API (default openai-completions).\n" +
         "embedder-check uses MemoryMcp__Ollama__Model / __NumCtx / __Dimensions when set (synthetic text only).\n" +
         "reranker-check needs Reranker__ApiKey (the Bridge-held key, see docs/reranker.md) and uses Reranker__Model / __TimeoutMs when set (synthetic text only).";
@@ -41,7 +41,7 @@ public static class HistorySmokeCli
         configured ??= HistoryCliConfiguration.Load();
         var workspace = new SmokeWorkspace(Option(args, "--dir") ?? configured.SmokeArtifactsDirectory);
         var source = Option(args, "--source") ?? "/app/state/messages.db";
-        var options = new HistoryOptions { Enabled = true, TimeZone = Option(args, "--tz") ?? "Europe/Copenhagen" };
+        var options = new HistoryOptions { Enabled = true, TimeZone = Option(args, "--tz") ?? string.Empty };
         Directory.CreateDirectory(workspace.Directory);
         if (HistoryCliConfiguration.ArtifactsWarning(workspace.Directory, configured.SmokeArtifactsDirectory, "History:SmokeArtifactsDirectory") is { } warning)
         {

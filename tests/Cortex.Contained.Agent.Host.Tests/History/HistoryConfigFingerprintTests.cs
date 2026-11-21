@@ -11,7 +11,15 @@ public class HistoryConfigFingerprintTests
 
         Assert.NotEqual(baseline, HistoryConfigFingerprint.Compute(new HistoryOptions { IdleGapMinutes = 31 }));
         Assert.NotEqual(baseline, HistoryConfigFingerprint.Compute(new HistoryOptions { MaxSegmentWords = 1499 }));
-        Assert.NotEqual(baseline, HistoryConfigFingerprint.Compute(new HistoryOptions { TimeZone = "UTC" }));
+        Assert.NotEqual(baseline, HistoryConfigFingerprint.Compute(new HistoryOptions { TimeZone = "Asia/Tokyo" }));
+    }
+
+    [Fact]
+    public void Compute_EmptyTimeZone_EqualsTheExplicitLocalZone()
+    {
+        Assert.Equal(
+            HistoryConfigFingerprint.Compute(new HistoryOptions()),
+            HistoryConfigFingerprint.Compute(new HistoryOptions { TimeZone = TimeZoneInfo.Local.Id }));
     }
 
     [Fact]

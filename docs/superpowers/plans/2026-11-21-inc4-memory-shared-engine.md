@@ -2451,7 +2451,7 @@ public class KeywordQueryTests
     [Fact]
     public void Build_PlainWords_FoldedQuotedAndOred()
     {
-        Assert.Equal("body : (\"kobenhavn\" OR \"train\")", KeywordQuery.Build("København train", stemmed: false));
+        Assert.Equal("body : (\"nordvik\" OR \"train\")", KeywordQuery.Build("Nørdvik train", stemmed: false));
     }
 
     [Fact]
@@ -2606,10 +2606,10 @@ public sealed class MemoryKeywordIndexTests : IDisposable
     public async Task KeywordSearch_FindsFoldedTitleAndContentWords()
     {
         await this.InitializeAsync();
-        await this.StoreAsync("m1", "Trip planning", "We take the night train to København on Friday.");
+        await this.StoreAsync("m1", "Trip planning", "We take the night train to Nørdvik on Friday.");
         await this.StoreAsync("m2", "Groceries", "Buy milk and bread.");
 
-        Assert.Equal(["m1"], await this.SearchAsync("kobenhavn"));
+        Assert.Equal(["m1"], await this.SearchAsync("nordvik"));
         Assert.Equal(["m1"], await this.SearchAsync("planning"));
         Assert.Equal(["m2"], await this.SearchAsync("\"milk and bread\""));
         Assert.Empty(await this.SearchAsync("\"bread and milk\""));

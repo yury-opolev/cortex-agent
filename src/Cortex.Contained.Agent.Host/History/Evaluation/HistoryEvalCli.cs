@@ -18,7 +18,7 @@ public static class HistoryEvalCli
 {
     private const string Usage =
         "usage: history-eval <init|validate|guard|register|ablate|holdout|kappa|rerank-curve|gate-r> [--dir /app/state/eval/hybrid] [--source /app/state/messages.db] " +
-        "[--tz Europe/Copenhagen] [--split dev|test|all] [--embedder http://embeddings:11434] [--labels judge-agreement.csv]\n" +
+        "[--tz <IANA zone, default: local>] [--split dev|test|all] [--embedder http://embeddings:11434] [--labels judge-agreement.csv]\n" +
         "rerank-curve [--condition normal|embedder-busy|cold] [--base CONFIG] [--reranker http://reranker:8080] [--timeout-ms 30000]; " +
         "gate-r --config CONFIG [--timeout-ms 2000]; both read the reranker key from Reranker__ApiKey.";
 
@@ -83,7 +83,7 @@ public static class HistoryEvalCli
         rerankerFactory ??= RerankEvalSetup.LiveReranker;
         var workspace = new EvalWorkspace(Option(args, "--dir") ?? configured.EvalArtifactsDirectory);
         var source = Option(args, "--source") ?? "/app/state/messages.db";
-        var baseline = new HistoryOptions { Enabled = true, TimeZone = Option(args, "--tz") ?? "Europe/Copenhagen" };
+        var baseline = new HistoryOptions { Enabled = true, TimeZone = Option(args, "--tz") ?? string.Empty };
         Directory.CreateDirectory(workspace.Directory);
         if (HistoryCliConfiguration.ArtifactsWarning(workspace.Directory, configured.EvalArtifactsDirectory, "History:EvalArtifactsDirectory") is { } warning)
         {

@@ -35,7 +35,7 @@ Defects: `docs/superpowers/research/2026-11-21-memory-search-scale-path.md` ("Cu
 - memory-mcp style: `this.` for members, braces always, `ILogger` extension calls (no source generators there). Cortex style: `this.` members, `ConfigureAwait(false)`, `[LoggerMessage]` for new logs (none needed here).
 - Test names `Method_Condition_Expected`.
 - Every commit message ends with the trailer `Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>`.
-- Run all commands from the Cortex repo root `C:\Users\yurio\Documents\github\cortex-agent` in PowerShell.
+- Run all commands from the Cortex repo root `<repo root>` in PowerShell.
 
 ## File Structure
 

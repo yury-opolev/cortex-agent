@@ -47,14 +47,14 @@ public sealed class MemoryKeywordIndexTests : IDisposable
     public async Task KeywordSearch_FindsFoldedTitleAndContentWords()
     {
         await this.InitializeAsync();
-        await this.StoreAsync("m1", "Trip planning", "We take the night train to København on Friday.");
+        await this.StoreAsync("m1", "Trip planning", "We take the night train to Nørdvik on Friday.");
         await this.StoreAsync("m2", "Groceries", "Buy milk and bread.");
 
-        Assert.Equal(["m1"], await this.SearchAsync("kobenhavn"));
+        Assert.Equal(["m1"], await this.SearchAsync("nordvik"));
         Assert.Equal(["m1"], await this.SearchAsync("planning"));
         Assert.Equal(["m2"], await this.SearchAsync("\"milk and bread\""));
         Assert.Empty(await this.SearchAsync("\"bread and milk\""));
-        Assert.Equal(["m1"], await this.SearchAsync("københ*"));
+        Assert.Equal(["m1"], await this.SearchAsync("nørdv*"));
     }
 
     [Fact]

@@ -12,6 +12,25 @@ public class HistoryOptionsTests
     }
 
     [Fact]
+    public void ResolveTimeZone_DefaultIsEmpty_UsesTheMachineLocalZone()
+    {
+        var options = new HistoryOptions();
+
+        Assert.Equal(string.Empty, options.TimeZone);
+        Assert.Equal(TimeZoneInfo.Local.Id, options.ResolveTimeZone().Id);
+        Assert.Equal(TimeZoneInfo.Local.Id, options.EffectiveTimeZoneId);
+    }
+
+    [Fact]
+    public void ResolveTimeZone_ExplicitZone_OverridesTheLocalZone()
+    {
+        var options = new HistoryOptions { TimeZone = "Asia/Tokyo" };
+
+        Assert.Equal("Asia/Tokyo", options.ResolveTimeZone().Id);
+        Assert.Equal("Asia/Tokyo", options.EffectiveTimeZoneId);
+    }
+
+    [Fact]
     public void Validate_UnknownTimeZone_ReturnsError()
     {
         var errors = new HistoryOptions { TimeZone = "Nowhere/Atlantis" }.Validate();

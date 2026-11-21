@@ -6,7 +6,7 @@ namespace Cortex.Contained.Agent.Host.Tests.History;
 
 public class HistorySegmenterTests
 {
-    private static readonly SegmenterSettings Settings = SegmenterSettings.From(new HistoryOptions { MaxSegmentWords = 50 });
+    private static readonly SegmenterSettings Settings = SegmenterSettings.From(new HistoryOptions { MaxSegmentWords = 50, TimeZone = "Europe/Berlin" });
 
     [Theory]
     [InlineData(29, 1)]
@@ -22,7 +22,7 @@ public class HistorySegmenterTests
     [Fact]
     public void Segment_LocalMidnight_Cuts()
     {
-        // 21:50Z and 22:10Z on 2026-05-04 are 23:50 and 00:10 in Copenhagen (UTC+2).
+        // 21:50Z and 22:10Z on 2026-05-04 are 23:50 and 00:10 in Berlin (UTC+2).
         var rows = new[]
         {
             Row(1, new DateTimeOffset(2026, 5, 4, 21, 50, 0, TimeSpan.Zero), "a"),

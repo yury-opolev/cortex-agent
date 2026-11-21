@@ -392,7 +392,7 @@ A delete request (per channel, older than, per channel older than, all, or a ten
 
 ## 13. Operations and configuration
 
-- **Configuration** (existing YAML / `IOptionsMonitor` pattern): `history:{enabled, timeZone:"Europe/Copenhagen", idleGapMinutes:30, maxSegmentWords:1500, dfCapRatio:0.2, searchTokenCap:1500, unindexedTailMax:2000}`. Changing a value that affects segmentation changes `ConfigFingerprint`, which triggers a rebuild.
+- **Configuration** (existing YAML / `IOptionsMonitor` pattern): `history:{enabled, timeZone:"" (empty = machine local zone), idleGapMinutes:30, maxSegmentWords:1500, dfCapRatio:0.2, searchTokenCap:1500, unindexedTailMax:2000}`. Changing a value that affects segmentation changes `ConfigFingerprint`, which triggers a rebuild.
 - **Health endpoint:** current generation, `buildComplete`, checkpoint lag, journal backlog, halted flag and last error, and `PendingErasure`.
 - **Initial build:** bounded batches of 2,000 messages, resumable; expected under a minute for about 28.7k messages (to be measured).
 

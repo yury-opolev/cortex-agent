@@ -14,8 +14,11 @@ public sealed class HistoryOptions
     /// <summary>Master switch: runs the projector and exposes the recall tools. Default false.</summary>
     public bool Enabled { get; set; }
 
-    /// <summary>IANA time zone used for local dates, segment cuts and displayed times.</summary>
-    public string TimeZone { get; set; } = "Europe/Copenhagen";
+    /// <summary>
+    /// IANA time zone used for local dates, segment cuts and displayed times. Empty (the default) means
+    /// the machine's local zone, i.e. <see cref="TimeZoneInfo.Local"/> (the <c>TZ</c> environment variable on Linux).
+    /// </summary>
+    public string TimeZone { get; set; } = string.Empty;
 
     /// <summary>A gap of at least this many minutes between two messages starts a new segment.</summary>
     public int IdleGapMinutes { get; set; } = 30;
@@ -62,8 +65,12 @@ public sealed class HistoryOptions
     /// <summary>Hybrid ranking settings (<c>History:Ranking</c>).</summary>
     public HistoryRankingOptions Ranking { get; set; } = new();
 
-    /// <summary>Resolves <see cref="TimeZone"/>.</summary>
-    public TimeZoneInfo ResolveTimeZone() => TimeZoneInfo.FindSystemTimeZoneById(this.TimeZone);
+    /// <summary>The zone id in effect: <see cref="TimeZone"/>, or the local zone's id when it is empty. Part of the index fingerprint.</summary>
+    public string EffectiveTimeZoneId => string.IsNullOrWhiteSpace(this.TimeZone) ? TimeZoneInfo.Local.Id : this.TimeZone;
+
+    /// <summary>Resolves <see cref="TimeZone"/> (the local zone when empty).</summary>
+    public TimeZoneInfo ResolveTimeZone() =>
+        string.IsNullOrWhiteSpace(this.TimeZone) ? TimeZoneInfo.Local : TimeZoneInfo.FindSystemTimeZoneById(this.TimeZone);
 
     /// <summary>Returns human-readable validation errors; empty when the options are usable.</summary>
     public IReadOnlyList<string> Validate()

@@ -33,7 +33,7 @@ public static class HistoryConfigFingerprint
         ArgumentNullException.ThrowIfNull(options);
         var text = string.Create(
             CultureInfo.InvariantCulture,
-            $"schema={SchemaVersion};segmenter={HistorySegmenter.Version};folder={TextFolder.Version};tokenizer={TokenizerSpec};prefix={PrefixSpec};tz={options.TimeZone};idle={options.IdleGapMinutes};words={options.MaxSegmentWords};kw={options.KeywordVariant}");
+            $"schema={SchemaVersion};segmenter={HistorySegmenter.Version};folder={TextFolder.Version};tokenizer={TokenizerSpec};prefix={PrefixSpec};tz={options.EffectiveTimeZoneId};idle={options.IdleGapMinutes};words={options.MaxSegmentWords};kw={options.KeywordVariant}");
         if (options.KeywordVariant == HistoryKeywordVariant.Stemmed)
         {
             text += string.Create(CultureInfo.InvariantCulture, $";stemmer={HistoryStemmer.Version}");

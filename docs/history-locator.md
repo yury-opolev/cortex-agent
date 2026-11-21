@@ -35,7 +35,7 @@ fingerprints. The agent always reads the text from `messages.db`.
 | Key | Default | Meaning |
 |---|---|---|
 | `Enabled` | `false` | Runs the projector and exposes the recall tools. |
-| `TimeZone` | `Europe/Copenhagen` | Local dates, segment cuts, displayed times. |
+| `TimeZone` | empty (machine local zone) | IANA zone for local dates, segment cuts, displayed times. Empty uses `TimeZoneInfo.Local`, i.e. the `TZ` environment variable of the container (UTC when unset); set an explicit IANA id such as `Europe/Berlin` to override. The effective zone is part of the config fingerprint, so changing `TZ` rebuilds the index. |
 | `IdleGapMinutes` | `30` | Idle gap that starts a new segment. |
 | `MaxSegmentWords` | `1500` | Segment word (FTS token) cap. |
 | `DfCapRatio` | `0.2` | Relevance queries drop unquoted terms in more than this share of segments (only once the index has ≥ 50 segments). |
@@ -49,7 +49,7 @@ fingerprints. The agent always reads the text from `messages.db`.
 | `SmokeArtifactsDirectory` | `/app/state/eval/smoke` | Local smoke-eval workspace; its `runs` are destroyed on overlapping purge. |
 | `EvalArtifactsDirectory` | `/app/state/eval/hybrid` | `history-eval` workspace; its `runs` (raw copies) are destroyed on overlapping purge ([details](history-hybrid-search.md#evaluation-run-artifacts-d3)). |
 
-Changing `TimeZone`, `IdleGapMinutes` or `MaxSegmentWords` (or the schema, segmenter, folder
+Changing `TimeZone` (or, when it is empty, the machine zone), `IdleGapMinutes` or `MaxSegmentWords` (or the schema, segmenter, folder
 or tokenizer versions) changes the config fingerprint and triggers a rebuild; until it cuts
 over, recall serves only the unindexed tail and reports `buildComplete=false`.
 
