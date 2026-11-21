@@ -56,6 +56,109 @@ public static class EvalStatistics
         return sorted[Math.Clamp(rank - 1, 0, sorted.Count - 1)];
     }
 
+    /// <summary>
+    /// Paired bootstrap of the mean difference <c>b − a</c> (§4.2): resamples query indices with
+    /// replacement <paramref name="resamples"/> times (seeded, so reports are reproducible) and returns
+    /// the observed mean difference with the percentile interval at <paramref name="confidence"/>.
+    /// </summary>
+    public static (double Mean, double Low, double High) PairedBootstrap(
+        IReadOnlyList<double> a, IReadOnlyList<double> b, int resamples = 10_000, int seed = 20261121, double confidence = 0.95)
+    {
+        var differences = Differences(a, b);
+        if (differences.Length == 0)
+        {
+            return (0, 0, 0);
+        }
+
+        var random = new Random(seed);
+        var means = new double[resamples];
+        for (var r = 0; r < resamples; r++)
+        {
+            double sum = 0;
+            for (var i = 0; i < differences.Length; i++)
+            {
+                sum += differences[random.Next(differences.Length)];
+            }
+
+            means[r] = sum / differences.Length;
+        }
+
+        Array.Sort(means);
+        var tail = (1 - confidence) / 2;
+        var low = means[(int)Math.Floor(tail * (resamples - 1))];
+        var high = means[(int)Math.Ceiling((1 - tail) * (resamples - 1))];
+        return (differences.Average(), low, high);
+    }
+
+    /// <summary>
+    /// Two-sided paired randomisation (sign-flip) test of the mean difference <c>b − a</c>: the share of
+    /// random sign assignments whose |mean| is at least the observed one (with the +1 correction).
+    /// </summary>
+    public static double PairedRandomisationTest(IReadOnlyList<double> a, IReadOnlyList<double> b, int resamples = 10_000, int seed = 20261121)
+    {
+        var differences = Differences(a, b);
+        if (differences.Length == 0)
+        {
+            return 1;
+        }
+
+        var observed = Math.Abs(differences.Average());
+        var random = new Random(seed);
+        var extreme = 0;
+        for (var r = 0; r < resamples; r++)
+        {
+            double sum = 0;
+            foreach (var d in differences)
+            {
+                sum += random.Next(2) == 0 ? d : -d;
+            }
+
+            if (Math.Abs(sum / differences.Length) >= observed - 1e-12)
+            {
+                extreme++;
+            }
+        }
+
+        return (extreme + 1.0) / (resamples + 1.0);
+    }
+
+    /// <summary>Non-inferiority: the lower bound of the difference (new − baseline) lies above −<paramref name="margin"/>.</summary>
+    public static bool NonInferior(double lowerBound, double margin) => lowerBound > -margin;
+
+    /// <summary>Cohen's κ between two raters' categorical labels (e.g. LLM vs human grades; must be ≥ 0.6).</summary>
+    public static double CohensKappa(IReadOnlyList<int> first, IReadOnlyList<int> second)
+    {
+        ArgumentNullException.ThrowIfNull(first);
+        ArgumentNullException.ThrowIfNull(second);
+        if (first.Count != second.Count)
+        {
+            throw new ArgumentException("Both raters must label the same items.", nameof(second));
+        }
+
+        if (first.Count == 0)
+        {
+            return 0;
+        }
+
+        var n = (double)first.Count;
+        var observed = first.Zip(second).Count(p => p.First == p.Second) / n;
+        var expected = first.Concat(second).Distinct()
+            .Sum(label => first.Count(x => x == label) / n * (second.Count(x => x == label) / n));
+        return expected >= 1 ? 1 : (observed - expected) / (1 - expected);
+    }
+
+    private static double[] Differences(IReadOnlyList<double> a, IReadOnlyList<double> b)
+    {
+        ArgumentNullException.ThrowIfNull(a);
+        ArgumentNullException.ThrowIfNull(b);
+        if (a.Count != b.Count)
+        {
+            throw new ArgumentException("Paired samples must have the same length.", nameof(b));
+        }
+
+        return a.Zip(b, (x, y) => y - x).ToArray();
+    }
+
     private static double LogChoose(int n, int k)
     {
         double result = 0;
