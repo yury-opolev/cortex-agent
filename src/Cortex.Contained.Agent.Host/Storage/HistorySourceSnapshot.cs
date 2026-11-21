@@ -10,7 +10,7 @@ namespace Cortex.Contained.Agent.Host.Storage;
 /// deferred transaction whose snapshot is pinned at open. Used by the projector (whole-channel
 /// reads) and recall tools (verification, unindexed tail, reads around a message).
 /// </summary>
-public sealed class HistorySourceSnapshot : IAsyncDisposable
+public sealed partial class HistorySourceSnapshot : IAsyncDisposable
 {
     /// <summary>Categories the recall tools can see: Normal, Internal, System, Proactive.</summary>
     internal const string IndexedCategories = "(0, 1, 2, 3)";

@@ -613,6 +613,7 @@ public sealed partial class MessageStore : IMessageStore, IHistorySource, IHisto
         }
 
         this.InitializeHistorySchema();
+        this.InitializeEventsSchema();
     }
 
     private bool ColumnExists(string table, string column)
