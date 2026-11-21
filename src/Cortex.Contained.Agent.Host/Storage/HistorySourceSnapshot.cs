@@ -139,11 +139,14 @@ public sealed partial class HistorySourceSnapshot : IAsyncDisposable
     /// <summary>
     /// The newest <paramref name="limit"/> rows of a channel with <c>since ≤ Timestamp &lt; until</c>
     /// (recall visibility), returned oldest first. <c>HasMore</c> is true when older rows were cut.
+    /// With <paramref name="untilMessageId"/> the bound is the <c>(Timestamp, Id)</c> keyset instead, so rows
+    /// sharing the bound's timestamp but with a lower id are still returned.
     /// </summary>
     public async Task<(IReadOnlyList<MessageRecord> Rows, bool HasMore)> ReadRangeAsync(
         string channelId,
         DateTimeOffset? since,
         DateTimeOffset? until,
+        long? untilMessageId,
         int limit,
         bool includeInternal,
         CancellationToken cancellationToken)
@@ -151,13 +154,15 @@ public sealed partial class HistorySourceSnapshot : IAsyncDisposable
         var categories = includeInternal ? IndexedCategories : "(0, 2, 3)";
         var rows = await this.QueryAsync(
             $"SELECT {Columns} FROM Messages WHERE ChannelId = @channelId AND Category IN {categories} AND Role <> 'tool' " +
-            "AND (@since IS NULL OR Timestamp >= @since) AND (@until IS NULL OR Timestamp < @until) " +
+            "AND (@since IS NULL OR Timestamp >= @since) " +
+            "AND (@until IS NULL OR Timestamp < @until OR (@untilId IS NOT NULL AND Timestamp = @until AND Id < @untilId)) " +
             "ORDER BY Timestamp DESC, Id DESC LIMIT @limit;",
             cmd =>
             {
                 cmd.Parameters.AddWithValue("@channelId", channelId);
                 cmd.Parameters.AddWithValue("@since", since is { } s ? SqliteDateTimeText.Format(s) : DBNull.Value);
                 cmd.Parameters.AddWithValue("@until", until is { } u ? SqliteDateTimeText.Format(u) : DBNull.Value);
+                cmd.Parameters.AddWithValue("@untilId", untilMessageId is { } id ? id : DBNull.Value);
                 cmd.Parameters.AddWithValue("@limit", limit + 1);
             },
             cancellationToken).ConfigureAwait(false);

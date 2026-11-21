@@ -189,10 +189,24 @@ public sealed class HistorySearchToolTests : IAsyncDisposable
         Assert.Contains(ids[^1], shown);
         Assert.DoesNotContain(ids[0], shown);
         Assert.Equal(ids.Skip(ids.Count - shown.Count), shown);
-        var hint = System.Text.RegularExpressions.Regex.Match(result.Content, @"until=(\S+)");
+        var hint = System.Text.RegularExpressions.Regex.Match(result.Content, @"until=(\S+) untilMessageId=(\d+)");
         Assert.True(hint.Success);
         var oldestShownIndex = ids.IndexOf(shown.Min());
         Assert.Equal(HistoryHarness.T0.AddMinutes(oldestShownIndex * 60), DateTimeOffset.Parse(hint.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture));
+        Assert.Equal(shown.Min(), long.Parse(hint.Groups[2].Value, System.Globalization.CultureInfo.InvariantCulture));
+    }
+
+    [Fact]
+    public async Task HistoryRead_RecallMode_UntilMessageId_ContinuesPastEqualTimestamps()
+    {
+        var first = await this.h.SayAsync("alpha", 0);
+        var second = await this.h.SayAsync("beta", 0);
+
+        var result = await this.readTool.ExecuteAsync(
+            JsonSerializer.Serialize(new { channelId = "ch", until = HistoryHarness.T0.ToString("O", System.Globalization.CultureInfo.InvariantCulture), untilMessageId = second }), Context, CancellationToken.None);
+
+        Assert.Contains($"#{first} ", result.Content, StringComparison.Ordinal);
+        Assert.DoesNotContain($"#{second} ", result.Content, StringComparison.Ordinal);
     }
 
     [Fact]

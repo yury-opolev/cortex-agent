@@ -197,7 +197,7 @@ public sealed partial class HistoryRecallService
         }
 
         var (range, hasMore) = await snapshot.ReadRangeAsync(
-            request.ChannelId, request.Since, request.Until, request.Limit, request.IncludeInternal, cancellationToken).ConfigureAwait(false);
+            request.ChannelId, request.Since, request.Until, request.UntilMessageId, request.Limit, request.IncludeInternal, cancellationToken).ConfigureAwait(false);
         return new HistoryReadResult { Lines = range.Select(HistoryLine.From).ToList(), HasMore = hasMore, Coverage = CoverageFor(request.ChannelId) };
     }
 

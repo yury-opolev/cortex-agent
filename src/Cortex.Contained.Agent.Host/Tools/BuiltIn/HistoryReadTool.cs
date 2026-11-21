@@ -67,7 +67,7 @@ internal sealed class HistoryReadTool : IAgentTool
         "A past message proves what was said then, not that it is still true. Check for later corrections before presenting it as current. " +
         "No hits means nothing was found within the reported coverage. It does not mean the event never happened. " +
         "Do not infer invention from a missing source. Acknowledge a real error when evidence supports it. " +
-        "If the output says older or later lines were omitted, call again with the until / aroundMessageId it names.";
+        "If the output says older or later lines were omitted, call again with the until (and untilMessageId) / aroundMessageId it names.";
 
     private static string RecallSchema => $$"""
         {
@@ -78,6 +78,7 @@ internal sealed class HistoryReadTool : IAgentTool
             "window": { "type": "integer", "description": "Messages before and after aroundMessageId, 1-{{MaxWindow}}. Default {{DefaultWindow}}." },
             "since": { "type": "string", "description": "Inclusive lower bound, ISO 8601. Optional." },
             "until": { "type": "string", "description": "Exclusive upper bound, ISO 8601. Optional." },
+            "untilMessageId": { "type": "integer", "description": "With until: also include messages at exactly that time whose id is lower. Pass the value an omission hint names." },
             "limit": { "type": "integer", "description": "Maximum messages for a range read. Default {{DefaultLimit}}, range {{MinLimit}}-{{MaxLimit}}." },
             "includeInternal": { "type": "boolean", "description": "Include internal rows (not necessarily delivered to the user). Default false." }
           },
@@ -327,6 +328,17 @@ internal sealed class HistoryReadTool : IAgentTool
             return untilError;
         }
 
+        long? untilMessageId = null;
+        if (root.TryGetProperty("untilMessageId", out var untilIdElement) && untilIdElement.ValueKind == JsonValueKind.Number)
+        {
+            if (!untilIdElement.TryGetInt64(out var untilId) || untilId < 1)
+            {
+                return "untilMessageId must be a positive message id.";
+            }
+
+            untilMessageId = untilId;
+        }
+
         var limit = DefaultLimit;
         if (root.TryGetProperty("limit", out var limitElement) && limitElement.ValueKind == JsonValueKind.Number
             && (!limitElement.TryGetInt32(out limit) || limit < MinLimit || limit > MaxLimit))
@@ -346,6 +358,7 @@ internal sealed class HistoryReadTool : IAgentTool
             ChannelId = string.IsNullOrWhiteSpace(channelId) ? null : channelId,
             Since = since,
             Until = until,
+            UntilMessageId = until is null ? null : untilMessageId,
             Limit = limit,
             AroundMessageId = around,
             Window = window,

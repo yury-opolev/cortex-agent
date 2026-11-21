@@ -63,7 +63,7 @@ FTS5 `contentless_delete` needs ≥ 3.43. The startup log prints `SQLite runtime
   - `order=relevance` (default): terms are OR-ed, very frequent unquoted terms are dropped; `order=time`: all terms required, exhaustive, oldest first, paginated by `cursor`.
   - `"quoted phrase"` matches the phrase; `word*` matches a prefix (stem ≥ 3 characters).
   - Internal rows (scheduler/system) are excluded unless `includeInternal=true`; assistant turns that themselves used a history tool (`recall_echo`) are down-weighted unless `includeEchoes=true`.
-- `history_read(channelId?, aroundMessageId?, window?, includeInternal?, …)` — reads the exact source around a hit.
+- `history_read(channelId?, aroundMessageId?, window?, since?, until?, untilMessageId?, includeInternal?, …)` — reads the exact source around a hit. A truncated range read keeps the newest lines and names `until` plus `untilMessageId` (a `(timestamp, id)` keyset) for the older ones, so lines sharing a timestamp are never skipped.
 
 Every response is wrapped in a per-response random boundary token; stored text containing it is
 escaped. Each line is labelled (`user`, `assistant`, `delivered`, `system`, `internal (not necessarily delivered)`, `recall_echo`),

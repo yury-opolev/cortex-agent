@@ -206,6 +206,9 @@ public sealed record HistoryReadRequest
     /// <summary>Exclusive upper bound.</summary>
     public DateTimeOffset? Until { get; init; }
 
+    /// <summary>With <see cref="Until"/>: also include rows at exactly that instant whose id is lower (keyset continuation).</summary>
+    public long? UntilMessageId { get; init; }
+
     /// <summary>Maximum rows for a range read.</summary>
     public int Limit { get; init; } = 200;
 

@@ -202,7 +202,7 @@ public static class HistoryResultRenderer
         {
             output.Append(anchorIndex < 0
                 ? string.Create(CultureInfo.InvariantCulture,
-                    $"older lines omitted (newest kept): call history_read with channelId={Escape(result.Lines[first].ChannelId, boundary)} until={SqliteDateTimeText.Format(result.Lines[first].Timestamp)}\n")
+                    $"older lines omitted (newest kept): call history_read with channelId={Escape(result.Lines[first].ChannelId, boundary)} until={SqliteDateTimeText.Format(result.Lines[first].Timestamp)} untilMessageId={result.Lines[first].MessageId}\n")
                 : string.Create(CultureInfo.InvariantCulture,
                     $"earlier lines omitted: call history_read with aroundMessageId={result.Lines[first].MessageId}\n"));
         }

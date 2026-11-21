@@ -264,6 +264,23 @@ public sealed class HistoryRecallServiceTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task ReadAsync_RangeUntilWithMessageId_DoesNotSkipLinesSharingTheTimestamp()
+    {
+        var first = await this.h.SayAsync("one", 0);
+        var second = await this.h.SayAsync("two", 0);
+        var third = await this.h.SayAsync("three", 0);
+
+        var newest = await this.recall.ReadAsync(new HistoryReadRequest { ChannelId = "ch", Limit = 2 }, CancellationToken.None);
+        var older = await this.recall.ReadAsync(
+            new HistoryReadRequest { ChannelId = "ch", Limit = 2, Until = HistoryHarness.T0, UntilMessageId = second }, CancellationToken.None);
+
+        Assert.Equal([second, third], newest.Lines.Select(l => l.MessageId));
+        Assert.True(newest.HasMore);
+        Assert.Equal([first], older.Lines.Select(l => l.MessageId));
+        Assert.False(older.HasMore);
+    }
+
+    [Fact]
     public async Task ReadAsync_AroundMessageId_ResolvesEveryIndexedCategory()
     {
         var ids = new[]
