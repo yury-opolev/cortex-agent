@@ -52,6 +52,8 @@ Vector memory at 1024 dims:
 
 A selective filter (one channel, one week ≈ 0.1–1%) makes exact search *faster*, and recall stays exact.
 
+Implementation note (increment 0): exact search uses sqlite-vec's own flat KNN scan (k ≤ 4096), which is exact for corpora ≤ 4,096 chunks; tag-filtered queries beyond 4,096 chunks fall back to a slower exact join (~16–20 µs/chunk measured). The in-process int8/SIMD scan in the table above is the increment-3/4 path for larger corpora.
+
 Why not a graph ANN index (HNSW) now:
 - Its recall collapses under restrictive filters. Qdrant's own benchmark shows plain HNSW at 0.1% recall with a 1% filter. pgvector's post-filtered HNSW gives 0.79 recall@10 at 0.1% selectivity, against 1.00 for B-tree pre-filter + exact search (100k rows).
 - It only clearly pays off beyond roughly 1–5M vectors.
