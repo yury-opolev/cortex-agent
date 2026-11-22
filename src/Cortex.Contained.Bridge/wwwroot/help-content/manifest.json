@@ -17,7 +17,8 @@
         { "id": "settings-overview", "title": "Settings Overview", "file": "settings/overview.md" },
         { "id": "llm-providers", "title": "LLM Providers & Routing", "file": "settings/llm-providers.md" },
         { "id": "speech-settings", "title": "Speech (STT / TTS)", "file": "settings/speech.md" },
-        { "id": "memory-settings", "title": "Memory Settings", "file": "settings/memory-settings.md" }
+        { "id": "memory-settings", "title": "Memory Settings", "file": "settings/memory-settings.md" },
+        { "id": "recall-settings", "title": "Recall Settings", "file": "settings/recall-settings.md" }
       ]
     },
     {

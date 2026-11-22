@@ -37,7 +37,17 @@ Design: [superpowers/specs/2026-11-21-inc5-reranker-design.md](superpowers/specs
 
 ## Configuration
 
-Bridge: `Reranker:Enabled` (false). Agent (`Reranker` section):
+Bridge: `Reranker:Enabled` (false) — switch it on Bridge → tenant → **Recall → Reranker (shared by all
+tenants)**. The switch is written to `cortex.yml` (`reranker: enabled:`); on enable the Bridge first runs
+`compose up` for the sidecar and then grants every agent, on disable it withdraws the grant first and then
+stops the sidecar. The page shows the sidecar state (`starting`, `running`, `stopped`, `failed`) and, when it
+failed, why: the `cortex-reranker:latest` image is not built (build it with `scripts\Build-RerankerImage.ps1`
+or `Build-All.ps1 -WithReranker`), compose could not start it (the default CUDA image needs an NVIDIA GPU
+with Docker GPU support; build `-Variant cpu` otherwise), or the container exited right after starting.
+The agent's own state (`ok`, `circuit-open`, last latency, last error) is shown next to it.
+
+Agent (`Reranker` section; the budgets and the timeout are per-tenant runtime settings on the same page,
+stored in the agent's `recall-settings.json`):
 
 | Key | Default | Meaning |
 |---|---|---|

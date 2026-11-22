@@ -34,12 +34,22 @@
 | GET | `/api/memory/settings` | Yes | Get memory configuration |
 | PUT | `/api/memory/settings` | Yes | Update memory configuration (runtime) |
 | GET | `/api/messages/{channelId}` | Yes | Get message history for a channel |
-| DELETE | `/api/tenants/{tenantId}/history` | Yes | Delete all (or `?olderThan=`) history through the erasure workflow. Returns `{ deletedCount, erasureComplete, cleanupPending, quarantinedMemories, message }` |
-| DELETE | `/api/tenants/{tenantId}/channels/{channelId}/history` | Yes | Same for one channel (previously `204`; now returns the same body) |
+| DELETE | `/api/tenants/{tenantId}/history` | Yes | Delete all (or `?olderThan=`) history through the erasure workflow. `?dependentMemories=review` (default) quarantines the memories created in that period, `delete` erases them with the history. Returns `{ deletedCount, erasureComplete, cleanupPending, quarantinedMemories, deletedMemories, dependentMemories, message }` |
+| DELETE | `/api/tenants/{tenantId}/channels/{channelId}/history` | Yes | Same for one channel (previously `204`; now returns the same body; same `dependentMemories` query) |
 | PUT | `/api/tenants/{tenantId}/history/recall-tools` | Yes | Body `{ enabled }`: show/hide `history_search` / recall-mode `history_read` at runtime (no effect unless `History:Enabled`) |
-| POST | `/api/tenants/{tenantId}/history/event-backfill` | Yes | Run the explicit event backfill (maintenance window). Returns `{ scanned, inserted, elapsedMs }`. Driven by `scripts/Invoke-HistoryBackfill.ps1` |
+| POST | `/api/tenants/{tenantId}/history/event-backfill` | Yes | Run the explicit event backfill (maintenance window). Returns `{ scanned, inserted, elapsedMs }`. Driven by `scripts/Invoke-HistoryBackfill.ps1` and the Recall page |
 | GET | `/api/tenants/{tenantId}/memories/quarantine` | Yes | Memories quarantined after a history deletion (D10), awaiting review |
 | POST | `/api/tenants/{tenantId}/memories/{memoryId}/keep` | Yes | Keep a quarantined memory (visible to the agent again) |
+| GET | `/api/tenants/{tenantId}/recall/settings` | Yes | Effective recall settings of the tenant's agent: `{ historyEnabled, historySearchMode, historyDenseEnabled, memorySearchMode, rerankHistoryTopN, rerankHistoryMaxDocChars, rerankMemoryTopN, rerankMemoryMaxDocChars, rerankTimeoutMs, overridden[] }`. `503` while the agent is disconnected |
+| PUT | `/api/tenants/{tenantId}/recall/settings` | Yes | Patch (null members unchanged; `resetToDefaults: true` drops every override first). Persisted in the agent's state volume (`recall-settings.json`) and applied live. Returns `{ applied, errors[], notices[], settings }`; `400` with the same body when validation fails |
+| GET | `/api/tenants/{tenantId}/recall/status` | Yes | `{ connected, agent: { settings, history, dense, reranker, eventBackfill, quarantinedMemories }, reranker: { enabled, sidecar: { state, problem, at } } }` (`503` with `connected: false` and the reranker block while disconnected) |
+| POST | `/api/tenants/{tenantId}/recall/purge/preview` | Yes | Body `{ channelId?, from?, olderThan?, dependentMemories? }`. Deletes nothing. Returns `{ messages, dependentMemories, rangeFrom, rangeTo, confirmations: { review, delete } }` |
+| POST | `/api/tenants/{tenantId}/recall/purge` | Yes | Same body; deletes through the erasure workflow (`from` inclusive, `olderThan` exclusive; `from ≥ olderThan` is `400`). Returns the history DELETE body |
+| GET | `/api/tenants/{tenantId}/recall/quarantine` | Yes | `{ items: [{ memory, purgeId, purgedAt, purgeChannelId, windowFrom, windowTo }] }`, newest first |
+| POST | `/api/tenants/{tenantId}/recall/quarantine/keep` | Yes | Body `{ memoryIds: [...] }` (1–1000). Keeps the quarantined ones; returns `{ affected, skipped[] }` |
+| POST | `/api/tenants/{tenantId}/recall/quarantine/delete` | Yes | Same body; erases the quarantined ones in one batch (`DeleteManyAsync`); ids not in quarantine are skipped |
+| GET | `/api/recall/reranker` | Yes | Bridge-wide reranker switch and sidecar state `{ enabled, sidecar: { state, problem, at } }` |
+| PUT | `/api/recall/reranker` | Yes | Body `{ enabled }`. Persists `reranker: enabled` in `cortex.yml`, then (in the background) starts the sidecar and grants every agent, or withdraws the grant and stops the sidecar |
 | POST | `/api/channels/{type}` | Yes | Update channel configuration |
 | GET | `/api/mcp/actions` | Yes | List approval-gated MCP mutation actions (filter by `serverKey`, `toolName`, `state`, `workerId`; paged with `before`/`limit`) |
 | GET | `/api/mcp/actions/{actionId}` | Yes | One action, including its canonical arguments (for review) and result |
@@ -145,11 +155,26 @@ Update memory settings at runtime. Takes effect immediately (no restart).
 
 #### `PurgeHistory(HistoryPurgeRequestDto)` -> `HistoryPurgeResultDto`
 
-Delete history (optional `channelId`, optional `olderThan`; neither = everything) through the
-erasure workflow. Returns `{ deleted, erasureComplete, cleanupPending[], quarantinedMemories }`.
+Delete history (optional `channelId`; optional `from` (inclusive) and `olderThan` (exclusive);
+none = everything) through the erasure workflow. `dependentMemories` is `review` (default:
+curated memories created in the purged period are quarantined) or `delete` (they are erased
+with the history by the `dependent-memories` erasure step; until it completes they stay
+quarantined). Returns `{ deleted, erasureComplete, cleanupPending[], quarantinedMemories,
+deletedMemories, dependentMemories }`. An inverted range or an unknown action is a `HubException`.
 All other delete methods (`DeleteConversation`, `ClearAllMessages`, `DeleteMessagesOlderThan`,
 `DeleteChannelMessagesOlderThan`, `ClearAll`, `ImportMessages` with `clearExisting`) use the
-same workflow.
+same workflow (always `review`).
+
+#### Recall (`IRecallHub`)
+
+| Method | Description |
+|--------|-------------|
+| `GetRecallSettings()` -> `RecallSettingsDto` | Effective settings (configured defaults + persisted overrides; `overridden[]` names the overrides) |
+| `UpdateRecallSettings(RecallSettingsPatchDto)` -> `RecallSettingsUpdateResultDto` | Validate, persist (`<state>/recall-settings.json`) and apply live; returns errors or notices (index rebuild, tools hidden, …) |
+| `GetRecallStatus()` -> `RecallStatusDto` | History index build, dense embedding progress, reranker health, event backfill, quarantined count |
+| `PreviewHistoryPurge(HistoryPurgeRequestDto)` -> `HistoryPurgePreviewDto` | Messages and dependent memories a purge would affect; deletes nothing |
+| `ListQuarantineReview()` -> `QuarantineReviewListDto` | Quarantined memories with the purge (id, time, channel, window) that quarantined each |
+| `KeepQuarantinedMemories(ids)` / `DeleteQuarantinedMemories(ids)` -> `QuarantineDecisionResultDto` | Bulk keep / bulk erase (one `DeleteManyAsync` batch); at most 1000 ids; ids not in quarantine are returned as `skipped` |
 
 #### `SetHistoryRecallTools(enabled)` -> `bool`
 

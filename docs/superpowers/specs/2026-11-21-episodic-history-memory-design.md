@@ -47,14 +47,14 @@ The work is also the foundation for the ambient-agent model: an event log as the
 |---|---|
 | D1 | Six increments, in this order: 0 → 1 → 2 → 3 → 4 → 5 (§4). |
 | D2 | A short **maintenance window** (agent paused) is acceptable for event backfill, restore and tenant import. |
-| D3 | When history is deleted: live history and all indexes are erased physically. Curated memories derived from the deleted range are **flagged for review** (not auto-deleted). Frozen evaluation snapshots that overlap the range are **destroyed and regenerated** as a new version. |
+| D3 | When history is deleted: live history and all indexes are erased physically. Curated memories derived from the deleted range are **flagged for review** by default; the owner may instead choose, per purge, to **delete them with the history** (amended 2026-11-22, Recall settings UI). Frozen evaluation snapshots that overlap the range are **destroyed and regenerated** as a new version. |
 | D4 | Encryption at rest arrives in increment 2 for `messages.db` and every index database, using **SQLite3 Multiple Ciphers** (the free SQLCipher bundle is deprecated in SQLitePCLRaw 3.0). The key is held by the Bridge (DPAPI) and pushed to the agent like other credentials. |
 | D5 | Cloud models may process history (the same trust boundary as live chat). **No LLM digests**, as a quality decision: summaries lose detail and make evaluation circular. |
 | D6 | Quality gates run on **raw local data**. The sanitised frozen copy is the off-machine backup (SafeExchange). |
 | D7 | Subagents get the same history tools as the main agent, with no extra restrictions. Re-confirmed in round 2. The privacy reviewer's objection is recorded as an accepted risk. |
 | D8 | The search engine is SQLite: FTS5 BM25 plus exact vector search with filters applied before scoring, fused with RRF. ANN indexes or a new engine only follow the triggers in the scale-path record. |
 | D9 | `Internal` rows (scheduled-task instructions, worker summaries, subagent completions) are indexed, labelled `internal (not necessarily delivered)`, excluded from results by default, and included with `includeInternal=true`. |
-| D10 | Curated memories whose `CreatedAt` falls in a purged time window are **quarantined**: hidden from `memory_search`, seeding and consolidation until the owner keeps or deletes them. They are never auto-deleted, and the delete confirmation says so. Time-window quarantine remains the mechanism; event provenance for memories (which events a memory was extracted from) is a possible future step. |
+| D10 | Curated memories whose `CreatedAt` falls in a purged time window are **quarantined**: hidden from `memory_search`, seeding and consolidation until the owner keeps or deletes them. They are never auto-deleted unless the owner explicitly chooses, for that purge, to delete them with the history (owner opt-in, amended 2026-11-22); the delete confirmation shows a preview count and states the chosen option. Time-window quarantine remains the mechanism; event provenance for memories (which events a memory was extracted from) is a possible future step. |
 
 ## 4. Roadmap
 
@@ -131,7 +131,7 @@ A search result tells the agent **where** to look. Evidence is always the source
 | `messages.db` rows, WAL, free pages | Deleted in one transaction, with `secure_delete=ON`. WAL checkpoint `TRUNCATE` afterwards. Periodic `VACUUM` (weekly, and after any purge over 1,000 rows) |
 | `history-index.db` (FTS5 + shadow tables) | Segments re-projected or removed; FTS5 `secure-delete=1`; `optimize`; WAL checkpoint `TRUNCATE`. Delete-all removes the file and its `-wal`/`-shm` |
 | `/app/data/tool-output` spill files | Deleted for delete-all and older-than. Per-channel deletion can't be mapped until increment 2 (documented gap) |
-| Curated memories created within a purged window | **Quarantined** (D10) until reviewed in the Memory UI; never auto-deleted |
+| Curated memories created within a purged window | **Quarantined** (D10) until reviewed on the Recall page (default), or **erased** with the history when the owner chose that for the purge |
 | `subagents.db` (`messages_json` 24 h, `result` 7 d) | Entries whose run window overlaps the range are deleted |
 | Smoke-evaluation artifacts (`/app/state/eval/smoke/`) | Overlapping artifacts destroyed |
 | Retired index generations (`history-index.<gen>.db` + `-wal`/`-shm`) | Unlinked during the cut-over, tracked in `PendingErasure` until done |
@@ -350,8 +350,8 @@ A delete request (per channel, older than, per channel older than, all, or a ten
    - Recall is already blind to the rows from step 2.
 5. **Curated memories (D10):**
    - Memories whose `CreatedAt` falls in a purged window are **quarantined**: hidden from `memory_search`, seeding and consolidation until the owner keeps or deletes them in the Memory UI.
-   - Never auto-deleted.
-   - The delete confirmation states this.
+   - Not auto-deleted, unless the owner chose **Delete** for this purge: then the `dependent-memories` erasure step erases them (memory row, content file, vectors, keyword rows; one batch), and they stay quarantined until the step completes.
+   - The delete confirmation shows the preview count and states the chosen option.
 6. **Weekly maintenance:** `VACUUM` of `messages.db` and of the current index generation, recorded in `PendingErasure` while running.
 
 **Retention notes** (added to §5.2):

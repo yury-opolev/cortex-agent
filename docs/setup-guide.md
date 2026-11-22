@@ -141,6 +141,27 @@ port: ${WEB_PORT:-5080}             # with default value
 
 Memory thresholds can also be changed at runtime via the web UI settings page.
 
+### Recall settings (history search, embeddings, reranker)
+
+Per tenant, under **Tenants → *tenant* → Recall** (no restart, no compose or `cortex.yml` edits):
+
+| Setting | Shipped default | What it does |
+|---------|-----------------|--------------|
+| History search | off | Builds the history index and gives the agent `history_search` / `event_get`. Switching it on builds the index in the background; switching it off hides the tools at once. |
+| Default history search mode | hybrid when embeddings are available | `keyword` keeps searches to exact words unless the agent asks for hybrid. |
+| Dense embeddings for history | off | Embeds history chunks for meaning-based (hybrid) search. Changing it rebuilds the index. |
+| Default memory search mode | dense (semantic) | `hybrid` or `keyword` for `memory_search mode=auto`. |
+| Reranker budget | top 15, 1200 chars, 2000 ms | How many hybrid results the reranker reorders and how long it may take. |
+| Reranker (shared) | off | Starts the `cortex-reranker` sidecar for all tenants; needs the image (`scripts\Build-RerankerImage.ps1`). |
+
+Your choices are stored in the agent's state volume (`recall-settings.json`), so they survive restarts
+and updates; values you never changed keep following the shipped defaults, and **Reset to defaults**
+returns to them. The same page shows the index build, embedding and reranker status, runs the event
+backfill, deletes history (one channel or all; everything, older than a date or between two dates) with a
+preview and your choice for the memories created in that period (**review** them or **delete** them with
+the history), and lists the memories waiting for review with bulk keep/delete. Details:
+[history-locator.md](history-locator.md#runtime-settings-bridge--tenant--recall), [reranker.md](reranker.md).
+
 ## Running tests
 
 ```powershell

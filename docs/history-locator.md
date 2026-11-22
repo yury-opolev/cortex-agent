@@ -34,7 +34,8 @@ fingerprints. The agent always reads the text from `messages.db`.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `Enabled` | `false` | Runs the projector and exposes the recall tools. |
+| `Enabled` | `false` | Runs the projector and exposes the recall tools. Switchable at runtime on the Recall page (see below). |
+| `DefaultSearchMode` | `Auto` | What `history_search mode=auto` (the default) means: `Auto`/`Hybrid` = hybrid when embeddings are available, `Keyword` = keyword-only unless the model asks for `mode=hybrid`. Query time. |
 | `TimeZone` | empty (machine local zone) | IANA zone for local dates, segment cuts, displayed times. Empty uses `TimeZoneInfo.Local`, i.e. the `TZ` environment variable of the container (UTC when unset); set an explicit IANA id such as `Europe/Berlin` to override. The effective zone is part of the config fingerprint, so changing `TZ` rebuilds the index. |
 | `IdleGapMinutes` | `30` | Idle gap that starts a new segment. |
 | `MaxSegmentWords` | `1500` | Segment word (FTS token) cap. |
@@ -52,6 +53,27 @@ fingerprints. The agent always reads the text from `messages.db`.
 Changing `TimeZone` (or, when it is empty, the machine zone), `IdleGapMinutes` or `MaxSegmentWords` (or the schema, segmenter, folder
 or tokenizer versions) changes the config fingerprint and triggers a rebuild; until it cuts
 over, recall serves only the unindexed tail and reports `buildComplete=false`.
+
+### Runtime settings (Bridge → tenant → Recall)
+
+The Recall page changes `History:Enabled`, `History:DefaultSearchMode`, `History:Dense:Enabled`,
+`MemoryMcp:Search:DefaultMode` and the reranker budgets (`Reranker:History|Memory:TopN|MaxDocChars`,
+`Reranker:TimeoutMs`) per tenant without a restart. The agent stores the owner's choices in
+`<state>/recall-settings.json` (`RecallSettingsStore`; the state volume, outside the tool sandbox) and
+overlays them on the configured values through `IPostConfigureOptions` plus a change token, so every
+`IOptionsMonitor` consumer sees them at once. A value that is not overridden keeps its configured
+default (`appsettings.json`, `History__*` …); **Reset to defaults** deletes every override. The compose
+file is not used for this: the Launcher rewrites it on every start.
+
+- **Switching History on** starts the projector within a second (the hosted service polls the switch):
+  it resumes the current generation or builds one; watch **Status** until the build completes.
+- **Switching History off** hides the recall tools immediately and pauses the projector. The index stays
+  on disk until the next erasure pass deletes it (as in *Rollout → Rollback*); maintenance prunes the
+  unconsumed journal, so switching back on rebuilds the index (the projector notices that its checkpoint
+  lies below `JournalPrunedThrough`).
+- **Dense on/off** changes the config fingerprint: the index is rebuilt (keyword-only tail until it cuts
+  over), then embedded in the background.
+- Search modes and reranker budgets apply to the next search.
 
 ### Time zone in the agent container
 
@@ -102,8 +124,11 @@ true — pending erasure steps always resume). History never flips the top-level
 
 ## Deletion, erasure and retention
 
-All delete paths (Bridge history page, channel history, tenant import with *clear existing*,
-`DeleteConversation`) go through `HistoryPurgeService`:
+All delete paths (Bridge history page, channel history, the Recall page's **Delete history**, tenant
+import with *clear existing*, `DeleteConversation`) go through `HistoryPurgeService`. A purge covers one
+channel or all, and everything, everything older than a date, or a date range (`from` inclusive,
+`olderThan` exclusive). The UI first asks for a preview (`PreviewHistoryPurge`: messages and dependent
+memories) and states the owner's choice for the dependent memories before confirming:
 
 1. Under the write lease, one `messages.db` transaction deletes the rows (optionally inserts a
    replacement set), appends the journal purge entry, records the quarantine windows and a
@@ -111,11 +136,11 @@ All delete paths (Bridge history page, channel history, tenant import with *clea
 2. The steps run synchronously: `index` (purge segments from the current generation, drop an
    in-progress build), `messages-wal` (`wal_checkpoint(TRUNCATE)`), `tool-output` (all-channel
    purges delete every `/app/data/tool-output` spill file), `subagents` (terminal subagent tasks
-   overlapping the purged range), `smoke-artifacts` (overlapping `runs/*` directories of the smoke and `history-eval` workspaces), `vacuum`
+   overlapping the purged range), `smoke-artifacts` (overlapping `runs/*` directories    of the smoke and `history-eval` workspaces), `dependent-memories` (only when the owner chose to delete them), `vacuum`
    (large purges) and `retired-generation:<n>`.
 3. Steps that cannot finish (a busy WAL reader, an active subagent) stay in `PendingErasure`;
    `HistoryMaintenanceService` retries them. The Bridge reports `erasureComplete` /
-   `cleanupPending` and the number of quarantined memories.
+   `cleanupPending` and the number of quarantined or deleted memories.
 
 Retention: `messages.db` keeps history until deleted; the index and journal are derived and
 pruned; spill files and subagent transcripts are deleted with purges (per-channel purges delete
@@ -126,22 +151,33 @@ database are not (see [security.md](security.md)).
 
 ### Memory quarantine (D10)
 
-Curated memories may have been extracted from deleted conversations. After a purge, memories
-whose `CreatedAt` falls in a purged window (clustered with a 6 h gap, extended by 24 h of
-extraction slack, capped at the purge time) are hidden from `memory_search`, subagent seeding,
-consolidation and compaction. The Memory page shows them under **Needs review** with **Keep**
-(make visible again) and **Delete**.
+Curated memories may have been extracted from deleted conversations. Memories whose `CreatedAt`
+falls in a purged window (clustered with a 6 h gap, extended by 24 h of extraction slack, capped at
+the purge time) are the purge's **dependent memories**. The owner chooses per purge:
+
+- **Review** (default): they are hidden from `memory_search`, subagent seeding, consolidation and
+  compaction until reviewed. The Recall page's **Needs review** list shows each one with its content,
+  creation time and the purge (time, channel) that quarantined it, with per-item and bulk **Keep** /
+  **Delete** (bulk delete is one `DeleteManyAsync` batch: one keyword-index rewrite and WAL truncate).
+  The Memory page links there.
+- **Delete**: the `dependent-memories` erasure step erases them physically with the history (memory
+  row, content file, vectors, keyword rows; `secure_delete`). Memories the owner kept earlier are never
+  deleted. If the step cannot finish, it stays in `PendingErasure` and the memories stay quarantined
+  until it does.
+
+The confirmation names the chosen option and the number of memories affected.
 
 ## Rollout
 
 1. Deploy with `History:Enabled=false` (default) — the journal is written, nothing else runs.
-2. Set `History__Enabled=true` (or `history: enabled: true` in `cortex.yml`) and restart. The
-   projector builds generation 1 in bounded batches; watch `/health` until `buildComplete=true`.
+2. Switch **History search** on in Bridge → tenant → **Recall** (or set `History__Enabled=true` /
+   `history: enabled: true` and restart). The projector builds generation 1 in bounded batches; watch
+   **Status** (or `/health`) until `buildComplete=true`.
 3. Add one line to the agent's self-notes: *"history_search finds when/where something was said;
    check current facts elsewhere before acting on a hit."*
 4. Run the smoke evaluation and the behaviour gate below before relying on the tools.
-5. Rollback: `History__Enabled=false` hides the tools and the next erasure pass deletes every
-   index generation.
+5. Rollback: switch History search off on the Recall page (or `History__Enabled=false`) — the tools are
+   hidden at once and the next erasure pass deletes every index generation.
 
 ## Smoke evaluation (§14.2, local only)
 
