@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using Cortex.Contained.Contracts.Security;
 
 namespace Cortex.Contained.Agent.Host.Storage;
 
@@ -28,9 +29,26 @@ public sealed class StorageKeyRing
 
     private readonly TaskCompletionSource<byte[]> master = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly Lock sync = new();
+    private string? expectedFingerprint;
 
     /// <summary>True once a key has been accepted.</summary>
     public bool IsAvailable => this.master.Task.IsCompletedSuccessfully;
+
+    /// <summary>True after a key was refused because its fingerprint is not the one the encrypted data belongs to.</summary>
+    public bool RejectedForData { get; private set; }
+
+    /// <summary>Fingerprint of the accepted key (never the key itself), or null before one arrived.</summary>
+    public string? Fingerprint => this.IsAvailable ? StorageKeyFingerprint.Compute(this.master.Task.Result) : null;
+
+    /// <summary>
+    /// The fingerprint recorded when encryption was enabled (the marker). A key with another fingerprint
+    /// is rejected before anything tries to open the data with it.
+    /// </summary>
+    public string? ExpectedFingerprint
+    {
+        get => this.expectedFingerprint;
+        set => this.expectedFingerprint = string.IsNullOrWhiteSpace(value) ? null : value;
+    }
 
     /// <summary>Offers the Base64 master key; the first valid key wins for the process lifetime.</summary>
     public StorageKeyAcceptance Provide(string base64Key)
@@ -47,6 +65,13 @@ public sealed class StorageKeyRing
 
         if (key.Length != KeyBytes)
         {
+            return StorageKeyAcceptance.Rejected;
+        }
+
+        if (this.expectedFingerprint is { } expected
+            && !string.Equals(StorageKeyFingerprint.Compute(key), expected, StringComparison.Ordinal))
+        {
+            this.RejectedForData = true;
             return StorageKeyAcceptance.Rejected;
         }
 
@@ -79,12 +104,39 @@ public sealed class StorageKeyRing
             ? DerivePassword(this.master.Task.Result, purpose)
             : throw new StorageLockedException($"The storage key for {purpose} has not been provided by the Bridge yet.");
 
+    /// <summary>The raw 256-bit key for <paramref name="purpose"/>; throws <see cref="StorageLockedException"/> before the key arrived.</summary>
+    public byte[] KeyFor(string purpose) =>
+        this.IsAvailable
+            ? DeriveKey(this.master.Task.Result, purpose)
+            : throw new StorageLockedException($"The storage key for {purpose} has not been provided by the Bridge yet.");
+
+    /// <summary>Waits up to <paramref name="timeout"/> for the key and returns the raw key for <paramref name="purpose"/>.</summary>
+    public async Task<byte[]> WaitForKeyAsync(string purpose, TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        var key = await this.master.Task.WaitAsync(timeout, cancellationToken).ConfigureAwait(false);
+        return DeriveKey(key, purpose);
+    }
+
     /// <summary>Deterministic, purpose-bound passphrase (64 hex characters).</summary>
     public static string DerivePassword(byte[] masterKey, string purpose)
     {
+        var derived = DeriveKey(masterKey, purpose);
+        try
+        {
+            return Convert.ToHexStringLower(derived);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(derived);
+        }
+    }
+
+    /// <summary>Deterministic, purpose-bound 256-bit key: HKDF-SHA256(master, info <c>cortex-storage/{purpose}</c>).</summary>
+    public static byte[] DeriveKey(byte[] masterKey, string purpose)
+    {
         ArgumentNullException.ThrowIfNull(masterKey);
-        var derived = HKDF.DeriveKey(HashAlgorithmName.SHA256, masterKey, KeyBytes, info: Encoding.UTF8.GetBytes("cortex-storage/" + purpose));
-        return Convert.ToHexStringLower(derived);
+        ArgumentException.ThrowIfNullOrWhiteSpace(purpose);
+        return HKDF.DeriveKey(HashAlgorithmName.SHA256, masterKey, KeyBytes, info: Encoding.UTF8.GetBytes("cortex-storage/" + purpose));
     }
 }
 

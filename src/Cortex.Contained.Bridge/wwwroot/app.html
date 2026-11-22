@@ -88,6 +88,13 @@
                                     <span class="sidebar-item-icon"><i class="bi bi-search-heart"></i></span>
                                     <span class="sidebar-item-label">Recall</span>
                                 </a>
+                                <a :href="`/tenants/${encodeURIComponent(t.tenantId)}/storage`"
+                                   class="sidebar-item sidebar-sub-item"
+                                   :class="{ active: page === 'tenant-storage' && $store.router.tenantId === t.tenantId }"
+                                   @click.prevent="nav(`/tenants/${encodeURIComponent(t.tenantId)}/storage`)">
+                                    <span class="sidebar-item-icon"><i class="bi bi-shield-lock"></i></span>
+                                    <span class="sidebar-item-label">Storage</span>
+                                </a>
                             </div>
                         </div>
                     </template>
@@ -172,7 +179,7 @@
         </div>
 
         <!-- ── Tenant Sub-Nav (shared across all /tenants/{id}/* pages) ── -->
-        <template x-if="['tenant-settings','tenant-history','tenant-channel-history','tenant-memory','tenant-recall'].includes($store.router.page)">
+        <template x-if="['tenant-settings','tenant-history','tenant-channel-history','tenant-memory','tenant-recall','tenant-storage'].includes($store.router.page)">
             <div x-data="tenantTabs()" class="container pt-3 pb-3" style="max-width: 860px;">
                 <div class="d-flex align-items-center gap-2">
                     <button class="btn btn-sm btn-outline-secondary" @click="backToTenants()">
@@ -199,6 +206,11 @@
                                 :class="isActive('recall') ? 'btn-primary' : 'btn-outline-secondary'"
                                 :disabled="isActive('recall')" @click="navSub('recall')">
                             <i class="bi bi-search-heart me-1"></i>Recall
+                        </button>
+                        <button class="btn btn-sm"
+                                :class="isActive('storage') ? 'btn-primary' : 'btn-outline-secondary'"
+                                :disabled="isActive('storage')" @click="navSub('storage')">
+                            <i class="bi bi-shield-lock me-1"></i>Storage
                         </button>
                     </div>
                 </div>
@@ -1538,6 +1550,150 @@
                         <div class="modal-footer">
                             <button class="btn btn-secondary btn-sm" @click="showBulkDeleteModal = false">Cancel</button>
                             <button class="btn btn-danger btn-sm" :disabled="reviewBusy" @click="decide(selectedIds, false)">Delete</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        </template>
+
+        <!-- ── Tenant Storage (encryption at rest, recovery kit) ── -->
+        <template x-if="$store.router.page === 'tenant-storage'">
+        <div x-data="tenantStoragePage()" class="container pb-3" style="max-width: 860px;">
+            <!-- Sub-nav is rendered above by the shared tenantTabs() block. -->
+
+            <div x-show="!connected" class="alert alert-warning py-2">
+                <i class="bi bi-plug me-1"></i>The agent is not connected; its storage status is unavailable.
+            </div>
+            <div x-show="needsRestore" class="alert alert-danger py-2">
+                <i class="bi bi-shield-exclamation me-1"></i>The agent's data is encrypted with a key the Bridge does not hold. Restore the recovery kit below.
+            </div>
+            <div x-show="restarting" class="alert alert-info py-2">
+                <span class="spinner-border spinner-border-sm me-1"></span>The agent is restarting and encrypting its stores…
+            </div>
+
+            <!-- ═══ Encryption at rest ═══ -->
+            <div class="card mb-3">
+                <div class="card-body">
+                    <h6 class="text-uppercase text-secondary border-bottom pb-2 mb-3">Encryption at rest</h6>
+                    <template x-if="status">
+                    <div>
+                        <p class="mb-2">
+                            <span class="badge" :class="encrypted ? 'bg-success' : 'bg-warning text-dark'" x-text="encrypted ? 'On' : (status.restartPending ? 'Pending restart' : 'Off')"></span>
+                            <span class="small text-body-secondary ms-1" x-show="encrypted" x-text="'since ' + formatDateTime(status.enabledAt) + ' (' + status.source + ')'"></span>
+                        </p>
+                        <div class="small mb-2">
+                            Key: <span class="badge" :class="badge(status.keyState)" x-text="status.keyState"></span>
+                            fingerprint <code x-text="fingerprint(status.keyFingerprint)"></code>
+                            · messages <span class="badge" :class="badge(status.messagesState)" x-text="status.messagesState"></span>
+                            · memory <span class="badge" :class="badge(status.memoryState)" x-text="status.memoryState"></span>
+                        </div>
+                        <table class="table table-sm small mb-2">
+                            <thead><tr><th>Store</th><th>Path</th><th>State</th><th class="text-end">Size</th></tr></thead>
+                            <tbody>
+                                <template x-for="item in status.items" :key="item.id">
+                                    <tr :title="item.detail || ''">
+                                        <td x-text="item.label"></td>
+                                        <td><code x-text="item.path"></code></td>
+                                        <td><span class="badge" :class="badge(item.state)" x-text="item.state"></span></td>
+                                        <td class="text-end" x-text="bytes(item.bytes) + (item.files != null ? ' · ' + item.files + ' files' : '')"></td>
+                                    </tr>
+                                </template>
+                            </tbody>
+                        </table>
+                    </div>
+                    </template>
+                    <div class="fw-semibold small mb-1">On this Windows host (Bridge)</div>
+                    <ul class="small mb-3">
+                        <template x-for="store in bridgeStores" :key="store.id">
+                            <li><span x-text="store.label"></span> <span class="badge" :class="badge(store.state)" x-text="store.state"></span>
+                                <span class="text-body-secondary" x-text="' — ' + store.detail"></span></li>
+                        </template>
+                    </ul>
+                    <button class="btn btn-sm btn-outline-danger" x-show="status && !encrypted && !status.restartPending" :disabled="previewing" @click="openEnable()">
+                        <i class="bi bi-shield-lock me-1"></i>Turn on encryption…
+                    </button>
+                </div>
+            </div>
+
+            <!-- ═══ Recovery kit ═══ -->
+            <div class="card mb-3">
+                <div class="card-body">
+                    <h6 class="text-uppercase text-secondary border-bottom pb-2 mb-3">Recovery kit</h6>
+                    <p class="small text-body-secondary">
+                        The storage key lives in this Windows profile (DPAPI). If the profile is reset or lost, the encrypted history and
+                        memories can only be opened with the recovery kit: the key encrypted with a passphrase you choose.
+                        Bridge key fingerprint <code x-text="fingerprint(bridge?.keyFingerprint)"></code>;
+                        last exported <span x-text="formatDateTime(bridge?.recoveryKitExportedAt)"></span>.
+                    </p>
+                    <div class="row g-2 mb-2">
+                        <div class="col-md-4"><input type="password" class="form-control form-control-sm" placeholder="Bridge password" x-model="kit.password" autocomplete="current-password"></div>
+                        <div class="col-md-4"><input type="password" class="form-control form-control-sm" placeholder="Kit passphrase (12+ chars)" x-model="kit.passphrase" autocomplete="new-password"></div>
+                        <div class="col-md-4"><input type="password" class="form-control form-control-sm" placeholder="Repeat passphrase" x-model="kit.passphrase2" autocomplete="new-password"></div>
+                    </div>
+                    <div class="small text-danger mb-2" x-show="kit.passphrase && kitError" x-text="kitError"></div>
+                    <button class="btn btn-sm btn-primary" :disabled="!!kitError || exporting" @click="exportKit()">
+                        <span x-show="exporting" class="spinner-border spinner-border-sm me-1"></span><i class="bi bi-download me-1"></i>Download recovery kit
+                    </button>
+
+                    <details class="mt-3" :open="needsRestore">
+                        <summary class="small">Restore a recovery kit</summary>
+                        <p class="small text-body-secondary mt-2">
+                            Only when the Bridge lost the key (new Windows profile, restored backup). A working key is never replaced.
+                        </p>
+                        <div class="row g-2 mb-2">
+                            <div class="col-md-4"><input type="file" accept=".json,application/json" class="form-control form-control-sm" @change="onKitFile($event)"></div>
+                            <div class="col-md-4"><input type="password" class="form-control form-control-sm" placeholder="Kit passphrase" x-model="restore.passphrase"></div>
+                            <div class="col-md-4"><input type="password" class="form-control form-control-sm" placeholder="Bridge password" x-model="restore.password" autocomplete="current-password"></div>
+                        </div>
+                        <div class="form-check mb-2">
+                            <input class="form-check-input" type="checkbox" id="restoreReplace" x-model="restore.replaceExisting">
+                            <label class="form-check-label small" for="restoreReplace">Replace the key this Bridge holds even though the agent does not report a problem with it (only if you are sure the kit is the right one)</label>
+                        </div>
+                        <button class="btn btn-sm btn-outline-primary" :disabled="!restore.text || !restore.passphrase || !restore.password || restoring" @click="restoreKit()">
+                            <span x-show="restoring" class="spinner-border spinner-border-sm me-1"></span>Restore key
+                        </button>
+                    </details>
+                </div>
+            </div>
+
+            <!-- Enable confirmation modal -->
+            <div x-show.important="showEnableModal" class="modal d-block" tabindex="-1" style="background: rgba(0,0,0,0.5);">
+                <div class="modal-dialog modal-lg">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title">Turn on encryption at rest</h5>
+                            <button type="button" class="btn-close" @click="showEnableModal = false"></button>
+                        </div>
+                        <div class="modal-body small">
+                            <div class="alert alert-danger py-1 px-2" x-show="previewError" x-text="previewError"></div>
+                            <div x-show="preview">
+                            <template x-for="w in preview?.warnings || []" :key="w"><div class="alert alert-warning py-1 px-2 mb-1" x-text="w"></div></template>
+                            <template x-for="b in preview?.blockers || []" :key="b"><div class="alert alert-danger py-1 px-2 mb-1" x-text="b"></div></template>
+                            <div class="fw-semibold mt-2">Will be encrypted</div>
+                            <ul class="mb-1"><template x-for="i in preview?.willEncrypt || []" :key="i.id"><li x-text="i.label + ' (' + bytes(i.bytes) + ')'"></li></template></ul>
+                            <div class="fw-semibold" x-show="preview?.willErase?.length">Will be erased (if checked below)</div>
+                            <ul class="mb-1"><template x-for="i in preview?.willErase || []" :key="i.id"><li x-text="i.label + ' (' + bytes(i.bytes) + ')'"></li></template></ul>
+                            <div class="fw-semibold" x-show="preview?.notCovered?.length">Not covered (stay in plaintext)</div>
+                            <ul class="mb-2"><template x-for="i in preview?.notCovered || []" :key="i.id"><li><span x-text="i.label"></span> <span class="text-body-secondary" x-text="'— ' + i.detail"></span></li></template></ul>
+                            <p class="mb-2" x-text="'Free space: ' + bytes(preview?.availableFreeBytes) + ' (needs ' + bytes(preview?.requiredFreeBytes) + ').'"></p>
+                            <div class="form-check"><input class="form-check-input" type="checkbox" id="enc-snapshot" x-model="enable.snapshotTaken">
+                                <label class="form-check-label" for="enc-snapshot">I took a snapshot of the agent's state volume (see the guide)</label></div>
+                            <div class="form-check" x-show="!bridge?.recoveryKitExportedAt"><input class="form-check-input" type="checkbox" id="enc-nokit" x-model="enable.acceptNoKit">
+                                <label class="form-check-label" for="enc-nokit">I have not downloaded a recovery kit and accept that losing this Windows profile loses every message and memory</label></div>
+                            <div class="form-check mb-2" x-show="preview?.willErase?.length"><input class="form-check-input" type="checkbox" id="enc-erase" x-model="enable.erase">
+                                <label class="form-check-label" for="enc-erase">Erase the plaintext evaluation copies</label></div>
+                            <div class="row g-2">
+                                <div class="col-md-6"><input type="password" class="form-control form-control-sm" placeholder="Bridge password" x-model="enable.password" autocomplete="current-password"></div>
+                                <div class="col-md-6"><input type="text" class="form-control form-control-sm" placeholder="Type ENCRYPT" x-model="enable.confirm"></div>
+                            </div>
+                            </div>
+                        </div>
+                        <div class="modal-footer">
+                            <button class="btn btn-outline-secondary btn-sm" @click="showEnableModal = false">Cancel</button>
+                            <button class="btn btn-danger btn-sm" :disabled="!canEnable || enabling" @click="confirmEnable()">
+                                <span x-show="enabling" class="spinner-border spinner-border-sm me-1"></span>Encrypt and restart the agent
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -2947,6 +3103,7 @@
 <script src="/js/pages/tenant-channel-history.js"></script>
 <script src="/js/pages/tenant-memory.js"></script>
 <script src="/js/pages/tenant-recall.js"></script>
+<script src="/js/pages/tenant-storage.js"></script>
 <script src="/js/pages/global-settings.js"></script>
 <script src="/js/pages/mcp-servers.js"></script>
 <script src="/js/pages/connectors.js"></script>

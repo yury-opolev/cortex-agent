@@ -256,7 +256,7 @@ public sealed partial class MemoryCompactionService : BackgroundService
                         continue;
                     }
 
-                    this.LogDuplicateClusterFound(memory.MemoryId, memory.Title ?? "(untitled)", duplicates.Count);
+                    this.LogDuplicateClusterFound(memory.MemoryId, duplicates.Count);
 
                     // For each duplicate, use consolidation to merge it into the original memory.
                     // We treat the duplicate's content as a "new fact" and the original memory
@@ -298,7 +298,7 @@ public sealed partial class MemoryCompactionService : BackgroundService
                             totalMerged++;
                         }
 
-                        this.LogCompactionResult(duplicate.MemoryId, result.Action, result.Reason ?? "");
+                        this.LogCompactionResult(duplicate.MemoryId, result.Action);
                     }
                 }
 #pragma warning disable CA1031 // One bad memory must not stop the sweep
@@ -348,11 +348,11 @@ public sealed partial class MemoryCompactionService : BackgroundService
     [LoggerMessage(Level = LogLevel.Information, Message = "Memory compaction catch-up: {Count} missed day(s) detected, running single compaction")]
     private partial void LogCatchUpStarting(int count);
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "Duplicate cluster found: memory {MemoryId} \"{Title}\" has {DuplicateCount} similar memories")]
-    private partial void LogDuplicateClusterFound(string memoryId, string title, int duplicateCount);
+    [LoggerMessage(Level = LogLevel.Information, Message = "Duplicate cluster found: memory {MemoryId} has {DuplicateCount} similar memories")]
+    private partial void LogDuplicateClusterFound(string memoryId, int duplicateCount);
 
-    [LoggerMessage(Level = LogLevel.Debug, Message = "Compaction result for {MemoryId}: action={Action}, reason={Reason}")]
-    private partial void LogCompactionResult(string memoryId, MemoryConsolidationService.ConsolidationAction action, string reason);
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Compaction result for {MemoryId}: action={Action}")]
+    private partial void LogCompactionResult(string memoryId, MemoryConsolidationService.ConsolidationAction action);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Compaction deleted memory {MemoryId}: {Reason}")]
     private partial void LogCompactionDeleted(string memoryId, string reason);

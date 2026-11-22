@@ -1247,8 +1247,8 @@ public sealed partial class SubagentSessionStore : SqliteStoreBase
 
     // ── Logging ──────────────────────────────────────────────────────────
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "[subagent-store] Task {TaskId} created: {Description}")]
-    private partial void LogTaskCreated(string taskId, string description);
+    [LoggerMessage(Level = LogLevel.Information, Message = "[subagent-store] Task {TaskId} created: {DescriptionRef}")]
+    private partial void LogTaskCreated(string taskId, ContentRef descriptionRef);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "[subagent-store] Task {TaskId} state changed to {State}")]
     private partial void LogTaskStateChanged(string taskId, string state);

@@ -430,8 +430,8 @@ public sealed partial class SubagentCallbacks : IAgentLoopCallbacks
     [LoggerMessage(Level = LogLevel.Information, Message = "[subagent] {ConversationId} executing {ToolName}")]
     private partial void LogToolExecuting(string conversationId, string toolName);
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "[subagent] {ConversationId} executing {ToolName}: {Arguments}")]
-    private partial void LogToolExecutingWithArgs(string conversationId, string toolName, string arguments);
+    [LoggerMessage(Level = LogLevel.Information, Message = "[subagent] {ConversationId} executing {ToolName}: {ArgumentsRef}")]
+    private partial void LogToolExecutingWithArgs(string conversationId, string toolName, ContentRef argumentsRef);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "[subagent] {ConversationId} {ToolName} completed: success={Success} ({ElapsedMs}ms)")]
     private partial void LogToolCompleted(string conversationId, string toolName, bool success, long elapsedMs);

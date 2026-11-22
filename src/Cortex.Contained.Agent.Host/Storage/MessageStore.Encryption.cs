@@ -5,7 +5,7 @@ namespace Cortex.Contained.Agent.Host.Storage;
 /// <summary>
 /// Encryption at rest for <see cref="MessageStore"/> (D4): with <see cref="MessageStoreEncryption"/>
 /// the store opens on first use after the Bridge has pushed the storage key, migrating a plaintext
-/// database in place first. Every read and write funnels through <see cref="EnsureOpenAsync"/>, so
+/// database (export to a sibling file, verify, swap) first. Every read and write funnels through <see cref="EnsureOpenAsync"/>, so
 /// nothing is served — and no plaintext file is created — before the key arrives.
 /// </summary>
 public sealed partial class MessageStore : IStorageState

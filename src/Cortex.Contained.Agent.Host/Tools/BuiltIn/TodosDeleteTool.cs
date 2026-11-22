@@ -69,6 +69,6 @@ public sealed partial class TodosDeleteTool : IAgentTool
         return Task.FromResult(AgentToolResult.Fail($"No todo list found with name \"{name}\"."));
     }
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "[todos_delete] \"{Name}\" for {ConversationId}")]
-    private partial void LogTodosDeleted(string name, string conversationId);
+    [LoggerMessage(Level = LogLevel.Information, Message = "[todos_delete] \"{NameRef}\" for {ConversationId}")]
+    private partial void LogTodosDeleted(ContentRef nameRef, string conversationId);
 }

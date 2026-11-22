@@ -234,6 +234,6 @@ public sealed partial class SubAgentStartTool : IAgentTool
         };
     }
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "[sub_agent_start] Queued: {TaskId} — {Description}")]
-    private partial void LogSubAgentQueued(string taskId, string description);
+    [LoggerMessage(Level = LogLevel.Information, Message = "[sub_agent_start] Queued: {TaskId} — {DescriptionRef}")]
+    private partial void LogSubAgentQueued(string taskId, ContentRef descriptionRef);
 }

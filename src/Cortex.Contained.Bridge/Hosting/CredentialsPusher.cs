@@ -125,7 +125,8 @@ public sealed partial class CredentialsPusher : ICredentialReplisher
 
     /// <summary>
     /// Pushes each connected tenant's storage master key (D4) from DPAPI storage. A tenant whose key
-    /// cannot be decrypted gets nothing, so its agent stays locked instead of starting a new history.
+    /// cannot be decrypted gets nothing, so its agent stays locked instead of starting a new history; a
+    /// key is created only when no encrypted data would be orphaned by it (<see cref="StorageKeyPushPolicy"/>).
     /// </summary>
     private async Task PushStorageKeysAsync(CancellationToken cancellationToken)
     {
@@ -139,7 +140,23 @@ public sealed partial class CredentialsPusher : ICredentialReplisher
 
             try
             {
-                var grant = new StorageKeyGrant { Key = this.secretManager.GetOrCreateTenantStorageKey(tenantId) };
+                var (key, decision) = await StorageKeyPushPolicy.ResolveAsync(
+                    this.secretManager, tenantId, () => StorageKeyPushPolicy.ReadAgentStatusAsync(() => client.GetStorageEncryptionStatusAsync(cancellationToken))).ConfigureAwait(false);
+                if (key is null)
+                {
+                    if (decision == StorageKeyPushDecision.WithholdMissingKey)
+                    {
+                        this.LogStorageKeyMissingForEncryptedData(tenantId);
+                    }
+                    else if (decision == StorageKeyPushDecision.WithholdUnknownStatus)
+                    {
+                        this.LogStorageKeyWithheldStatusUnknown(tenantId);
+                    }
+
+                    continue;
+                }
+
+                var grant = new StorageKeyGrant { Key = key };
                 if (!await client.ProvideStorageKeyAsync(grant, cancellationToken).ConfigureAwait(false))
                 {
                     this.LogStorageKeyRejected(tenantId);
@@ -621,6 +638,12 @@ public sealed partial class CredentialsPusher : ICredentialReplisher
 
     [LoggerMessage(Level = LogLevel.Error, Message = "Could not push the storage key to tenant {TenantId}: {Error}")]
     private partial void LogStorageKeyPushFailed(string tenantId, string error);
+
+    [LoggerMessage(Level = LogLevel.Critical, Message = "Tenant {TenantId} holds encrypted data but the Bridge has no storage key for it; no key is created. Restore the recovery kit on the Storage page.")]
+    private partial void LogStorageKeyMissingForEncryptedData(string tenantId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Tenant {TenantId}: the agent could not report its storage status, so no storage key is created or pushed now; the next credential push retries")]
+    private partial void LogStorageKeyWithheldStatusUnknown(string tenantId);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Could not push the reranker grant to tenant {TenantId}: {Error}")]
     private partial void LogRerankerGrantPushFailed(string tenantId, string error);

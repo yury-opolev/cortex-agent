@@ -562,7 +562,7 @@ public sealed partial class VoiceChannel : IChannel
             }
             else
             {
-                this.LogTranscribed(ChannelId, text);
+                this.LogTranscribed(ChannelId, text.Length);
                 await RaiseMessageReceivedAsync(text).ConfigureAwait(false);
             }
         }
@@ -677,8 +677,8 @@ public sealed partial class VoiceChannel : IChannel
     [LoggerMessage(Level = LogLevel.Debug, Message = "Voice channel {ChannelId} no speech transcribed")]
     private partial void LogNoSpeechTranscribed(string channelId);
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "Voice channel {ChannelId} transcribed: \"{Text}\"")]
-    private partial void LogTranscribed(string channelId, string text);
+    [LoggerMessage(Level = LogLevel.Information, Message = "Voice channel {ChannelId} transcribed {CharCount} chars")]
+    private partial void LogTranscribed(string channelId, int charCount);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Voice channel {ChannelId} transcription error: {ErrorMessage}")]
     private partial void LogTranscriptionError(string channelId, string errorMessage);

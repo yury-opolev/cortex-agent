@@ -304,6 +304,87 @@ public sealed partial class SecretManager
     }
 
     /// <summary>
+    /// The tenant's storage master key, or null when none exists yet. Never creates one; throws
+    /// <see cref="StorageKeyUnavailableException"/> when the stored key cannot be decrypted.
+    /// </summary>
+    public string? TryGetTenantStorageKey(string tenantId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
+        lock (this.fileLock)
+        {
+            EnsureSecretsDirectory();
+            var secrets = LoadSecrets(Path.Combine(this.secretsDir, SecretsFileName));
+            if (secrets.TenantStorageKeys is null || !secrets.TenantStorageKeys.TryGetValue(tenantId, out var encrypted))
+            {
+                return null;
+            }
+
+            try
+            {
+                return this.store.Unprotect(encrypted);
+            }
+            catch (Exception ex)
+            {
+                this.LogStorageKeyDecryptionFailed(tenantId, ex.Message);
+                throw new StorageKeyUnavailableException($"The storage key of tenant '{tenantId}' cannot be decrypted; it is not regenerated.", ex);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Installs a recovered storage key for the tenant (recovery-kit restore). The caller decides whether
+    /// replacing is safe; this only validates the key and persists it DPAPI-protected.
+    /// </summary>
+    public void ReplaceTenantStorageKey(string tenantId, string base64Key)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(base64Key);
+        if (Convert.FromBase64String(base64Key).Length != 32)
+        {
+            throw new ArgumentException("A storage key has exactly 32 bytes.", nameof(base64Key));
+        }
+
+        lock (this.fileLock)
+        {
+            EnsureSecretsDirectory();
+            var filePath = Path.Combine(this.secretsDir, SecretsFileName);
+            var secrets = LoadSecrets(filePath);
+            secrets.TenantStorageKeys ??= new Dictionary<string, string>();
+            secrets.TenantStorageKeys[tenantId] = this.store.Protect(base64Key);
+            SaveSecrets(filePath, secrets);
+            this.LogStorageKeyRestored(tenantId);
+        }
+    }
+
+    /// <summary>Records when the owner last exported the tenant's recovery kit (not a secret).</summary>
+    public void RecordStorageKeyExport(string tenantId, DateTimeOffset exportedAt)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
+        lock (this.fileLock)
+        {
+            EnsureSecretsDirectory();
+            var filePath = Path.Combine(this.secretsDir, SecretsFileName);
+            var secrets = LoadSecrets(filePath);
+            secrets.TenantStorageKeyExports ??= new Dictionary<string, DateTimeOffset>();
+            secrets.TenantStorageKeyExports[tenantId] = exportedAt;
+            SaveSecrets(filePath, secrets);
+            this.LogStorageKeyExported(tenantId);
+        }
+    }
+
+    /// <summary>When the tenant's recovery kit was last exported, or null.</summary>
+    public DateTimeOffset? GetStorageKeyExportedAt(string tenantId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
+        lock (this.fileLock)
+        {
+            EnsureSecretsDirectory();
+            var secrets = LoadSecrets(Path.Combine(this.secretsDir, SecretsFileName));
+            return secrets.TenantStorageKeyExports is not null && secrets.TenantStorageKeyExports.TryGetValue(tenantId, out var at) ? at : null;
+        }
+    }
+
+    /// <summary>
     /// The API key of the <c>cortex-reranker</c> sidecar (64 hex characters, 256-bit), created on first use
     /// and kept DPAPI-encrypted. The Bridge passes it to the sidecar when starting it and pushes it to the
     /// agents. If it cannot be decrypted a new one is generated: the next sidecar start recreates the
@@ -583,6 +664,12 @@ public sealed partial class SecretManager
     [LoggerMessage(Level = LogLevel.Error, Message = "Storage key of tenant {TenantId} cannot be decrypted (not regenerated): {ErrorMessage}")]
     private partial void LogStorageKeyDecryptionFailed(string tenantId, string errorMessage);
 
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Storage key of tenant {TenantId} installed from a recovery kit")]
+    private partial void LogStorageKeyRestored(string tenantId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Recovery kit of the storage key of tenant {TenantId} exported")]
+    private partial void LogStorageKeyExported(string tenantId);
+
     [LoggerMessage(Level = LogLevel.Information, Message = "Password hash stored in encrypted storage")]
     private partial void LogPasswordHashStored();
 
@@ -618,6 +705,8 @@ public sealed partial class SecretManager
         public string? DiscordBotToken { get; set; }
         /// <summary>DPAPI-encrypted per-tenant storage master keys (Base64-encoded 256-bit), keyed by tenant ID.</summary>
         public Dictionary<string, string>? TenantStorageKeys { get; set; }
+        /// <summary>When each tenant's recovery kit was last exported (not secret), keyed by tenant ID.</summary>
+        public Dictionary<string, DateTimeOffset>? TenantStorageKeyExports { get; set; }
         /// <summary>DPAPI-encrypted API key of the cortex-reranker sidecar (hex, 256-bit).</summary>
         public string? RerankerKey { get; set; }
 

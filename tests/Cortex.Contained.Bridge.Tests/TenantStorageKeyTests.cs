@@ -105,6 +105,46 @@ public sealed class TenantStorageKeyTests : IDisposable
         Assert.True(saved.RootElement.TryGetProperty("TenantStorageKeys", out _));
     }
 
+    [Fact]
+    public void TryGetTenantStorageKey_NeverCreates_AndThrowsWhenUndecryptable()
+    {
+        var store = new BreakableSecretStore();
+        var manager = new SecretManager(store, NullLogger<SecretManager>.Instance, this.tempDir);
+
+        Assert.Null(manager.TryGetTenantStorageKey("default"));
+        Assert.Null(manager.TryGetTenantStorageKey("default"));
+        var key = manager.GetOrCreateTenantStorageKey("default");
+        Assert.Equal(key, manager.TryGetTenantStorageKey("default"));
+
+        store.Broken = true;
+        Assert.Throws<StorageKeyUnavailableException>(() => manager.TryGetTenantStorageKey("default"));
+    }
+
+    [Fact]
+    public void ReplaceTenantStorageKey_InstallsAValidKeyOnly()
+    {
+        var manager = new SecretManager(new InMemorySecretStore(), NullLogger<SecretManager>.Instance, this.tempDir);
+        var recovered = Convert.ToBase64String(Enumerable.Range(1, 32).Select(i => (byte)i).ToArray());
+
+        Assert.Throws<ArgumentException>(() => manager.ReplaceTenantStorageKey("default", Convert.ToBase64String(new byte[16])));
+        manager.ReplaceTenantStorageKey("default", recovered);
+
+        Assert.Equal(recovered, manager.GetOrCreateTenantStorageKey("default"));
+    }
+
+    [Fact]
+    public void RecordStorageKeyExport_PersistsTheTimestampPerTenant()
+    {
+        var manager = new SecretManager(new InMemorySecretStore(), NullLogger<SecretManager>.Instance, this.tempDir);
+        var at = new DateTimeOffset(2026, 11, 22, 10, 0, 0, TimeSpan.Zero);
+
+        manager.RecordStorageKeyExport("default", at);
+
+        var reader = new SecretManager(new InMemorySecretStore(), NullLogger<SecretManager>.Instance, this.tempDir);
+        Assert.Equal(at, reader.GetStorageKeyExportedAt("default"));
+        Assert.Null(reader.GetStorageKeyExportedAt("other"));
+    }
+
     private sealed class BreakableSecretStore : ISecretStore
     {
         public bool Broken { get; set; }

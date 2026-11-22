@@ -457,7 +457,7 @@ public sealed partial class MemoryExtractionService : BackgroundService
         }
 
         // LLM returned prose. Ask a cheap follow-up: "any facts? true or false"
-        this.LogNonJsonResponse(result.Content);
+        this.LogNonJsonResponse(result.Content?.Length ?? 0);
 
         llmMessages.Add(new LlmMessage { Role = "assistant", Content = result.Content });
         llmMessages.Add(new LlmMessage
@@ -521,7 +521,7 @@ public sealed partial class MemoryExtractionService : BackgroundService
         var retryFacts = ParseExtractedFacts(retryResult.Content);
         if (retryFacts is null)
         {
-            this.LogExtractionRetryFailed(retryResult.Content);
+            this.LogExtractionRetryFailed(retryResult.Content?.Length ?? 0);
             return [];
         }
 
@@ -629,12 +629,12 @@ public sealed partial class MemoryExtractionService : BackgroundService
     [LoggerMessage(Level = LogLevel.Warning, Message = "LLM call failed during {Phase}: {ErrorMessage}")]
     private partial void LogLlmCallFailed(string phase, string errorMessage);
 
-    [LoggerMessage(Level = LogLevel.Debug, Message = "Extraction LLM returned prose instead of JSON, asking follow-up. Full response: {LlmResponse}")]
-    private partial void LogNonJsonResponse(string llmResponse);
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Extraction LLM returned prose instead of JSON ({ResponseLength} chars), asking follow-up")]
+    private partial void LogNonJsonResponse(int responseLength);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "LLM confirmed no facts worth remembering")]
     private partial void LogNoFactsConfirmed();
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Extraction retry also returned non-JSON. Full response: {LlmResponse}")]
-    private partial void LogExtractionRetryFailed(string llmResponse);
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Extraction retry also returned non-JSON ({ResponseLength} chars)")]
+    private partial void LogExtractionRetryFailed(int responseLength);
 }

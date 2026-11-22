@@ -19,6 +19,14 @@ using Microsoft.Extensions.Options;
 using OllamaSharp;
 using Serilog;
 
+// The evaluation CLIs copy the raw stores into run directories, so they refuse to run while encryption at rest is on.
+if (args.Length > 0 && args[0] is "history-smoke" or "history-eval" or "memory-eval"
+    && await EvaluationGuard.RefuseWhenEncryptedAsync(EvaluationGuard.CliConfiguration(), args[0], Console.Out).ConfigureAwait(false))
+{
+    Environment.ExitCode = EvaluationGuard.RefusedExitCode;
+    return;
+}
+
 // Local smoke-evaluation CLI (§14.2), run with `docker exec`:
 // dotnet Cortex.Contained.Agent.Host.dll history-smoke <init|generate-queries|pool|register|run>
 if (args.Length > 0 && string.Equals(args[0], "history-smoke", StringComparison.Ordinal))
@@ -128,11 +136,21 @@ builder.Services.AddSingleton<AgentSessionStore>();
 
 // --- Message Store (per-tenant SQLite persistence; encrypted at rest when Storage:EncryptAtRest, D4) ---
 var storageOptions = builder.Configuration.GetSection(StorageOptions.SectionName).Get<StorageOptions>() ?? new StorageOptions();
+// Encryption at rest is on when configured, when the owner enabled it (marker in the state volume) or when
+// encrypted files already exist: a reset configuration can never make the agent write plaintext again.
+var storageEncryption = StorageEncryptionContext.Resolve(
+    storageOptions,
+    StorageLayout.From(stateRoot, sandboxRoot, builder.Configuration.GetSection(MemoryMcpOptions.SectionName).Get<MemoryMcpOptions>() ?? new MemoryMcpOptions()));
+builder.Services.AddSingleton(storageEncryption);
+builder.Services.AddSingleton(sp => new Cortex.Contained.Agent.Host.Storage.StorageKeyRing
+{
+    ExpectedFingerprint = storageEncryption.Marker?.KeyFingerprint,
+});
 builder.Services.AddSingleton(sp =>
     new Cortex.Contained.Agent.Host.Storage.MessageStore(
         Path.Combine(stateRoot, "messages.db"),
         sp.GetRequiredService<ILoggerFactory>().CreateLogger<Cortex.Contained.Agent.Host.Storage.MessageStore>(),
-        storageOptions.EncryptAtRest
+        storageEncryption.Enabled
             ? new MessageStoreEncryption(sp.GetRequiredService<StorageKeyRing>(), TimeSpan.FromSeconds(storageOptions.KeyWaitSeconds))
             : null));
 builder.Services.AddSingleton<IStorageState>(sp => sp.GetRequiredService<MessageStore>());
@@ -150,7 +168,7 @@ builder.Services.AddSingleton<HistoryStatus>();
 builder.Services.AddSingleton<HistoryToolsSwitch>();
 builder.Services.AddSingleton(sp => new HistoryIndexGenerations(
     Path.Combine(stateRoot, "history"),
-    storageOptions.EncryptAtRest ? sp.GetRequiredService<StorageKeyRing>() : null,
+    storageEncryption.Enabled ? sp.GetRequiredService<StorageKeyRing>() : null,
     sp.GetRequiredService<ILogger<HistoryIndexGenerations>>()));
 builder.Services.AddSingleton<IHistoryEmbedder, OllamaHistoryEmbedder>();
 builder.Services.AddSingleton<HistoryProjector>();
@@ -194,7 +212,6 @@ builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Reranking.IRerankStage
 
 // --- Event log and provenance (increment 2): events in messages.db, tool payload policy ---
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Events.KnownSecrets>();
-builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Storage.StorageKeyRing>();
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Events.IEventLog>(sp => sp.GetRequiredService<MessageStore>());
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Events.ToolEventPayloads>();
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Events.IToolEventRecorder, Cortex.Contained.Agent.Host.Events.ToolEventRecorder>();
@@ -244,6 +261,39 @@ builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Agent.SubagentMessageR
 
 // --- Memory Services (MemoryMcp.Core) ---
 builder.Services.AddMemoryMcpCore(builder.Configuration);
+
+// --- Encryption at rest of the memory store (memory.db + *.memory.data) under the tenant key (D4) ---
+if (storageEncryption.Enabled)
+{
+    builder.Services.AddSingleton(sp => new EncryptedMemoryStore(
+        sp.GetRequiredService<IOptions<MemoryMcpOptions>>(),
+        sp.GetRequiredService<StorageKeyRing>(),
+        TimeSpan.FromSeconds(storageOptions.KeyWaitSeconds),
+        sp.GetRequiredService<ILoggerFactory>()));
+    builder.Services.AddSingleton<IMemoryStore>(sp => sp.GetRequiredService<EncryptedMemoryStore>());
+    builder.Services.AddSingleton<IMemoryAtRest>(sp => sp.GetRequiredService<EncryptedMemoryStore>());
+    builder.Services.AddHostedService<EncryptedStorageOpener>();
+}
+else
+{
+    builder.Services.AddSingleton<IMemoryAtRest, PlaintextMemoryAtRest>();
+}
+
+// --- Owner switch and status of encryption at rest (Bridge Storage page, /health) ---
+builder.Services.AddSingleton(new StorageInventory(storageEncryption.Layout));
+builder.Services.AddSingleton<IDiskSpace, DriveDiskSpace>();
+builder.Services.AddSingleton(sp => new StorageEncryptionService(
+    storageEncryption,
+    sp.GetRequiredService<StorageKeyRing>(),
+    sp.GetRequiredService<IStorageState>(),
+    sp.GetRequiredService<StorageInventory>(),
+    sp.GetRequiredService<IDiskSpace>(),
+    sp.GetRequiredService<IHostApplicationLifetime>(),
+    sp.GetRequiredService<TimeProvider>(),
+    sp.GetRequiredService<ILogger<StorageEncryptionService>>(),
+    storageEncryption.Enabled ? sp.GetRequiredService<EncryptedMemoryStore>() : null,
+    // Inside the container Docker restarts the agent (restart: unless-stopped) after it stops itself.
+    selfRestart: string.Equals(Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER"), "true", StringComparison.OrdinalIgnoreCase)));
 
 // --- Memory Settings Store (runtime-mutable overrides for memory options) ---
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Memory.MemorySettingsStore>();
@@ -895,7 +945,10 @@ builder.Services.AddSingleton<IHostedService>(sp =>
         sp.GetRequiredService<IAgentRuntime>(),
         sp.GetRequiredService<AgentSessionStore>(),
         stateRoot,
-        sp.GetRequiredService<ILoggerFactory>().CreateLogger<AgentProcessingService>()));
+        sp.GetRequiredService<ILoggerFactory>().CreateLogger<AgentProcessingService>(),
+        storageEncryption,
+        sp.GetRequiredService<StorageKeyRing>(),
+        TimeSpan.FromSeconds(storageOptions.KeyWaitSeconds)));
 
 var app = builder.Build();
 
@@ -923,7 +976,7 @@ Log.Information(
 if (app.Services.GetRequiredService<IOptions<MemoryMcpOptions>>().Value.Encryption.Enabled)
 {
     throw new InvalidOperationException(
-        "MemoryMcp:Encryption:Enabled is not supported by the Agent Host: its SQLite engine (SQLite3 Multiple Ciphers) cannot open SQLCipher databases. Encrypt messages and history with Storage:EncryptAtRest; encrypting memory.db is not supported yet.");
+        "MemoryMcp:Encryption:Enabled is not supported by the Agent Host: its SQLite engine (SQLite3 Multiple Ciphers) cannot open SQLCipher databases. Storage:EncryptAtRest (or the Bridge Storage page) encrypts memory.db and the memory files with the tenant key.");
 }
 
 // --- Initialize Memory Store (creates SQLite schema + data directories) ---
@@ -999,13 +1052,14 @@ _ = Task.Run(async () =>
 });
 
 // --- Health endpoint (unauthenticated) ---
-app.MapGet("/health", async (ToolRegistry toolRegistry, AgentSessionStore sessionStore, HistoryHealthReporter historyHealth, Cortex.Contained.Agent.Host.Reranking.RerankStage rerankStage, CancellationToken cancellationToken) =>
+app.MapGet("/health", async (ToolRegistry toolRegistry, AgentSessionStore sessionStore, HistoryHealthReporter historyHealth, Cortex.Contained.Agent.Host.Reranking.RerankStage rerankStage, StorageEncryptionService storageEncryptionService, CancellationToken cancellationToken) =>
 {
     var toolCount = toolRegistry.Count;
     var sessionCount = sessionStore.GetAll().Count;
     var healthy = toolCount > 0;
     var history = await historyHealth.SnapshotAsync(cancellationToken).ConfigureAwait(false);
     var reranker = rerankStage.Snapshot();
+    var storage = storageEncryptionService.GetHealth();
 
     return Results.Ok(new
     {
@@ -1046,6 +1100,17 @@ app.MapGet("/health", async (ToolRegistry toolRegistry, AgentSessionStore sessio
                 reranker.LastError,
                 reranker.LastLatencyMs,
                 reranker.LastCallAt,
+            },
+            // Encryption at rest: mode and whether the encrypted stores are open (no fingerprints, no paths).
+            storage = new
+            {
+                status = storage.Status,
+                storage.EncryptAtRest,
+                storage.Source,
+                storage.RestartPending,
+                key = storage.KeyState,
+                messages = storage.MessagesState,
+                memory = storage.MemoryState,
             },
         },
     });

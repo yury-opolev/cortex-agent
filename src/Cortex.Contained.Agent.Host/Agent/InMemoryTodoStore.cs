@@ -109,12 +109,12 @@ public sealed partial class InMemoryTodoStore : ITodoStore
         }
     }
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "[todos] Written (in-memory): \"{Name}\" for {ConversationId} ({ItemCount} items)")]
-    private partial void LogTodosWritten(string name, string conversationId, int itemCount);
+    [LoggerMessage(Level = LogLevel.Information, Message = "[todos] Written (in-memory): \"{NameRef}\" for {ConversationId} ({ItemCount} items)")]
+    private partial void LogTodosWritten(ContentRef nameRef, string conversationId, int itemCount);
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "[todos] Deleted (in-memory): \"{Name}\" for {ConversationId}")]
-    private partial void LogTodosDeleted(string name, string conversationId);
+    [LoggerMessage(Level = LogLevel.Information, Message = "[todos] Deleted (in-memory): \"{NameRef}\" for {ConversationId}")]
+    private partial void LogTodosDeleted(ContentRef nameRef, string conversationId);
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "[todos] Too many items in \"{Name}\" for {ConversationId}: {Count} exceeds max {Max}")]
-    private partial void LogTodosTooManyItems(string name, string conversationId, int count, int max);
+    [LoggerMessage(Level = LogLevel.Warning, Message = "[todos] Too many items in \"{NameRef}\" for {ConversationId}: {Count} exceeds max {Max}")]
+    private partial void LogTodosTooManyItems(ContentRef nameRef, string conversationId, int count, int max);
 }

@@ -167,11 +167,12 @@ builder.Services.AddRateLimiter(options =>
                 PermitLimit = 5,
                 Window = TimeSpan.FromMinutes(1),
             }));
+    options.AddPolicy(ReauthRateLimit.PolicyName, ReauthRateLimit.Partition);
     options.OnRejected = async (ctx, ct) =>
     {
         ctx.HttpContext.Response.StatusCode = 429;
         await ctx.HttpContext.Response.WriteAsJsonAsync(
-            new { error = "Too many login attempts. Try again later." }, ct).ConfigureAwait(false);
+            new { error = "Too many attempts. Try again later." }, ct).ConfigureAwait(false);
     };
 });
 
@@ -1214,6 +1215,9 @@ app.MapMemoryEndpoints(cortexConfigPath);
 
 // --- Recall page API (per-tenant recall settings/status/purge/quarantine + Bridge-wide reranker switch) ---
 app.MapRecallEndpoints();
+
+// --- Storage page API (encryption at rest: status, preview, enable, recovery kit export/restore) ---
+Cortex.Contained.Bridge.Storage.StorageEndpoints.MapStorageEndpoints(app, cortexDataDir);
 
 // --- Connector Plugin System endpoint (loopback-only, no WebUI dependency) ---
 app.MapConnectorEndpoint();
