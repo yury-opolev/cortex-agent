@@ -92,6 +92,6 @@ public sealed partial class TodosWriteTool : IAgentTool
         return Task.FromResult(AgentToolResult.Ok($"Todo list \"{name}\" updated: {summary.DoneCount}/{summary.TotalCount} done."));
     }
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "[todos_write] \"{Name}\" for {ConversationId}: {ItemCount} items")]
-    private partial void LogTodosWritten(string name, string conversationId, int itemCount);
+    [LoggerMessage(Level = LogLevel.Information, Message = "[todos_write] \"{NameRef}\" for {ConversationId}: {ItemCount} items")]
+    private partial void LogTodosWritten(ContentRef nameRef, string conversationId, int itemCount);
 }

@@ -206,9 +206,9 @@ internal sealed partial class AutonomySupervisor
     [LoggerMessage(Level = LogLevel.Information, Message = "[autonomy] Budget exhausted after {Elapsed} and {Continuations} continuations")]
     private partial void LogBudgetExhausted(TimeSpan elapsed, int continuations);
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "[autonomy] Nudging a stuck run: {Description}")]
-    private partial void LogNudging(string description);
+    [LoggerMessage(Level = LogLevel.Information, Message = "[autonomy] Nudging a stuck run: {DescriptionRef}")]
+    private partial void LogNudging(ContentRef descriptionRef);
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "[autonomy] Run still stuck after a nudge, stopping: {Description}")]
-    private partial void LogStuckAfterNudge(string description);
+    [LoggerMessage(Level = LogLevel.Warning, Message = "[autonomy] Run still stuck after a nudge, stopping: {DescriptionRef}")]
+    private partial void LogStuckAfterNudge(ContentRef descriptionRef);
 }

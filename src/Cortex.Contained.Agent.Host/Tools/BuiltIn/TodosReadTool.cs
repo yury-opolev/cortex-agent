@@ -100,11 +100,11 @@ public sealed partial class TodosReadTool : IAgentTool
         return sb.ToString();
     }
 
-    [LoggerMessage(Level = LogLevel.Debug, Message = "[todos_read] Read \"{Name}\" for {ConversationId}")]
-    private partial void LogTodosRead(string name, string conversationId);
+    [LoggerMessage(Level = LogLevel.Debug, Message = "[todos_read] Read \"{NameRef}\" for {ConversationId}")]
+    private partial void LogTodosRead(ContentRef nameRef, string conversationId);
 
-    [LoggerMessage(Level = LogLevel.Debug, Message = "[todos_read] Not found: \"{Name}\" for {ConversationId}")]
-    private partial void LogTodosNotFound(string name, string conversationId);
+    [LoggerMessage(Level = LogLevel.Debug, Message = "[todos_read] Not found: \"{NameRef}\" for {ConversationId}")]
+    private partial void LogTodosNotFound(ContentRef nameRef, string conversationId);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "[todos_read] Read all for {ConversationId}: {Count} lists")]
     private partial void LogTodosReadAll(string conversationId, int count);

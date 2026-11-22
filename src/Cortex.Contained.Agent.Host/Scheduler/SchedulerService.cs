@@ -333,14 +333,14 @@ public sealed partial class SchedulerService : IDisposable
     [LoggerMessage(Level = LogLevel.Information, Message = "Scheduler started with {TaskCount} persisted tasks, tick interval={TickIntervalSeconds}s")]
     private partial void LogSchedulerStarted(int taskCount, double tickIntervalSeconds);
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "Task scheduled: {TaskId} - {Description}, next execution={NextExecution}")]
-    private partial void LogTaskScheduled(string taskId, string description, DateTimeOffset nextExecution);
+    [LoggerMessage(Level = LogLevel.Information, Message = "Task scheduled: {TaskId} - {DescriptionRef}, next execution={NextExecution}")]
+    private partial void LogTaskScheduled(string taskId, ContentRef descriptionRef, DateTimeOffset nextExecution);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Task cancelled: {TaskId}")]
     private partial void LogTaskCancelled(string taskId);
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "Executing task {TaskId}: {Description}")]
-    private partial void LogTaskExecuting(string taskId, string description);
+    [LoggerMessage(Level = LogLevel.Information, Message = "Executing task {TaskId}: {DescriptionRef}")]
+    private partial void LogTaskExecuting(string taskId, ContentRef descriptionRef);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Task {TaskId} enqueued for LLM processing")]
     private partial void LogTaskEnqueued(string taskId);

@@ -323,20 +323,20 @@ public sealed partial class SqliteTodoStore : SqliteStoreBase, ITodoStore
 
     // ── Logging ──────────────────────────────────────────────────────────
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "[todos] Written: \"{Name}\" for {ConversationId} ({ItemCount} items)")]
-    private partial void LogTodosWritten(string name, string conversationId, int itemCount);
+    [LoggerMessage(Level = LogLevel.Information, Message = "[todos] Written: \"{NameRef}\" for {ConversationId} ({ItemCount} items)")]
+    private partial void LogTodosWritten(ContentRef nameRef, string conversationId, int itemCount);
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "[todos] Deleted: \"{Name}\" for {ConversationId}")]
-    private partial void LogTodosDeleted(string name, string conversationId);
+    [LoggerMessage(Level = LogLevel.Information, Message = "[todos] Deleted: \"{NameRef}\" for {ConversationId}")]
+    private partial void LogTodosDeleted(ContentRef nameRef, string conversationId);
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "[todos] Too many items in \"{Name}\" for {ConversationId}: {Count} exceeds max {Max}")]
-    private partial void LogTodosTooManyItems(string name, string conversationId, int count, int max);
+    [LoggerMessage(Level = LogLevel.Warning, Message = "[todos] Too many items in \"{NameRef}\" for {ConversationId}: {Count} exceeds max {Max}")]
+    private partial void LogTodosTooManyItems(ContentRef nameRef, string conversationId, int count, int max);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "[todos] Too many lists for {ConversationId}: max {Max} reached")]
     private partial void LogTodosTooManyLists(string conversationId, int max);
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "[todos] Auto-removed completed list \"{Name}\" for {ConversationId} to make room")]
-    private partial void LogTodosAutoRemoved(string name, string conversationId);
+    [LoggerMessage(Level = LogLevel.Information, Message = "[todos] Auto-removed completed list \"{NameRef}\" for {ConversationId} to make room")]
+    private partial void LogTodosAutoRemoved(ContentRef nameRef, string conversationId);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "[todos] Cleanup completed: {Count} lists purged")]
     private partial void LogTodosCleanupCompleted(int count);

@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Text.RegularExpressions;
+using Cortex.Contained.Agent.Host;
 using Microsoft.Extensions.Logging;
 
 namespace Cortex.Contained.Agent.Host.Tests.Storage;
@@ -13,6 +14,7 @@ public sealed partial class LogTemplateHygieneTests
     private static readonly HashSet<string> ContentPlaceholders = new(StringComparer.OrdinalIgnoreCase)
     {
         "Content", "Text", "Title", "Query", "Response", "LlmResponse", "Transcript", "Prompt", "Summary", "Snippet", "Fact", "Utterance",
+        "Description", "Name", "Arguments",
     };
 
     [Fact]
@@ -29,6 +31,20 @@ public sealed partial class LogTemplateHygieneTests
             .ToList();
 
         Assert.Empty(offenders);
+    }
+
+    [Fact]
+    public void ContentRef_FormatsLengthAndHashNeverTheText()
+    {
+        var text = "Call Zürich about the merger";
+
+        var formatted = ((ContentRef)text).ToString();
+
+        Assert.DoesNotContain("merger", formatted, StringComparison.Ordinal);
+        Assert.StartsWith("28 chars #", formatted, StringComparison.Ordinal);
+        Assert.Equal(formatted, ((ContentRef)text).ToString());
+        Assert.NotEqual(formatted, ((ContentRef)"Call Zürich about the mergers").ToString());
+        Assert.Equal("0 chars", ((ContentRef)(string?)null).ToString());
     }
 
     [GeneratedRegex(@"\{(\w+)(?:[:,][^}]*)?\}")]
