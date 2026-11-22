@@ -64,7 +64,8 @@ internal sealed partial class IntentComposer
     public async Task<AgentSession> CreateSessionAsync(
         AgentSession live,
         string intentText,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        DateTimeOffset? intentTimestamp = null)
     {
         var composed = new AgentSession(live.ConversationId) { SystemPromptSuffix = Framing };
 
@@ -99,6 +100,7 @@ internal sealed partial class IntentComposer
             // Nothing that reaches a history surface should be mistakable for something the user
             // said, even though this session is discarded. The model is told via Framing above.
             MessageType = LlmMessageType.ScheduledTaskInstruction,
+            Timestamp = intentTimestamp ?? DateTimeOffset.UtcNow,
         });
 
         this.LogComposerSessionBuilt(live.ConversationId, tail.Count, this.tailTurns);

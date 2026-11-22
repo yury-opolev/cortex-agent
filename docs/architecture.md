@@ -173,6 +173,25 @@ So a delivery is recorded as a complete, well-formed turn (never glued):
 
 A timer run that produces text but never calls `send_message` delivered *nothing*: only the trigger notice plus an internal `[nothing was delivered]` marker is recorded, and the undelivered wording is dropped rather than written back as agent speech. For the same reason a proactive turn's own narration is persisted as `MessageCategory.Internal` — the user never received it.
 
+## Current time stamp
+
+The model has no clock of its own, so every user-role message in its prompt starts with the time it was sent, in the owner's local time zone (the user's message, a scheduled-task or timer trigger, a voice turn, a subagent task or follow-up, a message drained mid-turn):
+
+```
+[Sunday 22 November 2026, 16:45 (Europe/Paris, UTC+01:00)]
+```
+
+Invariant English, minute precision, IANA zone id and the UTC offset of that instant (so DST is right). The latest user message's stamp is therefore effectively "now". The zone is the owner's — `History:TimeZone` (the container receives it as `CORTEX_TIMEZONE` → `History__TimeZone`; empty means the machine's local zone) — resolved once by `OwnerClock`, which also owns the `TimeProvider` used for testability.
+
+The design is shaped by the provider prompt cache (OpenAI/Copilot are stateless with automatic prefix caching), which keys on the request prefix. Rendering a message differently from one request to the next would make everything after it cache-cold, so the stamp is a pure function of the message itself:
+
+- **Each message is stamped from its OWN `LlmMessage.Timestamp`.** A message renders byte-identically on every request it appears in — later tool rounds, a message drained mid-turn, the next turn, a restart — so the whole earlier request stays a valid cached prefix. There is no in-memory state to lose or to keep in sync. Main-agent timestamps are the queued message's own time (also what `messages.db` records); seeded history keeps the Bridge's timestamps; subagent messages use the `OwnerClock` time when created.
+- **Not stamped:** compaction summaries (nobody sent them), messages with no timestamp (`default`, e.g. history seeded without times), and non-user roles. If a request's final message is not a user message it gets no extra stamp.
+- **The stamp exists only in the request being built.** `OwnerClock.StampUserMessages` swaps stamped *copies* into the prepared list (`PromptAssembler.BuildPromptAsync` for the main agent, `SubagentCallbacks.PrepareMessagesAsync` for subagents). Session history, `messages.db`, the extraction buffer, compaction input and events never contain it.
+- **The system prompt holds only static text.** `OwnerClock.SystemPromptNote` (appended to the main and subagent prompts) says each user message starts with the time it was sent, supplied by the system, that the latest one is the current time, and that delivery reports are in UTC and must be converted using the offset.
+
+Set `Agent:CurrentTimeStamp:Enabled: false` to turn off both the stamps and the system-prompt note (read at startup). Timestamps inside other content — notably delivery reports, which are rendered in UTC — are not rewritten. Within one long tool loop the latest stamp is when the user message was sent, not the instant of each model call.
+
 ## Memory system
 
 ### Pre-fetch (before each LLM call)

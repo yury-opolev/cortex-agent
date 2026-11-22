@@ -120,6 +120,7 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
     private readonly Events.DeliveryRecorder? deliveries;
     private readonly Events.DeliveryReportBuilder? deliveryReports;
     private readonly History.HistoryToolsSwitch? historyTools;
+    private readonly OwnerClock? ownerClock;
 
     /// <summary>
     /// Safety-net round limit. The real termination signals are: model stops calling tools,
@@ -196,9 +197,11 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
         string? reasoningEffort = null,
         Events.DeliveryRecorder? deliveries = null,
         Events.DeliveryReportBuilder? deliveryReports = null,
-        History.HistoryToolsSwitch? historyTools = null)
+        History.HistoryToolsSwitch? historyTools = null,
+        OwnerClock? ownerClock = null)
     {
         this.historyTools = historyTools;
+        this.ownerClock = ownerClock;
         this.deliveries = deliveries;
         this.deliveryReports = deliveryReports;
         this.reasoningEffort = Llm.LlmReasoningEffort.IsLevel(reasoningEffort) ? reasoningEffort : null;
@@ -260,7 +263,8 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
             todoResolver,
             imageDescriber,
             systemPromptStore,
-            historyTools);
+            historyTools,
+            ownerClock);
         this.slashCommandHandler = new SlashCommandHandler(
             bridgeClientAccessor,
             this.messageStore,
@@ -635,7 +639,7 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
         {
             liveConversation = session;
             session = composerSession = await this.intentComposer
-                .CreateSessionAsync(liveConversation, sanitizedText, cancellationToken)
+                .CreateSessionAsync(liveConversation, sanitizedText, cancellationToken, this.SentAt(message))
                 .ConfigureAwait(false);
         }
         else
@@ -650,6 +654,7 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
                 Content = sanitizedText,
                 ContentBlocks = contentBlocks,
                 MessageType = isInternal ? LlmMessageType.ScheduledTaskInstruction : LlmMessageType.Normal,
+                Timestamp = this.SentAt(message),
             });
 
             // Persist inbound message to local MessageStore. Skipped for composer sources: the
@@ -842,6 +847,14 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
 
         this.LogComposedOutcomeRecorded(liveConversation.ConversationId, turn.FinalText?.Length ?? 0);
     }
+
+    /// <summary>
+    /// When a queued message was sent: its own timestamp, which is also what the message store
+    /// records, so the time the model is shown for it matches the stored history. An undated
+    /// message falls back to now.
+    /// </summary>
+    private DateTimeOffset SentAt(AgentMessage message) =>
+        message.Timestamp == default ? this.ownerClock?.UtcNow ?? DateTimeOffset.UtcNow : message.Timestamp;
 
     private async Task<TurnOutcome> GenerateResponseAsync(
         AgentSession session,
@@ -1277,6 +1290,7 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
                     Role = "user",
                     Content = userText,
                     MessageType = pendingBehavior.PendingInjectionMessageType,
+                    Timestamp = this.SentAt(pending),
                 });
 
                 var sourceLabel = pending.Source.ToString();
@@ -1944,10 +1958,13 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
             return;
         }
 
+        // Seeded messages keep the time they were really sent (the stamp the model sees is derived
+        // from it); a message the Bridge could not date stays undated and is simply not stamped.
         var llmMessages = messages.Select(m => new LlmMessage
         {
             Role = m.Role,
             Content = m.Text,
+            Timestamp = m.Timestamp,
         }).ToList();
 
         this.sessions.Seed(channelId, llmMessages, this.sessionConfig.MaxHistory);

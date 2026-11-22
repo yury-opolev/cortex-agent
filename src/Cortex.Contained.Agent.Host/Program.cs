@@ -312,6 +312,14 @@ builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Coding.ICodingAgent>(s
         sp.GetRequiredService<Cortex.Contained.Agent.Host.Hubs.BridgeClientAccessor>(),
         sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<Cortex.Contained.Agent.Host.Coding.CodingAgentOptions>>().Value));
 builder.Services.AddSingleton(TimeProvider.System);
+
+// The owner's wall clock (History:TimeZone, else the machine's local zone): feeds the
+// current-time stamp on the final message of every turn and subagent run.
+builder.Services.AddSingleton(sp =>
+    Cortex.Contained.Agent.Host.Agent.OwnerClock.FromHistoryOptions(
+        sp.GetRequiredService<TimeProvider>(),
+        sp.GetRequiredService<IOptionsMonitor<HistoryOptions>>().CurrentValue,
+        sp.GetRequiredService<IOptions<AgentConfig>>().Value.CurrentTimeStamp.Enabled));
 builder.Services.AddHostedService<Cortex.Contained.Agent.Host.Coding.CodingAgentInjectionService>();
 builder.Services.AddHostedService<Cortex.Contained.Agent.Host.Coding.CodingAgentExpirySweeper>();
 
@@ -691,7 +699,8 @@ builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Agent.SubagentExecutio
         var runner = new SubagentRunner(
             llmClient, sp.GetRequiredService<ToolRegistry>(), agentConfig.CurrentValue.MaxSubagentRounds,
             runnerLogger, subagentStore, task.TaskId, modelProvider, todoStore,
-            transientStreamRetries: agentConfig.CurrentValue.SubagentTransientStreamRetries);
+            transientStreamRetries: agentConfig.CurrentValue.SubagentTransientStreamRetries,
+            ownerClock: sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.OwnerClock>());
 
         if (!string.IsNullOrWhiteSpace(task.Goal))
         {
@@ -874,7 +883,8 @@ builder.Services.AddSingleton(sp =>
         reasoningEffort: sp.GetRequiredService<IOptions<AgentConfig>>().Value.ReasoningEffort,
         deliveries: sp.GetRequiredService<Cortex.Contained.Agent.Host.Events.DeliveryRecorder>(),
         deliveryReports: sp.GetRequiredService<Cortex.Contained.Agent.Host.Events.DeliveryReportBuilder>(),
-        historyTools: sp.GetRequiredService<Cortex.Contained.Agent.Host.History.HistoryToolsSwitch>()));
+        historyTools: sp.GetRequiredService<Cortex.Contained.Agent.Host.History.HistoryToolsSwitch>(),
+        ownerClock: sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.OwnerClock>()));
 builder.Services.AddSingleton<IAgentRuntime>(sp => sp.GetRequiredService<AgentRuntime>());
 
 // Bootstrap context store removed — replaced by self-notes

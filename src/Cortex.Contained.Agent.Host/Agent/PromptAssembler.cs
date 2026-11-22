@@ -30,6 +30,7 @@ internal sealed partial class PromptAssembler
     private readonly IImageDescriber? imageDescriber;
     private readonly SystemPromptStore? systemPromptStore;
     private readonly History.HistoryToolsSwitch? historyTools;
+    private readonly OwnerClock? ownerClock;
     private readonly ILogger<PromptAssembler> logger;
 
     /// <summary>
@@ -54,9 +55,11 @@ internal sealed partial class PromptAssembler
         TodoStoreResolver? todoResolver = null,
         IImageDescriber? imageDescriber = null,
         SystemPromptStore? systemPromptStore = null,
-        History.HistoryToolsSwitch? historyTools = null)
+        History.HistoryToolsSwitch? historyTools = null,
+        OwnerClock? ownerClock = null)
     {
         this.historyTools = historyTools;
+        this.ownerClock = ownerClock;
         this.loadPersonality = loadPersonality;
         this.modelProvider = modelProvider;
         this.imageAgingOptions = imageAgingOptions;
@@ -72,8 +75,17 @@ internal sealed partial class PromptAssembler
     /// <summary>
     /// Builds the system prompt + conversation history message list for an LLM
     /// turn, then prunes/strips/trims it to fit the context window.
+    /// <para>
+    /// When an <see cref="OwnerClock"/> is configured, every user message of the RETURNED list is
+    /// stamped with the time it was sent (after trimming; the session history keeps the raw
+    /// messages). The system prompt carries just the static explanation of the stamps.
+    /// </para>
     /// </summary>
-    public async Task<List<LlmMessage>> BuildPromptAsync(AgentSession session, CancellationToken ct, string? channelId = null, bool isVoice = false)
+    public async Task<List<LlmMessage>> BuildPromptAsync(
+        AgentSession session,
+        CancellationToken ct,
+        string? channelId = null,
+        bool isVoice = false)
     {
         // Part 1: Personality (who I am — set by user)
         var personality = this.loadPersonality();
@@ -114,6 +126,11 @@ internal sealed partial class PromptAssembler
 
         var systemPrompt = SystemPromptRenderer.Render(config.MainTemplate, values);
 
+        if (this.ownerClock is not null)
+        {
+            systemPrompt = this.ownerClock.AppendSystemPromptNote(systemPrompt);
+        }
+
         if (!string.IsNullOrWhiteSpace(session.SystemPromptSuffix))
         {
             systemPrompt = systemPrompt + "\n\n" + session.SystemPromptSuffix;
@@ -150,6 +167,9 @@ internal sealed partial class PromptAssembler
             ct,
             this.historyTools?.IsEnabled ?? false).ConfigureAwait(false);
         var preparedTokens = TokenEstimator.EstimateTokens(prepared);
+
+        // After trimming and token accounting, on copies: the history keeps the raw messages.
+        this.ownerClock?.StampUserMessages(prepared);
 
         this.LogBuildPrompt(session.ConversationId, historyCount, estimatedTokens, prepared.Count - 1, preparedTokens, contextWindow, reserveForResponse);
 

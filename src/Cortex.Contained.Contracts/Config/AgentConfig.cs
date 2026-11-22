@@ -102,6 +102,22 @@ public sealed class AgentConfig
 
     /// <summary>Settings that control how images are aged out of the context window.</summary>
     public ImageAgingConfig ImageAging { get; set; } = new();
+
+    /// <summary>Settings for the current date/time stamp added to the latest message of every turn.</summary>
+    public CurrentTimeStampConfig CurrentTimeStamp { get; set; } = new();
+}
+
+/// <summary>
+/// The owner's current local date and time, given to the model on every turn as a transient
+/// line on the final user message (never in the cached prompt prefix, never persisted).
+/// </summary>
+public sealed class CurrentTimeStampConfig
+{
+    /// <summary>
+    /// Master switch (<c>Agent:CurrentTimeStamp:Enabled</c>). When off, neither the stamp nor the
+    /// system-prompt sentence that explains it is added. Read at startup.
+    /// </summary>
+    public bool Enabled { get; set; } = true;
 }
 
 /// <summary>Security settings for the agent.</summary>

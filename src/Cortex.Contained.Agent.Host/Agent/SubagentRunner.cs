@@ -37,6 +37,7 @@ public sealed partial class SubagentRunner : IDisposable
     private readonly ILogger logger;
     private readonly IOptionsMonitor<ImageAgingConfig>? imageAgingOptions;
     private readonly IImageDescriber? imageDescriber;
+    private readonly OwnerClock? ownerClock;
 
     /// <summary>
     /// Supervisor for a goal-driven run, or <see langword="null"/> for an ordinary subagent.
@@ -87,7 +88,8 @@ public sealed partial class SubagentRunner : IDisposable
         Tools.ToolRegistry toolRegistry,
         int maxRounds,
         ILogger logger,
-        int transientStreamRetries = DefaultTransientStreamRetries)
+        int transientStreamRetries = DefaultTransientStreamRetries,
+        OwnerClock? ownerClock = null)
     {
         this.agentLoop = new AgentLoop(llmClient, toolRegistry,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<AgentLoop>.Instance);
@@ -95,6 +97,7 @@ public sealed partial class SubagentRunner : IDisposable
         this.transientStreamRetries = Math.Max(0, transientStreamRetries);
         this.llmClient = llmClient;
         this.logger = logger;
+        this.ownerClock = ownerClock;
     }
 
     /// <summary>
@@ -113,8 +116,9 @@ public sealed partial class SubagentRunner : IDisposable
         InMemoryTodoStore? todoStore = null,
         IOptionsMonitor<ImageAgingConfig>? imageAgingOptions = null,
         IImageDescriber? imageDescriber = null,
-        int transientStreamRetries = DefaultTransientStreamRetries)
-        : this(llmClient, toolRegistry, maxRounds, logger, transientStreamRetries)
+        int transientStreamRetries = DefaultTransientStreamRetries,
+        OwnerClock? ownerClock = null)
+        : this(llmClient, toolRegistry, maxRounds, logger, transientStreamRetries, ownerClock)
     {
         this.store = store;
         this.taskId = taskId;
@@ -136,7 +140,8 @@ public sealed partial class SubagentRunner : IDisposable
         InMemoryTodoStore? todoStore = null,
         IOptionsMonitor<ImageAgingConfig>? imageAgingOptions = null,
         IImageDescriber? imageDescriber = null,
-        int transientStreamRetries = DefaultTransientStreamRetries)
+        int transientStreamRetries = DefaultTransientStreamRetries,
+        OwnerClock? ownerClock = null)
     {
         this.agentLoop = agentLoop;
         this.maxRounds = maxRounds > 0 ? maxRounds : DefaultMaxRounds;
@@ -149,6 +154,7 @@ public sealed partial class SubagentRunner : IDisposable
         this.todoStore = todoStore;
         this.imageAgingOptions = imageAgingOptions;
         this.imageDescriber = imageDescriber;
+        this.ownerClock = ownerClock;
     }
 
     /// <summary>
@@ -191,7 +197,7 @@ public sealed partial class SubagentRunner : IDisposable
         var messages = new List<LlmMessage>
         {
             new() { Role = "system", Content = systemPrompt },
-            new() { Role = "user", Content = userPrompt },
+            new() { Role = "user", Content = userPrompt, Timestamp = this.ownerClock?.UtcNow ?? DateTimeOffset.UtcNow },
         };
 
         return await ExecuteAsync(model, messages, conversationId, cancellationToken).ConfigureAwait(false);
@@ -262,7 +268,8 @@ public sealed partial class SubagentRunner : IDisposable
             this.taskId,
             this.pendingSession,
             this.imageAgingOptions?.CurrentValue,
-            this.imageDescriber);
+            this.imageDescriber,
+            this.ownerClock);
 
         // The callbacks own the mid-loop gate. RunLoopWithSupervisionAsync re-syncs this every
         // iteration so a goal set or cleared mid-run reaches the gate too.
