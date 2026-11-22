@@ -155,6 +155,10 @@ public sealed partial class DockerComposeCommandRunner : IComposeCommandRunner, 
     public Task<bool> IsRerankerRunningAsync(CancellationToken cancellationToken)
         => this.IsContainerRunningAsync(RerankerContainerName, cancellationToken);
 
+    /// <inheritdoc />
+    public Task<bool> HasRerankerImageAsync(CancellationToken cancellationToken)
+        => this.RunCommandAsync("image inspect cortex-reranker:latest --format {{.Id}}", ShortTimeout, cancellationToken);
+
     private async Task<bool> IsContainerRunningAsync(string containerName, CancellationToken cancellationToken)
     {
         try

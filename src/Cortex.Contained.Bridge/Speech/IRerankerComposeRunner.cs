@@ -15,4 +15,7 @@ public interface IRerankerComposeRunner
 
     /// <summary>True if the `cortex-reranker` container is currently running.</summary>
     Task<bool> IsRerankerRunningAsync(CancellationToken cancellationToken);
+
+    /// <summary>True if the <c>cortex-reranker:latest</c> image exists locally (compose never pulls it).</summary>
+    Task<bool> HasRerankerImageAsync(CancellationToken cancellationToken);
 }
