@@ -519,8 +519,14 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
     public async Task<HistoryPurgeResultDto> PurgeHistory(HistoryPurgeRequestDto request)
     {
         ArgumentNullException.ThrowIfNull(request);
+        var scope = new HistoryPurgeScope(string.IsNullOrWhiteSpace(request.ChannelId) ? null : request.ChannelId, request.OlderThan, request.From);
+        if (scope.Problem() is { } problem)
+        {
+            throw new HubException(problem);
+        }
+
         var result = await this.historyPurge.PurgeAsync(
-            new HistoryPurgeScope(string.IsNullOrWhiteSpace(request.ChannelId) ? null : request.ChannelId, request.OlderThan),
+            scope,
             null,
             Context.ConnectionAborted).ConfigureAwait(false);
 

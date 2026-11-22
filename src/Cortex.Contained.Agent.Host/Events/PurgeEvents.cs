@@ -27,6 +27,11 @@ public static class PurgeEvents
             payload["olderThan"] = SqliteDateTimeText.Format(olderThan);
         }
 
+        if (scope.From is { } from)
+        {
+            payload["from"] = SqliteDateTimeText.Format(from);
+        }
+
         if (replacementRows is { } rows)
         {
             payload["replacementRows"] = rows;

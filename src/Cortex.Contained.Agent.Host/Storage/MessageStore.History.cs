@@ -176,7 +176,7 @@ public sealed partial class MessageStore
             "purge",
             scope.ChannelId,
             null,
-            null,
+            scope.From is { } from ? SqliteDateTimeText.Format(from) : null,
             scope.OlderThan is { } olderThan ? SqliteDateTimeText.Format(olderThan) : null,
             purgeGeneration,
             cancellationToken);
@@ -324,6 +324,11 @@ public sealed partial class MessageStore
             clauses.Add($"{timeColumn} < @olderThan");
         }
 
+        if (scope.From is not null)
+        {
+            clauses.Add($"{timeColumn} >= @from");
+        }
+
         var where = clauses.Count == 0 ? "1 = 1" : string.Join(" AND ", clauses);
         return (where, cmd =>
         {
@@ -335,6 +340,11 @@ public sealed partial class MessageStore
             if (scope.OlderThan is { } olderThan)
             {
                 cmd.Parameters.AddWithValue("@olderThan", SqliteDateTimeText.Format(olderThan));
+            }
+
+            if (scope.From is { } from)
+            {
+                cmd.Parameters.AddWithValue("@from", SqliteDateTimeText.Format(from));
             }
         });
     }

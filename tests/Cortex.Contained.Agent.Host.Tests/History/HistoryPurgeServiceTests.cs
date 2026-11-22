@@ -90,6 +90,21 @@ public sealed class HistoryPurgeServiceTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task PurgeAsync_BetweenDates_DeletesOnlyRowsInRange()
+    {
+        await this.h.SayAsync("before", 0);
+        await this.h.SayAsync("inside", 60);
+        await this.h.SayAsync("after", 120);
+
+        var result = await this.purge.PurgeAsync(
+            new HistoryPurgeScope(null, OlderThan: HistoryHarness.T0.AddMinutes(90), From: HistoryHarness.T0.AddMinutes(30)), null, CancellationToken.None);
+
+        Assert.Equal(1, result.Deleted);
+        var left = await this.h.Store.GetMessagesAsync("ch");
+        Assert.Equal(["after", "before"], left.Select(m => m.Content).Order(StringComparer.Ordinal).ToArray());
+    }
+
+    [Fact]
     public async Task PurgeAsync_Channel_MarkersGoneFromEveryFileAndVocabulary()
     {
         await this.h.SayAsync("xvkqjwzd alpha", 0, channel: "secret");

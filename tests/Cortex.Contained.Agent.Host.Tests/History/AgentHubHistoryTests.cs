@@ -97,6 +97,28 @@ public sealed class AgentHubHistoryTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task PurgeHistory_BetweenDates_DeletesOnlyTheRange()
+    {
+        await this.h.SayAsync("a", 0);
+        await this.h.SayAsync("b", 60);
+
+        var result = await this.hub.PurgeHistory(new HistoryPurgeRequestDto { From = HistoryHarness.T0.AddMinutes(30), OlderThan = HistoryHarness.T0.AddDays(1) });
+
+        Assert.Equal(1, result.Deleted);
+        Assert.Equal("a", Assert.Single(await this.h.Store.GetMessagesAsync("ch")).Content);
+    }
+
+    [Fact]
+    public async Task PurgeHistory_InvertedRange_RejectedWithoutDeleting()
+    {
+        await this.h.SayAsync("a", 0);
+
+        await Assert.ThrowsAsync<HubException>(() => this.hub.PurgeHistory(new HistoryPurgeRequestDto { From = HistoryHarness.T0, OlderThan = HistoryHarness.T0 }));
+
+        Assert.Single(await this.h.Store.GetMessagesAsync("ch"));
+    }
+
+    [Fact]
     public async Task ImportMessages_ClearExisting_ReplacesInOneTransactionAndBumpsRestoreGeneration()
     {
         await this.h.SayAsync("old", 0);

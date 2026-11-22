@@ -2,14 +2,21 @@ namespace Cortex.Contained.Agent.Host.History;
 
 /// <summary>Which rows a purge deletes. Null members are unbounded.</summary>
 /// <param name="ChannelId">Restrict to one channel, or null for every channel.</param>
-/// <param name="OlderThan">Delete rows with <c>Timestamp &lt; OlderThan</c>, or null for all times.</param>
-public sealed record HistoryPurgeScope(string? ChannelId, DateTimeOffset? OlderThan)
+/// <param name="OlderThan">Delete rows with <c>Timestamp &lt; OlderThan</c>, or null for no upper bound.</param>
+/// <param name="From">Delete rows with <c>Timestamp &gt;= From</c>, or null for no lower bound (a "between dates" purge sets both).</param>
+public sealed record HistoryPurgeScope(string? ChannelId, DateTimeOffset? OlderThan, DateTimeOffset? From = null)
 {
     /// <summary>Every row.</summary>
     public static HistoryPurgeScope All { get; } = new(null, null);
 
     /// <summary>True when only one channel is affected.</summary>
     public bool IsChannelScoped => this.ChannelId is not null;
+
+    /// <summary>Null when the scope is usable; otherwise why not (an empty or inverted time range).</summary>
+    public string? Problem() =>
+        this.From is { } from && this.OlderThan is { } olderThan && from >= olderThan
+            ? "The start of the range must be before its end."
+            : null;
 }
 
 /// <summary>Input to the single purge transaction in <c>MessageStore.PurgeAsync</c>.</summary>

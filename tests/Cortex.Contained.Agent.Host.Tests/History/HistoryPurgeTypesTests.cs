@@ -21,6 +21,14 @@ public class HistoryPurgeTypesTests
     }
 
     [Fact]
+    public void Problem_FromNotBeforeOlderThan_ReportsInvertedRange()
+    {
+        Assert.NotNull(new HistoryPurgeScope(null, OlderThan: T0, From: T0).Problem());
+        Assert.Null(new HistoryPurgeScope(null, OlderThan: T0.AddDays(1), From: T0).Problem());
+        Assert.Null(new HistoryPurgeScope("ch", null, From: T0).Problem());
+    }
+
+    [Fact]
     public void Contains_IsHalfOpen()
     {
         var window = new QuarantineWindow(T0, T0.AddHours(1));
