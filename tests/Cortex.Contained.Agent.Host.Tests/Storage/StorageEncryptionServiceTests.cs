@@ -188,6 +188,32 @@ public sealed class StorageEncryptionServiceTests : IDisposable
     }
 
     [Fact]
+    public void Status_AnEncryptionThatFailedVerification_IsListedAsAProblemWithoutPaths()
+    {
+        using (var plain = new Microsoft.Data.Sqlite.SqliteConnection(EncryptedSqlite.ConnectionString(this.layout.MessagesDatabase, null, Microsoft.Data.Sqlite.SqliteOpenMode.ReadWriteCreate, pooling: false)))
+        {
+            plain.Open();
+            using var create = plain.CreateCommand();
+            create.CommandText = "CREATE TABLE t (x TEXT); INSERT INTO t VALUES ('a');";
+            create.ExecuteNonQuery();
+        }
+
+        Assert.ThrowsAny<Exception>(() => EncryptedSqlite.Prepare(this.layout.MessagesDatabase, "0123456789abcdef", s =>
+        {
+            if (s == "after-export")
+            {
+                using var stream = new FileStream(this.layout.MessagesDatabase + ".encrypting", FileMode.Open, FileAccess.Write);
+                stream.SetLength(10);
+            }
+        }));
+
+        var status = this.Service(Ring(KeyA)).GetStatus();
+
+        var problem = Assert.Single(status.Problems);
+        Assert.Contains("messages.db", problem, StringComparison.Ordinal);
+        Assert.DoesNotContain(this.root, problem, StringComparison.Ordinal);
+    }
+    [Fact]
     public void Status_AStoreCannotBeRead_IsReportedUnavailableSoNoKeyIsMintedFromIt()
     {
         File.WriteAllBytes(this.layout.MessagesDatabase, [.. "SQLite format 3\0"u8.ToArray(), .. new byte[4080]]);

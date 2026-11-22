@@ -75,6 +75,7 @@ public sealed partial class StorageEncryptionService
             ExpectedKeyFingerprint = this.context.Marker is { KeyFingerprint.Length: > 0 } marker ? marker.KeyFingerprint : null,
             HasEncryptedData = covered.Any(i => i.State is StorageItemStates.Encrypted or StorageItemStates.Mixed),
             Unavailable = covered.Any(i => i.State == StorageItemStates.Unknown),
+            Problems = [.. new[] { this.context.Layout.MessagesDatabase, this.context.Layout.MemoryDatabasePath }.Select(EncryptedSqlite.ExportProblem).OfType<string>()],
             Error = covered.Any(i => i.State == StorageItemStates.Unknown) ? "Some stores could not be read; their state is unknown." : null,
             MessagesState = health.MessagesState,
             MemoryState = health.MemoryState,

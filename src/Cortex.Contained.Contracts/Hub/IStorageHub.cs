@@ -118,6 +118,9 @@ public sealed record StorageEncryptionStatusDto
     /// <summary>Why <see cref="Unavailable"/> (no paths, no content).</summary>
     public string? Error { get; init; }
 
+    /// <summary>Stores that stay locked until the owner acts (for example a database whose encryption did not verify); a clear message each, no paths.</summary>
+    public IReadOnlyList<string> Problems { get; init; } = [];
+
     /// <summary>Every known stored item and its state.</summary>
     public IReadOnlyList<StorageItemDto> Items { get; init; } = [];
 }

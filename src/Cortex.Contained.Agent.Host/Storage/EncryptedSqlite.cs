@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using System.Text.RegularExpressions;
 using Cortex.Contained.Contracts.Security;
 using Microsoft.Data.Sqlite;
@@ -35,6 +36,16 @@ public static partial class EncryptedSqlite
     private const int Corrupt = 11;
     private const int BusyTimeoutSeconds = 2;
 
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, ExportFailure> ExportFailures = new(StringComparer.Ordinal);
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<ProbeKey, bool> ProbeResults = new();
+
+    private sealed record ExportFailure((long Length, long Ticks) Stamp, bool NeedsRepair, string Message)
+    {
+        public Exception ToException() => this.NeedsRepair ? new StorageSourceNeedsRepairException(this.Message) : new InvalidDataException(this.Message);
+    }
+
+    private readonly record struct ProbeKey(string Path, (long Length, long Ticks) Database, (long Length, long Ticks) Journal, string KeyHash);
+
     /// <summary>
     /// Prepares <paramref name="path"/> for opening with <paramref name="password"/>. A plaintext database is
     /// never rekeyed in place: it is exported to <c>&lt;db&gt;.encrypting</c> (<c>VACUUM INTO</c> a keyed target),
@@ -67,7 +78,7 @@ public static partial class EncryptedSqlite
             case StoredFileState.Empty:
                 return EncryptedOpenOutcome.Opened;
             case StoredFileState.Encrypted:
-                if (!(File.Exists(path + "-journal") ? CanReadOnCopy(path, password) : CanRead(path, password)))
+                if (!(File.Exists(path + "-journal") ? CanReadOnCopy(path, password, faultInjector) : CanRead(path, password, corruptMeansWrongKey: false)))
                 {
                     throw new StorageKeyMismatchException($"{Path.GetFileName(path)} cannot be opened with the provided storage key.");
                 }
@@ -112,6 +123,20 @@ public static partial class EncryptedSqlite
             Password = password,
         }.ToString();
 
+    /// <summary>The message of an encryption that failed verification and is not retried until the file changes, the agent restarts or <see cref="ResetExportBackoff"/>; otherwise null.</summary>
+    public static string? ExportProblem(string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        return ExportFailures.TryGetValue(path, out var failure) && failure.Stamp == StampOf(path) ? failure.Message : null;
+    }
+
+    /// <summary>Allows the next <see cref="Prepare"/> to retry an export that failed verification.</summary>
+    public static void ResetExportBackoff(string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ExportFailures.TryRemove(path, out _);
+    }
+
     [GeneratedRegex(@"\d+\.\d+\.\d+")]
     private static partial Regex VersionPattern();
 
@@ -120,28 +145,90 @@ public static partial class EncryptedSqlite
         var encrypting = path + EncryptingSuffix;
         var ready = path + EncryptedSuffix;
 
+        if (ExportFailures.TryGetValue(path, out var earlier))
+        {
+            if (earlier.Stamp == StampOf(path))
+            {
+                throw earlier.ToException();
+            }
+
+            ExportFailures.TryRemove(path, out _);
+        }
+
         faultInjector?.Invoke("before-export");
         DeleteWithSidecars(encrypting);
 
+        bool? failedNeedsRepair = null;
         using (var source = Open(path, password: null))
         {
-            Execute(source, "PRAGMA wal_checkpoint(TRUNCATE);");
-            Execute(source, $"VACUUM main INTO '{ExportTarget(encrypting, password)}';");
-            var expected = TableCounts(source);
-            FlushToDisk(encrypting);
-            faultInjector?.Invoke("after-export");
-
-            if (!VerifiesAgainst(encrypting, password, expected))
+            try
             {
-                DeleteWithSidecars(encrypting);
-                throw new InvalidDataException($"The encrypted copy of {Path.GetFileName(path)} did not verify; the original is kept.");
+                var sourceProblems = IntegrityProblems(source);
+                Execute(source, "PRAGMA wal_checkpoint(TRUNCATE);");
+                Execute(source, $"VACUUM main INTO '{ExportTarget(encrypting, password)}';");
+                var expected = TableCounts(source);
+                FlushToDisk(encrypting);
+                faultInjector?.Invoke("after-export");
+
+                if (!VerifiesAgainst(encrypting, password, expected, sourceProblems.Count))
+                {
+                    failedNeedsRepair = sourceProblems.Count > 0;
+                }
             }
+            catch (SqliteException ex) when (ex.SqliteErrorCode is Corrupt or NotADatabase)
+            {
+                failedNeedsRepair = true;
+            }
+        }
+
+        if (failedNeedsRepair is { } needsRepair)
+        {
+            DeleteWithSidecars(encrypting);
+            throw Fail(path, needsRepair);
         }
 
         File.Move(encrypting, ready);
         faultInjector?.Invoke("after-verify");
 
+        ExportFailures.TryRemove(path, out _);
         FinishSwap(path, ready, faultInjector);
+    }
+
+    // The stamp is taken after the source connection is closed (closing a WAL database rewrites the file).
+    private static Exception Fail(string path, bool needsRepair)
+    {
+        var failure = new ExportFailure(
+            StampOf(path),
+            needsRepair,
+            needsRepair
+                ? $"{Path.GetFileName(path)} fails its own integrity check and its encrypted copy is worse: repair or restore the database, then restart the agent. It stays plaintext and locked until then."
+                : $"The encrypted copy of {Path.GetFileName(path)} did not verify; the original is kept. It is not retried until the file changes or the agent restarts.");
+        ExportFailures[path] = failure;
+        return failure.ToException();
+    }
+
+    private static (long Length, long Ticks) StampOf(string path)
+    {
+        var info = new FileInfo(path);
+        return info.Exists ? (info.Length, info.LastWriteTimeUtc.Ticks) : (-1, -1);
+    }
+
+    private static List<string> IntegrityProblems(SqliteConnection connection)
+    {
+        var problems = new List<string>();
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "PRAGMA integrity_check;";
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            var line = reader.GetString(0);
+            if (!string.Equals(line, "ok", StringComparison.Ordinal))
+            {
+                problems.Add(line);
+            }
+        }
+
+        return problems;
     }
 
     private static bool CompleteInterruptedExport(string path, string password, Action<string>? faultInjector)
@@ -212,12 +299,15 @@ public static partial class EncryptedSqlite
         return $"file:{uriPath}?key={password}".Replace("'", "''", StringComparison.Ordinal);
     }
 
-    private static bool VerifiesAgainst(string path, string password, Dictionary<string, long> expected)
+    // The copy passes when every table has the source's row count and it is no more damaged than the source
+    // (VACUUM rebuilds indexes, so a source whose integrity check fails can still yield a clean or equally flawed copy).
+    private static bool VerifiesAgainst(string path, string password, Dictionary<string, long> expected, int sourceProblemCount)
     {
         try
         {
             using var connection = Open(path, password);
-            return IntegrityOk(connection)
+            var copyProblems = IntegrityProblems(connection).Count;
+            return (copyProblems == 0 || (sourceProblemCount > 0 && copyProblems <= sourceProblemCount))
                 && TableCounts(connection).OrderBy(p => p.Key, StringComparer.Ordinal).SequenceEqual(expected.OrderBy(p => p.Key, StringComparer.Ordinal));
         }
         catch (SqliteException)
@@ -226,12 +316,16 @@ public static partial class EncryptedSqlite
         }
     }
 
+    // A copy that was verified before it was renamed only has to open with the key again.
     private static bool VerifiesAlone(string path, string password)
     {
         try
         {
             using var connection = Open(path, password);
-            return IntegrityOk(connection);
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "SELECT COUNT(*) FROM sqlite_master;";
+            cmd.ExecuteScalar();
+            return true;
         }
         catch (SqliteException ex) when (ex.SqliteErrorCode is NotADatabase or Corrupt)
         {
@@ -241,13 +335,6 @@ public static partial class EncryptedSqlite
         {
             throw ProbeFailed(path, ex);
         }
-    }
-
-    private static bool IntegrityOk(SqliteConnection connection)
-    {
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = "PRAGMA integrity_check;";
-        return string.Equals(Convert.ToString(cmd.ExecuteScalar(), CultureInfo.InvariantCulture), "ok", StringComparison.Ordinal);
     }
 
     private static Dictionary<string, long> TableCounts(SqliteConnection connection)
@@ -268,7 +355,7 @@ public static partial class EncryptedSqlite
         foreach (var name in names)
         {
             using var cmd = connection.CreateCommand();
-            cmd.CommandText = $"SELECT COUNT(*) FROM \"{name.Replace("\"", "\"\"", StringComparison.Ordinal)}\";";
+            cmd.CommandText = $"SELECT COUNT(*) FROM \"{name.Replace("\"", "\"\"", StringComparison.Ordinal)}\" NOT INDEXED;";
             counts[name] = Convert.ToInt64(cmd.ExecuteScalar(), CultureInfo.InvariantCulture);
         }
 
@@ -318,7 +405,7 @@ public static partial class EncryptedSqlite
         return connection;
     }
 
-    private static bool CanRead(string path, string password)
+    private static bool CanRead(string path, string password, bool corruptMeansWrongKey)
     {
         try
         {
@@ -328,7 +415,7 @@ public static partial class EncryptedSqlite
             cmd.ExecuteScalar();
             return true;
         }
-        catch (SqliteException ex) when (ex.SqliteErrorCode == NotADatabase)
+        catch (SqliteException ex) when (ex.SqliteErrorCode == NotADatabase || (corruptMeansWrongKey && ex.SqliteErrorCode == Corrupt))
         {
             return false;
         }
@@ -339,16 +426,33 @@ public static partial class EncryptedSqlite
     }
 
     // A rollback journal next to an encrypted file is replayed by the first open, with whatever key that open uses;
-    // a wrong key could write garbage pages back. The key is therefore tried on a copy first.
-    private static bool CanReadOnCopy(string path, string password)
+    // a wrong key could write garbage pages back. The key is therefore tried on a copy first. On the copy, SQLite3MC
+    // answers a wrong key plus a hot journal with "corrupt" rather than "not a database", so both mean the key does
+    // not open it. The outcome is remembered per file state and key, so a locked store does not copy the database again.
+    private static bool CanReadOnCopy(string path, string password, Action<string>? faultInjector)
     {
+        var journal = path + "-journal";
+        var cacheKey = new ProbeKey(path, StampOf(path), StampOf(journal), Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(password))));
+        if (ProbeResults.TryGetValue(cacheKey, out var known))
+        {
+            return known;
+        }
+
         var probe = path + ".probe";
         try
         {
+            faultInjector?.Invoke("probe-copy");
             DeleteWithSidecars(probe);
             File.Copy(path, probe, overwrite: true);
-            File.Copy(path + "-journal", probe + "-journal", overwrite: true);
-            return CanRead(probe, password);
+            File.Copy(journal, probe + "-journal", overwrite: true);
+            var opens = CanRead(probe, password, corruptMeansWrongKey: true);
+            if (ProbeResults.Count > 64)
+            {
+                ProbeResults.Clear();
+            }
+
+            ProbeResults[cacheKey] = opens;
+            return opens;
         }
         finally
         {
@@ -389,6 +493,24 @@ public sealed class StorageKeyMismatchException : Exception
     }
 
     public StorageKeyMismatchException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
+}
+
+/// <summary>The plaintext database fails its own integrity check and its encrypted copy is worse: repair it, then retry.</summary>
+public sealed class StorageSourceNeedsRepairException : IOException
+{
+    public StorageSourceNeedsRepairException()
+    {
+    }
+
+    public StorageSourceNeedsRepairException(string message)
+        : base(message)
+    {
+    }
+
+    public StorageSourceNeedsRepairException(string message, Exception innerException)
         : base(message, innerException)
     {
     }
