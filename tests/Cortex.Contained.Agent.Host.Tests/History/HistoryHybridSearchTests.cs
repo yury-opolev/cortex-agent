@@ -65,6 +65,33 @@ public sealed class HistoryHybridSearchTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task Auto_DefaultSearchModeKeyword_StaysKeywordWithoutEmbeddingTheQuery()
+    {
+        await this.SeedAsync();
+        await this.EmbedAllAsync();
+        this.h.Options.DefaultSearchMode = HistorySearchMode.Keyword;
+
+        var result = await this.SearchAsync("railway");
+
+        Assert.Equal(HistorySearchMode.Keyword, result.Mode);
+        Assert.Equal("not used: mode=keyword (default)", result.Coverage.Dense);
+        Assert.Empty(this.embedder.Queries);
+    }
+
+    [Fact]
+    public async Task Hybrid_DefaultSearchModeKeyword_ExplicitHybridStillHybrid()
+    {
+        await this.SeedAsync();
+        await this.EmbedAllAsync();
+        this.h.Options.DefaultSearchMode = HistorySearchMode.Keyword;
+
+        var result = await this.SearchAsync("train trip", HistorySearchMode.Hybrid);
+
+        Assert.Equal(HistorySearchMode.Hybrid, result.Mode);
+        Assert.Contains("railway journey", result.Hits[0].Lines[0].Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Hybrid_KeywordAndDenseAgree_MatchedByBothRanksFirst()
     {
         await this.SeedAsync();

@@ -56,6 +56,14 @@ public sealed class HistoryOptions
     /// <summary><c>history-eval</c> workspace root; its overlapping <c>runs</c> are destroyed on purge too (they hold raw copies).</summary>
     public string EvalArtifactsDirectory { get; set; } = "/app/state/eval/hybrid";
 
+    /// <summary>
+    /// What <c>history_search mode=auto</c> (the default) means: <see cref="HistorySearchMode.Auto"/> or
+    /// <see cref="HistorySearchMode.Hybrid"/> use hybrid search when embeddings are available,
+    /// <see cref="HistorySearchMode.Keyword"/> keeps relevance searches keyword-only unless the caller asks
+    /// for <c>mode=hybrid</c>. Applies at query time.
+    /// </summary>
+    public HistorySearchMode DefaultSearchMode { get; set; } = HistorySearchMode.Auto;
+
     /// <summary>Keyword index variant; part of the index fingerprint (§4.2 stemming ablation).</summary>
     public HistoryKeywordVariant KeywordVariant { get; set; } = HistoryKeywordVariant.Plain;
 

@@ -50,9 +50,19 @@ public sealed partial class HistoryRecallService
             return (null, "off");
         }
 
-        if (request.Order == HistoryOrder.Time || request.Mode == HistorySearchMode.Keyword)
+        if (request.Order == HistoryOrder.Time)
         {
-            return (null, request.Order == HistoryOrder.Time ? "not used: order=time is exhaustive keyword" : "not used: mode=keyword");
+            return (null, "not used: order=time is exhaustive keyword");
+        }
+
+        if (request.Mode == HistorySearchMode.Keyword)
+        {
+            return (null, "not used: mode=keyword");
+        }
+
+        if (request.Mode == HistorySearchMode.Auto && this.options.CurrentValue.DefaultSearchMode == HistorySearchMode.Keyword)
+        {
+            return (null, "not used: mode=keyword (default)");
         }
 
         if (this.embedder is null)
