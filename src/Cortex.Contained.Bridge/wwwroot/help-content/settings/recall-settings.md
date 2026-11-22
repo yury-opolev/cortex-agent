@@ -2,8 +2,8 @@
 
 Found under **Tenants → *your tenant* → Recall**. Recall is how the assistant finds past
 conversations (`history_search`) and stored memories (`memory_search`). **Changes take effect
-immediately** — no restart needed — and apply to this tenant only (except the reranker switch, which is
-shared by all tenants).
+immediately** — no restart needed — and apply to this tenant only (except the reranker and embeddings GPU
+switches, which are shared by all tenants).
 
 ## Settings
 
@@ -26,6 +26,15 @@ Values you changed are marked *custom*. **Reset to defaults** removes all of the
 Starts the `cortex-reranker` sidecar and lets every tenant use it. If it fails, the page says why — most
 often the image is not built yet (`scripts\Build-RerankerImage.ps1`) or the machine has no usable GPU
 (build the CPU variant with `-Variant cpu`).
+
+## Embeddings (shared by all tenants)
+
+**Run embeddings on the GPU** moves the embeddings sidecar from the CPU (the default, works everywhere) to
+your NVIDIA GPU, which makes embedding the history much faster. It needs an NVIDIA GPU with Docker GPU
+support. Switching recreates the sidecar; if the GPU cannot be used, Cortex starts it on the CPU instead and
+the page tells you why, so memory keeps working. The page shows where the sidecar really runs (for example
+`GPU container, model: 100% GPU`; the model is only listed while it is loaded). While built-in memory is
+off, the sidecar is stopped and the switch applies when memory is switched on.
 
 ## Status
 

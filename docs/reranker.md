@@ -82,6 +82,10 @@ like the hub token).
 
 The CPU variant cannot meet Gate R's p95 ≤ 2.5 s at any useful budget; use the GPU.
 
+The reranker shares the NVIDIA GPU with the other sidecars. The embeddings sidecar can use it too (opt-in,
+[history-hybrid-search.md](history-hybrid-search.md#running-the-embedder-on-the-gpu-opt-in)); each keeps its
+model resident, so on a small card check the total VRAM before enabling both.
+
 ## Owner workflow (Gate R)
 
 The evaluation CLIs run outside the agent process, so they read the key from the environment; take it from

@@ -58,6 +58,28 @@ the embedder reports itself unavailable, nothing is sent and searches stay keywo
 embedder needs HTTPS and an API key (or an explicit entry in `AllowedEndpointHosts`); otherwise dense
 search reports `unavailable: …` and nothing is sent. `OllamaHistoryEmbedder` re-checks this on every call.
 
+### Running the embedder on the GPU (opt-in)
+
+The sidecar runs on the CPU by default, so hosts without an NVIDIA GPU keep working; re-embedding a large
+history is slow there (hours). With an NVIDIA GPU and Docker GPU support, switch it on in Bridge → tenant →
+**Recall → Embeddings (shared by all tenants) → Run embeddings on the GPU**, or set `embeddings: gpu: true` in
+the Bridge `cortex.yml` (`Embeddings:Gpu`, default false; environment `Embeddings__Gpu=true`).
+
+- **Mechanism.** `docker-compose.embeddings-gpu.yml` adds only the `nvidia` device reservation to `embeddings`
+  (the same one the reranker has). The Bridge adds `-f docker-compose.yml -f docker-compose.embeddings-gpu.yml`
+  to its embeddings commands when the switch is on; the Launcher keeps the override next to the stable compose
+  file in `%LOCALAPPDATA%\Cortex`, like `docker-compose.yml`.
+- **Toggling** recreates the container (`up -d --force-recreate --wait embeddings`, the image's healthcheck
+  decides "started"); the same reconcile also runs at Bridge start and when built-in memory is switched on, and
+  recreates the container only if its placement differs from the switch. The embedder fingerprint
+  (`model;dims;ctx`) does not change, so the switch re-embeds nothing; it only makes embedding faster.
+- **Honest status.** If the GPU start fails (no NVIDIA runtime), the Bridge logs it, starts the sidecar
+  **without** the override so memory keeps working, and the page shows the sidecar as `running` with the
+  problem. The page also shows where it really runs: the container's GPU device request (`docker inspect`)
+  and, while the model is loaded, the PROCESSOR column of `ollama ps` (`100% GPU`).
+- **Same GPU as the other sidecars.** The embedder, the reranker and the speech sidecars all reserve the
+  same GPU; each keeps its model resident, so mind the total VRAM on a small card.
+
 ## Coverage, health and fallback
 
 Every `history_search` response states `mode: hybrid (keyword + semantic)` or `mode: keyword` and a

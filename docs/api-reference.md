@@ -51,6 +51,8 @@
 | POST | `/api/tenants/{tenantId}/recall/quarantine/delete` | Yes | Same body; erases the quarantined ones in one batch (`DeleteManyAsync`); ids not in quarantine are skipped |
 | GET | `/api/recall/reranker` | Yes | Bridge-wide reranker switch and sidecar state `{ enabled, sidecar: { state, problem, at } }` |
 | PUT | `/api/recall/reranker` | Yes | Body `{ enabled }`. Persists `reranker: enabled` in `cortex.yml`, then (in the background) starts the sidecar and grants every agent, or withdraws the grant and stops the sidecar |
+| GET | `/api/recall/embeddings-gpu` | Yes | Bridge-wide "run embeddings on the GPU" switch, the sidecar state and where it really runs: `{ enabled, sidecar: { state, problem, at }, mode, processor }` — `mode` is `gpu`/`cpu` (the running container's device request) or null when it is not running; `processor` is the `ollama ps` PROCESSOR (`100% GPU`) or null while no model is loaded. `sidecar.problem` is set when the GPU start failed and the sidecar fell back to the CPU |
+| PUT | `/api/recall/embeddings-gpu` | Yes | Body `{ enabled }`. Persists `embeddings: gpu` in `cortex.yml` (`500` if it cannot be written; the switch is restored), then (in the background) recreates the `embeddings` container with or without `docker-compose.embeddings-gpu.yml`; falls back to the CPU when the GPU start fails |
 | POST | `/api/channels/{type}` | Yes | Update channel configuration |
 | GET | `/api/mcp/actions` | Yes | List approval-gated MCP mutation actions (filter by `serverKey`, `toolName`, `state`, `workerId`; paged with `before`/`limit`) |
 | GET | `/api/mcp/actions/{actionId}` | Yes | One action, including its canonical arguments (for review) and result |

@@ -116,6 +116,8 @@ services:
   # into the image (offline, no runtime pull, no model volume). Same model +
   # runtime as before, so existing memory vectors stay consistent. `image:` pulls
   # the GHCR release; `build:` is the dev fallback from the submodule.
+  # CPU by default; the opt-in GPU is docker-compose.embeddings-gpu.yml, which the Bridge
+  # layers on top of this file (Recall page: "Run embeddings on the GPU").
   embeddings:
     image: ghcr.io/yury-opolev/cortex-embeddings:0.1
     build:
