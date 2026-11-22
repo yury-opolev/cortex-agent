@@ -188,6 +188,7 @@ public static partial class EncryptedSqlite
         }
 
         File.Move(encrypting, ready);
+        DirectorySync.TryFlush(Path.GetDirectoryName(Path.GetFullPath(path))!);
         faultInjector?.Invoke("after-verify");
 
         ExportFailures.TryRemove(path, out _);
@@ -276,6 +277,8 @@ public static partial class EncryptedSqlite
 
         faultInjector?.Invoke("after-plaintext-erase");
         File.Move(ready, path);
+        faultInjector?.Invoke("directory-sync");
+        DirectorySync.TryFlush(Path.GetDirectoryName(Path.GetFullPath(path))!);
         faultInjector?.Invoke("after-swap");
     }
 

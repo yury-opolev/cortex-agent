@@ -116,7 +116,7 @@ public sealed class EncryptedSqliteTests : IDisposable
 
         EncryptedSqlite.Prepare(this.DbPath, KeyA, stages.Add);
 
-        Assert.Equal(["before-export", "after-export", "after-verify", "after-plaintext-erase", "after-swap"], stages);
+        Assert.Equal(["before-export", "after-export", "after-verify", "after-plaintext-erase", "directory-sync", "after-swap"], stages);
     }
 
     [Theory]
@@ -400,5 +400,12 @@ public sealed class EncryptedSqliteTests : IDisposable
         this.Write(null, "zqmore");
 
         Assert.Equal(EncryptedOpenOutcome.Migrated, EncryptedSqlite.Prepare(this.DbPath, KeyA));
+    }
+
+    [Fact]
+    public void DirectorySync_NeverThrows_AndFlushesOnUnix()
+    {
+        Assert.Equal(!OperatingSystem.IsWindows(), DirectorySync.TryFlush(this.dir));
+        Assert.False(DirectorySync.TryFlush(Path.Combine(this.dir, "missing")));
     }
 }
