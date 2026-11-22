@@ -11,6 +11,9 @@ public sealed record EventBackfillBatch(long LastId, int Scanned, int Inserted);
 /// <summary>Outcome of a whole backfill run.</summary>
 public sealed record EventBackfillReport(int Scanned, int Inserted, TimeSpan Elapsed);
 
+/// <summary>Whether a backfill is running and how the last one (since the agent started) ended.</summary>
+public sealed record EventBackfillStatus(bool Running, EventBackfillReport? Last, DateTimeOffset? LastRunAt);
+
 /// <summary>Writer-side backfill step, implemented by <c>MessageStore</c>.</summary>
 public interface IEventBackfillStore
 {
@@ -37,6 +40,8 @@ public sealed partial class EventBackfillService
     private readonly HistoryAccessGate gate;
     private readonly TimeProvider time;
     private readonly ILogger<EventBackfillService> logger;
+    private int running;
+    private volatile EventBackfillStatus last = new(false, null, null);
 
     public EventBackfillService(IEventBackfillStore store, HistoryAccessGate gate, TimeProvider time, ILogger<EventBackfillService> logger)
     {
@@ -46,8 +51,26 @@ public sealed partial class EventBackfillService
         this.logger = logger;
     }
 
+    /// <summary>The current state (for the Recall status page).</summary>
+    public EventBackfillStatus Status => this.last with { Running = Volatile.Read(ref this.running) > 0 };
+
     /// <summary>Runs the backfill to the end of the table.</summary>
     public async Task<EventBackfillReport> RunAsync(CancellationToken cancellationToken)
+    {
+        Interlocked.Increment(ref this.running);
+        try
+        {
+            var report = await this.RunCoreAsync(cancellationToken).ConfigureAwait(false);
+            this.last = new EventBackfillStatus(false, report, this.time.GetUtcNow());
+            return report;
+        }
+        finally
+        {
+            Interlocked.Decrement(ref this.running);
+        }
+    }
+
+    private async Task<EventBackfillReport> RunCoreAsync(CancellationToken cancellationToken)
     {
         var started = this.time.GetTimestamp();
         var scanned = 0;

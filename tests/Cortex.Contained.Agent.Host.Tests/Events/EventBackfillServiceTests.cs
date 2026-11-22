@@ -39,6 +39,33 @@ public sealed class EventBackfillServiceTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task Status_AfterRun_ReportsTheLastRun()
+    {
+        Assert.Equal(new EventBackfillStatus(false, null, null), this.backfill.Status);
+        await this.h.SayAsync("m", 0);
+        await this.ForgetAllEventsAsync();
+
+        var report = await this.backfill.RunAsync(CancellationToken.None);
+
+        var status = this.backfill.Status;
+        Assert.False(status.Running);
+        Assert.Equal(report, status.Last);
+        Assert.NotNull(status.LastRunAt);
+    }
+
+    [Fact]
+    public async Task Status_WhileWaitingForTheMaintenanceWindow_ReportsRunning()
+    {
+        var lease = await this.h.Gate.AcquireWriteAsync(CancellationToken.None);
+        var run = this.backfill.RunAsync(CancellationToken.None);
+
+        Assert.True(this.backfill.Status.Running);
+        await lease.DisposeAsync();
+        await run;
+        Assert.False(this.backfill.Status.Running);
+    }
+
+    [Fact]
     public async Task RunAsync_LegacyRows_GetOneLegacyImportEach()
     {
         for (var i = 0; i < 2500; i++)
