@@ -134,6 +134,9 @@ services:
       # History text is embedded here (episodic history, increment 3): keep debug
       # logging off so request bodies are never logged.
       - OLLAMA_DEBUG=0
+      # Flash attention: exact math, ~1.8x faster embedding on the GPU (240 ms vs 430 ms for a
+      # 500-word chunk), harmless on CPU. See docs/history-hybrid-search.md.
+      - OLLAMA_FLASH_ATTENTION=1
     networks:
       - cortex-internal
     restart: unless-stopped
@@ -166,6 +169,13 @@ services:
     profiles: [reranker]
     environment:
       - LLAMA_API_KEY=${CORTEX_RERANKER_API_KEY:-}
+      # Optional sizing overrides; empty keeps the entrypoint's lean defaults (docs/reranker.md).
+      - RERANKER_CTX_SIZE=${RERANKER_CTX_SIZE:-}
+      - RERANKER_PARALLEL=${RERANKER_PARALLEL:-}
+      - RERANKER_BATCH_SIZE=${RERANKER_BATCH_SIZE:-}
+      - RERANKER_UBATCH_SIZE=${RERANKER_UBATCH_SIZE:-}
+      - RERANKER_FLASH_ATTN=${RERANKER_FLASH_ATTN:-}
+      - RERANKER_CACHE_TYPE=${RERANKER_CACHE_TYPE:-}
     networks:
       - cortex-internal
     restart: unless-stopped

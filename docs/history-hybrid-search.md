@@ -65,8 +65,8 @@ history is slow there (hours). With an NVIDIA GPU and Docker GPU support, switch
 **Recall → Embeddings (shared by all tenants) → Run embeddings on the GPU**, or set `embeddings: gpu: true` in
 the Bridge `cortex.yml` (`Embeddings:Gpu`, default false; environment `Embeddings__Gpu=true`).
 
-- **Mechanism.** `docker-compose.embeddings-gpu.yml` adds only the `nvidia` device reservation to `embeddings`
-  (the same one the reranker has). The Bridge adds `-f docker-compose.yml -f docker-compose.embeddings-gpu.yml`
+- **Mechanism.** `docker-compose.embeddings-gpu.yml` adds the `nvidia` device reservation to `embeddings`
+  (the same one the reranker has) and `OLLAMA_GPU_OVERHEAD` (below). The Bridge adds `-f docker-compose.yml -f docker-compose.embeddings-gpu.yml`
   to its embeddings commands when the switch is on; the Launcher keeps the override next to the stable compose
   file in `%LOCALAPPDATA%\Cortex`, like `docker-compose.yml`.
 - **Toggling** recreates the container (`up -d --force-recreate --wait embeddings`, the image's healthcheck
@@ -77,7 +77,23 @@ the Bridge `cortex.yml` (`Embeddings:Gpu`, default false; environment `Embedding
   **without** the override so memory keeps working, and the page shows the sidecar as `running` with the
   problem. The page also shows where it really runs: the container's GPU device request (`docker inspect`)
   and, while the model is loaded, the PROCESSOR column of `ollama ps` (`100% GPU`).
-- **Same GPU as the other sidecars.** The embedder, the reranker and the speech sidecars all reserve the
+- **Flash attention.** The base compose sets `OLLAMA_FLASH_ATTENTION=1` on `embeddings`: exact math, faster on
+  the GPU and harmless on the CPU. The KV cache type makes no difference to the footprint of this model.
+- **GPU headroom.** The override sets `OLLAMA_GPU_OVERHEAD` (bytes Ollama keeps free per GPU, default
+  `536870912` = 512 MiB; override with `CORTEX_EMBEDDINGS_GPU_OVERHEAD` in the Bridge's environment) so the
+  speech sidecars, which load lazily, do not run out of VRAM. When the model no longer fits within the free
+  VRAM minus that overhead, Ollama splits its layers between CPU and GPU automatically (partial offload)
+  instead of failing.
+- **Measured** (qwen3-embedding:0.6b F16, ~1,425 MiB fully on the GPU, 8 GB laptop GPU with ~5.8 GB already in use):
+
+  | Placement | 500-word chunk |
+  |---|---|
+  | Full GPU, flash attention on | ~240 ms (~430 ms without) |
+  | Partial offload (Ollama auto-split, 64% CPU / 36% GPU) | ~320 ms |
+  | CPU only | ~2.2 s |
+
+  A short query on the CPU takes ~100 ms, so searching stays fast even when the GPU is full; the GPU matters for
+  embedding history in bulk.- **Same GPU as the other sidecars.** The embedder, the reranker and the speech sidecars all reserve the
   same GPU; each keeps its model resident, so mind the total VRAM on a small card.
 
 ## Coverage, health and fallback

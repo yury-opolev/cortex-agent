@@ -5,6 +5,10 @@
 # without one keep working. Same reservation as the reranker service.
 services:
   embeddings:
+    environment:
+      # Bytes Ollama keeps free per GPU (default 512 MiB) so the lazily loading speech sidecars do not
+      # run out of VRAM. When the model does not fit, Ollama splits its layers between CPU and GPU.
+      - OLLAMA_GPU_OVERHEAD=${CORTEX_EMBEDDINGS_GPU_OVERHEAD:-536870912}
     deploy:
       resources:
         reservations:
