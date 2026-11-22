@@ -38,7 +38,7 @@
     <PackageVersion Include="System.Security.Cryptography.ProtectedData" Version="10.0.0" />
     <!-- Database -->
     <PackageVersion Include="Microsoft.Data.Sqlite.Core" Version="10.0.1" />
-    <PackageVersion Include="SQLite3MC.PCLRaw.bundle" Version="2.2.7" />
+    <PackageVersion Include="SQLite3MC.PCLRaw.bundle" Version="2.7.1" />
     <!-- Configuration -->
     <PackageVersion Include="Microsoft.Extensions.Configuration.FileExtensions" Version="10.0.0" />
     <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.0" />

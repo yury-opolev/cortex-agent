@@ -62,6 +62,18 @@ public static class EncryptedSqlite
         return EncryptedOpenOutcome.Migrated;
     }
 
+    /// <summary>The version of the linked SQLite3 Multiple Ciphers engine (<c>sqlite3mc_version()</c>), e.g. <c>2.7.1</c>.</summary>
+    public static Version EngineVersion()
+    {
+        using var connection = new SqliteConnection("Data Source=:memory:");
+        connection.Open();
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT sqlite3mc_version();";
+        var text = Convert.ToString(cmd.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty;
+        var match = System.Text.RegularExpressions.Regex.Match(text, @"\d+\.\d+\.\d+");
+        return match.Success ? Version.Parse(match.Value) : new Version(0, 0, 0);
+    }
+
     /// <summary>A connection string for <paramref name="path"/>, encrypted when <paramref name="password"/> is set.</summary>
     public static string ConnectionString(string path, string? password, SqliteOpenMode mode, bool pooling) =>
         new SqliteConnectionStringBuilder

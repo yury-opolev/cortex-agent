@@ -35,6 +35,13 @@ public sealed class EncryptedSqliteTests : IDisposable
     }
 
     [Fact]
+    public void EngineVersion_IsPastTheRekeyDataLossFixes()
+    {
+        // SQLite3MC 2.7.0 fixed crash-during-rekey corruption (#291), keyless open deleting a hot journal (#292) and failed rekey (#294).
+        Assert.True(EncryptedSqlite.EngineVersion() >= new Version(2, 7, 0), EncryptedSqlite.EngineVersion().ToString());
+    }
+
+    [Fact]
     public void Prepare_NoFile_Created()
     {
         Assert.Equal(EncryptedOpenOutcome.Created, EncryptedSqlite.Prepare(this.DbPath, KeyA));
