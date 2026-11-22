@@ -120,6 +120,7 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
     private readonly Events.DeliveryRecorder? deliveries;
     private readonly Events.DeliveryReportBuilder? deliveryReports;
     private readonly History.HistoryToolsSwitch? historyTools;
+    private readonly OwnerClock? ownerClock;
 
     /// <summary>
     /// Safety-net round limit. The real termination signals are: model stops calling tools,
@@ -196,9 +197,11 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
         string? reasoningEffort = null,
         Events.DeliveryRecorder? deliveries = null,
         Events.DeliveryReportBuilder? deliveryReports = null,
-        History.HistoryToolsSwitch? historyTools = null)
+        History.HistoryToolsSwitch? historyTools = null,
+        OwnerClock? ownerClock = null)
     {
         this.historyTools = historyTools;
+        this.ownerClock = ownerClock;
         this.deliveries = deliveries;
         this.deliveryReports = deliveryReports;
         this.reasoningEffort = Llm.LlmReasoningEffort.IsLevel(reasoningEffort) ? reasoningEffort : null;
@@ -260,7 +263,8 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
             todoResolver,
             imageDescriber,
             systemPromptStore,
-            historyTools);
+            historyTools,
+            ownerClock);
         this.slashCommandHandler = new SlashCommandHandler(
             bridgeClientAccessor,
             this.messageStore,
@@ -884,6 +888,10 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
 
         // Per-turn latency profiling (queue-wait, TTFT, LLM, tools, e2e).
         var latency = new TurnLatencyTracker(TimeProvider.System);
+
+        // One stamper per turn: the current-time stamp is pinned to the final user message so every
+        // tool round of this turn sends an identical prompt prefix.
+        var turnStamper = new TurnTimeStamper(this.ownerClock);
         LlmTokenUsage? lastUsage = null;
 
         // Shared context for the entire turn — collects proactive messages
@@ -898,7 +906,7 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
         for (var round = 0; round < MaxToolRounds; round++)
         {
             // Build the LLM request with tool definitions
-            var messages = await this.promptAssembler.BuildPromptAsync(session, cancellationToken, channelId, isVoice).ConfigureAwait(false);
+            var messages = await this.promptAssembler.BuildPromptAsync(session, cancellationToken, channelId, isVoice, turnStamper).ConfigureAwait(false);
             var requestId = Guid.NewGuid().ToString("N");
 
             var request = new LlmCompletionRequest

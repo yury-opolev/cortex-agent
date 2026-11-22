@@ -30,6 +30,7 @@ internal sealed partial class PromptAssembler
     private readonly IImageDescriber? imageDescriber;
     private readonly SystemPromptStore? systemPromptStore;
     private readonly History.HistoryToolsSwitch? historyTools;
+    private readonly OwnerClock? ownerClock;
     private readonly ILogger<PromptAssembler> logger;
 
     /// <summary>
@@ -54,9 +55,11 @@ internal sealed partial class PromptAssembler
         TodoStoreResolver? todoResolver = null,
         IImageDescriber? imageDescriber = null,
         SystemPromptStore? systemPromptStore = null,
-        History.HistoryToolsSwitch? historyTools = null)
+        History.HistoryToolsSwitch? historyTools = null,
+        OwnerClock? ownerClock = null)
     {
         this.historyTools = historyTools;
+        this.ownerClock = ownerClock;
         this.loadPersonality = loadPersonality;
         this.modelProvider = modelProvider;
         this.imageAgingOptions = imageAgingOptions;
@@ -72,8 +75,18 @@ internal sealed partial class PromptAssembler
     /// <summary>
     /// Builds the system prompt + conversation history message list for an LLM
     /// turn, then prunes/strips/trims it to fit the context window.
+    /// <para>
+    /// When <paramref name="turnStamper"/> is supplied, the current-time stamp is added to the final
+    /// user message of the RETURNED list only (after trimming), never to the session history. The
+    /// system prompt carries just the static explanation of the stamp, never the time itself.
+    /// </para>
     /// </summary>
-    public async Task<List<LlmMessage>> BuildPromptAsync(AgentSession session, CancellationToken ct, string? channelId = null, bool isVoice = false)
+    public async Task<List<LlmMessage>> BuildPromptAsync(
+        AgentSession session,
+        CancellationToken ct,
+        string? channelId = null,
+        bool isVoice = false,
+        TurnTimeStamper? turnStamper = null)
     {
         // Part 1: Personality (who I am — set by user)
         var personality = this.loadPersonality();
@@ -114,6 +127,11 @@ internal sealed partial class PromptAssembler
 
         var systemPrompt = SystemPromptRenderer.Render(config.MainTemplate, values);
 
+        if (this.ownerClock is not null)
+        {
+            systemPrompt = this.ownerClock.AppendSystemPromptNote(systemPrompt);
+        }
+
         if (!string.IsNullOrWhiteSpace(session.SystemPromptSuffix))
         {
             systemPrompt = systemPrompt + "\n\n" + session.SystemPromptSuffix;
@@ -150,6 +168,9 @@ internal sealed partial class PromptAssembler
             ct,
             this.historyTools?.IsEnabled ?? false).ConfigureAwait(false);
         var preparedTokens = TokenEstimator.EstimateTokens(prepared);
+
+        // After trimming and token accounting, on a copy: the history keeps the raw message.
+        turnStamper?.Apply(prepared);
 
         this.LogBuildPrompt(session.ConversationId, historyCount, estimatedTokens, prepared.Count - 1, preparedTokens, contextWindow, reserveForResponse);
 

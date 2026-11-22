@@ -173,6 +173,24 @@ So a delivery is recorded as a complete, well-formed turn (never glued):
 
 A timer run that produces text but never calls `send_message` delivered *nothing*: only the trigger notice plus an internal `[nothing was delivered]` marker is recorded, and the undelivered wording is dropped rather than written back as agent speech. For the same reason a proactive turn's own narration is persisted as `MessageCategory.Internal` — the user never received it.
 
+## Current time stamp
+
+The model has no clock of its own, so every turn tells it the owner's local date and time: the final user message of the request (the user's message, a scheduled-task or timer trigger, a voice turn, a subagent task or follow-up) gets one line prepended:
+
+```
+[Current time: Sunday 22 November 2026, 16:45 (Europe/Paris, UTC+01:00)]
+```
+
+Invariant English, minute precision, IANA zone id and UTC offset. The zone is the owner's — `History:TimeZone` (the container receives it as `CORTEX_TIMEZONE` → `History__TimeZone`; empty means the machine's local zone) — resolved once by `OwnerClock`, which also owns the `TimeProvider` used for testability.
+
+The design is shaped by the provider prompt cache, which keys on the request prefix:
+
+- **Nothing time-dependent goes into the system prompt or any early message.** The system prompt gets one static sentence (`OwnerClock.SystemPromptNote`, appended to the main and subagent prompts) saying the bracketed line is supplied by the system and is authoritative for "now".
+- **The stamp exists only in the request being built.** `TurnTimeStamper.Apply` swaps a stamped *copy* of the last user message into the prepared list (`PromptAssembler.BuildPromptAsync` for the main agent, `SubagentCallbacks.PrepareMessagesAsync` for subagents). Session history, `messages.db`, the extraction buffer and events never contain it, so on the next turn the same message is rendered without it and the cached prefix is unchanged.
+- **One stamp per message.** The stamper is pinned to the message it first stamped, so the tool rounds of one turn (or one subagent run) all send the same text instead of rewriting the message at every minute boundary.
+
+Set `Agent:CurrentTimeStamp:Enabled: false` to turn off both the stamp and the system-prompt sentence (read at startup). Timestamps inside older messages — notably delivery reports, which are rendered in UTC — are not rewritten; the system-prompt sentence tells the model to compare them with the stamp's UTC offset.
+
 ## Memory system
 
 ### Pre-fetch (before each LLM call)

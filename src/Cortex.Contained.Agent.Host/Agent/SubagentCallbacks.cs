@@ -27,7 +27,8 @@ public sealed partial class SubagentCallbacks : IAgentLoopCallbacks
     private readonly AgentSession? pendingSession;
     private readonly ImageAgingConfig imageAging;
     private readonly IImageDescriber? imageDescriber;
-
+    private readonly OwnerClock? ownerClock;
+    private readonly TurnTimeStamper timeStamper;
     /// <summary>Tool actions seen in the current round, fed to the stuck detector at round end.</summary>
     private readonly List<StuckDetectorAction> roundActions = [];
 
@@ -58,7 +59,8 @@ public sealed partial class SubagentCallbacks : IAgentLoopCallbacks
         string? taskId = null,
         AgentSession? pendingSession = null,
         ImageAgingConfig? imageAging = null,
-        IImageDescriber? imageDescriber = null)
+        IImageDescriber? imageDescriber = null,
+        OwnerClock? ownerClock = null)
     {
         this.messages = messages;
         this.contextWindow = contextWindow;
@@ -72,6 +74,8 @@ public sealed partial class SubagentCallbacks : IAgentLoopCallbacks
         this.pendingSession = pendingSession;
         this.imageAging = imageAging ?? new ImageAgingConfig();
         this.imageDescriber = imageDescriber;
+        this.ownerClock = ownerClock;
+        this.timeStamper = new TurnTimeStamper(ownerClock);
     }
 
     public async Task<List<LlmMessage>> PrepareMessagesAsync(int round, CancellationToken cancellationToken)
@@ -98,6 +102,12 @@ public sealed partial class SubagentCallbacks : IAgentLoopCallbacks
             this.imageDescriber,
             cancellationToken).ConfigureAwait(false);
 
+        // Static note first (cache-stable); the todo section below already varies per round.
+        if (this.ownerClock is not null && prepared.Count > 0 && prepared[0].Role == "system")
+        {
+            prepared[0] = prepared[0] with { Content = this.ownerClock.AppendSystemPromptNote(prepared[0].Content ?? string.Empty) };
+        }
+
         // Inject current todo progress into system message
         if (this.todoStore is not null && prepared.Count > 0 && prepared[0].Role == "system")
         {
@@ -113,6 +123,9 @@ public sealed partial class SubagentCallbacks : IAgentLoopCallbacks
                 prepared[0] = prepared[0] with { Content = prepared[0].Content + todoSection };
             }
         }
+
+        // Last, on a copy: the stored subagent history keeps the raw user message.
+        this.timeStamper.Apply(prepared);
 
         return prepared;
     }
