@@ -24,16 +24,70 @@ public sealed class HistoryHostedServicesTests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task ProjectorService_Disabled_DoesNothing()
+    public async Task ProjectorService_Disabled_IdlesWithoutBuilding()
     {
         this.h.Options = new HistoryOptions { Enabled = false };
         var service = new HistoryProjectorService(this.h.Projector, this.h.Status, this.h.Monitor, NullLogger<HistoryProjectorService>.Instance, TimeSpan.FromMilliseconds(10));
 
         await service.StartAsync(CancellationToken.None);
-        await service.ExecuteTask!.WaitAsync(TimeSpan.FromSeconds(5));
+        await Task.Delay(200);
 
+        Assert.False(service.ExecuteTask!.IsCompleted);
         Assert.False(this.h.Projector.IsInitialized);
         Assert.Empty(this.h.Generations.List());
+        await service.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task ProjectorService_EnabledAtRuntime_BuildsIndex()
+    {
+        await this.h.SayAsync("kayak trip", 0);
+        this.h.Options = new HistoryOptions { Enabled = false, TimeZone = "UTC" };
+        var service = new HistoryProjectorService(this.h.Projector, this.h.Status, this.h.Monitor, NullLogger<HistoryProjectorService>.Instance, TimeSpan.FromMilliseconds(10));
+        await service.StartAsync(CancellationToken.None);
+        await Task.Delay(100);
+
+        this.h.Options = new HistoryOptions { Enabled = true, TimeZone = "UTC" };
+        await WaitUntilAsync(() => this.h.Status.Snapshot().BuildComplete);
+
+        await service.StopAsync(CancellationToken.None);
+        Assert.True(this.h.Status.Snapshot().BuildComplete);
+    }
+
+    [Fact]
+    public async Task ProjectorService_DisabledThenReenabledAfterJournalPrune_RebuildsNewGeneration()
+    {
+        await this.h.SayAsync("kayak trip", 0);
+        var service = new HistoryProjectorService(this.h.Projector, this.h.Status, this.h.Monitor, NullLogger<HistoryProjectorService>.Instance, TimeSpan.FromMilliseconds(10));
+        await service.StartAsync(CancellationToken.None);
+        await WaitUntilAsync(() => this.h.Status.Snapshot().Generation == 1);
+
+        this.h.Options = new HistoryOptions { Enabled = false, TimeZone = "UTC" };
+        await Task.Delay(100);
+        await this.h.SayAsync("canoe lake", 1);
+        await using (var snapshot = await this.h.Store.OpenSnapshotAsync(CancellationToken.None))
+        {
+            // What HistoryMaintenanceService does while History is off.
+            await this.h.Store.PruneJournalAsync((await snapshot.ReadMetaAsync(CancellationToken.None)).JournalHead, CancellationToken.None);
+        }
+
+        this.h.Options = new HistoryOptions { Enabled = true, TimeZone = "UTC" };
+        await WaitUntilAsync(() => this.h.Status.Snapshot() is { Generation: 2, BuildComplete: true });
+
+        await service.StopAsync(CancellationToken.None);
+        using var reader = this.h.Projector.Current!.OpenReader();
+        Assert.Equal(1, reader.DocumentFrequency("canoe"));
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (!condition() && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(20);
+        }
+
+        Assert.True(condition());
     }
 
     [Fact]

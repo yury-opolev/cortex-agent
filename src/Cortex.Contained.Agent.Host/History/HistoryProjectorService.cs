@@ -56,51 +56,51 @@ public sealed partial class HistoryProjectorService : BackgroundService
     /// <inheritdoc />
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        var settings = this.options.CurrentValue;
-        if (!settings.Enabled)
-        {
-            this.LogDisabled();
-            return;
-        }
-
-        var problems = settings.Validate().ToList();
-        var capabilities = SqliteRuntimeInfo.Capabilities;
-        if (!capabilities.SupportsHistoryIndex)
-        {
-            problems.Add($"SQLite {capabilities.Version} cannot host the history index: {capabilities.Error}");
-        }
-
-        if (problems.Count > 0)
-        {
-            var message = string.Join(" ", problems);
-            this.status.Update(s => s with { Halted = true, LastError = message });
-            this.LogHalted(message);
-            return;
-        }
-
-        if (this.storage is not null)
-        {
-            // Encrypted storage opens only once the Bridge pushed the key; wait rather than burn retries.
-            try
-            {
-                await this.storage.WhenOpenAsync(stoppingToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-            {
-                return;
-            }
-            catch (Exception ex) when (ex is Storage.StorageKeyMismatchException or Storage.StorageLockedException)
-            {
-                this.status.Update(s => s with { Halted = true, LastError = ex.Message });
-                this.LogHalted(ex.Message);
-                return;
-            }
-        }
-
+        // History:Enabled is read every tick, so the Recall settings page can switch it at runtime:
+        // switched on, the startup checks run and the projector resumes or rebuilds; switched off, the
+        // loop idles (recall tools are hidden by HistoryToolsSwitch; the index stays until the next erasure
+        // pass deletes it, and maintenance prunes the unconsumed journal, which forces a rebuild on re-enable).
+        var running = false;
+        var reportedDisabled = false;
         var failures = 0;
         var embeddingBackoff = 0;
         while (!stoppingToken.IsCancellationRequested)
         {
+            var settings = this.options.CurrentValue;
+            if (!settings.Enabled)
+            {
+                if (running)
+                {
+                    this.LogPaused();
+                    running = false;
+                }
+                else if (!reportedDisabled)
+                {
+                    this.LogDisabled();
+                }
+
+                reportedDisabled = true;
+                if (!await this.DelayAsync(stoppingToken).ConfigureAwait(false))
+                {
+                    return;
+                }
+
+                continue;
+            }
+
+            if (!running)
+            {
+                var start = await this.TryStartAsync(settings, stoppingToken).ConfigureAwait(false);
+                if (start != StartOutcome.Started)
+                {
+                    return;
+                }
+
+                running = true;
+                failures = 0;
+                embeddingBackoff = 0;
+            }
+
             try
             {
                 if (!this.projector.IsInitialized)
@@ -141,14 +141,63 @@ public sealed partial class HistoryProjectorService : BackgroundService
                 embeddingBackoff = await this.EmbedAsync(embeddingBackoff, stoppingToken).ConfigureAwait(false);
             }
 
-            try
-            {
-                await Task.Delay(this.pollInterval, stoppingToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
+            if (!await this.DelayAsync(stoppingToken).ConfigureAwait(false))
             {
                 return;
             }
+        }
+    }
+
+    private async Task<StartOutcome> TryStartAsync(HistoryOptions settings, CancellationToken stoppingToken)
+    {
+        var problems = settings.Validate().ToList();
+        var capabilities = SqliteRuntimeInfo.Capabilities;
+        if (!capabilities.SupportsHistoryIndex)
+        {
+            problems.Add($"SQLite {capabilities.Version} cannot host the history index: {capabilities.Error}");
+        }
+
+        if (problems.Count > 0)
+        {
+            var message = string.Join(" ", problems);
+            this.status.Update(s => s with { Halted = true, LastError = message });
+            this.LogHalted(message);
+            return StartOutcome.Halted;
+        }
+
+        if (this.storage is not null)
+        {
+            // Encrypted storage opens only once the Bridge pushed the key; wait rather than burn retries.
+            try
+            {
+                await this.storage.WhenOpenAsync(stoppingToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                return StartOutcome.Stopped;
+            }
+            catch (Exception ex) when (ex is Storage.StorageKeyMismatchException or Storage.StorageLockedException)
+            {
+                this.status.Update(s => s with { Halted = true, LastError = ex.Message });
+                this.LogHalted(ex.Message);
+                return StartOutcome.Halted;
+            }
+        }
+
+        this.LogStarted();
+        return StartOutcome.Started;
+    }
+
+    private async Task<bool> DelayAsync(CancellationToken stoppingToken)
+    {
+        try
+        {
+            await Task.Delay(this.pollInterval, stoppingToken).ConfigureAwait(false);
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+            return false;
         }
     }
 
@@ -185,8 +234,14 @@ public sealed partial class HistoryProjectorService : BackgroundService
         }
     }
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "History locator disabled (History:Enabled=false); projector not started")]
+    [LoggerMessage(Level = LogLevel.Information, Message = "History locator disabled (History:Enabled=false); projector idle until it is enabled")]
     private partial void LogDisabled();
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "History locator enabled; projector started")]
+    private partial void LogStarted();
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "History locator switched off at runtime; projector paused")]
+    private partial void LogPaused();
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "History projector batch failed (attempt {Attempt}): {Error}")]
     private partial void LogBatchFailed(int attempt, string error);
@@ -196,4 +251,11 @@ public sealed partial class HistoryProjectorService : BackgroundService
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "History embedding failed; keyword search continues and embedding retries later: {Error}")]
     private partial void LogEmbeddingFailed(string error);
+
+    private enum StartOutcome
+    {
+        Started,
+        Halted,
+        Stopped,
+    }
 }

@@ -112,6 +112,22 @@ public sealed class HistoryProjectorTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task ApplyPendingAsync_JournalPrunedPastCheckpointWhileRunning_RequiresRebuild()
+    {
+        await this.h.SayAsync("a", 0);
+        await this.h.Projector.InitializeAsync(CancellationToken.None);
+        await this.h.CatchUpAsync();
+        await this.h.SayAsync("b", 1);
+        await using (var snapshot = await this.h.Store.OpenSnapshotAsync(CancellationToken.None))
+        {
+            var head = (await snapshot.ReadMetaAsync(CancellationToken.None)).JournalHead;
+            await this.h.Store.PruneJournalAsync(head, CancellationToken.None);
+        }
+
+        Assert.Equal(ProjectorApplyResult.RebuildRequired, await this.h.Projector.ApplyPendingAsync(CancellationToken.None));
+    }
+
+    [Fact]
     public async Task ApplyPendingAsync_RestoredSource_RequiresRebuildAndRetiresGeneration()
     {
         await this.h.SayAsync("old", 0);

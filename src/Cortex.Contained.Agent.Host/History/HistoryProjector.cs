@@ -563,8 +563,11 @@ public sealed partial class HistoryProjector : IDisposable
         var meta = await snapshot.ReadMetaAsync(cancellationToken).ConfigureAwait(false);
         if (!string.Equals(meta.DbInstanceId, state.SourceInstanceId, StringComparison.Ordinal)
             || meta.RestoreGeneration != state.SourceRestoreGeneration
-            || !string.Equals(state.ConfigFingerprint, fingerprint, StringComparison.Ordinal))
+            || !string.Equals(state.ConfigFingerprint, fingerprint, StringComparison.Ordinal)
+            || state.CheckpointJournalSeq < meta.JournalPrunedThrough)
         {
+            // The last condition: the journal was pruned past this index (History was switched off at
+            // runtime and maintenance dropped the unconsumed journal), so it can no longer catch up.
             return false;
         }
 
