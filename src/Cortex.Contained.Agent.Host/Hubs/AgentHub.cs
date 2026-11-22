@@ -535,11 +535,20 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
 
         var dependentMemories = DependentMemoryActions.IsDelete(request.DependentMemories) ? DependentMemoryAction.Delete : DependentMemoryAction.Review;
 
-        var result = await this.historyPurge.PurgeAsync(
-            scope,
-            null,
-            Context.ConnectionAborted,
-            dependentMemories: dependentMemories).ConfigureAwait(false);
+        HistoryPurgeResult result;
+        try
+        {
+            result = await this.historyPurge.PurgeAsync(
+                scope,
+                null,
+                Context.ConnectionAborted,
+                dependentMemories: dependentMemories,
+                expectedMessages: request.ExpectedMessages).ConfigureAwait(false);
+        }
+        catch (HistoryScopeChangedException ex)
+        {
+            throw new HubException(ex.Message);
+        }
 
         if (request.ChannelId is { Length: > 0 } channelId)
         {

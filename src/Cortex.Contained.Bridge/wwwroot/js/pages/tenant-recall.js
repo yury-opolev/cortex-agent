@@ -31,6 +31,7 @@ function tenantRecallPage() {
         channels: [],
         purge: { channelId: "", time: "all", from: "", olderThan: "", dependentMemories: "review" },
         preview: null,
+        previewState: recallPurge.newState(),
         previewError: "",
         previewing: false,
         showPurgeModal: false,
@@ -189,11 +190,17 @@ function tenantRecallPage() {
 
         async refreshPreview() {
             this.preview = null;
+            recallPurge.reset(this.previewState);
             this.previewError = this.purgeScopeError();
-            if (this.previewError) return;
+            if (this.previewError) {
+                this.previewing = false;
+                return;
+            }
             this.previewing = true;
             try {
-                this.preview = await recallPurge.preview(this.tenantId, this.purgeScope(), this.purge.dependentMemories);
+                const result = await recallPurge.startPreview(this.previewState, this.tenantId, this.purgeScope(), this.purge.dependentMemories);
+                if (result.stale) return;
+                this.preview = result.preview;
             } catch (e) {
                 this.previewError = e.message;
             }
@@ -209,15 +216,24 @@ function tenantRecallPage() {
         },
 
         async confirmPurge() {
+            const invalid = this.purgeScopeError();
+            if (invalid) {
+                Alpine.store("toast").error(invalid);
+                return;
+            }
             this.purging = true;
             try {
-                const resp = await recallPurge.run(this.tenantId, this.purgeScope(), this.purge.dependentMemories);
+                const resp = await recallPurge.run(this.previewState, this.tenantId, this.purgeScope(), this.purge.dependentMemories);
                 Alpine.store("toast").success(resp?.message ?? "History deleted");
                 this.showPurgeModal = false;
                 await Promise.all([this.loadChannels(), this.loadQuarantine(), this.loadStatus()]);
                 await this.refreshPreview();
             } catch (e) {
                 Alpine.store("toast").error("Delete failed: " + e.message);
+                if (e.stale || e.status === 409) {
+                    this.showPurgeModal = false;
+                    await this.refreshPreview();
+                }
             }
             this.purging = false;
         },

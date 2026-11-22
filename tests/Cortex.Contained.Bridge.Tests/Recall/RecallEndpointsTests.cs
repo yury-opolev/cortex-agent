@@ -110,6 +110,26 @@ public sealed class RecallEndpointsTests
     }
 
     [Fact]
+    public async Task Purge_ScopeChangedSincePreview_Returns409AndForwardsExpectedMessages()
+    {
+        this.agent.PurgeAsync(Arg.Any<HistoryPurgeRequestDto>(), Arg.Any<CancellationToken>())
+            .Returns<HistoryPurgeResultDto>(_ => throw new HubException("An unexpected error occurred invoking 'PurgeHistory' on the server. HubException: " + HistoryPurgeErrors.ScopeChangedPrefix + " preview again"));
+
+        var result = await RecallEndpoints.PurgeAsync(this.agent, new HistoryPurgeRequestDto { ExpectedMessages = 3 }, CancellationToken.None);
+
+        Assert.Equal(409, StatusOf(result));
+        await this.agent.Received(1).PurgeAsync(Arg.Is<HistoryPurgeRequestDto>(r => r.ExpectedMessages == 3), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Purge_NegativeExpectedMessages_Returns400()
+    {
+        var result = await RecallEndpoints.PurgeAsync(this.agent, new HistoryPurgeRequestDto { ExpectedMessages = -1 }, CancellationToken.None);
+
+        Assert.Equal(400, StatusOf(result));
+    }
+
+    [Fact]
     public async Task Preview_ReturnsCountsAndBothConfirmations()
     {
         this.agent.PreviewPurgeAsync(Arg.Any<HistoryPurgeRequestDto>(), Arg.Any<CancellationToken>())

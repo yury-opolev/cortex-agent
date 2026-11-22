@@ -171,6 +171,11 @@ internal static class RecallEndpoints
             return "from must be before olderThan";
         }
 
+        if (body.ExpectedMessages is < 0)
+        {
+            return "expectedMessages must not be negative";
+        }
+
         if (body.ChannelId is { } channel && (channel.Length > MaxChannelIdLength || channel.Any(char.IsControl)))
         {
             return "channelId is invalid";
@@ -188,6 +193,10 @@ internal static class RecallEndpoints
         try
         {
             value = await call().ConfigureAwait(false);
+        }
+        catch (HubException ex) when (ex.Message.Contains(HistoryPurgeErrors.ScopeChangedPrefix, StringComparison.Ordinal))
+        {
+            return Results.Json(new { error = "The history to delete changed since the preview. Preview again." }, statusCode: 409);
         }
         catch (HubException ex)
         {

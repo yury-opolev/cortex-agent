@@ -48,6 +48,47 @@ public sealed class HistoryPurgePreviewTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task PurgeAsync_ScopeGrewBeyondPreview_RefusesAndDeletesNothing()
+    {
+        for (var i = 0; i < HistoryPurgeService.ExpectedMessagesTolerance + 2; i++)
+        {
+            await this.h.SayAsync($"m{i}", i, channel: "x");
+        }
+
+        var ex = await Assert.ThrowsAsync<HistoryScopeChangedException>(() =>
+            this.purge.PurgeAsync(new HistoryPurgeScope("x", null), null, CancellationToken.None, expectedMessages: 1));
+
+        Assert.StartsWith(HistoryScopeChangedException.Prefix, ex.Message, StringComparison.Ordinal);
+        Assert.Equal(HistoryPurgeService.ExpectedMessagesTolerance + 2, (await this.h.Store.GetMessagesAsync("x")).Count);
+    }
+
+    [Fact]
+    public async Task PurgeAsync_ScopeGrewWithinTolerance_Proceeds()
+    {
+        for (var i = 0; i < HistoryPurgeService.ExpectedMessagesTolerance + 1; i++)
+        {
+            await this.h.SayAsync($"m{i}", i, channel: "x");
+        }
+
+        var result = await this.purge.PurgeAsync(new HistoryPurgeScope("x", null), null, CancellationToken.None, expectedMessages: 1);
+
+        Assert.Equal(HistoryPurgeService.ExpectedMessagesTolerance + 1, result.Deleted);
+    }
+
+    [Fact]
+    public async Task PurgeAsync_NoExpectedMessages_IsNotChecked()
+    {
+        for (var i = 0; i < HistoryPurgeService.ExpectedMessagesTolerance + 5; i++)
+        {
+            await this.h.SayAsync($"m{i}", i, channel: "x");
+        }
+
+        var result = await this.purge.PurgeAsync(new HistoryPurgeScope("x", null), null, CancellationToken.None);
+
+        Assert.Equal(HistoryPurgeService.ExpectedMessagesTolerance + 5, result.Deleted);
+    }
+
+    [Fact]
     public async Task PreviewAsync_NothingInScope_ReportsZero()
     {
         await this.h.SayAsync("a", 0, channel: "x");

@@ -21,6 +21,9 @@ public sealed record HistoryPurgeResult(int Deleted, int Inserted, bool ErasureC
 /// </summary>
 public sealed partial class HistoryPurgeService
 {
+    /// <summary>How many messages may have arrived since the preview before a deletion is refused.</summary>
+    public const int ExpectedMessagesTolerance = 50;
+
     private readonly IHistoryErasureStore store;
     private readonly HistoryAccessGate gate;
     private readonly HistoryProjector projector;
@@ -57,12 +60,15 @@ public sealed partial class HistoryPurgeService
     /// <param name="cancellationToken">Cancellation.</param>
     /// <param name="quarantineCap">Quarantine windows end no later than this (the moment an import began), or null for the purge time.</param>
     /// <param name="dependentMemories">Quarantine (default) or erase the curated memories created in the purged period.</param>
+    /// <param name="expectedMessages">The previewed message count; the purge is refused when the scope now holds more than this plus <see cref="ExpectedMessagesTolerance"/>. Null skips the check.</param>
+    /// <exception cref="HistoryScopeChangedException">The scope grew beyond the preview.</exception>
     public async Task<HistoryPurgeResult> PurgeAsync(
         HistoryPurgeScope scope,
         IReadOnlyList<MessageRecord>? replacement,
         CancellationToken cancellationToken,
         DateTimeOffset? quarantineCap = null,
-        DependentMemoryAction dependentMemories = DependentMemoryAction.Review)
+        DependentMemoryAction dependentMemories = DependentMemoryAction.Review,
+        int? expectedMessages = null)
     {
         ArgumentNullException.ThrowIfNull(scope);
         var settings = this.options.CurrentValue;
@@ -72,6 +78,15 @@ public sealed partial class HistoryPurgeService
 
         await using (await this.gate.AcquireWriteAsync(cancellationToken).ConfigureAwait(false))
         {
+            if (expectedMessages is { } expected)
+            {
+                var actual = (await this.store.ReadPurgeTimestampsAsync(scope, cancellationToken).ConfigureAwait(false)).Count;
+                if (actual > expected + ExpectedMessagesTolerance)
+                {
+                    throw new HistoryScopeChangedException(expected, actual);
+                }
+            }
+
             var request = new MessagePurgeRequest(scope)
             {
                 Now = this.time.GetUtcNow(),

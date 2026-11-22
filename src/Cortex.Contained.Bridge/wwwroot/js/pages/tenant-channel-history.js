@@ -53,6 +53,7 @@ function tenantChannelHistoryPage() {
         clearOlderThan: "",
         clearDependentMemories: "review", // "review" (quarantine) or "delete" — the owner's choice per purge
         clearPreview: null,
+        clearState: recallPurge.newState(),
         clearPreviewError: "",
         clearing: false,
 
@@ -70,12 +71,13 @@ function tenantChannelHistoryPage() {
         purgeScope() {
             return {
                 channelId: this.channelId,
-                olderThan: this.clearScope === "older" ? this.clearOlderThan || null : null,
+                olderThan: this.clearScope === "older" ? this.clearOlderThan : null,
             };
         },
 
         async refreshClearPreview() {
             this.clearPreview = null;
+            recallPurge.reset(this.clearState);
             this.clearPreviewError = "";
             // An empty date would silently widen "older than" to the whole channel.
             if (this.clearScope === "older" && !this.clearOlderThan) {
@@ -83,7 +85,8 @@ function tenantChannelHistoryPage() {
                 return;
             }
             try {
-                this.clearPreview = await recallPurge.preview(this.tenantId, this.purgeScope(), this.clearDependentMemories);
+                const result = await recallPurge.startPreview(this.clearState, this.tenantId, this.purgeScope(), this.clearDependentMemories);
+                if (!result.stale) this.clearPreview = result.preview;
             } catch (e) {
                 this.clearPreviewError = e.message;
             }
@@ -100,13 +103,18 @@ function tenantChannelHistoryPage() {
             }
             this.clearing = true;
             try {
-                const resp = await recallPurge.run(this.tenantId, this.purgeScope(), this.clearDependentMemories);
+                const resp = await recallPurge.run(this.clearState, this.tenantId, this.purgeScope(), this.clearDependentMemories);
                 Alpine.store("toast").success(resp?.message ?? "Channel history cleared");
                 this.showClearModal = false;
                 this.msgOffset = 0;
                 await this.loadMessages();
             } catch (e) {
-                Alpine.store("toast").error("Failed to clear channel history: " + e.message);
+                if (e.stale || e.status === 409) {
+                    this.clearPreviewError = e.message;
+                    await this.refreshClearPreview();
+                } else {
+                    Alpine.store("toast").error("Failed to clear channel history: " + e.message);
+                }
             }
             this.clearing = false;
         },

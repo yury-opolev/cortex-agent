@@ -20,6 +20,19 @@ public sealed record HistoryPurgeRequestDto
     /// <see cref="DependentMemoryActions.Review"/> (default, quarantine) or <see cref="DependentMemoryActions.Delete"/>.
     /// </summary>
     public string DependentMemories { get; init; } = DependentMemoryActions.Review;
+
+    /// <summary>
+    /// The message count the preview reported for this scope. The agent refuses the deletion when
+    /// markedly more messages are now in scope (the scope changed since the preview); null skips the check.
+    /// </summary>
+    public int? ExpectedMessages { get; init; }
+}
+
+/// <summary>Marker of the agent's "scope changed since the preview" refusal, which the Bridge reports as 409.</summary>
+public static class HistoryPurgeErrors
+{
+    /// <summary>Prefix of the error message.</summary>
+    public const string ScopeChangedPrefix = "scope-changed:";
 }
 
 /// <summary>Outcome of a history deletion, including the erasure status and the dependent-memory outcome.</summary>
