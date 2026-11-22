@@ -41,11 +41,20 @@ public sealed partial class RerankerSwitch : IDisposable
     /// <summary>The switch and the sidecar state.</summary>
     public RerankerSwitchView Current => new(this.config.Reranker.Enabled, this.lifecycle.Status);
 
-    /// <summary>Persists <paramref name="enabled"/> (synchronously, so a failure surfaces to the caller).</summary>
+    /// <summary>Persists <paramref name="enabled"/> (synchronously, so a failure surfaces to the caller); the previous value is restored when persisting fails.</summary>
     public void Set(bool enabled)
     {
+        var previous = this.config.Reranker.Enabled;
         this.config.Reranker.Enabled = enabled;
-        this.persist(this.config);
+        try
+        {
+            this.persist(this.config);
+        }
+        catch
+        {
+            this.config.Reranker.Enabled = previous;
+            throw;
+        }
     }
 
     /// <summary>Converges the sidecar and every agent's grant with the persisted switch. Never throws.</summary>
@@ -57,8 +66,15 @@ public sealed partial class RerankerSwitch : IDisposable
             var enabled = this.config.Reranker.Enabled;
             if (enabled)
             {
-                await this.lifecycle.ReconcileAsync(true, cancellationToken).ConfigureAwait(false);
-                await this.pushGrant(cancellationToken).ConfigureAwait(false);
+                var sidecar = await this.lifecycle.ReconcileAsync(true, cancellationToken).ConfigureAwait(false);
+                if (sidecar.State == "running")
+                {
+                    await this.pushGrant(cancellationToken).ConfigureAwait(false);
+                }
+                else
+                {
+                    this.LogGrantWithheld(sidecar.State);
+                }
             }
             else
             {
@@ -83,4 +99,7 @@ public sealed partial class RerankerSwitch : IDisposable
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Reranker switch could not converge: {Error}")]
     private partial void LogConvergeFailed(string error);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Reranker is on but the sidecar is {State}; agents are not granted the reranker until it is running")]
+    private partial void LogGrantWithheld(string state);
 }

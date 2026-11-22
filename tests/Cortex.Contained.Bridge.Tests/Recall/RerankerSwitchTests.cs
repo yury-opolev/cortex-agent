@@ -65,6 +65,47 @@ public sealed class RerankerSwitchTests : IDisposable
     }
 
     [Fact]
+    public async Task Enable_SidecarDoesNotComeUp_DoesNotGrantAgents()
+    {
+        this.runner.StartRerankerAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            this.calls.Add("compose-up");
+            return false;
+        });
+
+        this.sut.Set(true);
+        await this.sut.ConvergeAsync(CancellationToken.None);
+
+        Assert.Equal(["persist", "compose-up"], this.calls);
+        Assert.Equal("failed", this.sut.Current.Sidecar.State);
+    }
+
+    [Fact]
+    public void Set_PersistFails_RestoresThePreviousSwitchAndRethrows()
+    {
+        var failing = new RerankerSwitch(
+            this.config,
+            _ => throw new IOException("disk full"),
+            new RerankerSidecarLifecycle(this.runner, () => "k", NullLogger<RerankerSidecarLifecycle>.Instance),
+            _ => Task.CompletedTask,
+            NullLogger<RerankerSwitch>.Instance);
+
+        Assert.Throws<IOException>(() => failing.Set(true));
+
+        Assert.False(failing.Current.Enabled);
+        failing.Dispose();
+    }
+
+    [Fact]
+    public void RerankerUpArguments_WaitForTheContainerToBeHealthy()
+    {
+        var args = DockerComposeCommandRunner.RerankerUpArguments(@"C:\c\docker-compose.yml");
+
+        Assert.Contains("up -d --wait --wait-timeout " + DockerComposeCommandRunner.RerankerWaitSeconds, args, StringComparison.Ordinal);
+        Assert.EndsWith("reranker", args, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void PersistSettingsToYaml_WritesTheRerankerSwitch()
     {
         var path = Path.Combine(Path.GetTempPath(), "cortex-" + Guid.NewGuid().ToString("N") + ".yml");

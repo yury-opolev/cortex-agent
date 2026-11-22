@@ -24,6 +24,12 @@ public sealed partial class DockerComposeCommandRunner : IComposeCommandRunner, 
     /// <summary>Image pull/start can be slow on first run, so allow a generous window.</summary>
     private static readonly TimeSpan StartTimeout = TimeSpan.FromSeconds(60);
 
+    /// <summary>How long compose waits for the reranker to become healthy (model load).</summary>
+    internal const int RerankerWaitSeconds = 180;
+
+    /// <summary>The compose wait plus headroom for the container to be created.</summary>
+    private static readonly TimeSpan RerankerStartTimeout = TimeSpan.FromSeconds(RerankerWaitSeconds + 30);
+
     /// <summary>Stop and ps are quick; cap them tightly.</summary>
     private static readonly TimeSpan ShortTimeout = TimeSpan.FromSeconds(20);
 
@@ -138,11 +144,18 @@ public sealed partial class DockerComposeCommandRunner : IComposeCommandRunner, 
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(apiKey);
         return this.RunCommandAsync(
-            $"compose -f \"{this.composeFilePath}\" --profile reranker up -d reranker",
-            StartTimeout,
+            RerankerUpArguments(this.composeFilePath),
+            RerankerStartTimeout,
             cancellationToken,
             new Dictionary<string, string> { [RerankerKeyVariable] = apiKey });
     }
+
+    /// <summary>
+    /// <c>up -d --wait</c> returns once the container's HEALTHCHECK (llama-server <c>/health</c>) passes,
+    /// and fails when it exits or turns unhealthy, so "started" means "serving".
+    /// </summary>
+    internal static string RerankerUpArguments(string composeFilePath) =>
+        $"compose -f \"{composeFilePath}\" --profile reranker up -d --wait --wait-timeout {RerankerWaitSeconds} reranker";
 
     /// <inheritdoc />
     public Task<bool> StopRerankerAsync(CancellationToken cancellationToken)

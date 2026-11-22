@@ -6,7 +6,8 @@ public interface IRerankerComposeRunner
     /// <summary>
     /// `docker compose --profile reranker up -d reranker` with <paramref name="apiKey"/> in the process
     /// environment (<c>CORTEX_RERANKER_API_KEY</c>, never on the command line). Compose recreates the
-    /// container when the key or the <c>cortex-reranker:latest</c> image changed. Returns true on exit 0.
+    /// container when the key or the <c>cortex-reranker:latest</c> image changed, and waits until it is
+    /// healthy (or fails). Returns true on exit 0.
     /// </summary>
     Task<bool> StartRerankerAsync(string apiKey, CancellationToken cancellationToken);
 
