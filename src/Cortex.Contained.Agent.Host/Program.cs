@@ -572,6 +572,22 @@ builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Memory.MemoryManagemen
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Memory.IMemoryManagementService>(
     sp => sp.GetRequiredService<Cortex.Contained.Agent.Host.Memory.MemoryManagementService>());
 
+// --- Recall page (Bridge): settings, status, purge preview, quarantine review ---
+builder.Services.AddSingleton(sp => new Cortex.Contained.Agent.Host.Memory.QuarantineReviewService(
+    sp.GetRequiredService<Cortex.Contained.Agent.Host.Memory.MemoryQuarantine>(),
+    sp.GetRequiredService<Cortex.Contained.Agent.Host.Memory.IMemoryManagementService>()));
+builder.Services.AddSingleton(sp => new Cortex.Contained.Agent.Host.Recall.RecallControlService(
+    sp.GetRequiredService<Cortex.Contained.Agent.Host.Recall.RecallSettingsStore>(),
+    sp.GetRequiredService<IOptionsMonitor<HistoryOptions>>(),
+    sp.GetRequiredService<IOptionsMonitor<Cortex.Contained.Agent.Host.Reranking.RerankerOptions>>(),
+    sp.GetRequiredService<IOptionsMonitor<MemoryMcpOptions>>(),
+    sp.GetRequiredService<HistoryHealthReporter>(),
+    () => sp.GetRequiredService<Cortex.Contained.Agent.Host.Reranking.RerankStage>().Snapshot(),
+    sp.GetRequiredService<Cortex.Contained.Agent.Host.Memory.MemoryQuarantine>(),
+    sp.GetRequiredService<Cortex.Contained.Agent.Host.Memory.QuarantineReviewService>(),
+    sp.GetRequiredService<HistoryPurgeService>(),
+    sp.GetRequiredService<Cortex.Contained.Agent.Host.Events.EventBackfillService>()));
+
 // --- Automatic Memory Extraction (hosted background service with Channel<T> queue) ---
 builder.Services.AddSingleton(sp =>
     new Cortex.Contained.Agent.Host.Memory.MemoryExtractionService(

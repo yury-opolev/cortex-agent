@@ -45,6 +45,7 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
     private readonly Cortex.Contained.Agent.Host.Events.EventBackfillService? eventBackfill;
     private readonly Storage.StorageKeyRing? storageKeys;
     private readonly Cortex.Contained.Agent.Host.Reranking.RerankerAccess? rerankerAccess;
+    private readonly Cortex.Contained.Agent.Host.Recall.RecallControlService? recall;
     private readonly Cortex.Contained.Agent.Host.Mcp.McpToolStore mcpToolStore;
     private readonly IHttpClientFactory httpClientFactory;
     private readonly AgentMetrics metrics;
@@ -81,7 +82,8 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
         Cortex.Contained.Agent.Host.Events.KnownSecrets? knownSecrets = null,
         Cortex.Contained.Agent.Host.Events.EventBackfillService? eventBackfill = null,
         Storage.StorageKeyRing? storageKeys = null,
-        Cortex.Contained.Agent.Host.Reranking.RerankerAccess? rerankerAccess = null)
+        Cortex.Contained.Agent.Host.Reranking.RerankerAccess? rerankerAccess = null,
+        Cortex.Contained.Agent.Host.Recall.RecallControlService? recall = null)
     {
         this.runtime = runtime;
         this.llmClient = llmClient;
@@ -106,6 +108,7 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
         this.eventBackfill = eventBackfill;
         this.storageKeys = storageKeys;
         this.rerankerAccess = rerankerAccess;
+        this.recall = recall;
         this.mcpToolStore = mcpToolStore;
         this.httpClientFactory = httpClientFactory;
         this.metrics = metrics;
