@@ -46,7 +46,7 @@ Non-goals (YAGNI):
 | # | Finding | Evidence |
 |---|---|---|
 | F1 | The SQLite engine of the agent process is SQLite3 Multiple Ciphers. `MemoryMcp.Core` references `SQLitePCLRaw.bundle_e_sqlcipher`, but the Agent Host's `SQLite3MC.PCLRaw.bundle` provider is the one in use. `Program.cs` already refuses `MemoryMcp:Encryption:Enabled` because that path is SQLCipher plus an OS keychain. | `SqliteRuntimeInfo`; startup guard |
-| F2 | **sqlite-vec loads under SQLite3MC and works on an encrypted `memory.db`.** A plaintext store with `vec0` vectors, FTS5 index, triggers and `vec_writer_meta` migrates through `VACUUM` + `PRAGMA rekey` without the extension loaded: VACUUM copies virtual-table schema rows and shadow tables as plain tables. After the migration, KNN and BM25 searches return the same hits. | `EncryptedMemoryStoreTests` (Task 7) |
+| F2 | **sqlite-vec loads under SQLite3MC and works on an encrypted `memory.db`.** A plaintext store with `vec0` vectors, FTS5 index, triggers and `vec_writer_meta` migrates through an export (`VACUUM INTO` a keyed sibling file, verified, then swapped; superseding the original in-place `VACUUM` + `PRAGMA rekey`) without the extension loaded: VACUUM copies virtual-table schema rows and shadow tables as plain tables. After the migration, KNN and BM25 searches return the same hits. | `EncryptedMemoryStoreTests` (Task 7) |
 | F3 | The SQLite3MC build compiles `SQLITE_SECURE_DELETE`: `PRAGMA secure_delete` is `1` on a fresh connection, so every agent SQLite store (subagents, todos, scheduler, …) zeroes deleted rows. | probe + `PlaintextResidueTests` (Task 12) |
 | F4 | **The Bridge keeps no message history.** It has done so since the public release ("Bridge.Storage removed — all message persistence handled by Agent Host"). A `%LOCALAPPDATA%\Cortex\messages.db` may still exist from older versions: it is SQLite3MC-encrypted with the DPAPI-held Bridge database key and unused. `mcp\actions.db` is encrypted the same way. `docs/security.md` still says otherwise. | code search; header check |
 | F5 | `sessions-snapshot.json` is a **full plaintext copy of every live conversation** (history, tool calls, extraction buffer). It is written at every shutdown, including the restart that enabling encryption triggers, and restored at startup before any key exists. | `SessionSnapshotSerializer`, `AgentProcessingService` |
@@ -157,7 +157,7 @@ by the pre-enable process) is restored, overwritten with zeros and deleted.
 | unrecognized state-volume entries (e.g. manual backups) | listed as "other" | the owner decides; the docs say to delete plaintext backups |
 | Bridge `mcp\actions.db`, legacy `messages.db` | already encrypted (Bridge database key); reported | F4 |
 | Bridge recording sessions (opt-in recorder: WAV and event logs) | not covered | explicit debugging feature, off by default |
-| volume snapshots, host backups, provider-side copies, filesystem free space, the one-time rekey journal | out of scope | outside what the application can reach (as in increment 2) |
+| volume snapshots, host backups, provider-side copies, filesystem free space, the one-time migration copy | out of scope | outside what the application can reach (as in increment 2) |
 
 **D7 — Status.**
 
@@ -286,8 +286,8 @@ Integrity gate additions (`Category=Integrity`):
 - **No plaintext anywhere after migration.** Markers in content, title, tags and a deleted memory are absent from
   every file under the data directory, including `-journal`, `-wal` and the content files.
 - **Fail closed.** A wrong key leaves every file byte-identical. No key means no file is created.
-- **Crash recovery.** Crash before the database rekey, after the encrypted copy, and after the plaintext
-  overwrite: the next open completes, and no plaintext remains.
+- **Crash recovery.** Crash before the export, after the export (unverified), after verification, after the plaintext
+  overwrite and after the swap: the next open completes, and no plaintext remains.
 - **Snapshot.** Ciphertext only; restored only with the key; never written without it.
 - **End-to-end.** Plaintext agent → enable over the hub → second host on the same volumes → key push → both
   stores open, data intact, no marker bytes in any state file.
