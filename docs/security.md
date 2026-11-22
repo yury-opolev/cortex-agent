@@ -62,15 +62,16 @@ All secrets are stored on the Windows host using DPAPI (`DataProtectionScope.Cur
 - Hub authentication token
 - LLM API keys (per provider)
 - OAuth access/refresh tokens (per provider)
-- Database encryption key (for message history)
+- Bridge database key (encrypts the MCP action ledger `mcp\actions.db`)
+- Per-tenant storage keys (encryption at rest of the agent's stores; never regenerated) and the time each tenant's recovery kit was last exported
 - Web UI password hash
 - Discord bot token
 
 Secrets are **never** stored inside the Docker container. LLM credentials are pushed from Bridge to Agent via SignalR at connection startup and held in memory only.
 
-## Message history encryption
+## Bridge-side stores
 
-`%LOCALAPPDATA%\Cortex\messages.db` is encrypted using SQLite3 Multiple Ciphers. The encryption key is generated on first run and stored in DPAPI.
+The Bridge keeps no message history: the agent owns `messages.db`. A `%LOCALAPPDATA%\Cortex\messages.db` left by older Bridge versions is SQLite3 Multiple Ciphers-encrypted with the DPAPI-held Bridge database key and unused; delete it when you no longer need it. The Storage page reports both Bridge stores.
 
 ## Agent history index and erasure
 
@@ -117,8 +118,7 @@ the built image id. See [reranker.md](reranker.md).
 
 `memory.db` holds a contentless FTS5 index of every curated memory (folded title and content tokens
 and their stems) next to the chunk metadata and vectors; the text itself stays in the `.memory.data`
-files. Like those files and the vectors, the index is **not** encrypted by `Storage:EncryptAtRest`
-(the memory store is outside that key). Deleting or editing a memory removes its row in the write
+files. With encryption at rest the whole memory store — the index, the vectors and the `.memory.data` files — is encrypted with the tenant key (see below). Deleting or editing a memory removes its row in the write
 transaction and rewrites the index with FTS5 `optimize` under `PRAGMA secure_delete=ON`, so no
 token of the deleted text stays in the database file (byte-level integrity tests). Quarantined
 memories (D10) are excluded before scoring in keyword and semantic search. `memory-eval` searches a
@@ -128,11 +128,7 @@ memory text and is deleted by the owner after the dataset is written. See
 
 ## Agent storage encryption and event payloads
 
-With `Storage:EncryptAtRest`, `messages.db` and the history index generations inside the container
-are encrypted with SQLite3 Multiple Ciphers. The per-tenant key is DPAPI-protected on the Bridge,
-never regenerated, pushed before credentials and held in memory only; the agent fails closed
-without it. `subagents.db`, `/app/data/tool-output` spill files and the memory database are not
-covered by this key. Tool payloads are persisted under an exact allowlist with
+Encryption at rest is turned on per tenant from the Bridge **Storage** page (one-way marker `storage-encryption.json` in the state volume; `Storage:EncryptAtRest` still works) and covers `messages.db`, the history index generations, `memory.db` (metadata, sqlite-vec vectors, FTS5 keyword index), every `.memory.data` file (AES-256-GCM) and the shutdown session snapshot. Each store has its own HKDF-derived key; the per-tenant master key is DPAPI-protected on the Bridge, never regenerated, pushed before credentials and held in memory only, and the agent fails closed without it. Logs carry no message or memory text (guarded by tests). Not covered: `subagents.db` (24 h transcripts), to-do lists, scheduled tasks, voiceprints, self-notes and the tool sandbox — see [encryption-at-rest.md](encryption-at-rest.md). The owner can export a passphrase-wrapped recovery kit (re-authentication required; never logged) to survive a Windows profile reset. Tool payloads are persisted under an exact allowlist with
 `SensitiveDataRedactor.RedactForPersistence`; `mcp__*` payloads, file/page/mail bodies and
 attachment bytes are never persisted.
 
@@ -140,7 +136,7 @@ attachment bytes are never persisted.
 that introduced tenant storage keys (`TenantStorageKeys` in `secrets.json`). An older Bridge neither
 knows the key nor, before this change, preserved unknown fields when it saved the file, so the
 encrypted `messages.db` could become unreadable. Current Bridges keep unknown `secrets.json` fields
-across load/save for future downgrades.
+across load/save for future downgrades. Agent images older than the Storage page cannot open encrypted stores and stop at startup rather than write plaintext; the Bridge never mints a tenant key while the agent reports encrypted data, and the agent rejects any key whose fingerprint differs from the one recorded when encryption was enabled.
 
 ## Content security
 

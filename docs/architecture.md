@@ -245,7 +245,10 @@ SQLite-backed (`/app/state/scheduler/tasks.db`). Tick interval: 15 seconds. Recu
 | History index | `/app/state/history/history-index.<gen>.db` + `history-index.current` | Contentless FTS5 plus chunk vectors (derived, no message text; vectors erased and encrypted with the generation) |
 | Smoke-eval workspace | `/app/state/eval/smoke` | Local only, never committed; `runs` destroyed by overlapping purges |
 | History-eval workspace | `/app/state/eval/hybrid` | Local only, never committed; `runs` (raw copies) destroyed by overlapping purges |
-| Memories (encrypted DB) | `/app/state/memory/memory.db` | SQLite (SQLCipher) + sqlite-vec |
+| Memories | `/app/state/memory/memory.db` | SQLite + sqlite-vec + FTS5; SQLite3MC-encrypted with encryption at rest |
+| Memory content | `/app/state/memory/memories/*.memory.data` | Text files; AES-256-GCM with encryption at rest |
+| Session snapshot | `/app/state/sessions-snapshot.json` | Live sessions saved at shutdown; AES-256-GCM with encryption at rest |
+| Encryption marker | `/app/state/storage-encryption.json` | One-way switch written by the Storage page |
 | Maintenance state | `/app/state/maintenance/maintenance.db` | SQLite |
 | Scheduled tasks | `/app/state/scheduler/tasks.db` | SQLite |
 | Personality | `/app/data/personality.md` | Markdown |
@@ -257,7 +260,8 @@ SQLite-backed (`/app/state/scheduler/tasks.db`). Tick interval: 15 seconds. Recu
 | Data | Path | Format |
 |------|------|--------|
 | Secrets (all credentials) | `secrets\secrets.json` | DPAPI-encrypted JSON |
-| Message history | `messages.db` | Encrypted SQLite |
+| MCP action ledger | `mcp\actions.db` | SQLite3MC-encrypted (Bridge database key) |
+| Legacy message history (unused) | `messages.db` | Left by older Bridge versions; encrypted, nothing writes it |
 | Configuration | `cortex.yml` | YAML |
 | Bridge logs | `logs\bridge-*.log` | Rolling, 30-day retention (redacted) |
 | Speech models | `models\` | Downloaded binaries (Whisper, Kokoro, Silero) |

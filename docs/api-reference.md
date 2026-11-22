@@ -6,7 +6,7 @@
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| GET | `/health` | No | Health check with subsystem status |
+| GET | `/health` | No | Health check with subsystem status (incl. `storage`: encryption mode and whether the encrypted stores are open) |
 | GET | `/` | No | Liveness check ("Cortex Agent Host is running.") |
 
 ### Bridge
@@ -53,6 +53,11 @@
 | PUT | `/api/recall/reranker` | Yes | Body `{ enabled }`. Persists `reranker: enabled` in `cortex.yml`, then (in the background) starts the sidecar and grants every agent, or withdraws the grant and stops the sidecar |
 | GET | `/api/recall/embeddings-gpu` | Yes | Bridge-wide "run embeddings on the GPU" switch, the sidecar state and where it really runs: `{ enabled, sidecar: { state, problem, at }, mode, processor }` — `mode` is `gpu`/`cpu` (the running container's device request) or null when it is not running; `processor` is the `ollama ps` PROCESSOR (`100% GPU`) or null while no model is loaded. `sidecar.problem` is set when the GPU start failed and the sidecar fell back to the CPU |
 | PUT | `/api/recall/embeddings-gpu` | Yes | Body `{ enabled }`. Persists `embeddings: gpu` in `cortex.yml` (`500` if it cannot be written; the switch is restored), then (in the background) recreates the `embeddings` container with or without `docker-compose.embeddings-gpu.yml`; falls back to the CPU when the GPU start fails |
+| GET | `/api/tenants/{tenantId}/storage/status` | Yes | `{ connected, agent: StorageEncryptionStatusDto, bridge: { keyPresent, keyUnavailable, keyFingerprint, recoveryKitExportedAt }, bridgeStores: [{ id, label, state, detail }] }` (`503` with `connected: false` and the Bridge view while disconnected). Never returns key material |
+| POST | `/api/tenants/{tenantId}/storage/encryption/preview` | Yes | Changes nothing. `{ preview: { alreadyEnabled, keyFingerprint, willEncrypt[], willErase[], notCovered[], requiredFreeBytes, availableFreeBytes, requiredTempBytes, availableTempBytes, blockers[], warnings[] }, bridge }` |
+| POST | `/api/tenants/{tenantId}/storage/encryption/enable` | Yes + password | Body `{ password, confirm: "ENCRYPT", eraseEvaluationArtifacts = true, acceptNoRecoveryKit = false }`. `403` wrong password; `400` without the confirmation or without an exported kit (unless accepted); `409` when the agent holds encrypted data the Bridge has no key for, or refuses the key. Pushes the key, then `202` with `{ accepted, alreadyEnabled, restartScheduled, errors[] }` (one-way; the agent restarts) |
+| POST | `/api/tenants/{tenantId}/storage/recovery-kit` | Yes + password | Body `{ password, passphrase }` (passphrase ≥ 12). Returns the kit file (`application/json`, `Cache-Control: no-store`) and records the export time |
+| POST | `/api/tenants/{tenantId}/storage/recovery-kit/restore` | Yes + password | Body `{ password, passphrase, kit }`. Installs the kit key only when the Bridge has no usable key or the agent reports its data belongs to the kit's key; `409` otherwise; `400` wrong passphrase or another tenant's kit. Returns `{ restored, fingerprint, applied, message }` |
 | POST | `/api/channels/{type}` | Yes | Update channel configuration |
 | GET | `/api/mcp/actions` | Yes | List approval-gated MCP mutation actions (filter by `serverKey`, `toolName`, `state`, `workerId`; paged with `before`/`limit`) |
 | GET | `/api/mcp/actions/{actionId}` | Yes | One action, including its canonical arguments (for review) and result |
@@ -179,6 +184,14 @@ same workflow (always `review`).
 | `ListQuarantineReview(offset, limit)` -> `QuarantineReviewListDto` | One page of quarantined memories with the purge (id, time, channel, window) that quarantined each, plus `Total` |
 | `ListQuarantineReviewIds()` -> `string[]` | Every quarantined memory id (no content) |
 | `KeepQuarantinedMemories(ids)` / `DeleteQuarantinedMemories(ids)` -> `QuarantineDecisionResultDto` | Bulk keep / bulk erase (one `DeleteManyAsync` batch); at most 1000 ids; ids not in quarantine are returned as `skipped` |
+
+#### Storage (`IStorageHub`)
+
+| Method | Description |
+|--------|-------------|
+| `GetStorageEncryptionStatus()` -> `StorageEncryptionStatusDto` | Mode and source (`off`/`config`/`marker`/`detected`), restart pending, key state and fingerprints, store states, every item (header-only inventory) |
+| `PreviewStorageEncryption()` -> `StorageEncryptionPreviewDto` | What enabling would encrypt, erase and leave alone; disk-space pre-flight; changes nothing |
+| `EnableStorageEncryption(StorageEncryptionEnableRequestDto)` -> `StorageEncryptionEnableResultDto` | Requires the pushed key with the given fingerprint; erases evaluation copies on request; writes the one-way marker; stops the agent so Docker restarts it encrypted |
 
 #### `SetHistoryRecallTools(enabled)` -> `bool`
 

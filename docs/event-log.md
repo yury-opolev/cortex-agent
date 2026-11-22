@@ -49,20 +49,18 @@ It runs in a maintenance window (recall and purges wait), is idempotent (a secon
 
 ## Encryption at rest
 
-`Storage:EncryptAtRest: true` encrypts `messages.db` and every history index generation with
-SQLite3 Multiple Ciphers. The per-tenant master key lives in the Bridge's DPAPI secrets file (never
+Encryption at rest is enabled from the Bridge **Storage** page (or `Storage:EncryptAtRest: true`) and covers `messages.db`, every history index generation, the memory store and the session snapshot (see [encryption-at-rest.md](encryption-at-rest.md)). The per-tenant master key lives in the Bridge's DPAPI secrets file (never
 regenerated if it cannot be decrypted) and is pushed to the agent before credentials on every
-connect; the agent holds it in memory only and derives one passphrase per database.
+connect; the agent holds it in memory only and derives one key per store.
 
 | Situation | Behaviour |
 |---|---|
 | Key not pushed yet | requests wait `Storage:KeyWaitSeconds` (120) then fail; no file is created; `/health` → `history.storage: awaitingKey` |
 | Plaintext `messages.db` | encrypted in place on first open (VACUUM + rekey); plaintext index generations are erased and rebuilt |
+| Plaintext memory store | `memory.db` migrated like `messages.db`; content files encrypted one by one (crash-safe, plaintext overwritten) |
 | Wrong key | store stays locked, file untouched; `/health` → `failed` |
 
-Enable it only after the increment 2 build has run healthily (an older image cannot read the
-encrypted files), and keep it on. Losing the Windows profile that holds the DPAPI key loses the
-history — back it up. The `history-smoke` CLI reads a plaintext copy: run it before enabling.
+Encryption is one-way: the marker `storage-encryption.json` keeps it on across configuration resets, and older images cannot read the encrypted files. Keep the recovery kit — losing the Windows profile that holds the DPAPI key otherwise loses the history. The evaluation CLIs (`history-smoke`, `history-eval`, `memory-eval`) refuse to run while encryption is on.
 
 ## Integrity gate
 
