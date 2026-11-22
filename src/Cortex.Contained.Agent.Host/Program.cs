@@ -139,6 +139,9 @@ builder.Services.AddSingleton<IStorageState>(sp => sp.GetRequiredService<Message
 
 // --- Episodic history locator (increment 1): journal-fed FTS5 index, recall tools, erasure ---
 builder.Services.Configure<HistoryOptions>(builder.Configuration.GetSection(HistoryOptions.SectionName));
+// Recall settings (owner's runtime overrides from the Bridge "Recall" page): <state>/recall-settings.json,
+// applied over History, Reranker and MemoryMcp:Search options via post-configure + change token.
+Cortex.Contained.Agent.Host.Recall.RecallSettingsRegistration.AddRecallSettings(builder.Services, stateRoot);
 builder.Services.AddSingleton<IHistorySource>(sp => sp.GetRequiredService<MessageStore>());
 builder.Services.AddSingleton<IHistoryErasureStore>(sp => sp.GetRequiredService<MessageStore>());
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Memory.IMemoryQuarantineSource>(sp => sp.GetRequiredService<MessageStore>());
