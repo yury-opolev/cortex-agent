@@ -1244,7 +1244,11 @@ if (bridgeConfig.WebUi.Enabled)
     // mapping every help markdown fetch would 404.
     var staticContentTypeProvider = new Microsoft.AspNetCore.StaticFiles.FileExtensionContentTypeProvider();
     staticContentTypeProvider.Mappings[".md"] = "text/markdown";
-    app.UseStaticFiles(new StaticFileOptions { ContentTypeProvider = staticContentTypeProvider });
+    app.UseStaticFiles(new StaticFileOptions
+    {
+        ContentTypeProvider = staticContentTypeProvider,
+        OnPrepareResponse = ctx => Cortex.Contained.Bridge.Hosting.StaticAssetCaching.Apply(ctx.Context.Response),
+    });
 
     // SPA fallback: all UI routes serve app.html (the unified SPA shell).
     // Alpine.js handles client-side routing based on the URL path.
@@ -1257,8 +1261,9 @@ if (bridgeConfig.WebUi.Enabled)
         app.MapGet(route, ServeSpa);
     }
 
-    static IResult ServeSpa(IWebHostEnvironment env)
+    static IResult ServeSpa(HttpContext context, IWebHostEnvironment env)
     {
+        Cortex.Contained.Bridge.Hosting.StaticAssetCaching.Apply(context.Response);
         var filePath = Path.Combine(env.WebRootPath, "app.html");
         return Results.File(filePath, "text/html");
     }
