@@ -1,4 +1,5 @@
 using Cortex.Contained.Agent.Host.Storage;
+using Cortex.Contained.Contracts.Security;
 
 namespace Cortex.Contained.Agent.Host.Tests.Events;
 
@@ -48,5 +49,31 @@ public sealed class StorageKeyRingTests
         Assert.Equal(64, messages.Length);
         Assert.Matches("^[0-9a-f]+$", messages);
         Assert.NotEqual(messages, StorageKeyRing.DerivePassword(key, "history-index"));
+    }
+
+    [Fact]
+    public void Provide_KeyOfAnotherFingerprintThanTheData_RejectedBeforeAcceptance()
+    {
+        var ring = new StorageKeyRing { ExpectedFingerprint = StorageKeyFingerprint.Compute(KeyA) };
+
+        Assert.Equal(StorageKeyAcceptance.Rejected, ring.Provide(KeyB));
+        Assert.True(ring.RejectedForData);
+        Assert.False(ring.IsAvailable);
+        Assert.Equal(StorageKeyAcceptance.Accepted, ring.Provide(KeyA));
+        Assert.Equal(StorageKeyFingerprint.Compute(KeyA), ring.Fingerprint);
+    }
+
+    [Fact]
+    public void KeyFor_IsPurposeBoundAndMatchesThePassword()
+    {
+        var ring = new StorageKeyRing();
+        Assert.Throws<StorageLockedException>(() => ring.KeyFor("memory-content"));
+        ring.Provide(KeyA);
+
+        var content = ring.KeyFor("memory-content");
+
+        Assert.Equal(32, content.Length);
+        Assert.NotEqual(content, ring.KeyFor("sessions-snapshot"));
+        Assert.Equal(ring.PasswordFor("memory-content"), Convert.ToHexStringLower(content));
     }
 }
