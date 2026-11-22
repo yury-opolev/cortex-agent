@@ -20,17 +20,20 @@ public sealed class MemoryManagementService : IMemoryManagementService, IMemoryC
     private readonly IMemoryService memoryService;
     private readonly MemoryMcpOptions options;
     private readonly ILogger<MemoryManagementService> logger;
+    private readonly Storage.IMemoryAtRest atRest;
     private SqliteConnection? readConnection;
     private bool disposed;
 
     public MemoryManagementService(
         IMemoryService memoryService,
         IOptions<MemoryMcpOptions> options,
-        ILogger<MemoryManagementService> logger)
+        ILogger<MemoryManagementService> logger,
+        Storage.IMemoryAtRest? atRest = null)
     {
         this.memoryService = memoryService;
         this.options = options.Value;
         this.logger = logger;
+        this.atRest = atRest ?? new Storage.PlaintextMemoryAtRest();
     }
 
     /// <summary>
@@ -68,10 +71,10 @@ public sealed class MemoryManagementService : IMemoryManagementService, IMemoryC
             var createdAt = DateTimeOffset.Parse(reader.GetString(3), System.Globalization.CultureInfo.InvariantCulture);
             var updatedAt = DateTimeOffset.Parse(reader.GetString(4), System.Globalization.CultureInfo.InvariantCulture);
 
-            // Read content from file
+            // Read content from file (decrypted when the store is encrypted)
             var contentPath = Path.Combine(this.options.MemoriesDirectory, $"{memoryId}.memory.data");
             var content = File.Exists(contentPath)
-                ? await File.ReadAllTextAsync(contentPath, cancellationToken).ConfigureAwait(false)
+                ? await this.atRest.ReadContentAsync(contentPath, cancellationToken).ConfigureAwait(false)
                 : "(content file missing)";
 
             items.Add(new MemoryItem
@@ -108,11 +111,18 @@ public sealed class MemoryManagementService : IMemoryManagementService, IMemoryC
             return times;
         }
 
-        await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        var password = await this.atRest.GetDatabasePasswordAsync(cancellationToken).ConfigureAwait(false);
+        var builder = new SqliteConnectionStringBuilder
         {
             DataSource = this.options.DatabasePath,
             Mode = SqliteOpenMode.ReadOnly,
-        }.ToString());
+        };
+        if (password is not null)
+        {
+            builder.Password = password;
+        }
+
+        await using var connection = new SqliteConnection(builder.ToString());
         await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
         await using var cmd = connection.CreateCommand();
         cmd.CommandText = "SELECT MemoryId, CreatedAt FROM chunks WHERE ChunkIndex = 0";
@@ -196,11 +206,18 @@ public sealed class MemoryManagementService : IMemoryManagementService, IMemoryC
 
         this.readConnection?.Dispose();
 
-        var connectionString = new SqliteConnectionStringBuilder
+        var password = await this.atRest.GetDatabasePasswordAsync(cancellationToken).ConfigureAwait(false);
+        var builder = new SqliteConnectionStringBuilder
         {
             DataSource = this.options.DatabasePath,
             Mode = SqliteOpenMode.ReadOnly,
-        }.ToString();
+        };
+        if (password is not null)
+        {
+            builder.Password = password;
+        }
+
+        var connectionString = builder.ToString();
 
         this.readConnection = new SqliteConnection(connectionString);
         await this.readConnection.OpenAsync(cancellationToken).ConfigureAwait(false);

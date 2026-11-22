@@ -254,6 +254,22 @@ builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Agent.SubagentMessageR
 // --- Memory Services (MemoryMcp.Core) ---
 builder.Services.AddMemoryMcpCore(builder.Configuration);
 
+// --- Encryption at rest of the memory store (memory.db + *.memory.data) under the tenant key (D4) ---
+if (storageEncryption.Enabled)
+{
+    builder.Services.AddSingleton(sp => new EncryptedMemoryStore(
+        sp.GetRequiredService<IOptions<MemoryMcpOptions>>(),
+        sp.GetRequiredService<StorageKeyRing>(),
+        TimeSpan.FromSeconds(storageOptions.KeyWaitSeconds),
+        sp.GetRequiredService<ILoggerFactory>()));
+    builder.Services.AddSingleton<IMemoryStore>(sp => sp.GetRequiredService<EncryptedMemoryStore>());
+    builder.Services.AddSingleton<IMemoryAtRest>(sp => sp.GetRequiredService<EncryptedMemoryStore>());
+    builder.Services.AddHostedService<EncryptedStorageOpener>();
+}
+else
+{
+    builder.Services.AddSingleton<IMemoryAtRest, PlaintextMemoryAtRest>();
+}
 // --- Memory Settings Store (runtime-mutable overrides for memory options) ---
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Memory.MemorySettingsStore>();
 builder.Services.AddSingleton<IPostConfigureOptions<MemoryMcpOptions>,
@@ -932,7 +948,7 @@ Log.Information(
 if (app.Services.GetRequiredService<IOptions<MemoryMcpOptions>>().Value.Encryption.Enabled)
 {
     throw new InvalidOperationException(
-        "MemoryMcp:Encryption:Enabled is not supported by the Agent Host: its SQLite engine (SQLite3 Multiple Ciphers) cannot open SQLCipher databases. Encrypt messages and history with Storage:EncryptAtRest; encrypting memory.db is not supported yet.");
+        "MemoryMcp:Encryption:Enabled is not supported by the Agent Host: its SQLite engine (SQLite3 Multiple Ciphers) cannot open SQLCipher databases. Storage:EncryptAtRest (or the Bridge Storage page) encrypts memory.db and the memory files with the tenant key.");
 }
 
 // --- Initialize Memory Store (creates SQLite schema + data directories) ---
