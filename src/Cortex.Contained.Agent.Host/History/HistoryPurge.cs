@@ -19,6 +19,16 @@ public sealed record HistoryPurgeScope(string? ChannelId, DateTimeOffset? OlderT
             : null;
 }
 
+/// <summary>What a purge does with the curated memories created in the purged period.</summary>
+public enum DependentMemoryAction
+{
+    /// <summary>Quarantine them until the owner keeps or deletes them (D10, the default).</summary>
+    Review,
+
+    /// <summary>Erase them physically with the history (owner opt-in per purge).</summary>
+    Delete,
+}
+
 /// <summary>What a purge would delete (shown before the owner confirms).</summary>
 /// <param name="Messages">Rows the purge would delete.</param>
 /// <param name="DependentMemories">Not-kept curated memories inside the purge's quarantine windows.</param>

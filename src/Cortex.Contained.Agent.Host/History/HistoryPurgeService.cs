@@ -10,7 +10,8 @@ namespace Cortex.Contained.Agent.Host.History;
 /// <param name="ErasureComplete">True when every cleanup step finished synchronously.</param>
 /// <param name="CleanupPending">Steps that will resume on the next maintenance tick or at startup.</param>
 /// <param name="QuarantinedMemories">Curated memories now quarantined for review (D10).</param>
-public sealed record HistoryPurgeResult(int Deleted, int Inserted, bool ErasureComplete, IReadOnlyList<string> CleanupPending, int QuarantinedMemories);
+/// <param name="DeletedMemories">Curated memories erased with the history (owner opt-in).</param>
+public sealed record HistoryPurgeResult(int Deleted, int Inserted, bool ErasureComplete, IReadOnlyList<string> CleanupPending, int QuarantinedMemories, int DeletedMemories = 0);
 
 /// <summary>
 /// Owns every purge side effect (§11): takes the <see cref="HistoryAccessGate"/> write lease,
@@ -55,16 +56,19 @@ public sealed partial class HistoryPurgeService
     /// <param name="replacement">Replacement rows inserted in the same transaction, or null.</param>
     /// <param name="cancellationToken">Cancellation.</param>
     /// <param name="quarantineCap">Quarantine windows end no later than this (the moment an import began), or null for the purge time.</param>
+    /// <param name="dependentMemories">Quarantine (default) or erase the curated memories created in the purged period.</param>
     public async Task<HistoryPurgeResult> PurgeAsync(
         HistoryPurgeScope scope,
         IReadOnlyList<MessageRecord>? replacement,
         CancellationToken cancellationToken,
-        DateTimeOffset? quarantineCap = null)
+        DateTimeOffset? quarantineCap = null,
+        DependentMemoryAction dependentMemories = DependentMemoryAction.Review)
     {
         ArgumentNullException.ThrowIfNull(scope);
         var settings = this.options.CurrentValue;
         MessagePurgeOutcome outcome;
         IReadOnlyList<string> pending;
+        int affected;
 
         await using (await this.gate.AcquireWriteAsync(cancellationToken).ConfigureAwait(false))
         {
@@ -73,19 +77,24 @@ public sealed partial class HistoryPurgeService
                 Now = this.time.GetUtcNow(),
                 QuarantineSlack = TimeSpan.FromHours(settings.QuarantineExtractionSlackHours),
                 QuarantineClusterGap = TimeSpan.FromHours(settings.QuarantineClusterGapHours),
-                PendingSteps = ErasureSteps.ForPurge(scope),
+                PendingSteps = ErasureSteps.ForPurge(scope, dependentMemories),
                 Replacement = replacement,
                 QuarantineCap = quarantineCap,
             };
             outcome = await this.store.PurgeAsync(request, cancellationToken).ConfigureAwait(false);
+
+            // Counted before the steps run: the dependent-memories step deletes exactly these.
+            affected = this.quarantine is null
+                ? 0
+                : await this.quarantine.CountInWindowsAsync(outcome.Windows, cancellationToken).ConfigureAwait(false);
             pending = await this.RunPendingLockedAsync(request.ErasureId, cancellationToken).ConfigureAwait(false);
         }
 
-        var quarantined = this.quarantine is null
-            ? 0
-            : await this.quarantine.CountInWindowsAsync(outcome.Windows, cancellationToken).ConfigureAwait(false);
-        this.LogPurged(scope.ChannelId ?? "(all)", outcome.Deleted, pending.Count == 0, quarantined);
-        return new HistoryPurgeResult(outcome.Deleted, outcome.Inserted, pending.Count == 0, pending, quarantined);
+        var erased = dependentMemories == DependentMemoryAction.Delete && !pending.Contains(ErasureSteps.DependentMemories);
+        var quarantined = erased ? 0 : affected;
+        var deletedMemories = erased ? affected : 0;
+        this.LogPurged(scope.ChannelId ?? "(all)", outcome.Deleted, pending.Count == 0, quarantined, deletedMemories);
+        return new HistoryPurgeResult(outcome.Deleted, outcome.Inserted, pending.Count == 0, pending, quarantined, deletedMemories);
     }
 
     /// <summary>
@@ -183,8 +192,8 @@ public sealed partial class HistoryPurgeService
             : Task.FromResult(true);
     }
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "History purge of {Scope}: {Deleted} messages deleted, erasure complete={Complete}, {Quarantined} memories quarantined")]
-    private partial void LogPurged(string scope, int deleted, bool complete, int quarantined);
+    [LoggerMessage(Level = LogLevel.Information, Message = "History purge of {Scope}: {Deleted} messages deleted, erasure complete={Complete}, {Quarantined} memories quarantined, {DeletedMemories} memories deleted")]
+    private partial void LogPurged(string scope, int deleted, bool complete, int quarantined, int deletedMemories);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Erasure step {Step} of task {TaskId} failed and stays pending: {Error}")]
     private partial void LogStepFailed(string step, string taskId, string error);

@@ -18,6 +18,9 @@ public static class ErasureSteps
     /// <summary>Destroy overlapping smoke-evaluation artifacts.</summary>
     public const string SmokeArtifacts = "smoke-artifacts";
 
+    /// <summary>Erase the curated memories inside this purge's quarantine windows (owner opt-in per purge).</summary>
+    public const string DependentMemories = "dependent-memories";
+
     /// <summary><c>VACUUM</c> of <c>messages.db</c> and the current index generation.</summary>
     public const string Vacuum = "vacuum";
 
@@ -28,11 +31,13 @@ public static class ErasureSteps
     public static string RetiredGeneration(long generation) =>
         RetiredGenerationPrefix + generation.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
-    /// <summary>The steps of a user purge of <paramref name="scope"/>.</summary>
-    public static IReadOnlyList<string> ForPurge(HistoryPurgeScope scope)
+    /// <summary>The steps of a user purge of <paramref name="scope"/>; <see cref="DependentMemories"/> only when the owner chose deletion.</summary>
+    public static IReadOnlyList<string> ForPurge(HistoryPurgeScope scope, DependentMemoryAction dependentMemories = DependentMemoryAction.Review)
     {
         ArgumentNullException.ThrowIfNull(scope);
-        return [Index, MessagesWal, ToolOutput, Subagents, SmokeArtifacts, Vacuum];
+        return dependentMemories == DependentMemoryAction.Delete
+            ? [Index, MessagesWal, ToolOutput, Subagents, SmokeArtifacts, DependentMemories, Vacuum]
+            : [Index, MessagesWal, ToolOutput, Subagents, SmokeArtifacts, Vacuum];
     }
 }
 

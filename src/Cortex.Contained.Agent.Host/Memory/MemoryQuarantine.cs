@@ -37,7 +37,9 @@ public interface IMemoryCreationTimes
 /// <summary>
 /// D10: curated memories whose <c>CreatedAt</c> falls in a
 /// purged time window are quarantined — hidden from <c>memory_search</c>, subagent seeding,
-/// consolidation and compaction until the owner keeps or deletes them. Never auto-deleted.
+/// consolidation and compaction until the owner keeps or deletes them. They are deleted automatically
+/// only when the owner chose that for the purge (<c>DependentMemories = delete</c>, see
+/// <c>DependentMemoryErasureStep</c>).
 /// Time-window quarantine remains the mechanism; recording which events a memory was extracted
 /// from (event provenance for memories) is a possible future refinement.
 /// </summary>

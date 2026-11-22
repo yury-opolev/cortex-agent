@@ -525,10 +525,18 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
             throw new HubException(problem);
         }
 
+        if (!DependentMemoryActions.IsValid(request.DependentMemories))
+        {
+            throw new HubException("dependentMemories must be review or delete.");
+        }
+
+        var dependentMemories = DependentMemoryActions.IsDelete(request.DependentMemories) ? DependentMemoryAction.Delete : DependentMemoryAction.Review;
+
         var result = await this.historyPurge.PurgeAsync(
             scope,
             null,
-            Context.ConnectionAborted).ConfigureAwait(false);
+            Context.ConnectionAborted,
+            dependentMemories: dependentMemories).ConfigureAwait(false);
 
         if (request.ChannelId is { Length: > 0 } channelId)
         {
@@ -545,6 +553,8 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
             ErasureComplete = result.ErasureComplete,
             CleanupPending = result.CleanupPending,
             QuarantinedMemories = result.QuarantinedMemories,
+            DeletedMemories = result.DeletedMemories,
+            DependentMemories = dependentMemories == DependentMemoryAction.Delete ? DependentMemoryActions.Delete : DependentMemoryActions.Review,
         };
     }
 

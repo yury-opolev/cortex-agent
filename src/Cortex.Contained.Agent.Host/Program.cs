@@ -161,6 +161,7 @@ builder.Services.AddSingleton<IErasureStep>(new ToolOutputErasureStep(Path.Combi
 builder.Services.AddSingleton<IErasureStep, SubagentErasureStep>();
 builder.Services.AddSingleton<IErasureStep, SmokeArtifactErasureStep>();
 builder.Services.AddSingleton<IErasureStep, VacuumErasureStep>();
+builder.Services.AddSingleton<IErasureStep, Cortex.Contained.Agent.Host.Memory.DependentMemoryErasureStep>();
 builder.Services.AddSingleton(sp =>
     new HistoryPurgeService(
         sp.GetRequiredService<IHistoryErasureStore>(),

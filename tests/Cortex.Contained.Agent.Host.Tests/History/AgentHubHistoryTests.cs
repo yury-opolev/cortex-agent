@@ -109,6 +109,16 @@ public sealed class AgentHubHistoryTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task PurgeHistory_UnknownDependentMemoryAction_RejectedWithoutDeleting()
+    {
+        await this.h.SayAsync("a", 0);
+
+        await Assert.ThrowsAsync<HubException>(() => this.hub.PurgeHistory(new HistoryPurgeRequestDto { DependentMemories = "purge" }));
+
+        Assert.Single(await this.h.Store.GetMessagesAsync("ch"));
+    }
+
+    [Fact]
     public async Task PurgeHistory_InvertedRange_RejectedWithoutDeleting()
     {
         await this.h.SayAsync("a", 0);
