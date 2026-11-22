@@ -909,16 +909,24 @@
                         </div>
                         <div class="modal-body">
                             <p>Delete all messages older than:</p>
-                            <input type="datetime-local" class="form-control" x-model="clearOlderThan">
-                            <p class="small text-body-secondary mt-2 mb-0">
-                                Deleted messages are also erased from the agent's search index.
-                                Memories the agent created during that period are hidden until you
-                                review them under Memory → Needs review; they are never deleted automatically.
+                            <input type="datetime-local" class="form-control" x-model="clearOlderThan" @change="refreshClearPreview()">
+                            <div class="small fw-semibold mt-3 mb-1">Memories created in that period</div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="radio" id="clear-all-dep-review" value="review" x-model="clearDependentMemories">
+                                <label class="form-check-label small" for="clear-all-dep-review">Review them (hidden until I keep or delete them)</label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="radio" id="clear-all-dep-delete" value="delete" x-model="clearDependentMemories">
+                                <label class="form-check-label small" for="clear-all-dep-delete">Delete them with the history (permanent)</label>
+                            </div>
+                            <p class="small mt-2 mb-0">
+                                <span x-show="clearPreviewError" class="text-danger" x-text="clearPreviewError"></span>
+                                <span x-show="!clearPreviewError" x-text="clearConfirmation"></span>
                             </p>
                         </div>
                         <div class="modal-footer">
                             <button class="btn btn-outline-secondary btn-sm" @click="showClearModal = false">Cancel</button>
-                            <button class="btn btn-outline-danger btn-sm" @click="confirmClear()" :disabled="clearing">
+                            <button class="btn btn-outline-danger btn-sm" @click="confirmClear()" :disabled="clearing || !clearPreview || clearPreview.messages === 0">
                                 <span x-show="!clearing">Delete</span>
                                 <span x-show="clearing"><span class="spinner-border spinner-border-sm"></span> Deleting...</span>
                             </button>
@@ -1008,29 +1016,37 @@
                             </p>
                             <div class="form-check mb-2">
                                 <input class="form-check-input" type="radio" id="clear-scope-older"
-                                       value="older" x-model="clearScope">
+                                       value="older" x-model="clearScope" @change="refreshClearPreview()">
                                 <label class="form-check-label" for="clear-scope-older">
                                     Delete messages older than:
                                 </label>
                             </div>
                             <input type="datetime-local" class="form-control mb-2"
-                                   x-model="clearOlderThan" :disabled="clearScope !== 'older'">
+                                   x-model="clearOlderThan" :disabled="clearScope !== 'older'" @change="refreshClearPreview()">
                             <div class="form-check">
                                 <input class="form-check-input" type="radio" id="clear-scope-all"
-                                       value="all" x-model="clearScope">
+                                       value="all" x-model="clearScope" @change="refreshClearPreview()">
                                 <label class="form-check-label" for="clear-scope-all">
                                     All messages in this channel
                                 </label>
                             </div>
-                            <p class="small text-body-secondary mt-2 mb-0">
-                                Deleted messages are also erased from the agent's search index.
-                                Memories the agent created during that period are hidden until you
-                                review them under Memory → Needs review; they are never deleted automatically.
+                            <div class="small fw-semibold mt-3 mb-1">Memories created in that period</div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="radio" id="clear-ch-dep-review" value="review" x-model="clearDependentMemories">
+                                <label class="form-check-label small" for="clear-ch-dep-review">Review them (hidden until I keep or delete them)</label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="radio" id="clear-ch-dep-delete" value="delete" x-model="clearDependentMemories">
+                                <label class="form-check-label small" for="clear-ch-dep-delete">Delete them with the history (permanent)</label>
+                            </div>
+                            <p class="small mt-2 mb-0">
+                                <span x-show="clearPreviewError" class="text-danger" x-text="clearPreviewError"></span>
+                                <span x-show="!clearPreviewError" x-text="clearConfirmation"></span>
                             </p>
                         </div>
                         <div class="modal-footer">
                             <button class="btn btn-outline-secondary btn-sm" @click="showClearModal = false">Cancel</button>
-                            <button class="btn btn-outline-danger btn-sm" @click="confirmClear()" :disabled="clearing">
+                            <button class="btn btn-outline-danger btn-sm" @click="confirmClear()" :disabled="clearing || !clearPreview || clearPreview.messages === 0">
                                 <span x-show="!clearing">Delete</span>
                                 <span x-show="clearing"><span class="spinner-border spinner-border-sm"></span> Deleting...</span>
                             </button>
@@ -1065,7 +1081,10 @@
                     </div>
                     <small class="text-body-secondary d-block mb-1">
                         Created while history you deleted was recent. Hidden from the agent until you
-                        keep or delete them. Never deleted automatically.
+                        keep or delete them.
+                        <a :href="`/tenants/${encodeURIComponent(tenantId)}/recall#recall-review`"
+                           @click.prevent="Alpine.store('router').navigate(`/tenants/${encodeURIComponent(tenantId)}/recall`)">Review them all on the Recall page</a>
+                        (select several, keep or delete in bulk).
                     </small>
                     <template x-for="m in quarantined" :key="'q-' + m.memoryId">
                         <div class="d-flex justify-content-between align-items-start border-top pt-2 mt-2">

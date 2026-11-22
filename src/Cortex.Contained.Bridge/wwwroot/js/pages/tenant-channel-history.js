@@ -51,26 +51,56 @@ function tenantChannelHistoryPage() {
         showClearModal: false,
         clearScope: "older", // "older" or "all"
         clearOlderThan: "",
+        clearDependentMemories: "review", // "review" (quarantine) or "delete" — the owner's choice per purge
+        clearPreview: null,
+        clearPreviewError: "",
         clearing: false,
 
-        openClearModal() {
+        async openClearModal() {
             // Default to 7 days ago — matches the "Clear History" modal on the overview.
             const d = new Date();
             d.setDate(d.getDate() - 7);
             this.clearOlderThan = d.toISOString().slice(0, 16);
             this.clearScope = "older";
+            this.clearDependentMemories = "review";
             this.showClearModal = true;
+            await this.refreshClearPreview();
+        },
+
+        purgeScope() {
+            return {
+                channelId: this.channelId,
+                olderThan: this.clearScope === "older" ? this.clearOlderThan || null : null,
+            };
+        },
+
+        async refreshClearPreview() {
+            this.clearPreview = null;
+            this.clearPreviewError = "";
+            // An empty date would silently widen "older than" to the whole channel.
+            if (this.clearScope === "older" && !this.clearOlderThan) {
+                this.clearPreviewError = "Choose a date.";
+                return;
+            }
+            try {
+                this.clearPreview = await recallPurge.preview(this.tenantId, this.purgeScope(), this.clearDependentMemories);
+            } catch (e) {
+                this.clearPreviewError = e.message;
+            }
+        },
+
+        get clearConfirmation() {
+            return recallPurge.confirmation(this.clearPreview, this.clearDependentMemories);
         },
 
         async confirmClear() {
+            if (this.clearScope === "older" && !this.clearOlderThan) {
+                this.clearPreviewError = "Choose a date.";
+                return;
+            }
             this.clearing = true;
             try {
-                let url = `/api/tenants/${encodeURIComponent(this.tenantId)}/channels/${encodeURIComponent(this.channelId)}/history`;
-                if (this.clearScope === "older") {
-                    const olderThan = new Date(this.clearOlderThan).toISOString();
-                    url += `?olderThan=${encodeURIComponent(olderThan)}`;
-                }
-                const resp = await api.del(url);
+                const resp = await recallPurge.run(this.tenantId, this.purgeScope(), this.clearDependentMemories);
                 Alpine.store("toast").success(resp?.message ?? "Channel history cleared");
                 this.showClearModal = false;
                 this.msgOffset = 0;
