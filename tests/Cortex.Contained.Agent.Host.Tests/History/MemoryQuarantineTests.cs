@@ -115,4 +115,73 @@ public sealed class MemoryQuarantineTests : IAsyncDisposable
 
         Assert.Equal(2, await this.quarantine.CountInWindowsAsync(windows, CancellationToken.None));
     }
+
+    [Fact]
+    public async Task ListAsync_AfterPurge_ReportsThePurgeAndItsChannel()
+    {
+        await this.PurgeOneConversationAsync();
+
+        var listed = await this.quarantine.ListAsync(CancellationToken.None);
+
+        Assert.Equal(["slack", "during"], listed.Select(q => q.MemoryId));
+        Assert.All(listed, q => Assert.Equal("ch", q.Source.ChannelId));
+        Assert.All(listed, q => Assert.Equal(T0.AddDays(2), q.Source.PurgedAt));
+    }
+
+    [Fact]
+    public async Task InErasureAsync_OnlyThatPurgesWindows()
+    {
+        await this.store.SaveMessageAsync("u", "ch", "user", "a", T0);
+        await this.store.SaveMessageAsync("u", "other", "user", "b", T0.AddDays(3));
+        var first = new MessagePurgeRequest(new HistoryPurgeScope("ch", null)) { Now = T0.AddDays(5) };
+        await this.store.PurgeAsync(first, CancellationToken.None);
+        await this.store.PurgeAsync(new MessagePurgeRequest(new HistoryPurgeScope("other", null)) { Now = T0.AddDays(5) }, CancellationToken.None);
+
+        Assert.Equal(["during", "slack"], (await this.quarantine.InErasureAsync(first.ErasureId, CancellationToken.None)).Order());
+        Assert.Equal(3, (await this.quarantine.GetQuarantinedIdsAsync(CancellationToken.None)).Count);
+    }
+
+    [Fact]
+    public async Task KeepManyAsync_KeepsQuarantinedAndSkipsTheRest()
+    {
+        await this.PurgeOneConversationAsync();
+
+        var (kept, skipped) = await this.quarantine.KeepManyAsync(["during", "slack", "after", "during"], CancellationToken.None);
+
+        Assert.Equal(["during", "slack"], kept);
+        Assert.Equal(["after"], skipped);
+        Assert.Empty(await this.quarantine.GetQuarantinedIdsAsync(CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task ReadQuarantineWindowRecordsAsync_DatabaseFromBeforeChannelColumn_IsMigrated()
+    {
+        var legacyDir = Path.Combine(Path.GetTempPath(), $"quarantine-legacy-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(legacyDir);
+        var path = Path.Combine(legacyDir, "messages.db");
+        try
+        {
+            using (var legacy = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={path};Pooling=False"))
+            {
+                legacy.Open();
+                using var cmd = legacy.CreateCommand();
+                cmd.CommandText = """
+                    CREATE TABLE MemoryQuarantineWindows (Id INTEGER PRIMARY KEY AUTOINCREMENT, ErasureId TEXT NOT NULL, FromTs TEXT NOT NULL, ToTs TEXT NOT NULL, CreatedAt TEXT NOT NULL);
+                    INSERT INTO MemoryQuarantineWindows (ErasureId, FromTs, ToTs, CreatedAt) VALUES ('e1', '2026-05-04 08:00:00', '2026-05-05 08:00:00', '2026-05-06 08:00:00');
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+
+            await using var migrated = new MessageStore(path, NullLogger<MessageStore>.Instance);
+            var record = Assert.Single(await migrated.ReadQuarantineWindowRecordsAsync(CancellationToken.None));
+
+            Assert.Equal("e1", record.ErasureId);
+            Assert.Null(record.ChannelId);
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            try { Directory.Delete(legacyDir, recursive: true); } catch { /* best effort */ }
+        }
+    }
 }

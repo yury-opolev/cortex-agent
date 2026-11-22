@@ -43,7 +43,8 @@ public sealed partial class MessageStore
                 ErasureId TEXT NOT NULL,
                 FromTs    TEXT NOT NULL,
                 ToTs      TEXT NOT NULL,
-                CreatedAt TEXT NOT NULL
+                CreatedAt TEXT NOT NULL,
+                ChannelId TEXT NULL
             );
 
             CREATE TABLE IF NOT EXISTS MemoryQuarantineDecisions (
@@ -63,6 +64,14 @@ public sealed partial class MessageStore
         cmd.Parameters.AddWithValue("@instanceId", Guid.NewGuid().ToString("N"));
         cmd.Parameters.AddWithValue("@now", SqliteDateTimeText.Format(DateTimeOffset.UtcNow));
         cmd.ExecuteNonQuery();
+
+        // Purged channel per quarantine window (Recall review list); null for all-channel purges and older rows.
+        if (!this.ColumnExists("MemoryQuarantineWindows", "ChannelId"))
+        {
+            using var alter = this.writer.CreateCommand();
+            alter.CommandText = "ALTER TABLE MemoryQuarantineWindows ADD COLUMN ChannelId TEXT NULL;";
+            alter.ExecuteNonQuery();
+        }
     }
 
     // ──────────────────────────────────────────────
@@ -266,8 +275,9 @@ public sealed partial class MessageStore
                 var windows = QuarantineWindowBuilder.Build(timestamps, request.QuarantineClusterGap, request.QuarantineSlack, request.QuarantineCap is { } cap && cap < request.Now ? cap : request.Now);
                 foreach (var window in windows)
                 {
-                    await using var insert = this.WriterCommand(transaction, "INSERT INTO MemoryQuarantineWindows (ErasureId, FromTs, ToTs, CreatedAt) VALUES (@id, @from, @to, @at);");
+                    await using var insert = this.WriterCommand(transaction, "INSERT INTO MemoryQuarantineWindows (ErasureId, FromTs, ToTs, CreatedAt, ChannelId) VALUES (@id, @from, @to, @at, @channelId);");
                     insert.Parameters.AddWithValue("@id", request.ErasureId);
+                    insert.Parameters.AddWithValue("@channelId", (object?)request.Scope.ChannelId ?? DBNull.Value);
                     insert.Parameters.AddWithValue("@from", SqliteDateTimeText.Format(window.From));
                     insert.Parameters.AddWithValue("@to", SqliteDateTimeText.Format(window.To));
                     insert.Parameters.AddWithValue("@at", SqliteDateTimeText.Format(request.Now));

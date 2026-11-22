@@ -7,6 +7,13 @@ public sealed record QuarantineWindow(DateTimeOffset From, DateTimeOffset To)
     public bool Contains(DateTimeOffset instant) => instant >= this.From && instant < this.To;
 }
 
+/// <summary>A stored quarantine window with the purge that recorded it.</summary>
+/// <param name="ErasureId">Erasure workflow id of the purge.</param>
+/// <param name="Window">The window.</param>
+/// <param name="PurgedAt">When the purge ran.</param>
+/// <param name="ChannelId">The purged channel, or null for an all-channel purge (and windows recorded before this column existed).</param>
+public sealed record QuarantineWindowRecord(string ErasureId, QuarantineWindow Window, DateTimeOffset PurgedAt, string? ChannelId);
+
 /// <summary>
 /// Turns the timestamps of purged rows into quarantine windows: rows closer than the cluster gap
 /// share a window; each window ends <c>slack</c> after its last row (memory extraction runs at

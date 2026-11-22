@@ -13,7 +13,16 @@ public interface IMemoryQuarantineSource
 
     /// <summary>Records that the owner kept <paramref name="memoryId"/>.</summary>
     Task RecordKeptMemoryAsync(string memoryId, DateTimeOffset at, CancellationToken cancellationToken);
+
+    /// <summary>Every recorded quarantine window with the purge that recorded it.</summary>
+    Task<IReadOnlyList<QuarantineWindowRecord>> ReadQuarantineWindowRecordsAsync(CancellationToken cancellationToken);
+
+    /// <summary>Records that the owner kept every memory in <paramref name="memoryIds"/> (one transaction).</summary>
+    Task RecordKeptMemoriesAsync(IReadOnlyCollection<string> memoryIds, DateTimeOffset at, CancellationToken cancellationToken);
 }
+
+/// <summary>A quarantined memory and the purge that quarantined it.</summary>
+public sealed record QuarantinedMemory(string MemoryId, DateTimeOffset CreatedAt, QuarantineWindowRecord Source);
 
 /// <summary>Creation time of one curated memory.</summary>
 public sealed record MemoryCreationTime(string MemoryId, DateTimeOffset CreatedAt);
@@ -69,6 +78,62 @@ public sealed class MemoryQuarantine
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(memoryId);
         return this.source.RecordKeptMemoryAsync(memoryId, this.time.GetUtcNow(), cancellationToken);
+    }
+
+    /// <summary>Quarantined memories with the latest purge whose window contains each one (the Recall review list).</summary>
+    public async Task<IReadOnlyList<QuarantinedMemory>> ListAsync(CancellationToken cancellationToken)
+    {
+        var records = await this.source.ReadQuarantineWindowRecordsAsync(cancellationToken).ConfigureAwait(false);
+        if (records.Count == 0)
+        {
+            return [];
+        }
+
+        var kept = await this.source.ReadKeptMemoryIdsAsync(cancellationToken).ConfigureAwait(false);
+        var all = await this.memories.ListCreationTimesAsync(cancellationToken).ConfigureAwait(false);
+        var result = new List<QuarantinedMemory>();
+        foreach (var memory in all.Where(m => !kept.Contains(m.MemoryId)))
+        {
+            var source = records
+                .Where(r => r.Window.Contains(memory.CreatedAt))
+                .OrderByDescending(r => r.PurgedAt)
+                .FirstOrDefault();
+            if (source is not null)
+            {
+                result.Add(new QuarantinedMemory(memory.MemoryId, memory.CreatedAt, source));
+            }
+        }
+
+        return result.OrderByDescending(q => q.CreatedAt).ThenBy(q => q.MemoryId, StringComparer.Ordinal).ToList();
+    }
+
+    /// <summary>Not-kept memories inside the windows recorded by purge <paramref name="erasureId"/>.</summary>
+    public async Task<IReadOnlySet<string>> InErasureAsync(string erasureId, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(erasureId);
+        var windows = (await this.source.ReadQuarantineWindowRecordsAsync(cancellationToken).ConfigureAwait(false))
+            .Where(r => string.Equals(r.ErasureId, erasureId, StringComparison.Ordinal))
+            .Select(r => r.Window)
+            .ToList();
+        return windows.Count == 0
+            ? new HashSet<string>(StringComparer.Ordinal)
+            : await this.InWindowsAsync(windows, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Keeps the quarantined members of <paramref name="memoryIds"/> in one transaction; the others are returned as skipped.</summary>
+    public async Task<(IReadOnlyList<string> Kept, IReadOnlyList<string> Skipped)> KeepManyAsync(IReadOnlyCollection<string> memoryIds, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(memoryIds);
+        var quarantined = await this.GetQuarantinedIdsAsync(cancellationToken).ConfigureAwait(false);
+        var requested = memoryIds.Where(id => !string.IsNullOrWhiteSpace(id)).Distinct(StringComparer.Ordinal).ToList();
+        var keep = requested.Where(quarantined.Contains).ToList();
+        var skipped = requested.Where(id => !quarantined.Contains(id)).ToList();
+        if (keep.Count > 0)
+        {
+            await this.source.RecordKeptMemoriesAsync(keep, this.time.GetUtcNow(), cancellationToken).ConfigureAwait(false);
+        }
+
+        return (keep, skipped);
     }
 
     private async Task<IReadOnlySet<string>> InWindowsAsync(IReadOnlyList<QuarantineWindow> windows, CancellationToken cancellationToken)
