@@ -39,8 +39,28 @@ public sealed class StorageFileCipher : IContentEncryptor
     /// <summary>The magic prefix of an encrypted file.</summary>
     public static ReadOnlySpan<byte> Magic => "CXE1"u8;
 
-    /// <summary>True when <paramref name="content"/> starts with the encrypted-file magic.</summary>
-    public static bool IsEncrypted(ReadOnlySpan<byte> content) => content.Length >= HeaderSize && content.StartsWith(Magic);
+    /// <summary>
+    /// True when <paramref name="content"/> starts with the encrypted-file magic and what follows is not readable text:
+    /// the nonce and tag are random, whereas a plaintext note that merely begins with <c>CXE1</c> continues as text.
+    /// </summary>
+    public static bool IsEncrypted(ReadOnlySpan<byte> content) =>
+        content.Length >= HeaderSize && content.StartsWith(Magic) && !LooksLikeText(content[Magic.Length..HeaderSize]);
+
+    // A random 28 bytes are almost never valid UTF-8 without control characters; the last bytes may cut a multi-byte character.
+    private static bool LooksLikeText(ReadOnlySpan<byte> bytes)
+    {
+        for (var cut = 0; cut <= 3; cut++)
+        {
+            var candidate = bytes[..^cut];
+            if (System.Text.Unicode.Utf8.IsValid(candidate) && !candidate.ContainsAnyInRange((byte)0, (byte)8) && !candidate.Contains((byte)0x7F)
+                && !candidate.ContainsAnyInRange((byte)14, (byte)31))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     /// <summary>True when the file at <paramref name="path"/> starts with the encrypted-file magic.</summary>
     public static bool IsEncryptedFile(string path)

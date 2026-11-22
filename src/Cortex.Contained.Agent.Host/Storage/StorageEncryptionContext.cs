@@ -111,7 +111,7 @@ public sealed class StorageEncryptionContext
             : new StorageEncryptionContext(layout, false, "off", null);
     }
 
-    /// <summary>True when any covered store already holds encrypted bytes.</summary>
+    /// <summary>True when any covered store already holds encrypted bytes: an encrypted database header or session snapshot. Memory content files alone never switch the mode (a note can start with the cipher's magic).</summary>
     public static bool HasEncryptedData(StorageLayout layout)
     {
         ArgumentNullException.ThrowIfNull(layout);
@@ -121,13 +121,8 @@ public sealed class StorageEncryptionContext
             return true;
         }
 
-        if (File.Exists(layout.SessionsSnapshot) && StorageFileCipher.IsEncryptedFile(layout.SessionsSnapshot))
-        {
-            return true;
-        }
-
-        return Directory.Exists(layout.MemoriesDirectory)
-            && Directory.EnumerateFiles(layout.MemoriesDirectory, "*.memory.data").Any(StorageFileCipher.IsEncryptedFile);
+        return (File.Exists(layout.SessionsSnapshot) && StorageFileCipher.IsEncryptedFile(layout.SessionsSnapshot))
+            || Agent.SessionSnapshotSerializer.PendingSnapshots(layout.StateRoot).Count > 0;
     }
 
     /// <summary>Persists <paramref name="written"/> and flags the restart that applies it.</summary>

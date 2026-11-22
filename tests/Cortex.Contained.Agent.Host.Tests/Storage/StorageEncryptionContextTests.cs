@@ -78,12 +78,31 @@ public sealed class StorageEncryptionContextTests : IDisposable
     }
 
     [Fact]
-    public void Resolve_EncryptedMemoryFileWithoutMarker_Detected()
+    public void Resolve_EncryptedMemoryDatabaseWithoutMarker_Detected()
+    {
+        File.WriteAllBytes(this.layout.MemoryDatabasePath, RandomNumberGenerator.GetBytes(4096));
+
+        Assert.Equal("detected", StorageEncryptionContext.Resolve(new StorageOptions(), this.layout).Source);
+    }
+
+    [Fact]
+    public void Resolve_ContentFileAloneLooksEncrypted_DoesNotSwitchTheInstall()
     {
         var cipher = new StorageFileCipher(RandomNumberGenerator.GetBytes(32), "memory-content");
         File.WriteAllBytes(Path.Combine(this.layout.MemoriesDirectory, "a.memory.data"), cipher.Encrypt("x"u8.ToArray()));
 
-        Assert.Equal("detected", StorageEncryptionContext.Resolve(new StorageOptions(), this.layout).Source);
+        Assert.False(StorageEncryptionContext.Resolve(new StorageOptions(), this.layout).Enabled);
+    }
+
+    [Fact]
+    public void Resolve_PlaintextMemoryWhoseTextStartsWithTheMagic_StaysOff()
+    {
+        File.WriteAllText(Path.Combine(this.layout.MemoriesDirectory, "a.memory.data"), "CXE1 is the code of the Zürich conference room, booked for Friday");
+
+        var context = StorageEncryptionContext.Resolve(new StorageOptions(), this.layout);
+
+        Assert.False(context.Enabled);
+        Assert.Equal("off", context.Source);
     }
 
     [Fact]

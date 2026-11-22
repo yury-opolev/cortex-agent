@@ -46,6 +46,16 @@ public sealed class MemoryContentMigratorTests : IDisposable
         Directory.EnumerateFiles(this.dir).Order(StringComparer.Ordinal).Select(f => Path.GetFileName(f) + ":" + Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(f)))));
 
     [Fact]
+    public void Migrate_PlaintextMemoryStartingWithTheMagic_IsEncryptedNotMistakenForCiphertext()
+    {
+        this.Write("a", "CXE1 is the code of the Zürich conference room, booked for Friday");
+
+        var result = MemoryContentMigrator.Migrate(this.dir, Cipher(KeyA));
+
+        Assert.Equal(new MemoryContentMigrationResult(1, 0, 0), result);
+        Assert.StartsWith("CXE1 is the code", this.Read("a", KeyA), StringComparison.Ordinal);
+    }
+    [Fact]
     public void Migrate_PlaintextFiles_EncryptedAndNoPlaintextLeft()
     {
         this.Write("a", "zqmemmarker one");

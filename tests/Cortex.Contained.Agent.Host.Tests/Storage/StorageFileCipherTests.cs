@@ -41,4 +41,13 @@ public sealed class StorageFileCipherTests
     {
         Assert.Throws<InvalidDataException>(() => new StorageFileCipher(Key, "memory-content").Decrypt("plain text"u8.ToArray()));
     }
+
+    [Fact]
+    public void IsEncrypted_PlaintextThatStartsWithTheMagic_IsNotAnEncryptedFile()
+    {
+        var text = "CXE1 is the code of the Zürich conference room, booked for Friday"u8.ToArray();
+
+        Assert.False(StorageFileCipher.IsEncrypted(text));
+        Assert.True(StorageFileCipher.IsEncrypted(new StorageFileCipher(Key, "memory-content").Encrypt("CXE1 text"u8.ToArray())));
+    }
 }
