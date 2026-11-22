@@ -21,6 +21,10 @@ function tenantRecallPage() {
         reranker: null,
         rerankerBusy: false,
 
+        // ── Embeddings GPU (Bridge-wide) ─────────────────────────
+        embeddingsGpu: null,
+        embeddingsGpuBusy: false,
+
         // ── Status ───────────────────────────────────────────────
         status: null,
         connected: true,
@@ -123,8 +127,46 @@ function tenantRecallPage() {
             setTimeout(() => this.loadStatus(), 1500);
         },
 
+        async setEmbeddingsGpu(enabled) {
+            this.embeddingsGpuBusy = true;
+            try {
+                this.embeddingsGpu = await api.put("/api/recall/embeddings-gpu", { enabled });
+                Alpine.store("toast").success(enabled
+                    ? "Embeddings will run on the GPU; the sidecar is being recreated (see below)"
+                    : "Embeddings will run on the CPU; the sidecar is being recreated (see below)");
+            } catch (e) {
+                Alpine.store("toast").error("Embeddings GPU: " + e.message);
+            }
+            this.embeddingsGpuBusy = false;
+            setTimeout(() => this.loadEmbeddingsGpu(), 1500);
+        },
+
+        async loadEmbeddingsGpu() {
+            try {
+                this.embeddingsGpu = await api.get("/api/recall/embeddings-gpu");
+            } catch {
+                // keep the last known view; the next refresh tries again
+            }
+        },
+
+        embeddingsGpuBadge() {
+            const state = this.embeddingsGpu?.sidecar?.state;
+            return state === "running" ? "bg-success"
+                : state === "failed" ? "bg-danger"
+                : state === "starting" ? "bg-warning text-dark"
+                : "bg-secondary";
+        },
+
+        embeddingsPlacement() {
+            const view = this.embeddingsGpu;
+            if (!view?.mode) return "not running";
+            const where = view.mode === "gpu" ? "GPU" : "CPU";
+            return view.processor ? `${where} container, model: ${view.processor}` : `${where} container, model not loaded right now`;
+        },
+
         // ── Status ───────────────────────────────────────────────
         async loadStatus() {
+            this.loadEmbeddingsGpu();
             try {
                 const data = await api.get(`${this.base}/status`);
                 this.status = data?.agent || null;

@@ -1312,6 +1312,25 @@
                 </div>
             </div>
 
+            <!-- ═══ Embeddings GPU (Bridge-wide) ═══ -->
+            <div class="card mb-3">
+                <div class="card-body">
+                    <h6 class="text-uppercase text-secondary border-bottom pb-2 mb-3">Embeddings (shared by all tenants)</h6>
+                    <div class="d-flex align-items-center gap-2 flex-wrap">
+                        <div class="form-check form-switch mb-0">
+                            <input class="form-check-input" type="checkbox" id="recall-embeddings-gpu" :checked="embeddingsGpu?.enabled"
+                                   :disabled="embeddingsGpuBusy" @change="setEmbeddingsGpu($event.target.checked)">
+                            <label class="form-check-label" for="recall-embeddings-gpu">Run embeddings on the GPU (cortex-embeddings sidecar)</label>
+                        </div>
+                        <span class="badge" :class="embeddingsGpuBadge()" x-text="'sidecar: ' + (embeddingsGpu?.sidecar?.state || 'unknown')"></span>
+                        <span class="small text-secondary" x-text="'running as: ' + embeddingsPlacement()"></span>
+                    </div>
+                    <div class="small text-secondary mt-1">Needs an NVIDIA GPU with Docker GPU support. Off keeps the CPU. Switching recreates the sidecar; if the GPU cannot be used it falls back to the CPU and says so here. While built-in memory is off the sidecar is stopped and the switch applies once memory is on.</div>
+                    <div x-show="embeddingsGpu?.sidecar?.problem" class="alert py-1 px-2 small mt-2 mb-0"
+                         :class="embeddingsGpu?.sidecar?.state === 'running' ? 'alert-warning' : 'alert-danger'" x-text="embeddingsGpu?.sidecar?.problem"></div>
+                </div>
+            </div>
+
             <!-- ═══ Status ═══ -->
             <div class="card mb-3" x-show="status">
                 <div class="card-body small">
