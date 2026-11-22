@@ -40,6 +40,9 @@ public static partial class SessionSnapshotSerializer
     /// <summary>Default snapshot file name within the state directory.</summary>
     public const string SnapshotFileName = "sessions-snapshot.json";
 
+    /// <summary>Key purpose (and associated-data label) of an encrypted snapshot.</summary>
+    public const string Purpose = "sessions-snapshot";
+
     private static readonly JsonSerializerOptions jsonOptions = new()
     {
         WriteIndented = false,
@@ -85,9 +88,10 @@ public static partial class SessionSnapshotSerializer
     }
 
     /// <summary>
-    /// Saves the snapshot to disk using atomic write (temp + rename).
+    /// Saves the snapshot to disk using atomic write (temp + flush + rename). With <paramref name="cipher"/> the
+    /// file is AES-GCM encrypted under the tenant storage key (it holds every live conversation).
     /// </summary>
-    public static async Task SaveAsync(SessionsSnapshot snapshot, string stateDir, ILogger logger)
+    public static async Task SaveAsync(SessionsSnapshot snapshot, string stateDir, ILogger logger, Storage.StorageFileCipher? cipher = null)
     {
         var filePath = Path.Combine(stateDir, SnapshotFileName);
         var tempPath = filePath + ".tmp";
@@ -96,8 +100,20 @@ public static partial class SessionSnapshotSerializer
         {
             Directory.CreateDirectory(stateDir);
 
-            var json = JsonSerializer.Serialize(snapshot, jsonOptions);
-            await File.WriteAllTextAsync(tempPath, json).ConfigureAwait(false);
+            var bytes = JsonSerializer.SerializeToUtf8Bytes(snapshot, jsonOptions);
+            if (cipher is not null)
+            {
+                var plaintext = bytes;
+                bytes = cipher.Encrypt(plaintext);
+                System.Security.Cryptography.CryptographicOperations.ZeroMemory(plaintext);
+            }
+
+            await using (var stream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None, 4096, FileOptions.Asynchronous))
+            {
+                await stream.WriteAsync(bytes).ConfigureAwait(false);
+                stream.Flush(flushToDisk: true);
+            }
+
             File.Move(tempPath, filePath, overwrite: true);
 
             LogSnapshotSaved(logger, snapshot.Sessions.Count, filePath);
@@ -121,12 +137,20 @@ public static partial class SessionSnapshotSerializer
         }
     }
 
+    /// <summary>True when the snapshot file exists and is encrypted (restoring it needs the storage key).</summary>
+    public static bool IsEncrypted(string stateDir)
+    {
+        var filePath = Path.Combine(stateDir, SnapshotFileName);
+        return File.Exists(filePath) && Storage.StorageFileCipher.IsEncryptedFile(filePath);
+    }
+
     /// <summary>
     /// Loads and restores sessions from the snapshot file.
     /// Returns the number of sessions restored, or 0 if no snapshot or on failure.
-    /// The snapshot file is deleted after successful restore (one-shot).
+    /// The snapshot file is deleted after successful restore (one-shot); a plaintext one is overwritten first.
+    /// An encrypted snapshot without <paramref name="cipher"/>, or one that does not authenticate, is kept.
     /// </summary>
-    public static int TryRestore(AgentSessionStore sessionStore, string stateDir, ILogger logger)
+    public static int TryRestore(AgentSessionStore sessionStore, string stateDir, ILogger logger, Storage.StorageFileCipher? cipher = null)
     {
         var filePath = Path.Combine(stateDir, SnapshotFileName);
         if (!File.Exists(filePath))
@@ -136,8 +160,27 @@ public static partial class SessionSnapshotSerializer
 
         try
         {
-            var json = File.ReadAllText(filePath);
-            var snapshot = JsonSerializer.Deserialize<SessionsSnapshot>(json, jsonOptions);
+            var bytes = File.ReadAllBytes(filePath);
+            if (Storage.StorageFileCipher.IsEncrypted(bytes))
+            {
+                if (cipher is null)
+                {
+                    LogEncryptedSnapshotKept(logger, filePath);
+                    return 0;
+                }
+
+                try
+                {
+                    bytes = cipher.Decrypt(bytes);
+                }
+                catch (System.Security.Cryptography.CryptographicException)
+                {
+                    LogEncryptedSnapshotKept(logger, filePath);
+                    return 0;
+                }
+            }
+
+            var snapshot = JsonSerializer.Deserialize<SessionsSnapshot>(bytes, jsonOptions);
             if (snapshot?.Sessions is null || snapshot.Sessions.Count == 0)
             {
                 LogSnapshotEmpty(logger, filePath);
@@ -200,6 +243,14 @@ public static partial class SessionSnapshotSerializer
     {
         try
         {
+            // A plaintext snapshot holds whole conversations: overwrite it before unlinking.
+            if (File.Exists(filePath) && !Storage.StorageFileCipher.IsEncryptedFile(filePath))
+            {
+                using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Write, FileShare.None);
+                stream.Write(new byte[stream.Length]);
+                stream.Flush(flushToDisk: true);
+            }
+
             File.Delete(filePath);
         }
         catch
@@ -222,4 +273,7 @@ public static partial class SessionSnapshotSerializer
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to restore session snapshot from {FilePath}: {ErrorMessage}. Sessions will be re-seeded by Bridge.")]
     private static partial void LogSnapshotRestoreFailed(ILogger logger, string filePath, string errorMessage);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Encrypted session snapshot {FilePath} kept: it cannot be decrypted now (no storage key, or another key)")]
+    private static partial void LogEncryptedSnapshotKept(ILogger logger, string filePath);
 }

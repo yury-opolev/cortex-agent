@@ -920,7 +920,10 @@ builder.Services.AddSingleton<IHostedService>(sp =>
         sp.GetRequiredService<IAgentRuntime>(),
         sp.GetRequiredService<AgentSessionStore>(),
         stateRoot,
-        sp.GetRequiredService<ILoggerFactory>().CreateLogger<AgentProcessingService>()));
+        sp.GetRequiredService<ILoggerFactory>().CreateLogger<AgentProcessingService>(),
+        storageEncryption,
+        sp.GetRequiredService<StorageKeyRing>(),
+        TimeSpan.FromSeconds(storageOptions.KeyWaitSeconds)));
 
 var app = builder.Build();
 
