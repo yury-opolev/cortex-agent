@@ -81,6 +81,13 @@
                                     <span class="sidebar-item-icon"><i class="bi bi-sd-card"></i></span>
                                     <span class="sidebar-item-label">Memory</span>
                                 </a>
+                                <a :href="`/tenants/${encodeURIComponent(t.tenantId)}/recall`"
+                                   class="sidebar-item sidebar-sub-item"
+                                   :class="{ active: page === 'tenant-recall' && $store.router.tenantId === t.tenantId }"
+                                   @click.prevent="nav(`/tenants/${encodeURIComponent(t.tenantId)}/recall`)">
+                                    <span class="sidebar-item-icon"><i class="bi bi-search-heart"></i></span>
+                                    <span class="sidebar-item-label">Recall</span>
+                                </a>
                             </div>
                         </div>
                     </template>
@@ -165,7 +172,7 @@
         </div>
 
         <!-- ── Tenant Sub-Nav (shared across all /tenants/{id}/* pages) ── -->
-        <template x-if="['tenant-settings','tenant-history','tenant-channel-history','tenant-memory'].includes($store.router.page)">
+        <template x-if="['tenant-settings','tenant-history','tenant-channel-history','tenant-memory','tenant-recall'].includes($store.router.page)">
             <div x-data="tenantTabs()" class="container pt-3 pb-3" style="max-width: 860px;">
                 <div class="d-flex align-items-center gap-2">
                     <button class="btn btn-sm btn-outline-secondary" @click="backToTenants()">
@@ -187,6 +194,11 @@
                                 :class="isActive('memory') ? 'btn-primary' : 'btn-outline-secondary'"
                                 :disabled="isActive('memory')" @click="navSub('memory')">
                             <i class="bi bi-sd-card me-1"></i>Memory
+                        </button>
+                        <button class="btn btn-sm"
+                                :class="isActive('recall') ? 'btn-primary' : 'btn-outline-secondary'"
+                                :disabled="isActive('recall')" @click="navSub('recall')">
+                            <i class="bi bi-search-heart me-1"></i>Recall
                         </button>
                     </div>
                 </div>
@@ -1163,6 +1175,323 @@
                         <div class="modal-footer">
                             <button class="btn btn-secondary" @click="showDeleteModal = false">Cancel</button>
                             <button class="btn btn-danger" @click="doDelete()">Delete</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        </template>
+
+        <!-- ── Tenant Recall (history search, embeddings, reranker, deletion, review) ── -->
+        <template x-if="$store.router.page === 'tenant-recall'">
+        <div x-data="tenantRecallPage()" class="container pb-3" style="max-width: 860px;">
+            <!-- Sub-nav is rendered above by the shared tenantTabs() block. -->
+
+            <div x-show="!connected" class="alert alert-warning py-2">
+                <i class="bi bi-plug me-1"></i>The agent is not connected; settings and status are unavailable.
+            </div>
+
+            <!-- ═══ Settings ═══ -->
+            <div class="card mb-3" x-show="form">
+                <div class="card-body">
+                    <h6 class="text-uppercase text-secondary border-bottom pb-2 mb-3">Recall settings</h6>
+                    <template x-if="form">
+                    <div>
+                        <div class="form-check form-switch mb-2">
+                            <input class="form-check-input" type="checkbox" id="recall-history-enabled" x-model="form.historyEnabled">
+                            <label class="form-check-label" for="recall-history-enabled">History search (<code>history_search</code>)</label>
+                            <span x-show="isOverridden('historyEnabled')" class="badge bg-info text-dark ms-1">custom</span>
+                        </div>
+                        <div class="row g-2 mb-2">
+                            <div class="col-sm-6">
+                                <label class="form-label small mb-1" for="recall-history-mode">Default history search mode
+                                    <span x-show="isOverridden('historySearchMode')" class="badge bg-info text-dark ms-1">custom</span></label>
+                                <select id="recall-history-mode" class="form-select form-select-sm" x-model="form.historySearchMode">
+                                    <option value="auto">Hybrid (keyword + semantic when embeddings are available)</option>
+                                    <option value="hybrid">Hybrid (same as auto)</option>
+                                    <option value="keyword">Keyword only</option>
+                                </select>
+                            </div>
+                            <div class="col-sm-6 d-flex align-items-end">
+                                <div class="form-check form-switch">
+                                    <input class="form-check-input" type="checkbox" id="recall-dense" x-model="form.historyDenseEnabled">
+                                    <label class="form-check-label" for="recall-dense">Dense embeddings for history</label>
+                                    <span x-show="isOverridden('historyDenseEnabled')" class="badge bg-info text-dark ms-1">custom</span>
+                                </div>
+                            </div>
+                        </div>
+                        <p class="small text-body-secondary mb-3">
+                            Turning dense embeddings on or off rebuilds the history index; until it finishes, searches cover only recent messages.
+                        </p>
+
+                        <div class="mb-3" style="max-width: 360px;">
+                            <label class="form-label small mb-1" for="recall-memory-mode">Default memory search mode
+                                <span x-show="isOverridden('memorySearchMode')" class="badge bg-info text-dark ms-1">custom</span></label>
+                            <select id="recall-memory-mode" class="form-select form-select-sm" x-model="form.memorySearchMode">
+                                <option value="dense">Semantic (dense)</option>
+                                <option value="hybrid">Hybrid (keyword + semantic)</option>
+                                <option value="keyword">Keyword only</option>
+                            </select>
+                        </div>
+
+                        <div class="fw-semibold small mb-1">Reranker budget (this tenant)</div>
+                        <div class="row g-2 mb-2">
+                            <div class="col-6 col-md">
+                                <label class="form-label small mb-0" for="rr-h-topn">History top N</label>
+                                <input id="rr-h-topn" type="number" min="1" max="50" class="form-control form-control-sm" x-model.number="form.rerankHistoryTopN">
+                            </div>
+                            <div class="col-6 col-md">
+                                <label class="form-label small mb-0" for="rr-h-chars">History chars</label>
+                                <input id="rr-h-chars" type="number" min="200" max="4000" step="100" class="form-control form-control-sm" x-model.number="form.rerankHistoryMaxDocChars">
+                            </div>
+                            <div class="col-6 col-md">
+                                <label class="form-label small mb-0" for="rr-m-topn">Memory top N</label>
+                                <input id="rr-m-topn" type="number" min="1" max="50" class="form-control form-control-sm" x-model.number="form.rerankMemoryTopN">
+                            </div>
+                            <div class="col-6 col-md">
+                                <label class="form-label small mb-0" for="rr-m-chars">Memory chars</label>
+                                <input id="rr-m-chars" type="number" min="200" max="4000" step="100" class="form-control form-control-sm" x-model.number="form.rerankMemoryMaxDocChars">
+                            </div>
+                            <div class="col-6 col-md">
+                                <label class="form-label small mb-0" for="rr-timeout">Timeout (ms)</label>
+                                <input id="rr-timeout" type="number" min="100" max="30000" step="100" class="form-control form-control-sm" x-model.number="form.rerankTimeoutMs">
+                            </div>
+                        </div>
+
+                        <div x-show="settingsError" class="alert alert-danger py-1 px-2 small" x-text="settingsError"></div>
+                        <template x-for="n in notices" :key="n">
+                            <div class="alert alert-info py-1 px-2 small mb-1" x-text="n"></div>
+                        </template>
+
+                        <div class="d-flex gap-2 mt-2">
+                            <button class="btn btn-sm btn-primary" :disabled="!dirty || saving" @click="saveSettings()">
+                                <span x-show="saving" class="spinner-border spinner-border-sm me-1"></span>Save
+                            </button>
+                            <button class="btn btn-sm btn-outline-secondary" :disabled="saving || !(settings?.overridden?.length)"
+                                    @click="saveSettings(true)" title="Drop every custom value; the configured defaults apply again">
+                                Reset to defaults
+                            </button>
+                        </div>
+                    </div>
+                    </template>
+                </div>
+            </div>
+
+            <!-- ═══ Reranker (Bridge-wide) ═══ -->
+            <div class="card mb-3">
+                <div class="card-body">
+                    <h6 class="text-uppercase text-secondary border-bottom pb-2 mb-3">Reranker (shared by all tenants)</h6>
+                    <div class="d-flex align-items-center gap-2 flex-wrap">
+                        <div class="form-check form-switch mb-0">
+                            <input class="form-check-input" type="checkbox" id="recall-reranker" :checked="reranker?.enabled"
+                                   :disabled="rerankerBusy" @change="setReranker($event.target.checked)">
+                            <label class="form-check-label" for="recall-reranker">Rerank hybrid results (cortex-reranker sidecar)</label>
+                        </div>
+                        <span class="badge" :class="sidecarBadge()" x-text="'sidecar: ' + (reranker?.sidecar?.state || 'unknown')"></span>
+                    </div>
+                    <div x-show="reranker?.sidecar?.problem" class="alert alert-danger py-1 px-2 small mt-2 mb-0" x-text="reranker?.sidecar?.problem"></div>
+                </div>
+            </div>
+
+            <!-- ═══ Status ═══ -->
+            <div class="card mb-3" x-show="status">
+                <div class="card-body small">
+                    <h6 class="text-uppercase text-secondary border-bottom pb-2 mb-3">Status <span class="fw-normal text-lowercase">(refreshes every 5 s)</span></h6>
+                    <template x-if="status">
+                    <div>
+                        <div class="fw-semibold">History index</div>
+                        <div class="mb-2">
+                            <span class="badge" :class="status.history.enabled ? 'bg-success' : 'bg-secondary'" x-text="status.history.enabled ? 'on' : 'off'"></span>
+                            <span class="badge bg-secondary" x-text="'storage: ' + status.history.storage"></span>
+                            <span class="badge" :class="status.history.buildComplete ? 'bg-success' : 'bg-warning text-dark'"
+                                  x-text="status.history.buildComplete ? 'build complete' : (status.history.buildInProgress ? 'building…' : 'not built')"></span>
+                            <span x-show="status.history.halted" class="badge bg-danger">halted</span>
+                            <span class="ms-1" x-text="'generation ' + (status.history.generation ?? '—') + ' · checkpoint lag ' + status.history.checkpointLag + ' · journal backlog ' + status.history.journalBacklog"></span>
+                        </div>
+                        <div x-show="status.history.lastError" class="text-danger mb-2" x-text="'Last error: ' + status.history.lastError"></div>
+                        <div x-show="status.history.pendingErasureTasks > 0" class="text-warning mb-2"
+                             x-text="'Erasure still running: ' + status.history.pendingErasureSteps.join(', ')"></div>
+
+                        <div class="fw-semibold">Dense embeddings</div>
+                        <div class="mb-2">
+                            <span class="badge" :class="status.dense.state === 'on' ? 'bg-success' : (status.dense.state === 'off' ? 'bg-secondary' : 'bg-danger')" x-text="status.dense.state"></span>
+                            <span class="ms-1" x-text="status.dense.embedded + ' / ' + status.dense.total + ' chunks embedded · ' + status.dense.pending + ' pending · ' + status.dense.failed + ' failed'"></span>
+                            <div class="progress mt-1" style="height: 6px;" x-show="status.dense.total > 0">
+                                <div class="progress-bar" :style="'width:' + percent(status.dense.embedded, status.dense.total) + '%'"></div>
+                            </div>
+                            <div x-show="status.dense.oldestPendingQueuedAt" class="text-body-secondary" x-text="'Oldest pending since ' + formatDateTime(status.dense.oldestPendingQueuedAt)"></div>
+                            <div x-show="status.dense.lastError" class="text-danger" x-text="'Last error: ' + status.dense.lastError"></div>
+                        </div>
+
+                        <div class="fw-semibold">Reranker (this agent)</div>
+                        <div class="mb-2">
+                            <span class="badge" :class="status.reranker.state === 'ok' ? 'bg-success' : (status.reranker.state === 'off' ? 'bg-secondary' : 'bg-danger')" x-text="status.reranker.state"></span>
+                            <span class="ms-1" x-show="status.reranker.lastLatencyMs != null" x-text="'last call ' + Math.round(status.reranker.lastLatencyMs) + ' ms at ' + formatDateTime(status.reranker.lastCallAt)"></span>
+                            <span class="ms-1" x-show="status.reranker.consecutiveFailures > 0" x-text="status.reranker.consecutiveFailures + ' consecutive failures'"></span>
+                            <div x-show="status.reranker.lastError" class="text-danger" x-text="'Last error: ' + status.reranker.lastError"></div>
+                        </div>
+
+                        <div class="fw-semibold">Event backfill</div>
+                        <div class="d-flex align-items-center gap-2 mb-2">
+                            <span x-text="status.eventBackfill.lastRunAt
+                                ? 'Last run ' + formatDateTime(status.eventBackfill.lastRunAt) + ': ' + status.eventBackfill.lastInserted + ' of ' + status.eventBackfill.lastScanned + ' messages backfilled'
+                                : 'Not run since the agent started'"></span>
+                            <button class="btn btn-sm btn-outline-secondary" :disabled="backfillRunning" @click="runBackfill()">
+                                <span x-show="backfillRunning" class="spinner-border spinner-border-sm me-1"></span>Run event backfill
+                            </button>
+                        </div>
+
+                        <div>
+                            <span class="fw-semibold">Needs review:</span>
+                            <span x-text="status.quarantinedMemories + ' memories'"></span>
+                            <a href="#recall-review" class="ms-1" x-show="status.quarantinedMemories > 0">review below</a>
+                        </div>
+                    </div>
+                    </template>
+                </div>
+            </div>
+
+            <!-- ═══ Delete history ═══ -->
+            <div class="card mb-3">
+                <div class="card-body">
+                    <h6 class="text-uppercase text-secondary border-bottom pb-2 mb-3">Delete history</h6>
+                    <div class="row g-2 mb-2">
+                        <div class="col-sm-6">
+                            <label class="form-label small mb-1" for="purge-channel">Channel</label>
+                            <select id="purge-channel" class="form-select form-select-sm" x-model="purge.channelId" @change="refreshPreview()">
+                                <option value="">All channels</option>
+                                <template x-for="ch in channels" :key="ch.id">
+                                    <option :value="ch.id" x-text="prettyName(ch.id) + ' (' + ch.messageCount + ')'"></option>
+                                </template>
+                            </select>
+                        </div>
+                        <div class="col-sm-6">
+                            <label class="form-label small mb-1" for="purge-time">Time</label>
+                            <select id="purge-time" class="form-select form-select-sm" x-model="purge.time" @change="refreshPreview()">
+                                <option value="all">Everything</option>
+                                <option value="older">Older than…</option>
+                                <option value="between">Between…</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="row g-2 mb-2" x-show="purge.time !== 'all'">
+                        <div class="col-sm-6" x-show="purge.time === 'between'">
+                            <label class="form-label small mb-1" for="purge-from">From</label>
+                            <input id="purge-from" type="datetime-local" class="form-control form-control-sm" x-model="purge.from" @change="refreshPreview()">
+                        </div>
+                        <div class="col-sm-6">
+                            <label class="form-label small mb-1" for="purge-until" x-text="purge.time === 'between' ? 'Until' : 'Older than'"></label>
+                            <input id="purge-until" type="datetime-local" class="form-control form-control-sm" x-model="purge.olderThan" @change="refreshPreview()">
+                        </div>
+                    </div>
+                    <div class="mb-2">
+                        <div class="small fw-semibold mb-1">Memories created in that period</div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" id="dep-review" value="review" x-model="purge.dependentMemories">
+                            <label class="form-check-label small" for="dep-review">Review them (hidden from the agent until I keep or delete them)</label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" id="dep-delete" value="delete" x-model="purge.dependentMemories">
+                            <label class="form-check-label small" for="dep-delete">Delete them with the history (permanent)</label>
+                        </div>
+                    </div>
+                    <div class="small mb-2">
+                        <span x-show="previewing" class="spinner-border spinner-border-sm me-1"></span>
+                        <span x-show="previewError" class="text-danger" x-text="previewError"></span>
+                        <span x-show="preview && !previewError" x-text="confirmation"></span>
+                        <div x-show="previewRange" class="text-body-secondary" x-text="previewRange"></div>
+                    </div>
+                    <button class="btn btn-sm btn-outline-danger" :disabled="!preview || preview.messages === 0 || previewing" @click="showPurgeModal = true">
+                        <i class="bi bi-trash me-1"></i>Delete…
+                    </button>
+                </div>
+            </div>
+
+            <!-- Purge confirmation modal -->
+            <div x-show.important="showPurgeModal" class="modal d-block" tabindex="-1" style="background: rgba(0,0,0,0.5);">
+                <div class="modal-dialog">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title">Delete history</h5>
+                            <button type="button" class="btn-close" @click="showPurgeModal = false"></button>
+                        </div>
+                        <div class="modal-body">
+                            <p x-text="confirmation"></p>
+                            <p class="small text-body-secondary mb-0" x-text="previewRange"></p>
+                        </div>
+                        <div class="modal-footer">
+                            <button class="btn btn-outline-secondary btn-sm" @click="showPurgeModal = false">Cancel</button>
+                            <button class="btn btn-danger btn-sm" @click="confirmPurge()" :disabled="purging">
+                                <span x-show="!purging" x-text="purge.dependentMemories === 'delete' ? 'Delete history and memories' : 'Delete history'"></span>
+                                <span x-show="purging"><span class="spinner-border spinner-border-sm"></span> Deleting...</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ═══ Needs review ═══ -->
+            <div class="card mb-3 border-warning" id="recall-review">
+                <div class="card-body">
+                    <h6 class="text-uppercase text-secondary border-bottom pb-2 mb-2">
+                        Needs review (<span x-text="quarantine.length"></span>)
+                    </h6>
+                    <p class="small text-body-secondary">
+                        Memories created while history you deleted was recent. They are hidden from the agent until you keep or delete them.
+                    </p>
+                    <div x-show="quarantine.length === 0" class="text-body-secondary small">Nothing to review.</div>
+                    <div x-show="quarantine.length > 0" class="d-flex align-items-center gap-2 mb-2">
+                        <div class="form-check mb-0">
+                            <input class="form-check-input" type="checkbox" id="review-all" :checked="allSelected" @change="toggleAll($event.target.checked)">
+                            <label class="form-check-label small" for="review-all">Select all</label>
+                        </div>
+                        <button class="btn btn-sm btn-outline-success" :disabled="selectedIds.length === 0 || reviewBusy" @click="decide(selectedIds, true)">
+                            <i class="bi bi-check-lg"></i> Keep selected (<span x-text="selectedIds.length"></span>)
+                        </button>
+                        <button class="btn btn-sm btn-outline-danger" :disabled="selectedIds.length === 0 || reviewBusy" @click="showBulkDeleteModal = true">
+                            <i class="bi bi-trash"></i> Delete selected (<span x-text="selectedIds.length"></span>)
+                        </button>
+                    </div>
+                    <template x-for="q in quarantine" :key="'rq-' + q.memory.memoryId">
+                        <div class="d-flex gap-2 align-items-start border-top pt-2 mt-2">
+                            <input class="form-check-input mt-1" type="checkbox" :id="'rq-' + q.memory.memoryId" x-model="selected[q.memory.memoryId]">
+                            <div class="flex-grow-1">
+                                <div x-show="q.memory.title" class="fw-semibold" x-text="q.memory.title"></div>
+                                <div style="white-space: pre-wrap; font-size:var(--text-base);"
+                                     x-text="expanded[q.memory.memoryId] ? q.memory.content : preview300(q.memory.content)"></div>
+                                <a href="#" class="small" x-show="q.memory.content && q.memory.content.length > 300"
+                                   @click.prevent="expanded[q.memory.memoryId] = !expanded[q.memory.memoryId]"
+                                   x-text="expanded[q.memory.memoryId] ? 'Show less' : 'Show all'"></a>
+                                <div class="small text-body-secondary">
+                                    <span x-text="'Created ' + formatDateTime(q.memory.createdAt)"></span> ·
+                                    <span x-text="purgeSource(q)"></span>
+                                </div>
+                            </div>
+                            <div class="d-flex gap-1 flex-shrink-0">
+                                <button class="btn btn-sm btn-outline-success" :disabled="reviewBusy" @click="decide([q.memory.memoryId], true)" title="Keep">
+                                    <i class="bi bi-check-lg"></i>
+                                </button>
+                                <button class="btn btn-sm btn-outline-danger" :disabled="reviewBusy" @click="askDelete(q.memory.memoryId)" title="Delete">
+                                    <i class="bi bi-trash"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </div>
+
+            <!-- Bulk delete confirmation -->
+            <div x-show.important="showBulkDeleteModal" class="modal d-block" tabindex="-1" style="background: rgba(0,0,0,0.5);">
+                <div class="modal-dialog modal-sm">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title">Delete memories</h5>
+                            <button type="button" class="btn-close" @click="showBulkDeleteModal = false"></button>
+                        </div>
+                        <div class="modal-body" x-text="'Delete ' + selectedIds.length + ' memories permanently?'"></div>
+                        <div class="modal-footer">
+                            <button class="btn btn-secondary btn-sm" @click="showBulkDeleteModal = false">Cancel</button>
+                            <button class="btn btn-danger btn-sm" :disabled="reviewBusy" @click="decide(selectedIds, false)">Delete</button>
                         </div>
                     </div>
                 </div>
@@ -2562,6 +2891,7 @@
 <script src="/js/components/toast.js"></script>
 <script src="/js/components/layout.js"></script>
 <script src="/js/components/channel-helpers.js"></script>
+<script src="/js/components/recall-purge.js"></script>
 <script src="/js/components/restart-modal.js"></script>
 
 <!-- Page scripts (Alpine x-data functions) -->
@@ -2570,6 +2900,7 @@
 <script src="/js/pages/tenant-history.js"></script>
 <script src="/js/pages/tenant-channel-history.js"></script>
 <script src="/js/pages/tenant-memory.js"></script>
+<script src="/js/pages/tenant-recall.js"></script>
 <script src="/js/pages/global-settings.js"></script>
 <script src="/js/pages/mcp-servers.js"></script>
 <script src="/js/pages/connectors.js"></script>
