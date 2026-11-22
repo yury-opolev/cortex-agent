@@ -102,6 +102,30 @@ public sealed class RecallSettingsStoreTests : IDisposable
     }
 
     [Fact]
+    public void Current_OutOfRangeValue_IsDroppedAndTheValidMembersStay()
+    {
+        Directory.CreateDirectory(this.root);
+        File.WriteAllText(this.FilePath, """{ "historyEnabled": true, "rerankTimeoutMs": 5, "rerankHistoryTopN": 99999, "rerankMemoryTopN": 20 }""");
+
+        using var store = this.NewStore();
+
+        Assert.Equal(["historyEnabled", "rerankMemoryTopN"], store.Current.Names());
+        Assert.Null(store.Current.RerankTimeoutMs);
+    }
+
+    [Fact]
+    public void Current_UndefinedEnumNumber_IsDropped()
+    {
+        Directory.CreateDirectory(this.root);
+        File.WriteAllText(this.FilePath, """{ "historySearchMode": 9, "memorySearchMode": "keyword" }""");
+
+        using var store = this.NewStore();
+
+        Assert.Null(store.Current.HistorySearchMode);
+        Assert.Equal(MemorySearchMode.Keyword, store.Current.MemorySearchMode);
+    }
+
+    [Fact]
     public void Current_CorruptFile_FallsBackToNoOverrides()
     {
         Directory.CreateDirectory(this.root);

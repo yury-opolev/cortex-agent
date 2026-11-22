@@ -146,6 +146,51 @@ public static class RecallSettingsValidation
         }
     }
 
+    /// <summary>
+    /// Drops the members of <paramref name="overrides"/> that fail the validation bounds or hold an undefined
+    /// enum value (a hand-edited or older file); returns the cleaned overrides and the names that were dropped.
+    /// </summary>
+    public static RecallOverrides Sanitize(RecallOverrides overrides, out IReadOnlyList<string> dropped)
+    {
+        ArgumentNullException.ThrowIfNull(overrides);
+        var names = new List<string>();
+        var clean = overrides with
+        {
+            HistorySearchMode = Defined(overrides.HistorySearchMode, "historySearchMode"),
+            MemorySearchMode = Defined(overrides.MemorySearchMode, "memorySearchMode"),
+            RerankHistoryTopN = InRange(overrides.RerankHistoryTopN, RerankBudget.MinTopN, RerankBudget.MaxTopN, "rerankHistoryTopN"),
+            RerankMemoryTopN = InRange(overrides.RerankMemoryTopN, RerankBudget.MinTopN, RerankBudget.MaxTopN, "rerankMemoryTopN"),
+            RerankHistoryMaxDocChars = InRange(overrides.RerankHistoryMaxDocChars, RerankBudget.MinDocChars, RerankBudget.MaxDocCharsLimit, "rerankHistoryMaxDocChars"),
+            RerankMemoryMaxDocChars = InRange(overrides.RerankMemoryMaxDocChars, RerankBudget.MinDocChars, RerankBudget.MaxDocCharsLimit, "rerankMemoryMaxDocChars"),
+            RerankTimeoutMs = InRange(overrides.RerankTimeoutMs, MinTimeoutMs, MaxTimeoutMs, "rerankTimeoutMs"),
+        };
+        dropped = names;
+        return clean;
+
+        TEnum? Defined<TEnum>(TEnum? value, string name)
+            where TEnum : struct, Enum
+        {
+            if (value is { } v && !Enum.IsDefined(v))
+            {
+                names.Add(name);
+                return null;
+            }
+
+            return value;
+        }
+
+        int? InRange(int? value, int min, int max, string name)
+        {
+            if (value is { } v && (v < min || v > max))
+            {
+                names.Add(name);
+                return null;
+            }
+
+            return value;
+        }
+    }
+
     /// <summary>Parses <c>auto</c>, <c>hybrid</c> or <c>keyword</c> (case-insensitive).</summary>
     public static bool TryParseHistoryMode(string value, out HistorySearchMode mode)
     {

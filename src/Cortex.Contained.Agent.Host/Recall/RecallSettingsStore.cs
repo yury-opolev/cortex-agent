@@ -111,7 +111,14 @@ public sealed partial class RecallSettingsStore : IDisposable
         {
             if (File.Exists(this.filePath))
             {
-                return JsonSerializer.Deserialize<RecallOverrides>(File.ReadAllText(this.filePath), json) ?? RecallOverrides.None;
+                var loaded = JsonSerializer.Deserialize<RecallOverrides>(File.ReadAllText(this.filePath), json) ?? RecallOverrides.None;
+                var clean = RecallSettingsValidation.Sanitize(loaded, out var dropped);
+                if (dropped.Count > 0)
+                {
+                    this.LogInvalidDropped(this.filePath, string.Join(", ", dropped));
+                }
+
+                return clean;
             }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
@@ -137,6 +144,9 @@ public sealed partial class RecallSettingsStore : IDisposable
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "[recall-settings] read failed for {Path}: {Reason}; using the configured defaults")]
     private partial void LogReadFailed(string path, string reason);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "[recall-settings] {Path} holds invalid values for {Names}; they are ignored and the configured defaults apply")]
+    private partial void LogInvalidDropped(string path, string names);
 
     [LoggerMessage(Level = LogLevel.Error, Message = "[recall-settings] write failed for {Path}: {Reason}")]
     private partial void LogWriteFailed(string path, string reason);
