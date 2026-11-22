@@ -132,6 +132,28 @@ public sealed partial class SessionManager
     /// </summary>
     public int ActiveSessionCount => this.sessions.Count;
 
+    /// <summary>
+    /// Re-authentication for sensitive actions (exporting or restoring the storage recovery kit, enabling
+    /// encryption at rest): the signed-in owner types the Bridge password again. Failures are logged.
+    /// </summary>
+    public bool VerifyPassword(string? password)
+    {
+        var storedHash = this.secretManager.GetPasswordHash();
+        if (storedHash is null || string.IsNullOrEmpty(password))
+        {
+            this.LogReauthenticationFailed();
+            return false;
+        }
+
+        if (BCrypt.Net.BCrypt.EnhancedVerify(password, storedHash))
+        {
+            return true;
+        }
+
+        this.LogReauthenticationFailed();
+        return false;
+    }
+
     private static string GenerateSessionToken()
     {
         return Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
@@ -156,6 +178,9 @@ public sealed partial class SessionManager
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Password changed for Bridge web UI, other sessions invalidated")]
     private partial void LogPasswordChanged();
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Re-authentication for a sensitive storage action failed")]
+    private partial void LogReauthenticationFailed();
 
     internal sealed record SessionInfo(DateTimeOffset CreatedAt);
 }
