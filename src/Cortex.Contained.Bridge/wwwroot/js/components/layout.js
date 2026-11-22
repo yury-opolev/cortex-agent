@@ -50,8 +50,8 @@ document.addEventListener("alpine:init", () => {
                 return;
             }
 
-            // /tenants/{id}/settings|history|memory|recall
-            const match = path.match(/^\/tenants\/([^/]+)\/(settings|history|memory|recall)$/);
+            // /tenants/{id}/settings|history|memory|recall|storage
+            const match = path.match(/^\/tenants\/([^/]+)\/(settings|history|memory|recall|storage)$/);
             if (match) {
                 this.tenantId = decodeURIComponent(match[1]);
                 this.channelId = null;
