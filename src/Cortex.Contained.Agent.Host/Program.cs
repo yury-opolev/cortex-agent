@@ -19,6 +19,14 @@ using Microsoft.Extensions.Options;
 using OllamaSharp;
 using Serilog;
 
+// The evaluation CLIs copy the raw stores into run directories, so they refuse to run while encryption at rest is on.
+if (args.Length > 0 && args[0] is "history-smoke" or "history-eval" or "memory-eval"
+    && await EvaluationGuard.RefuseWhenEncryptedAsync(EvaluationGuard.CliConfiguration(), args[0], Console.Out).ConfigureAwait(false))
+{
+    Environment.ExitCode = EvaluationGuard.RefusedExitCode;
+    return;
+}
+
 // Local smoke-evaluation CLI (§14.2), run with `docker exec`:
 // dotnet Cortex.Contained.Agent.Host.dll history-smoke <init|generate-queries|pool|register|run>
 if (args.Length > 0 && string.Equals(args[0], "history-smoke", StringComparison.Ordinal))
