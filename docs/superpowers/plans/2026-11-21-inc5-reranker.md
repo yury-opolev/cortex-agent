@@ -4710,9 +4710,9 @@ index dc8a33a..ff04867 100644
  {
      private const string Usage =
 -        "usage: history-eval <init|validate|guard|register|ablate|holdout|kappa> [--dir /app/state/eval/hybrid] [--source /app/state/messages.db] " +
--        "[--tz Europe/Copenhagen] [--split dev|test|all] [--embedder http://embeddings:11434] [--labels judge-agreement.csv]";
+-        "[--tz Europe/Berlin] [--split dev|test|all] [--embedder http://embeddings:11434] [--labels judge-agreement.csv]";
 +        "usage: history-eval <init|validate|guard|register|ablate|holdout|kappa|rerank-curve|gate-r> [--dir /app/state/eval/hybrid] [--source /app/state/messages.db] " +
-+        "[--tz Europe/Copenhagen] [--split dev|test|all] [--embedder http://embeddings:11434] [--labels judge-agreement.csv]\n" +
++        "[--tz Europe/Berlin] [--split dev|test|all] [--embedder http://embeddings:11434] [--labels judge-agreement.csv]\n" +
 +        "rerank-curve [--condition normal|embedder-busy|cold] [--base CONFIG] [--reranker http://reranker:8080] [--timeout-ms 30000]; " +
 +        "gate-r --config CONFIG [--timeout-ms 2000]; both read the reranker key from Reranker__ApiKey.";
  
@@ -4735,7 +4735,7 @@ index dc8a33a..ff04867 100644
 +        rerankerFactory ??= RerankEvalSetup.LiveReranker;
          var workspace = new EvalWorkspace(Option(args, "--dir") ?? configured.EvalArtifactsDirectory);
          var source = Option(args, "--source") ?? "/app/state/messages.db";
-         var baseline = new HistoryOptions { Enabled = true, TimeZone = Option(args, "--tz") ?? "Europe/Copenhagen" };
+         var baseline = new HistoryOptions { Enabled = true, TimeZone = Option(args, "--tz") ?? "Europe/Berlin" };
 @@ -109,6 +115,10 @@ public static class HistoryEvalCli
                      return await HoldoutAsync(workspace, source, baseline, embedderFactory, output, cancellationToken).ConfigureAwait(false);
                  case "kappa":
@@ -5124,8 +5124,8 @@ index f02c334..82a4b54 100644
  public static class HistorySmokeCli
  {
      private const string Usage =
--        "usage: history-smoke <init|generate-queries|pool|register|run|embedder-check> [--dir /app/state/eval/smoke] [--source /app/state/messages.db] [--tz Europe/Copenhagen] [--embedder http://embeddings:11434]\n" +
-+        "usage: history-smoke <init|generate-queries|pool|register|run|embedder-check|reranker-check> [--dir /app/state/eval/smoke] [--source /app/state/messages.db] [--tz Europe/Copenhagen] [--embedder http://embeddings:11434] [--reranker http://reranker:8080]\n" +
+-        "usage: history-smoke <init|generate-queries|pool|register|run|embedder-check> [--dir /app/state/eval/smoke] [--source /app/state/messages.db] [--tz Europe/Berlin] [--embedder http://embeddings:11434]\n" +
++        "usage: history-smoke <init|generate-queries|pool|register|run|embedder-check|reranker-check> [--dir /app/state/eval/smoke] [--source /app/state/messages.db] [--tz Europe/Berlin] [--embedder http://embeddings:11434] [--reranker http://reranker:8080]\n" +
          "generate-queries needs SMOKE_LLM_ENDPOINT, SMOKE_LLM_API_KEY, SMOKE_LLM_MODEL and optional SMOKE_LLM_API (default openai-completions).\n" +
 -        "embedder-check uses MemoryMcp__Ollama__Model / __NumCtx / __Dimensions when set (synthetic text only).";
 +        "embedder-check uses MemoryMcp__Ollama__Model / __NumCtx / __Dimensions when set (synthetic text only).\n" +

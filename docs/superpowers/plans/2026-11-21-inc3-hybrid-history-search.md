@@ -7782,7 +7782,7 @@ public static class HistoryEvalCli
 {
     private const string Usage =
         "usage: history-eval <init|validate|guard|register|ablate|holdout|kappa> [--dir /app/state/eval/hybrid] [--source /app/state/messages.db] " +
-        "[--tz Europe/Copenhagen] [--split dev|test|all] [--embedder http://embeddings:11434] [--labels judge-agreement.csv]";
+        "[--tz Europe/Berlin] [--split dev|test|all] [--embedder http://embeddings:11434] [--labels judge-agreement.csv]";
 
     /// <summary>Minimum LLM-vs-human agreement for LLM relevance labels (§4.2).</summary>
     private const double MinKappa = 0.6;
@@ -7811,7 +7811,7 @@ public static class HistoryEvalCli
 
         var workspace = new EvalWorkspace(Option(args, "--dir") ?? "/app/state/eval/hybrid");
         var source = Option(args, "--source") ?? "/app/state/messages.db";
-        var baseline = new HistoryOptions { Enabled = true, TimeZone = Option(args, "--tz") ?? "Europe/Copenhagen" };
+        var baseline = new HistoryOptions { Enabled = true, TimeZone = Option(args, "--tz") ?? "Europe/Berlin" };
         Directory.CreateDirectory(workspace.Directory);
         try
         {
@@ -8290,9 +8290,9 @@ diff --git a/src/Cortex.Contained.Agent.Host/History/Evaluation/Smoke/HistorySmo
  public static class HistorySmokeCli
  {
      private const string Usage =
--        "usage: history-smoke <init|generate-queries|pool|register|run> [--dir /app/state/eval/smoke] [--source /app/state/messages.db] [--tz Europe/Copenhagen]\n" +
+-        "usage: history-smoke <init|generate-queries|pool|register|run> [--dir /app/state/eval/smoke] [--source /app/state/messages.db] [--tz Europe/Berlin]\n" +
 -        "generate-queries needs SMOKE_LLM_ENDPOINT, SMOKE_LLM_API_KEY, SMOKE_LLM_MODEL and optional SMOKE_LLM_API (default openai-completions).";
-+        "usage: history-smoke <init|generate-queries|pool|register|run|embedder-check> [--dir /app/state/eval/smoke] [--source /app/state/messages.db] [--tz Europe/Copenhagen] [--embedder http://embeddings:11434]\n" +
++        "usage: history-smoke <init|generate-queries|pool|register|run|embedder-check> [--dir /app/state/eval/smoke] [--source /app/state/messages.db] [--tz Europe/Berlin] [--embedder http://embeddings:11434]\n" +
 +        "generate-queries needs SMOKE_LLM_ENDPOINT, SMOKE_LLM_API_KEY, SMOKE_LLM_MODEL and optional SMOKE_LLM_API (default openai-completions).\n" +
 +        "embedder-check uses MemoryMcp__Ollama__Model / __NumCtx / __Dimensions when set (synthetic text only).";
  

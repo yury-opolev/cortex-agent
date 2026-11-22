@@ -346,7 +346,7 @@ public sealed class HistoryOptions
     public bool Enabled { get; set; }
 
     /// <summary>IANA time zone used for local dates, segment cuts and displayed times.</summary>
-    public string TimeZone { get; set; } = "Europe/Copenhagen";
+    public string TimeZone { get; set; } = "Europe/Berlin";
 
     /// <summary>A gap of at least this many minutes between two messages starts a new segment.</summary>
     public int IdleGapMinutes { get; set; } = 30;
@@ -455,7 +455,7 @@ with:
   },
   "History": {
     "Enabled": false,
-    "TimeZone": "Europe/Copenhagen",
+    "TimeZone": "Europe/Berlin",
     "IdleGapMinutes": 30,
     "MaxSegmentWords": 1500,
     "DfCapRatio": 0.2,
@@ -1387,7 +1387,7 @@ public class HistorySegmenterTests
     [Fact]
     public void Segment_LocalMidnight_Cuts()
     {
-        // 21:50Z and 22:10Z on 2026-05-04 are 23:50 and 00:10 in Copenhagen (UTC+2).
+        // 21:50Z and 22:10Z on 2026-05-04 are 23:50 and 00:10 in Berlin (UTC+2).
         var rows = new[]
         {
             Row(1, new DateTimeOffset(2026, 5, 4, 21, 50, 0, TimeSpan.Zero), "a"),
@@ -12086,7 +12086,7 @@ namespace Cortex.Contained.Agent.Host.History.Evaluation.Smoke;
 public static class HistorySmokeCli
 {
     private const string Usage =
-        "usage: history-smoke <init|generate-queries|pool|register|run> [--dir /app/state/eval/smoke] [--source /app/state/messages.db] [--tz Europe/Copenhagen]\n" +
+        "usage: history-smoke <init|generate-queries|pool|register|run> [--dir /app/state/eval/smoke] [--source /app/state/messages.db] [--tz Europe/Berlin]\n" +
         "generate-queries needs SMOKE_LLM_ENDPOINT, SMOKE_LLM_API_KEY, SMOKE_LLM_MODEL and optional SMOKE_LLM_API (default openai-completions).";
 
     /// <summary>Entry point; returns a process exit code.</summary>
@@ -12102,7 +12102,7 @@ public static class HistorySmokeCli
 
         var workspace = new SmokeWorkspace(Option(args, "--dir") ?? "/app/state/eval/smoke");
         var source = Option(args, "--source") ?? "/app/state/messages.db";
-        var options = new HistoryOptions { Enabled = true, TimeZone = Option(args, "--tz") ?? "Europe/Copenhagen" };
+        var options = new HistoryOptions { Enabled = true, TimeZone = Option(args, "--tz") ?? "Europe/Berlin" };
         Directory.CreateDirectory(workspace.Directory);
 
         try
@@ -13462,7 +13462,7 @@ fingerprints. The agent always reads the text from `messages.db`.
 | Key | Default | Meaning |
 |---|---|---|
 | `Enabled` | `false` | Runs the projector and exposes the recall tools. |
-| `TimeZone` | `Europe/Copenhagen` | Local dates, segment cuts, displayed times. |
+| `TimeZone` | `Europe/Berlin` | Local dates, segment cuts, displayed times. |
 | `IdleGapMinutes` | `30` | Idle gap that starts a new segment. |
 | `MaxSegmentWords` | `1500` | Segment word (FTS token) cap. |
 | `DfCapRatio` | `0.2` | Relevance queries drop unquoted terms in more than this share of segments (only once the index has ≥ 50 segments). |
