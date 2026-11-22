@@ -10,15 +10,33 @@ Design: [encryption at rest, complete](superpowers/specs/2026-11-22-encryption-a
 
 | Store | Where (agent state volume) | How |
 |---|---|---|
-| Message history and event log | `messages.db` (+ WAL) | SQLite3 Multiple Ciphers, migrated in place (VACUUM + rekey) |
+| Message history and event log | `messages.db` (+ WAL) | SQLite3 Multiple Ciphers; a plaintext file is exported to a keyed sibling, verified and swapped (see below) |
 | History search index | `history/history-index.<n>.db` | SQLite3 Multiple Ciphers; rebuilt encrypted |
-| Memory index (metadata, vectors, keyword index) | `memory/memory.db` | SQLite3 Multiple Ciphers, migrated in place |
+| Memory index (metadata, vectors, keyword index) | `memory/memory.db` | SQLite3 Multiple Ciphers; same export-and-swap; switched to WAL afterwards |
 | Memory content | `memory/memories/*.memory.data` | AES-256-GCM per file, written atomically; plaintext overwritten during migration |
-| Live sessions saved at shutdown | `sessions-snapshot.json` | AES-256-GCM; never written in plaintext once encryption is on |
+| Live sessions saved at shutdown | `sessions-snapshot.json` | AES-256-GCM; never written in plaintext once encryption is on. A snapshot that was never restored (the key did not arrive) is renamed `sessions-snapshot.pending-<time>.enc`, never overwritten, and restored when the key arrives |
 
 Each store uses its own key, derived with HKDF-SHA256 from the tenant master key: `messages.db`,
 `history-index`, `memory.db`, `memory-content` and `sessions-snapshot`. Without the key nothing opens and nothing
 is created. A wrong key changes no byte on disk.
+
+### How a database is migrated
+
+The agent never rekeys a database in place. For `messages.db` and `memory.db` it:
+
+1. exports the plaintext database to `<db>.encrypting` (`VACUUM INTO` a keyed target; vec0 and FTS5 tables are copied
+   as plain tables, no extension is loaded) and flushes it to disk;
+2. verifies the copy with the key: `PRAGMA integrity_check` and the row count of every table must match the source;
+3. renames it to `<db>.encrypted` (the copy is now complete and verified);
+4. overwrites the plaintext file and its `-journal`, `-wal` and `-shm` with zeros and deletes them;
+5. renames `<db>.encrypted` over `<db>` and switches it to WAL.
+
+A crash at any step is resolved on the next start: an unverified `.encrypting` file is dropped while the plaintext is
+still intact; a verified `.encrypted` file completes the swap. If the copy does not verify, the plaintext stays and
+the store reports an error. Encrypted files are classified by their 16-byte header, and an encrypted database that
+has a rollback journal is key-checked on a copy first, so a wrong key can never replay (and damage) its journal. The
+SQLite3 Multiple Ciphers engine is 2.7.1 (fixes for rekey crashes, a keyless open deleting a hot journal and failed
+rekeys came in 2.7.0).
 
 ## What is not covered
 
@@ -122,8 +140,21 @@ To restore access:
 The Bridge installs the key and pushes it. If the agent has already accepted another key in this process, restart
 it.
 
-A working key is never replaced. A kit is accepted only when the Bridge has no usable key, or when the agent
-reports that its data belongs to the kit's key.
+A working key is not replaced silently. A kit is accepted when the Bridge has no usable key, when the agent
+reports that its data belongs to the kit's key, or when the agent rejects the Bridge's key for its encrypted data
+(key state `rejected`, or a store `failed`). In any other case the restore is refused; tick **Replace the key this
+Bridge holds…** (API: `replaceExistingKey: true`, together with the Bridge password) to override it deliberately.
+A kit whose key differs from the one the agent's data names is never accepted.
+
+If the agent cannot report its storage status (a store is unreadable, or the call fails), the Bridge creates and
+pushes no key, and tries again on the next credential push: only an agent that does not have the storage hub at
+all counts as an older agent.
+
+## Password re-authentication
+
+Enabling encryption, exporting the kit and restoring a kit ask for the Bridge password again. These three routes
+are rate limited to 5 attempts per minute per session and address, and the third wrong password in a row ends that
+session (sign in again to continue). Each failure is logged without any secret.
 
 ## Status and health
 
