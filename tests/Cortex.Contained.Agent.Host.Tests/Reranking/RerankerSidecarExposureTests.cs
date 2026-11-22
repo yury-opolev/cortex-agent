@@ -46,7 +46,9 @@ public sealed partial class RerankerSidecarExposureTests
         var reranker = Service("reranker");
 
         Assert.False(reranker.Children.ContainsKey(new YamlScalarNode("ports")));
-        Assert.Equal(["LLAMA_API_KEY=${CORTEX_RERANKER_API_KEY:-}"], Sequence(reranker, "environment"));
+        var environment = Sequence(reranker, "environment");
+        Assert.Equal("LLAMA_API_KEY=${CORTEX_RERANKER_API_KEY:-}", environment[0]);
+        Assert.All(environment.Skip(1), entry => Assert.StartsWith("RERANKER_", entry, StringComparison.Ordinal));
         Assert.Equal(["reranker"], Sequence(reranker, "profiles"));
         Assert.Equal(["cortex-internal"], Sequence(reranker, "networks"));
         Assert.Equal("never", Scalar(reranker, "pull_policy"));
@@ -84,6 +86,26 @@ public sealed partial class RerankerSidecarExposureTests
 
         Assert.DoesNotContain("--metrics", entrypoint, StringComparison.Ordinal);
         Assert.DoesNotContain("--verbose", entrypoint, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Entrypoint_SizesTheServerFromTheEnvironment_WithTheLeanDefaults()
+    {
+        var entrypoint = File.ReadAllText(Path.Combine(Root, "docker", "reranker", "entrypoint.sh"));
+
+        foreach (var flag in new[]
+        {
+            "--ctx-size \"${RERANKER_CTX_SIZE:-4096}\"",
+            "--parallel \"${RERANKER_PARALLEL:-2}\"",
+            "--batch-size \"${RERANKER_BATCH_SIZE:-2048}\"",
+            "--ubatch-size \"${RERANKER_UBATCH_SIZE:-2048}\"",
+            "--flash-attn \"${RERANKER_FLASH_ATTN:-on}\"",
+            "--cache-type-k \"${RERANKER_CACHE_TYPE:-q8_0}\"",
+            "--cache-type-v \"${RERANKER_CACHE_TYPE:-q8_0}\"",
+        })
+        {
+            Assert.Contains(flag, entrypoint, StringComparison.Ordinal);
+        }
     }
 
     [GeneratedRegex(@"^FROM ghcr\.io/ggml-org/llama\.cpp:server(-cuda)?-b\d+@sha256:[0-9a-f]{64} AS server-(cuda|cpu)$")]

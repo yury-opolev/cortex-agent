@@ -36,6 +36,12 @@ the page tells you why, so memory keeps working. The page shows where the sideca
 `GPU container, model: 100% GPU`; the model is only listed while it is loaded). While built-in memory is
 off, the sidecar is stopped and the switch applies when memory is switched on.
 
+If the GPU is short of memory (the speech engines share it), Cortex keeps about 512 MiB free for them and
+the embeddings service then splits its work between the GPU and the CPU on its own, so it keeps working,
+only a little slower than fully on the GPU and much faster than on the CPU alone. The page shows this as a
+percentage split (for example `64%/36% CPU/GPU`). To change the amount kept free, set the environment
+variable `CORTEX_EMBEDDINGS_GPU_OVERHEAD` (in bytes, default `536870912`) for the Bridge and switch the GPU
+setting off and on again.
 ## Status
 
 Shows the history index build, the embedding progress, the reranker's health, the last event backfill

@@ -12,7 +12,7 @@ Design: [superpowers/specs/2026-11-21-inc5-reranker-design.md](superpowers/specs
 | Piece | Where | Role |
 |---|---|---|
 | `cortex-reranker` sidecar | `docker/reranker` (Dockerfile, entrypoint, `version.json`) | llama.cpp `llama-server --reranking` (pinned by digest) with Qwen3-Reranker-0.6B Q8_0 baked in (pinned by sha256). `VARIANT=cuda` (default) or `cpu`. |
-| Compose service `reranker` | `docker-compose.yml`, profile `reranker` | Internal network only, **no published port**, `pull_policy: never`, read-only root, GPU reservation, `LLAMA_API_KEY=${CORTEX_RERANKER_API_KEY:-}`. |
+| Compose service `reranker` | `docker-compose.yml`, profile `reranker` | Internal network only, **no published port**, `pull_policy: never`, read-only root, GPU reservation, `LLAMA_API_KEY=${CORTEX_RERANKER_API_KEY:-}`, optional `RERANKER_*` sizing overrides (below). |
 | Bridge | `RerankerSidecarLifecycle`, `SecretManager.GetOrCreateRerankerKey`, `CredentialsPusher` | `Reranker:Enabled` (Bridge config, default false) starts the sidecar with the DPAPI-held key and pushes `RerankerGrant { Enabled, ApiKey }` to every agent on connect. |
 | Agent | `Agent.Host/Reranking` | `RerankerAccess` (the grant, memory only), `LlamaServerReranker` (`POST /v1/rerank`, bearer key, exposure guard), `RerankStage` (budget, timeout, circuit breaker), `RerankDocument` (raw best-matching lines). |
 | Self-Update | `Build-RerankerImage.ps1`, `Build-All`, `Build-Launcher`, `Self-Update.ps1` | Build, image-id pin in the manifest, health gate, rollback — see [self-update.md](self-update.md#the-reranker-sidecar-opt-in). |
@@ -82,10 +82,40 @@ like the hub token).
 
 The CPU variant cannot meet Gate R's p95 ≤ 2.5 s at any useful budget; use the GPU.
 
-The reranker shares the NVIDIA GPU with the other sidecars. The embeddings sidecar can use it too (opt-in,
-[history-hybrid-search.md](history-hybrid-search.md#running-the-embedder-on-the-gpu-opt-in)); each keeps its
-model resident, so on a small card check the total VRAM before enabling both.
+## Sizing and sharing the GPU
 
+The reranker shares the NVIDIA GPU with the embeddings sidecar (opt-in,
+[history-hybrid-search.md](history-hybrid-search.md#running-the-embedder-on-the-gpu-opt-in)) and the speech
+sidecars. `docker/reranker/entrypoint.sh` therefore starts `llama-server` with lean sizing flags, each
+overridable through the container environment (an empty value keeps the default). The compose `reranker`
+service passes the variables through from the host environment, so they can be tuned without rebuilding the image.
+
+| Variable | Default | llama-server flag |
+|---|---|---|
+| `RERANKER_CTX_SIZE` | `4096` | `--ctx-size` (total across slots) |
+| `RERANKER_PARALLEL` | `2` | `--parallel` (per-slot context = ctx-size / parallel = 2048 tokens) |
+| `RERANKER_BATCH_SIZE` | `2048` | `--batch-size` |
+| `RERANKER_UBATCH_SIZE` | `2048` | `--ubatch-size` |
+| `RERANKER_FLASH_ATTN` | `on` | `--flash-attn` |
+| `RERANKER_CACHE_TYPE` | `q8_0` | `--cache-type-k` and `--cache-type-v` |
+
+For reranking, `ubatch` must be at least the token count of the longest query + document, and a single
+request must fit one slot (ctx-size / parallel). With `MaxDocChars` 2000 the defaults hold; a larger document
+budget needs a larger `RERANKER_CTX_SIZE` and `RERANKER_UBATCH_SIZE`.
+
+Measured VRAM and latency (owner's 8 GB laptop GPU, of which ~5.8 GB was already used by the desktop and the
+speech sidecars; Qwen3-Reranker-0.6B Q8_0):
+
+| Flags | VRAM | 30 docs × 2,000 chars | 10 docs × 600 chars |
+|---|---|---|---|
+| Before: ctx 8192, batch 2048, ubatch 2048 | ~1,670 MiB | ~1.3 s | ~230 ms |
+| **Lean (defaults)**: ctx 4096, parallel 2, batch 2048, ubatch 2048, flash-attn on, KV q8_0 | ~1,000–1,100 MiB | ~0.7 s | ~140 ms |
+| ctx 2048, parallel 1, ubatch 1024 (rejected) | ~920 MiB | n/a | n/a |
+
+The lean set saves ~600 MiB and is faster. The ~920 MiB variant caps the document length, so it was rejected.
+
+Each sidecar keeps its model resident, so on a small card check the total VRAM before enabling several. The
+embedder can fall back to a CPU/GPU split when VRAM is short (see the embedder section).
 ## Owner workflow (Gate R)
 
 The evaluation CLIs run outside the agent process, so they read the key from the environment; take it from

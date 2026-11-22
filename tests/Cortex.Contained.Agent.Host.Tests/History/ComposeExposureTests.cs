@@ -39,6 +39,7 @@ public sealed class ComposeExposureTests
 
         Assert.False(embeddings.Children.ContainsKey(new YamlScalarNode("ports")));
         Assert.Contains("OLLAMA_DEBUG=0", Environment(embeddings));
+        Assert.Contains("OLLAMA_FLASH_ATTENTION=1", Environment(embeddings));
     }
 
     [Fact]
@@ -52,7 +53,7 @@ public sealed class ComposeExposureTests
     }
 
     [Fact]
-    public void EmbeddingsGpuOverride_OnlyAddsTheNvidiaDeviceReservationToEmbeddings()
+    public void EmbeddingsGpuOverride_OnlyAddsTheNvidiaDeviceReservationAndTheGpuOverheadToEmbeddings()
     {
         var stream = new YamlStream();
         using (var reader = new StreamReader(Path.Combine(RepositoryRoot(), "docker-compose.embeddings-gpu.yml")))
@@ -66,7 +67,8 @@ public sealed class ComposeExposureTests
         Assert.Equal(["embeddings"], services.Children.Keys.Select(k => ((YamlScalarNode)k).Value!).ToList());
 
         var service = (YamlMappingNode)services.Children[new YamlScalarNode("embeddings")];
-        Assert.Equal(["deploy"], service.Children.Keys.Select(k => ((YamlScalarNode)k).Value!).ToList());
+        Assert.Equal(["environment", "deploy"], service.Children.Keys.Select(k => ((YamlScalarNode)k).Value!).ToList());
+        Assert.Equal(["OLLAMA_GPU_OVERHEAD=${CORTEX_EMBEDDINGS_GPU_OVERHEAD:-536870912}"], Environment(service));
         var resources = (YamlMappingNode)((YamlMappingNode)service.Children[new YamlScalarNode("deploy")]).Children[new YamlScalarNode("resources")];
         var reservations = (YamlMappingNode)resources.Children[new YamlScalarNode("reservations")];
         var device = (YamlMappingNode)((YamlSequenceNode)reservations.Children[new YamlScalarNode("devices")]).Children.Single();
