@@ -48,9 +48,9 @@ tenants:
   default:
     endpoint: http://localhost:5100/hub/agent
     enabled: true
-    discordUserId: "806798098839765047"
-    discordGuildId: "1477637110159638568"
-    discordVoiceChannelId: "1477637110885384321"
+    discordUserId: "111111111111111111"
+    discordGuildId: "222222222222222222"
+    discordVoiceChannelId: "333333333333333333"
 
 memory:
   duplicateThreshold: 0.9
@@ -76,9 +76,9 @@ maxSubagentRounds: 600
 
         Assert.Contains("tenants:", updated, StringComparison.Ordinal);
         Assert.Contains("default:", updated, StringComparison.Ordinal);
-        Assert.Contains("1477637110159638568", updated, StringComparison.Ordinal); // discordGuildId
-        Assert.Contains("1477637110885384321", updated, StringComparison.Ordinal); // discordVoiceChannelId
-        Assert.Contains("806798098839765047", updated, StringComparison.Ordinal);   // discordUserId
+        Assert.Contains("222222222222222222", updated, StringComparison.Ordinal); // discordGuildId
+        Assert.Contains("333333333333333333", updated, StringComparison.Ordinal); // discordVoiceChannelId
+        Assert.Contains("111111111111111111", updated, StringComparison.Ordinal); // discordUserId
     }
 
     [Fact]

@@ -198,7 +198,7 @@ internal sealed partial class DiscordMessageRouter
     /// <summary>
     /// Resolve a Discord invite code to a short agent-friendly description.
     /// Translates e.g. <c>https://discord.gg/TTQEUKmyn</c> into
-    /// <c>[Discord voice-channel invite: "General" in "oYster's Private Server"]</c>
+    /// <c>[Discord voice-channel invite: "General" in "Example Server"]</c>
     /// so the agent can respond to the user's intent rather than guessing at a
     /// bare URL. Falls back to a generic description on any lookup failure
     /// (expired invite, network error, bot lacks access, etc.) — we never

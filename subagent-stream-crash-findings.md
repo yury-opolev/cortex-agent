@@ -9,7 +9,7 @@ section 10 lists the residual risk that remains.
 
 Investigation basis: `docker logs cortex-agent` (the agent runs in the `cortex-agent`
 container; the host-side `%LOCALAPPDATA%\Cortex\logs\bridge-*.log` files do **not** contain
-this error) plus the source at `C:\Users\yurio\Documents\github\cortex-agent`.
+this error) plus the source at `<repo root>`.
 
 ---
 
