@@ -32,9 +32,19 @@ The agent never rekeys a database in place. For `messages.db` and `memory.db` it
 5. renames `<db>.encrypted` over `<db>` and switches it to WAL.
 
 A crash at any step is resolved on the next start: an unverified `.encrypting` file is dropped while the plaintext is
-still intact; a verified `.encrypted` file completes the swap. If the copy does not verify, the plaintext stays and
-the store reports an error. Encrypted files are classified by their 16-byte header, and an encrypted database that
-has a rollback journal is key-checked on a copy first, so a wrong key can never replay (and damage) its journal. The
+still intact; a verified `.encrypted` file completes the swap. On Linux the directory is fsynced after the renames
+(best effort), so the verified copy's name is durable before the plaintext is erased.
+
+The copy passes when every table has the source's row count and it is no more damaged than the source: the source's
+own `integrity_check` is taken first, and the export rebuilds indexes, so a source with a flawed header or index can
+still migrate. If the copy is worse, or the source cannot be exported at all, the plaintext stays, the store stays
+locked and the Storage status lists the problem ("repair or restore the database, then restart the agent"). A
+failed verification is not redone on every request: the export is retried only after the file changes or the agent
+restarts. The pre-flight counts a keyed copy of **each** database plus the content files and the history index.
+
+Encrypted files are classified by their 16-byte header. An encrypted database that has a rollback journal is
+key-checked on a copy first (the outcome is remembered per file state and key), so a wrong key can never replay,
+and damage, its journal; SQLite reports that case as "corrupt", which counts as a wrong key. The
 SQLite3 Multiple Ciphers engine is 2.7.1 (fixes for rekey crashes, a keyless open deleting a hot journal and failed
 rekeys came in 2.7.0).
 
@@ -62,7 +72,7 @@ You need:
 
 - a deployed build with the Storage page;
 - the Bridge password;
-- free space on the state volume, at least the size of the largest database plus the history index plus 64 MB
+- free space on the state volume, at least the size of both databases (each is copied before the plaintext is erased) plus the memory files, the history index and 64 MB
   (the preview checks this).
 
 ### 1. Snapshot the state volume
