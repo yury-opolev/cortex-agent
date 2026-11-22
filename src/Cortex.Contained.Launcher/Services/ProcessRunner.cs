@@ -10,6 +10,7 @@ public sealed class ProcessRunner : IProcessRunner
         string fileName,
         string arguments,
         TimeSpan? timeout = null,
+        IReadOnlyDictionary<string, string>? environmentVariables = null,
         CancellationToken cancellationToken = default)
     {
         using var process = new Process();
@@ -22,6 +23,11 @@ public sealed class ProcessRunner : IProcessRunner
             UseShellExecute = false,
             CreateNoWindow = true,
         };
+
+        foreach (var (key, value) in environmentVariables ?? new Dictionary<string, string>())
+        {
+            process.StartInfo.Environment[key] = value;
+        }
 
         process.Start();
 

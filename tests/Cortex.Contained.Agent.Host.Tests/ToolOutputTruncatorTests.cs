@@ -2,6 +2,7 @@ using Cortex.Contained.Agent.Host.Agent;
 
 namespace Cortex.Contained.Agent.Host.Tests;
 
+[Collection("ToolOutputTruncator")]
 public class ToolOutputTruncatorTests : IDisposable
 {
     private readonly string _tempDir;

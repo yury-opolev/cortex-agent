@@ -37,8 +37,9 @@
     <PackageReference Include="StreamJsonRpc" />
     <PackageReference Include="Nerdbank.Streams" />
     <PackageReference Include="Nerdbank.MessagePack" />
-    <!-- Direct ref to force the patched MessagePack (2.5.301) over the vulnerable
-         2.5.198 that StreamJsonRpc pulls transitively. Fixes GHSA-hv8m-jj95-wg3x. -->
+    <!-- Direct ref to force the patched MessagePack (2.5.307) over the vulnerable
+         2.5.198 that StreamJsonRpc pulls transitively. Fixes GHSA-hv8m-jj95-wg3x
+         and GHSA-qhrr-8q5h-9q3h. -->
     <PackageReference Include="MessagePack" />
   </ItemGroup>
 

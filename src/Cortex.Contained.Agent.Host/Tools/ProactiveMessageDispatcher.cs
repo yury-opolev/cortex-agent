@@ -1,3 +1,4 @@
+using Cortex.Contained.Agent.Host.Events;
 using Cortex.Contained.Agent.Host.Hubs;
 using Cortex.Contained.Agent.Host.Storage;
 using Cortex.Contained.Contracts.Hub;
@@ -16,15 +17,18 @@ internal sealed partial class ProactiveMessageDispatcher : IProactiveMessageDisp
     private readonly BridgeClientAccessor bridgeClientAccessor;
     private readonly MessageStore messageStore;
     private readonly ILogger<ProactiveMessageDispatcher> logger;
+    private readonly DeliveryRecorder? deliveries;
 
     public ProactiveMessageDispatcher(
         BridgeClientAccessor bridgeClientAccessor,
         MessageStore messageStore,
-        ILogger<ProactiveMessageDispatcher> logger)
+        ILogger<ProactiveMessageDispatcher> logger,
+        DeliveryRecorder? deliveries = null)
     {
         this.bridgeClientAccessor = bridgeClientAccessor;
         this.messageStore = messageStore;
         this.logger = logger;
+        this.deliveries = deliveries;
     }
 
     /// <inheritdoc/>
@@ -69,6 +73,10 @@ internal sealed partial class ProactiveMessageDispatcher : IProactiveMessageDisp
             ? AppendAttachmentMarker(text, attachments!)
             : text;
 
+        var attempt = this.deliveries is null
+            ? null
+            : await this.deliveries.AttemptAsync(channelId, "proactive", cancellationToken).ConfigureAwait(false);
+
         ProactiveMessageResult bridgeResult;
         try
         {
@@ -82,6 +90,11 @@ internal sealed partial class ProactiveMessageDispatcher : IProactiveMessageDisp
             // stack-like detail that would leak into agent-visible result content otherwise.
             var safeReason = Truncate(ex.Message);
             this.LogDispatchFailed(channelId, safeReason);
+            if (attempt is not null)
+            {
+                await this.deliveries!.UnknownAsync(attempt, channelId, ex.GetType().Name, CancellationToken.None).ConfigureAwait(false);
+            }
+
             return new ProactiveDispatchResult { Success = false, Error = $"Failed to send message: {safeReason}" };
         }
 
@@ -89,6 +102,11 @@ internal sealed partial class ProactiveMessageDispatcher : IProactiveMessageDisp
         {
             var safeReason = Truncate(bridgeResult.Error ?? "(unspecified)");
             this.LogDispatchFailed(channelId, safeReason);
+            if (attempt is not null)
+            {
+                await this.deliveries!.AcknowledgedAsync(attempt, channelId, delivered: false, messageRowId: null, CancellationToken.None).ConfigureAwait(false);
+            }
+
             return new ProactiveDispatchResult
             {
                 Success = false,
@@ -104,11 +122,13 @@ internal sealed partial class ProactiveMessageDispatcher : IProactiveMessageDisp
         {
             ChannelId = channelId,
             Text = historyText,
+            OperationId = attempt?.OperationId,
+            DeliveredAt = attempt?.AttemptedAt ?? DateTimeOffset.UtcNow,
         });
 
         // Persist for Bridge-side history (the chat UI). Forwards the caller's
         // cancellation token so a cooperative cancellation aborts the persist.
-        await this.messageStore.SaveMessageAsync(
+        var rowId = await this.messageStore.SaveMessageAsync(
             userId: "assistant",
             channelId: channelId,
             role: "assistant",
@@ -116,6 +136,11 @@ internal sealed partial class ProactiveMessageDispatcher : IProactiveMessageDisp
             timestamp: DateTimeOffset.UtcNow,
             category: MessageCategory.Proactive,
             cancellationToken: cancellationToken).ConfigureAwait(false);
+
+        if (attempt is not null)
+        {
+            await this.deliveries!.AcknowledgedAsync(attempt, channelId, delivered: true, rowId, CancellationToken.None).ConfigureAwait(false);
+        }
 
         this.LogDispatchSucceeded(channelId, bridgeResult.ConversationId);
         return new ProactiveDispatchResult

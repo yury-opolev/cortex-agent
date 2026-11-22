@@ -202,9 +202,11 @@ public sealed partial class AgentLoop
         IAgentLoopCallbacks callbacks,
         CancellationToken cancellationToken)
     {
+        // Evaluated per run (not cached) so tool gates such as the history recall switch apply to
+        // subagents and a runtime toggle is picked up by the next run.
         var toolDefinitions = config.ExcludedTools is { Count: > 0 }
-            ? this.toolRegistry.GetDefinitionsExcluding(config.ExcludedTools)
-            : this.toolRegistry.GetDefinitions();
+            ? this.toolRegistry.GetDefinitionsExcluding(config.ExcludedTools, config.ConversationId)
+            : this.toolRegistry.GetDefinitionsForConversation(config.ConversationId);
 
         var doomLoopDetector = new DoomLoopDetector();
         var toolContext = new ToolExecutionContext
@@ -419,6 +421,7 @@ public sealed partial class AgentLoop
                     Role = "tool",
                     Content = toolContent,
                     ToolCallId = toolCall.Id,
+                    EvidenceId = result.EvidenceId,
                 };
                 callbacks.OnToolResultMessage(toolMessage);
             }

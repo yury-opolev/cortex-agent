@@ -72,6 +72,76 @@ Secrets are **never** stored inside the Docker container. LLM credentials are pu
 
 `%LOCALAPPDATA%\Cortex\messages.db` is encrypted using SQLite3 Multiple Ciphers. The encryption key is generated on first run and stored in DPAPI.
 
+## Agent history index and erasure
+
+The Agent Host's history locator stores no message text outside `messages.db`: the FTS5 index
+is contentless with `secure-delete`, and the journal holds ids only. Deleting history runs the
+erasure workflow in [history-locator.md](history-locator.md#deletion-erasure-and-retention)
+(index, WAL checkpoint, tool-output spill files, subagent transcripts, smoke and `history-eval` run
+artifacts overlapping the range,
+optional `VACUUM`) and quarantines curated memories created in the deleted window until the
+owner reviews them (D10). Recall output is wrapped in a per-response random boundary token and
+labelled as historical data, never as instructions. Per-channel deletion also removes the
+tool-output spill files its tool results referenced, and the event log is purged in the same
+transaction (see [event-log.md](event-log.md)). Not covered: volume snapshots, host backups and
+provider-side copies.
+
+## Dense history search: embedder exposure and vectors
+
+With `History:Dense:Enabled` (on by default since 2026-11-22), transcript chunks of the history are sent to
+the embeddings sidecar. Only
+the in-compose `embeddings` service may receive them (no published host port, `OLLAMA_DEBUG=0`, internal
+network only); a remote embedder needs HTTPS and an API key, otherwise nothing is sent and dense search
+reports `unavailable`. To stop history text leaving the agent process for the embedder, set
+`History__Dense__Enabled=false` (or switch **Dense embeddings for history** off on the Recall page);
+search then stays keyword-only. Inputs are sent with an explicit `num_ctx` and `truncate=false`. Vectors can leak
+content (embedding inversion), so they are treated like text: they live only in the history index
+generation (encrypted with it, erased with it under `secure_delete`, byte-level tested) and are served
+only while the source segment is unchanged. `history-eval` run directories hold raw copies of
+`messages.db`; purges destroy the ones overlapping the purged range. See
+[history-hybrid-search.md](history-hybrid-search.md).
+
+## Reranker sidecar exposure
+
+With `Reranker:Enabled` (Bridge configuration, default false), the raw best-matching lines of the top
+hybrid history and memory candidates are sent to the `cortex-reranker` sidecar. It is reachable only on
+the internal compose network (no published port), requires an API key on every request (generated once,
+DPAPI-encrypted by the Bridge, passed to the container through the `docker compose` process environment
+and pushed to the agent's memory; the entrypoint refuses to start without it), logs no requests
+(`--log-verbosity 2`), exposes no web UI, `/slots` or `/metrics`, runs as an unprivileged user on a
+read-only root and keeps no state. The agent refuses to send text to any other host unless it uses HTTPS,
+and always with the key. The image's server and model are pinned (digest, sha256) and Self-Update verifies
+the built image id. See [reranker.md](reranker.md).
+
+## Curated memory keyword index
+
+`memory.db` holds a contentless FTS5 index of every curated memory (folded title and content tokens
+and their stems) next to the chunk metadata and vectors; the text itself stays in the `.memory.data`
+files. Like those files and the vectors, the index is **not** encrypted by `Storage:EncryptAtRest`
+(the memory store is outside that key). Deleting or editing a memory removes its row in the write
+transaction and rewrites the index with FTS5 `optimize` under `PRAGMA secure_delete=ON`, so no
+token of the deleted text stays in the database file (byte-level integrity tests). Quarantined
+memories (D10) are excluded before scoring in keyword and semantic search. `memory-eval` searches a
+private copy of the memory store that is deleted when the command ends; its `seeds.jsonl` holds raw
+memory text and is deleted by the owner after the dataset is written. See
+[memory-hybrid-search.md](memory-hybrid-search.md).
+
+## Agent storage encryption and event payloads
+
+With `Storage:EncryptAtRest`, `messages.db` and the history index generations inside the container
+are encrypted with SQLite3 Multiple Ciphers. The per-tenant key is DPAPI-protected on the Bridge,
+never regenerated, pushed before credentials and held in memory only; the agent fails closed
+without it. `subagents.db`, `/app/data/tool-output` spill files and the memory database are not
+covered by this key. Tool payloads are persisted under an exact allowlist with
+`SensitiveDataRedactor.RedactForPersistence`; `mcp__*` payloads, file/page/mail bodies and
+attachment bytes are never persisted.
+
+**Downgrades:** after enabling `Storage:EncryptAtRest`, do not downgrade the Bridge below the version
+that introduced tenant storage keys (`TenantStorageKeys` in `secrets.json`). An older Bridge neither
+knows the key nor, before this change, preserved unknown fields when it saved the file, so the
+encrypted `messages.db` could become unreadable. Current Bridges keep unknown `secrets.json` fields
+across load/save for future downgrades.
+
 ## Content security
 
 ### Prompt injection defense

@@ -44,27 +44,64 @@ function tenantHistoryPage() {
         // ── Clear all history modal ──────────────────────────────────
         showClearModal: false,
         clearOlderThan: "",
+        clearDependentMemories: "review", // "review" (quarantine) or "delete" — the owner's choice per purge
+        clearPreview: null,
+        clearState: recallPurge.newState(),
+        clearPreviewError: "",
         clearing: false,
 
-        openClearModal() {
+        async openClearModal() {
             const d = new Date();
             d.setDate(d.getDate() - 7);
             this.clearOlderThan = d.toISOString().slice(0, 16);
+            this.clearDependentMemories = "review";
             this.showClearModal = true;
+            await this.refreshClearPreview();
+        },
+
+        clearScope() {
+            return { olderThan: this.clearOlderThan };
+        },
+
+        async refreshClearPreview() {
+            this.clearPreview = null;
+            recallPurge.reset(this.clearState);
+            this.clearPreviewError = "";
+            // An empty date would mean "everything"; this dialog only deletes older-than.
+            if (!this.clearOlderThan) {
+                this.clearPreviewError = "Choose a date.";
+                return;
+            }
+            try {
+                const result = await recallPurge.startPreview(this.clearState, this.tenantId, this.clearScope(), this.clearDependentMemories);
+                if (!result.stale) this.clearPreview = result.preview;
+            } catch (e) {
+                this.clearPreviewError = e.message;
+            }
+        },
+
+        get clearConfirmation() {
+            return recallPurge.confirmation(this.clearPreview, this.clearDependentMemories);
         },
 
         async confirmClear() {
+            if (!this.clearOlderThan) {
+                this.clearPreviewError = "Choose a date.";
+                return;
+            }
             this.clearing = true;
             try {
-                const olderThan = new Date(this.clearOlderThan).toISOString();
-                const resp = await api.del(
-                    `/api/tenants/${encodeURIComponent(this.tenantId)}/history?olderThan=${encodeURIComponent(olderThan)}`
-                );
-                Alpine.store("toast").success(`Deleted ${resp?.deletedCount ?? 0} messages`);
+                const resp = await recallPurge.run(this.clearState, this.tenantId, this.clearScope(), this.clearDependentMemories);
+                Alpine.store("toast").success(resp?.message ?? `Deleted ${resp?.deletedCount ?? 0} messages`);
                 this.showClearModal = false;
                 await this.loadChannels();
             } catch (e) {
-                Alpine.store("toast").error("Failed to clear history: " + e.message);
+                if (e.stale || e.status === 409) {
+                    this.clearPreviewError = e.message;
+                    await this.refreshClearPreview();
+                } else {
+                    Alpine.store("toast").error("Failed to clear history: " + e.message);
+                }
             }
             this.clearing = false;
         },

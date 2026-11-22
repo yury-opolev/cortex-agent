@@ -1087,13 +1087,35 @@ builder.Services.AddSingleton<Cortex.Contained.Bridge.Speech.IEmbeddingsComposeR
     sp => sp.GetRequiredService<Cortex.Contained.Bridge.Speech.DockerComposeCommandRunner>());
 builder.Services.AddSingleton<Cortex.Contained.Bridge.Speech.IVoiceIdComposeRunner>(
     sp => sp.GetRequiredService<Cortex.Contained.Bridge.Speech.DockerComposeCommandRunner>());
+builder.Services.AddSingleton<Cortex.Contained.Bridge.Speech.IRerankerComposeRunner>(
+    sp => sp.GetRequiredService<Cortex.Contained.Bridge.Speech.DockerComposeCommandRunner>());
 builder.Services.AddSingleton<Cortex.Contained.Bridge.Speech.DanishTtsLifecycle>();
 // Restarts uni-voices / whisper-stt when they report healthy but fail every request
 // (poisoned CUDA context) — otherwise voice stays dead until someone notices by ear.
 builder.Services.AddSingleton<Cortex.Contained.Bridge.Speech.SpeechSidecarFaultRecovery>();
 builder.Services.AddSingleton<Cortex.Contained.Bridge.Speech.SttSidecarLifecycle>();
-builder.Services.AddSingleton<Cortex.Contained.Bridge.Speech.EmbeddingsSidecarLifecycle>();
+builder.Services.AddSingleton(sp => new Cortex.Contained.Bridge.Speech.EmbeddingsSidecarLifecycle(
+    sp.GetRequiredService<Cortex.Contained.Bridge.Speech.IEmbeddingsComposeRunner>(),
+    () => sp.GetRequiredService<BridgeConfig>().Embeddings.Gpu,
+    sp.GetRequiredService<ILogger<Cortex.Contained.Bridge.Speech.EmbeddingsSidecarLifecycle>>()));
+// Recall page embeddings GPU switch: persists Embeddings:Gpu to cortex.yml, then recreates the sidecar on the chosen processor.
+builder.Services.AddSingleton(sp => new Cortex.Contained.Bridge.Recall.EmbeddingsGpuSwitch(
+    sp.GetRequiredService<BridgeConfig>(),
+    cfg => Cortex.Contained.Bridge.Setup.BridgeSettingsWriter.PersistSettingsToYaml(cfg, cortexConfigPath),
+    sp.GetRequiredService<Cortex.Contained.Bridge.Speech.EmbeddingsSidecarLifecycle>(),
+    sp.GetRequiredService<Cortex.Contained.Bridge.Speech.IEmbeddingsComposeRunner>()));
 builder.Services.AddSingleton<Cortex.Contained.Bridge.Speech.VoiceIdSidecarLifecycle>();
+builder.Services.AddSingleton(sp => new Cortex.Contained.Bridge.Speech.RerankerSidecarLifecycle(
+    sp.GetRequiredService<Cortex.Contained.Bridge.Speech.IRerankerComposeRunner>(),
+    secretManager.GetOrCreateRerankerKey,
+    sp.GetRequiredService<ILogger<Cortex.Contained.Bridge.Speech.RerankerSidecarLifecycle>>()));
+// Recall page reranker switch: persists Reranker:Enabled to cortex.yml, then converges sidecar + agent grants.
+builder.Services.AddSingleton(sp => new Cortex.Contained.Bridge.Recall.RerankerSwitch(
+    sp.GetRequiredService<BridgeConfig>(),
+    cfg => Cortex.Contained.Bridge.Setup.BridgeSettingsWriter.PersistSettingsToYaml(cfg, cortexConfigPath),
+    sp.GetRequiredService<Cortex.Contained.Bridge.Speech.RerankerSidecarLifecycle>(),
+    ct => sp.GetRequiredService<Cortex.Contained.Bridge.Hosting.CredentialsPusher>().PushRerankerGrantAsync(ct),
+    sp.GetRequiredService<ILogger<Cortex.Contained.Bridge.Recall.RerankerSwitch>>()));
 
 var app = builder.Build();
 
@@ -1136,6 +1158,13 @@ _ = modelCatalog.InitializeAsync(); // Fire-and-forget; data will be ready befor
     var embeddingsLifecycle = app.Services.GetRequiredService<Cortex.Contained.Bridge.Speech.EmbeddingsSidecarLifecycle>();
     var memEnabled = app.Services.GetRequiredService<BridgeConfig>().Memory.Enabled;
     _ = Task.Run(() => embeddingsLifecycle.ReconcileAsync(memEnabled, CancellationToken.None));
+}
+
+// --- Reranker sidecar lifecycle: converge with Reranker:Enabled at startup (also picks up a new image) ---
+{
+    var rerankerLifecycle = app.Services.GetRequiredService<Cortex.Contained.Bridge.Speech.RerankerSidecarLifecycle>();
+    var rerankerEnabled = app.Services.GetRequiredService<BridgeConfig>().Reranker.Enabled;
+    _ = Task.Run(() => rerankerLifecycle.ReconcileAsync(rerankerEnabled, CancellationToken.None));
 }
 
 // --- Voice-id sidecar lifecycle: converge with effective voice-id flag at startup ---
@@ -1183,6 +1212,9 @@ app.MapSpeechEndpoints(cortexConfigPath);
 // --- Memory Management API ---
 app.MapMemoryEndpoints(cortexConfigPath);
 
+// --- Recall page API (per-tenant recall settings/status/purge/quarantine + Bridge-wide reranker switch) ---
+app.MapRecallEndpoints();
+
 // --- Connector Plugin System endpoint (loopback-only, no WebUI dependency) ---
 app.MapConnectorEndpoint();
 
@@ -1221,7 +1253,11 @@ if (bridgeConfig.WebUi.Enabled)
     // mapping every help markdown fetch would 404.
     var staticContentTypeProvider = new Microsoft.AspNetCore.StaticFiles.FileExtensionContentTypeProvider();
     staticContentTypeProvider.Mappings[".md"] = "text/markdown";
-    app.UseStaticFiles(new StaticFileOptions { ContentTypeProvider = staticContentTypeProvider });
+    app.UseStaticFiles(new StaticFileOptions
+    {
+        ContentTypeProvider = staticContentTypeProvider,
+        OnPrepareResponse = ctx => Cortex.Contained.Bridge.Hosting.StaticAssetCaching.Apply(ctx.Context.Response),
+    });
 
     // SPA fallback: all UI routes serve app.html (the unified SPA shell).
     // Alpine.js handles client-side routing based on the URL path.
@@ -1234,8 +1270,9 @@ if (bridgeConfig.WebUi.Enabled)
         app.MapGet(route, ServeSpa);
     }
 
-    static IResult ServeSpa(IWebHostEnvironment env)
+    static IResult ServeSpa(HttpContext context, IWebHostEnvironment env)
     {
+        Cortex.Contained.Bridge.Hosting.StaticAssetCaching.Apply(context.Response);
         var filePath = Path.Combine(env.WebRootPath, "app.html");
         return Results.File(filePath, "text/html");
     }

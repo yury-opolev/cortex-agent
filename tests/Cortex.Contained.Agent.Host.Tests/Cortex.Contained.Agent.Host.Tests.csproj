@@ -19,6 +19,8 @@
   <ItemGroup>
     <Using Include="Xunit" />
     <Using Include="NSubstitute" />
+    <Using Include="MemoryMcp.Core.Retrieval" />
+    <Using Include="MemoryMcp.Core.Evaluation" />
   </ItemGroup>
 
 </Project>

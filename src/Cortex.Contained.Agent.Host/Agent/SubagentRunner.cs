@@ -229,6 +229,8 @@ public sealed partial class SubagentRunner : IDisposable
         string conversationId,
         CancellationToken cancellationToken)
     {
+        // Subagent events carry their own run (no conversation: metadata-only tool payloads).
+        using var runScope = Events.RunScope.Begin(Events.RunProvenance.ForSubagent(this.taskId ?? conversationId));
         var contextWindow = this.modelProvider?.ContextWindow > 0 ? this.modelProvider.ContextWindow : FallbackContextWindow;
         var maxOutputTokens = TokenLimits.ResolveMaxOutput(this.modelProvider);
 

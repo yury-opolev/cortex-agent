@@ -10,9 +10,15 @@ services:
       - CORTEX_HUB_TOKEN=${CORTEX_HUB_TOKEN:-dev-token-change-me}
       - ASPNETCORE_URLS=http://+:5100
       - ASPNETCORE_ENVIRONMENT=${ASPNETCORE_ENVIRONMENT:-Production}
+      # Host IANA time zone (exported as CORTEX_TIMEZONE by the Launcher, the Bridge and the scripts) so
+      # history day boundaries follow the owner's zone, not the container's UTC. Empty keeps the container zone.
+      - History__TimeZone=${CORTEX_TIMEZONE:-}
       # NOTE: No API keys here. LLM calls are proxied through the Bridge.
       # Memory service: embeddings (Ollama) endpoint inside the Docker network
       - MemoryMcp__Ollama__Endpoint=http://embeddings:11434
+      # Reranker sidecar inside the Docker network (used only when the Bridge enables it; the
+      # Bridge pushes the switch and the API key over the hub, never through this file).
+      - Reranker__Endpoint=http://reranker:8080
       # Speaker-ID remote sidecar
       - SpeakerId__Backend=Remote
       - SpeakerId__RemoteEndpoint=http://voice-id:5200
@@ -110,6 +116,8 @@ services:
   # into the image (offline, no runtime pull, no model volume). Same model +
   # runtime as before, so existing memory vectors stay consistent. `image:` pulls
   # the GHCR release; `build:` is the dev fallback from the submodule.
+  # CPU by default; the opt-in GPU is docker-compose.embeddings-gpu.yml, which the Bridge
+  # layers on top of this file (Recall page: "Run embeddings on the GPU").
   embeddings:
     image: ghcr.io/yury-opolev/cortex-embeddings:0.1
     build:
@@ -123,6 +131,9 @@ services:
       # pays a cold model reload — the multi-second "slow first reply". Set to
       # "-1" to pin the model permanently, or e.g. "30m" to shorten.
       - OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE:-12h}
+      # History text is embedded here (episodic history, increment 3): keep debug
+      # logging off so request bodies are never logged.
+      - OLLAMA_DEBUG=0
     networks:
       - cortex-internal
     restart: unless-stopped
@@ -135,8 +146,50 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-    ports:
-      - "127.0.0.1:11434:11434"
+    # No published port: only containers on cortex-internal (the agent) reach the
+    # embedder. For a host-side debug session add a compose override that publishes
+    # 127.0.0.1:11434, and remove it again afterwards.
+
+  # Cross-encoder reranker for hybrid history and memory search (episodic history,
+  # increment 5). Built locally from docker/reranker by scripts/Build-RerankerImage.ps1
+  # (llama.cpp server pinned by digest + Qwen3-Reranker-0.6B GGUF pinned by sha256, baked
+  # in; Self-Update records and verifies the image id). The Bridge starts it only when
+  # Reranker:Enabled is true, passing the API key it keeps in DPAPI storage through the
+  # process environment; the entrypoint refuses to start without a key.
+  reranker:
+    image: cortex-reranker:latest
+    build:
+      context: ./docker/reranker
+    # Local-only image: never pull a same-named image from a registry.
+    pull_policy: never
+    container_name: cortex-reranker
+    profiles: [reranker]
+    environment:
+      - LLAMA_API_KEY=${CORTEX_RERANKER_API_KEY:-}
+    networks:
+      - cortex-internal
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+        # GPU: the Gate R latency budget is out of reach on CPU (docs/reranker.md). On a host
+        # without an NVIDIA GPU, build -Variant cpu and drop this block in a compose override.
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # No published port and no request logging (--log-verbosity 2): history and memory text
+    # reach it only from cortex-internal and never land in its logs.
 
 networks:
   cortex-internal:

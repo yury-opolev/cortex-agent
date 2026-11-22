@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using Cortex.Contained.Common.Security;
 using Microsoft.Extensions.Logging;
@@ -14,9 +15,14 @@ public sealed partial class SecretManager
 
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
+    // One lock per secrets file, shared by every SecretManager instance over it: every
+    // load-modify-save runs under it so concurrent writers cannot lose each other's changes.
+    private static readonly ConcurrentDictionary<string, object> FileLocks = new(StringComparer.OrdinalIgnoreCase);
+
     private readonly ISecretStore store;
     private readonly ILogger<SecretManager> logger;
     private readonly string secretsDir;
+    private readonly object fileLock;
 
     public SecretManager(ISecretStore store, ILogger<SecretManager> logger, string? secretsDir = null)
     {
@@ -26,6 +32,9 @@ public sealed partial class SecretManager
             ?? Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "Cortex", "secrets");
+        this.fileLock = FileLocks.GetOrAdd(
+            Path.GetFullPath(Path.Combine(this.secretsDir, SecretsFileName)),
+            static _ => new object());
     }
 
     /// <summary>
@@ -34,33 +43,36 @@ public sealed partial class SecretManager
     /// </summary>
     public string GetOrCreateHubToken()
     {
-        EnsureSecretsDirectory();
-
-        var filePath = Path.Combine(this.secretsDir, SecretsFileName);
-        var secrets = LoadSecrets(filePath);
-
-        if (secrets.HubToken is not null)
+        lock (this.fileLock)
         {
-            try
+            EnsureSecretsDirectory();
+
+            var filePath = Path.Combine(this.secretsDir, SecretsFileName);
+            var secrets = LoadSecrets(filePath);
+
+            if (secrets.HubToken is not null)
             {
-                var token = this.store.Unprotect(secrets.HubToken);
-                this.LogHubTokenLoaded();
-                return token;
+                try
+                {
+                    var token = this.store.Unprotect(secrets.HubToken);
+                    this.LogHubTokenLoaded();
+                    return token;
+                }
+                catch (Exception ex)
+                {
+                    this.LogHubTokenDecryptionFailed(ex.Message);
+                    // Fall through to regenerate
+                }
             }
-            catch (Exception ex)
-            {
-                this.LogHubTokenDecryptionFailed(ex.Message);
-                // Fall through to regenerate
-            }
+
+            // Generate new token
+            var newToken = TokenGenerator.GenerateHubToken();
+            secrets.HubToken = this.store.Protect(newToken);
+            SaveSecrets(filePath, secrets);
+            this.LogHubTokenGenerated();
+
+            return newToken;
         }
-
-        // Generate new token
-        var newToken = TokenGenerator.GenerateHubToken();
-        secrets.HubToken = this.store.Protect(newToken);
-        SaveSecrets(filePath, secrets);
-        this.LogHubTokenGenerated();
-
-        return newToken;
     }
 
     /// <summary>
@@ -68,16 +80,19 @@ public sealed partial class SecretManager
     /// </summary>
     public void StoreApiKey(string providerName, string apiKey)
     {
-        EnsureSecretsDirectory();
+        lock (this.fileLock)
+        {
+            EnsureSecretsDirectory();
 
-        var filePath = Path.Combine(this.secretsDir, SecretsFileName);
-        var secrets = LoadSecrets(filePath);
+            var filePath = Path.Combine(this.secretsDir, SecretsFileName);
+            var secrets = LoadSecrets(filePath);
 
-        secrets.ApiKeys ??= new Dictionary<string, string>();
-        secrets.ApiKeys[providerName] = this.store.Protect(apiKey);
-        SaveSecrets(filePath, secrets);
+            secrets.ApiKeys ??= new Dictionary<string, string>();
+            secrets.ApiKeys[providerName] = this.store.Protect(apiKey);
+            SaveSecrets(filePath, secrets);
 
-        this.LogApiKeyStored(providerName);
+            this.LogApiKeyStored(providerName);
+        }
     }
 
     /// <summary>
@@ -89,15 +104,18 @@ public sealed partial class SecretManager
     /// </summary>
     public void RemoveApiKey(string providerName)
     {
-        EnsureSecretsDirectory();
-
-        var filePath = Path.Combine(this.secretsDir, SecretsFileName);
-        var secrets = LoadSecrets(filePath);
-
-        if (secrets.ApiKeys?.Remove(providerName) == true)
+        lock (this.fileLock)
         {
-            SaveSecrets(filePath, secrets);
-            this.LogApiKeyRemoved(providerName);
+            EnsureSecretsDirectory();
+
+            var filePath = Path.Combine(this.secretsDir, SecretsFileName);
+            var secrets = LoadSecrets(filePath);
+
+            if (secrets.ApiKeys?.Remove(providerName) == true)
+            {
+                SaveSecrets(filePath, secrets);
+                this.LogApiKeyRemoved(providerName);
+            }
         }
     }
 
@@ -106,13 +124,11 @@ public sealed partial class SecretManager
     /// </summary>
     public string? GetApiKey(string providerName)
     {
-        var filePath = Path.Combine(this.secretsDir, SecretsFileName);
-        if (!File.Exists(filePath))
+        var secrets = this.ReadSecrets();
+        if (secrets is null)
         {
             return null;
         }
-
-        var secrets = LoadSecrets(filePath);
 
         if (secrets.ApiKeys is null || !secrets.ApiKeys.TryGetValue(providerName, out var encrypted))
         {
@@ -136,29 +152,32 @@ public sealed partial class SecretManager
     /// </summary>
     public void StoreOAuthTokens(string providerName, string accessToken, string refreshToken, long expiresAtMs)
     {
-        EnsureSecretsDirectory();
-
-        var filePath = Path.Combine(this.secretsDir, SecretsFileName);
-        var secrets = LoadSecrets(filePath);
-
-        secrets.ApiKeys ??= new Dictionary<string, string>();
-        secrets.ApiKeys[providerName] = this.store.Protect(accessToken);
-
-        secrets.RefreshTokens ??= new Dictionary<string, string>();
-        if (!string.IsNullOrEmpty(refreshToken))
+        lock (this.fileLock)
         {
-            secrets.RefreshTokens[providerName] = this.store.Protect(refreshToken);
-        }
-        else
-        {
-            secrets.RefreshTokens.Remove(providerName);
-        }
+            EnsureSecretsDirectory();
 
-        secrets.TokenExpiries ??= new Dictionary<string, long>();
-        secrets.TokenExpiries[providerName] = expiresAtMs;
+            var filePath = Path.Combine(this.secretsDir, SecretsFileName);
+            var secrets = LoadSecrets(filePath);
 
-        SaveSecrets(filePath, secrets);
-        this.LogOAuthTokensStored(providerName);
+            secrets.ApiKeys ??= new Dictionary<string, string>();
+            secrets.ApiKeys[providerName] = this.store.Protect(accessToken);
+
+            secrets.RefreshTokens ??= new Dictionary<string, string>();
+            if (!string.IsNullOrEmpty(refreshToken))
+            {
+                secrets.RefreshTokens[providerName] = this.store.Protect(refreshToken);
+            }
+            else
+            {
+                secrets.RefreshTokens.Remove(providerName);
+            }
+
+            secrets.TokenExpiries ??= new Dictionary<string, long>();
+            secrets.TokenExpiries[providerName] = expiresAtMs;
+
+            SaveSecrets(filePath, secrets);
+            this.LogOAuthTokensStored(providerName);
+        }
     }
 
     /// <summary>
@@ -166,13 +185,12 @@ public sealed partial class SecretManager
     /// </summary>
     public string? GetRefreshToken(string providerName)
     {
-        var filePath = Path.Combine(this.secretsDir, SecretsFileName);
-        if (!File.Exists(filePath))
+        var secrets = this.ReadSecrets();
+        if (secrets is null)
         {
             return null;
         }
 
-        var secrets = LoadSecrets(filePath);
         if (secrets.RefreshTokens is null || !secrets.RefreshTokens.TryGetValue(providerName, out var encrypted))
         {
             return null;
@@ -194,13 +212,12 @@ public sealed partial class SecretManager
     /// </summary>
     public long GetTokenExpiry(string providerName)
     {
-        var filePath = Path.Combine(this.secretsDir, SecretsFileName);
-        if (!File.Exists(filePath))
+        var secrets = this.ReadSecrets();
+        if (secrets is null)
         {
             return 0;
         }
 
-        var secrets = LoadSecrets(filePath);
         if (secrets.TokenExpiries is null || !secrets.TokenExpiries.TryGetValue(providerName, out var expiry))
         {
             return 0;
@@ -215,33 +232,109 @@ public sealed partial class SecretManager
     /// </summary>
     public string GetOrCreateDatabaseKey()
     {
-        EnsureSecretsDirectory();
-
-        var filePath = Path.Combine(this.secretsDir, SecretsFileName);
-        var secrets = LoadSecrets(filePath);
-
-        if (secrets.DatabaseKey is not null)
+        lock (this.fileLock)
         {
-            try
+            EnsureSecretsDirectory();
+
+            var filePath = Path.Combine(this.secretsDir, SecretsFileName);
+            var secrets = LoadSecrets(filePath);
+
+            if (secrets.DatabaseKey is not null)
             {
-                var key = this.store.Unprotect(secrets.DatabaseKey);
-                this.LogDatabaseKeyLoaded();
-                return key;
+                try
+                {
+                    var key = this.store.Unprotect(secrets.DatabaseKey);
+                    this.LogDatabaseKeyLoaded();
+                    return key;
+                }
+                catch (Exception ex)
+                {
+                    this.LogDatabaseKeyDecryptionFailed(ex.Message);
+                    // Fall through to regenerate
+                }
             }
-            catch (Exception ex)
-            {
-                this.LogDatabaseKeyDecryptionFailed(ex.Message);
-                // Fall through to regenerate
-            }
+
+            // Generate new 256-bit key
+            var newKey = TokenGenerator.GenerateHubToken(); // Reuses existing 256-bit generator
+            secrets.DatabaseKey = this.store.Protect(newKey);
+            SaveSecrets(filePath, secrets);
+            this.LogDatabaseKeyGenerated();
+
+            return newKey;
         }
+    }
 
-        // Generate new 256-bit key
-        var newKey = TokenGenerator.GenerateHubToken(); // Reuses existing 256-bit generator
-        secrets.DatabaseKey = this.store.Protect(newKey);
-        SaveSecrets(filePath, secrets);
-        this.LogDatabaseKeyGenerated();
+    /// <summary>
+    /// The tenant's storage master key (Base64, 256-bit) that encrypts its agent's databases (D4),
+    /// created on first use. Unlike the other secrets it is NEVER regenerated when it cannot be
+    /// decrypted: a new key would make the tenant's stored history unreadable, so this throws
+    /// <see cref="StorageKeyUnavailableException"/> instead (fail closed).
+    /// </summary>
+    public string GetOrCreateTenantStorageKey(string tenantId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
 
-        return newKey;
+        // Existence is checked inside the lock so two first-time callers cannot generate different keys.
+        lock (this.fileLock)
+        {
+            EnsureSecretsDirectory();
+
+            var filePath = Path.Combine(this.secretsDir, SecretsFileName);
+            var secrets = LoadSecrets(filePath);
+            if (secrets.TenantStorageKeys is not null && secrets.TenantStorageKeys.TryGetValue(tenantId, out var encrypted))
+            {
+                try
+                {
+                    return this.store.Unprotect(encrypted);
+                }
+                catch (Exception ex)
+                {
+                    this.LogStorageKeyDecryptionFailed(tenantId, ex.Message);
+                    throw new StorageKeyUnavailableException($"The storage key of tenant '{tenantId}' cannot be decrypted; it is not regenerated.", ex);
+                }
+            }
+
+            var key = Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32));
+            secrets.TenantStorageKeys ??= new Dictionary<string, string>();
+            secrets.TenantStorageKeys[tenantId] = this.store.Protect(key);
+            SaveSecrets(filePath, secrets);
+            this.LogStorageKeyGenerated(tenantId);
+            return key;
+        }
+    }
+
+    /// <summary>
+    /// The API key of the <c>cortex-reranker</c> sidecar (64 hex characters, 256-bit), created on first use
+    /// and kept DPAPI-encrypted. The Bridge passes it to the sidecar when starting it and pushes it to the
+    /// agents. If it cannot be decrypted a new one is generated: the next sidecar start recreates the
+    /// container with it (the key is part of its configuration) and the next push updates the agents.
+    /// </summary>
+    public string GetOrCreateRerankerKey()
+    {
+        lock (this.fileLock)
+        {
+            EnsureSecretsDirectory();
+
+            var filePath = Path.Combine(this.secretsDir, SecretsFileName);
+            var secrets = LoadSecrets(filePath);
+            if (secrets.RerankerKey is not null)
+            {
+                try
+                {
+                    return this.store.Unprotect(secrets.RerankerKey);
+                }
+                catch (Exception ex)
+                {
+                    this.LogRerankerKeyDecryptionFailed(ex.Message);
+                }
+            }
+
+            var key = Convert.ToHexStringLower(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32));
+            secrets.RerankerKey = this.store.Protect(key);
+            SaveSecrets(filePath, secrets);
+            this.LogRerankerKeyGenerated();
+            return key;
+        }
     }
 
     /// <summary>
@@ -249,17 +342,20 @@ public sealed partial class SecretManager
     /// </summary>
     public string RegenerateHubToken()
     {
-        EnsureSecretsDirectory();
+        lock (this.fileLock)
+        {
+            EnsureSecretsDirectory();
 
-        var filePath = Path.Combine(this.secretsDir, SecretsFileName);
-        var secrets = LoadSecrets(filePath);
+            var filePath = Path.Combine(this.secretsDir, SecretsFileName);
+            var secrets = LoadSecrets(filePath);
 
-        var newToken = TokenGenerator.GenerateHubToken();
-        secrets.HubToken = this.store.Protect(newToken);
-        SaveSecrets(filePath, secrets);
-        this.LogHubTokenRegenerated();
+            var newToken = TokenGenerator.GenerateHubToken();
+            secrets.HubToken = this.store.Protect(newToken);
+            SaveSecrets(filePath, secrets);
+            this.LogHubTokenRegenerated();
 
-        return newToken;
+            return newToken;
+        }
     }
 
     /// <summary>
@@ -267,14 +363,8 @@ public sealed partial class SecretManager
     /// </summary>
     public string? GetPasswordHash()
     {
-        var filePath = Path.Combine(this.secretsDir, SecretsFileName);
-        if (!File.Exists(filePath))
-        {
-            return null;
-        }
-
-        var secrets = LoadSecrets(filePath);
-        if (secrets.PasswordHash is null)
+        var secrets = this.ReadSecrets();
+        if (secrets?.PasswordHash is null)
         {
             return null;
         }
@@ -295,15 +385,18 @@ public sealed partial class SecretManager
     /// </summary>
     public void SetPasswordHash(string bcryptHash)
     {
-        EnsureSecretsDirectory();
+        lock (this.fileLock)
+        {
+            EnsureSecretsDirectory();
 
-        var filePath = Path.Combine(this.secretsDir, SecretsFileName);
-        var secrets = LoadSecrets(filePath);
+            var filePath = Path.Combine(this.secretsDir, SecretsFileName);
+            var secrets = LoadSecrets(filePath);
 
-        secrets.PasswordHash = this.store.Protect(bcryptHash);
-        SaveSecrets(filePath, secrets);
+            secrets.PasswordHash = this.store.Protect(bcryptHash);
+            SaveSecrets(filePath, secrets);
 
-        this.LogPasswordHashStored();
+            this.LogPasswordHashStored();
+        }
     }
 
     /// <summary>
@@ -311,14 +404,8 @@ public sealed partial class SecretManager
     /// </summary>
     public string? GetDiscordBotToken()
     {
-        var filePath = Path.Combine(this.secretsDir, SecretsFileName);
-        if (!File.Exists(filePath))
-        {
-            return null;
-        }
-
-        var secrets = LoadSecrets(filePath);
-        if (secrets.DiscordBotToken is null)
+        var secrets = this.ReadSecrets();
+        if (secrets?.DiscordBotToken is null)
         {
             return null;
         }
@@ -339,15 +426,18 @@ public sealed partial class SecretManager
     /// </summary>
     public void SetDiscordBotToken(string botToken)
     {
-        EnsureSecretsDirectory();
+        lock (this.fileLock)
+        {
+            EnsureSecretsDirectory();
 
-        var filePath = Path.Combine(this.secretsDir, SecretsFileName);
-        var secrets = LoadSecrets(filePath);
+            var filePath = Path.Combine(this.secretsDir, SecretsFileName);
+            var secrets = LoadSecrets(filePath);
 
-        secrets.DiscordBotToken = this.store.Protect(botToken);
-        SaveSecrets(filePath, secrets);
+            secrets.DiscordBotToken = this.store.Protect(botToken);
+            SaveSecrets(filePath, secrets);
 
-        this.LogDiscordBotTokenStored();
+            this.LogDiscordBotTokenStored();
+        }
     }
 
     // ── Tenant API Keys ────────────────────────────────────────────
@@ -370,14 +460,17 @@ public sealed partial class SecretManager
     /// <summary>Revokes a tenant's API key by removing it from encrypted storage.</summary>
     public void RevokeTenantApiKey(string tenantId)
     {
-        EnsureSecretsDirectory();
-        var filePath = Path.Combine(this.secretsDir, SecretsFileName);
-        var secrets = LoadSecrets(filePath);
-
-        var keyName = $"tenant-apikey-{tenantId}";
-        if (secrets.ApiKeys?.Remove(keyName) == true)
+        lock (this.fileLock)
         {
-            SaveSecrets(filePath, secrets);
+            EnsureSecretsDirectory();
+            var filePath = Path.Combine(this.secretsDir, SecretsFileName);
+            var secrets = LoadSecrets(filePath);
+
+            var keyName = $"tenant-apikey-{tenantId}";
+            if (secrets.ApiKeys?.Remove(keyName) == true)
+            {
+                SaveSecrets(filePath, secrets);
+            }
         }
     }
 
@@ -407,6 +500,16 @@ public sealed partial class SecretManager
         }
     }
 
+    /// <summary>A consistent snapshot of the secrets file, or null when it does not exist.</summary>
+    private EncryptedSecrets? ReadSecrets()
+    {
+        lock (this.fileLock)
+        {
+            var filePath = Path.Combine(this.secretsDir, SecretsFileName);
+            return File.Exists(filePath) ? LoadSecrets(filePath) : null;
+        }
+    }
+
     private static EncryptedSecrets LoadSecrets(string filePath)
     {
         if (!File.Exists(filePath))
@@ -421,7 +524,19 @@ public sealed partial class SecretManager
     private static void SaveSecrets(string filePath, EncryptedSecrets secrets)
     {
         var json = JsonSerializer.Serialize(secrets, JsonOptions);
-        File.WriteAllText(filePath, json);
+
+        // Write a temp file in the same directory, then replace atomically so a crash never leaves a torn file.
+        var tempPath = $"{filePath}.{Guid.NewGuid():N}.tmp";
+        try
+        {
+            File.WriteAllText(tempPath, json);
+            File.Move(tempPath, filePath, overwrite: true);
+        }
+        catch
+        {
+            try { File.Delete(tempPath); } catch (IOException) { /* best effort */ }
+            throw;
+        }
     }
 
     // ── LoggerMessage ────────────────────────────────────────────────
@@ -462,6 +577,12 @@ public sealed partial class SecretManager
     [LoggerMessage(Level = LogLevel.Information, Message = "Database encryption key auto-generated and saved to encrypted storage")]
     private partial void LogDatabaseKeyGenerated();
 
+    [LoggerMessage(Level = LogLevel.Information, Message = "Storage key generated for tenant {TenantId}")]
+    private partial void LogStorageKeyGenerated(string tenantId);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "Storage key of tenant {TenantId} cannot be decrypted (not regenerated): {ErrorMessage}")]
+    private partial void LogStorageKeyDecryptionFailed(string tenantId, string errorMessage);
+
     [LoggerMessage(Level = LogLevel.Information, Message = "Password hash stored in encrypted storage")]
     private partial void LogPasswordHashStored();
 
@@ -470,6 +591,12 @@ public sealed partial class SecretManager
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Discord bot token stored in encrypted storage")]
     private partial void LogDiscordBotTokenStored();
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Reranker API key generated and saved to encrypted storage")]
+    private partial void LogRerankerKeyGenerated();
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to decrypt the reranker API key: {ErrorMessage}. Regenerating...")]
+    private partial void LogRerankerKeyDecryptionFailed(string errorMessage);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to decrypt Discord bot token: {ErrorMessage}")]
     private partial void LogDiscordBotTokenDecryptionFailed(string errorMessage);
@@ -489,5 +616,13 @@ public sealed partial class SecretManager
         public string? PasswordHash { get; set; }
         /// <summary>DPAPI-encrypted Discord bot token.</summary>
         public string? DiscordBotToken { get; set; }
+        /// <summary>DPAPI-encrypted per-tenant storage master keys (Base64-encoded 256-bit), keyed by tenant ID.</summary>
+        public Dictionary<string, string>? TenantStorageKeys { get; set; }
+        /// <summary>DPAPI-encrypted API key of the cortex-reranker sidecar (hex, 256-bit).</summary>
+        public string? RerankerKey { get; set; }
+
+        /// <summary>Fields written by a newer Bridge; kept so a downgrade-and-save does not drop them.</summary>
+        [System.Text.Json.Serialization.JsonExtensionData]
+        public Dictionary<string, JsonElement>? ExtensionData { get; set; }
     }
 }

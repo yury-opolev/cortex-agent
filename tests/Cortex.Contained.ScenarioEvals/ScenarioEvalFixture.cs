@@ -30,6 +30,9 @@ public sealed class ScenarioEvalFixture : IAsyncLifetime
     public IConfiguration Configuration { get; private set; } = null!;
     public string EvalModel { get; private set; } = null!;
 
+    /// <summary>LLM client for actor/judge calls (shared by the history behaviour gate).</summary>
+    public ILlmClient EvalLlmClient { get; private set; } = null!;
+
     public ILoggerFactory LoggerFactory { get; } = Microsoft.Extensions.Logging.LoggerFactory.Create(builder =>
     {
         builder.AddConsole();
@@ -84,6 +87,7 @@ public sealed class ScenarioEvalFixture : IAsyncLifetime
 
         // Create LLM client for actor/judge
         var evalLlmClient = CreateEvalLlmClient(llmApiKey, llmModel, llmEndpoint, llmApi);
+        EvalLlmClient = evalLlmClient;
 
         // Create actor service
         ActorService = new ActorService(

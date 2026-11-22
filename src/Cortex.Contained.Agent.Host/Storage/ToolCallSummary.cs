@@ -18,12 +18,41 @@ internal static class ToolCallSummary
     /// <summary>Suffix appended when argument text is truncated.</summary>
     public const string TruncationSuffix = "…";
 
+    /// <summary>
+    /// Name of the synthetic entry stamped on every assistant row of a turn that used a
+    /// <c>history_*</c> tool but whose own row carries no such entry (so the final reply that
+    /// quotes recalled text is still labelled <c>recall_echo</c>). Hidden from tool-call renders
+    /// and from the indexed body.
+    /// </summary>
+    public const string RecallTurnMarkerName = "history_turn";
+
+    /// <summary><see cref="ToolCallSummaryEntry.Pos"/> of the synthetic turn marker.</summary>
+    public const string RecallTurnMarkerPos = "turn";
+
     private static readonly JsonSerializerOptions jsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
         Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
     };
+
+    /// <summary>True for the content-returning recall tools (<c>history_*</c>, <c>event_get</c>).</summary>
+    public static bool IsRecallTool(string toolName) =>
+        toolName.StartsWith("history_", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(toolName, "event_get", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>True for every tool whose output can carry stored conversation or memory text into a context (recall tools and <c>memory_search</c>).</summary>
+    public static bool IsRecallSource(string toolName) =>
+        IsRecallTool(toolName) || string.Equals(toolName, "memory_search", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>True when <paramref name="entry"/> is the synthetic recall-turn marker.</summary>
+    public static bool IsRecallTurnMarker(ToolCallSummaryEntry entry) =>
+        string.Equals(entry.Name, RecallTurnMarkerName, StringComparison.Ordinal)
+        && string.Equals(entry.Pos, RecallTurnMarkerPos, StringComparison.Ordinal);
+
+    /// <summary>Creates the synthetic recall-turn marker entry.</summary>
+    public static ToolCallSummaryEntry CreateRecallTurnMarker() =>
+        new(RecallTurnMarkerName, string.Empty, true, RecallTurnMarkerPos);
 
     /// <summary>
     /// Truncates the raw arguments string at <see cref="MaxArgsChars"/>,

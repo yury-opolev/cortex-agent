@@ -97,7 +97,12 @@ $statusPath = Join-Path $artifacts 'update-status.json'
 $lockPath = Join-Path $artifacts '.self-update.lock'
 $lkgMsix = Join-Path $artifacts 'last-known-good.msix'
 $rollbackImageTag = 'cortex-agent:rollback'
+$rerankerRollbackImageTag = 'cortex-reranker:rollback'
 $log = [System.Collections.Generic.List[string]]::new()
+
+# Compose maps CORTEX_TIMEZONE to the agent's History__TimeZone; recreating the agent must keep the host zone.
+. (Join-Path $PSScriptRoot 'Set-CortexTimeZone.ps1')
+Set-CortexTimeZoneEnv
 
 function Say([string]$msg, [string]$color = 'Cyan') {
     $line = "[self-update] $msg"
@@ -134,6 +139,24 @@ function Test-HealthAt([string]$expectVersion) {
         Start-Sleep -Seconds 3
     }
     return $false
+}
+
+function Test-RerankerAt([string]$expectImageId) {
+    # The Bridge reconciles cortex-reranker on startup: a changed image or key makes compose recreate it.
+    # Wait until it runs $expectImageId and its healthcheck passes. 'stopped'/'absent' mean the Bridge
+    # has reranking disabled (nothing to gate); 'unhealthy' means it never got there within the budget.
+    $deadline = (Get-Date).AddSeconds($HealthTimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        $state = $null
+        try { $state = (& docker inspect cortex-reranker --format '{{.State.Status}}|{{.Image}}|{{if .State.Health}}{{.State.Health.Status}}{{end}}' 2>$null) } catch { }
+        $global:LASTEXITCODE = 0
+        if (-not $state) { return 'absent' }
+        $status, $image, $health = "$state".Trim() -split '\|'
+        if ($status -eq 'exited') { return 'stopped' }
+        if ($image -eq $expectImageId -and $health -eq 'healthy') { return 'healthy' }
+        Start-Sleep -Seconds 3
+    }
+    return 'unhealthy'
 }
 
 function Register-DeployTask([string]$version) {
@@ -320,6 +343,19 @@ try {
     if ($sigThumb -ne $m.msix.certThumbprint) { throw "MSIX signer thumbprint $sigThumb != manifest $($m.msix.certThumbprint) — refusing." }
     Say "manifest verified: sha256 OK, signature Valid, thumbprint OK" 'Green'
 
+    # Image pins exist only when this machine opted in to the reranker sidecar (older manifests have
+    # none): the tag must still point at the image id recorded at build time, so the deploy ships exactly
+    # what was built and test-gated.
+    $rerankerPin = if ($m.imageIds) { "$($m.imageIds.'cortex-reranker')".Trim() } else { '' }
+    if ($rerankerPin) {
+        $rerankerTag = $m.images.'cortex-reranker'
+        $actualId = $null
+        try { $actualId = (& docker image inspect $rerankerTag --format '{{.Id}}' 2>$null) } catch { }
+        $global:LASTEXITCODE = 0
+        if ("$actualId".Trim() -ne $rerankerPin) { throw "Image $rerankerTag is '$actualId' but the manifest pins $rerankerPin — refusing (rebuilt or retagged since the build?)." }
+        Say "image pin verified: cortex-reranker $rerankerPin" 'Green'
+    }
+
     # --- 5. Gate: schedule (detached, for coda) / dry-run / deploy inline -----
     if ($Schedule) {
         Register-DeployTask $resolvedVersion
@@ -358,6 +394,24 @@ try {
         }
     } catch { Say "could not snapshot agent image for rollback: $_" 'Yellow' }
 
+    # Opt-in reranker: the new Bridge recreates the sidecar on startup (compose recreates it when
+    # cortex-reranker:latest changed). Snapshot the image the RUNNING sidecar uses, for rollback.
+    $rerankerWasRunning = $false
+    $rerankerRollbackSaved = $false
+    if ($rerankerPin) {
+        try {
+            $runningReranker = (& docker inspect cortex-reranker --format '{{if .State.Running}}{{.Image}}{{end}}' 2>$null)
+            $global:LASTEXITCODE = 0
+            if ($runningReranker) {
+                $rerankerWasRunning = $true
+                & docker tag $runningReranker $rerankerRollbackImageTag 2>$null
+                $rerankerRollbackSaved = ($LASTEXITCODE -eq 0)
+                $global:LASTEXITCODE = 0
+                Say "snapshotted running reranker image ($runningReranker) as $rerankerRollbackImageTag"
+            }
+        } catch { Say "could not snapshot reranker image for rollback: $_" 'Yellow' }
+    }
+
     # --- 7. Deploy: containers, then MSIX ------------------------------------
     Say "recreating containers ($($m.images.'cortex-agent'), $($m.images.'voice-id'))..."
     & docker compose -f (Join-Path $repoRoot 'docker-compose.yml') up -d --force-recreate --no-deps cortex-agent voice-id 2>&1 | ForEach-Object { Say "docker: $_" 'Gray' }
@@ -372,6 +426,12 @@ try {
     # A rollback drill deploys the (known-good) target, then forces this gate to fail so the rollback
     # path below runs for real. Everything else is a genuine /health check.
     $healthy = if ($RollbackDrill) { Say "DRILL: forcing health-gate failure to exercise the rollback path" 'Yellow'; $false } else { Test-HealthAt $resolvedVersion }
+    if ($healthy -and $rerankerWasRunning) {
+        Say "verifying cortex-reranker runs the pinned image $rerankerPin and is healthy..."
+        $rerankerState = Test-RerankerAt $rerankerPin
+        Say "reranker: $rerankerState" $(if ($rerankerState -eq 'unhealthy') { 'Red' } else { 'Green' })
+        $healthy = $rerankerState -ne 'unhealthy'
+    }
     if ($healthy) {
         Say "HEALTHY on $resolvedVersion — update complete" 'Green'
         Write-Status -ok $true -from $fromVersion -to $resolvedVersion -rolledBack $false -reason 'deployed'
@@ -384,10 +444,17 @@ try {
     if ($lkgSaved) {
         try {
             & docker tag $rollbackImageTag cortex-agent:latest 2>$null
+            # The last-known-good Bridge recreates the reranker from the restored tag when it starts.
+            if ($rerankerRollbackSaved) { & docker tag $rerankerRollbackImageTag cortex-reranker:latest 2>$null }
             & docker compose -f (Join-Path $repoRoot 'docker-compose.yml') up -d --force-recreate --no-deps cortex-agent 2>&1 | Out-Null
             Add-AppxPackage -Path $lkgMsix -ForceUpdateFromAnyVersion -ForceApplicationShutdown
             Start-Process "shell:AppsFolder\$Aumid"
             $rolledBack = Test-HealthAt $fromVersion
+            if ($rolledBack -and $rerankerRollbackSaved) {
+                $rollbackId = "$(& docker image inspect $rerankerRollbackImageTag --format '{{.Id}}' 2>$null)".Trim()
+                $global:LASTEXITCODE = 0
+                Say "reranker after rollback: $(Test-RerankerAt $rollbackId)"
+            }
             Say ("rollback " + $(if ($rolledBack) { 'HEALTHY on ' + $fromVersion } else { 'did NOT come healthy — MANUAL INTERVENTION NEEDED' })) $(if ($rolledBack) { 'Yellow' } else { 'Red' })
         } catch { Say "rollback error: $_" 'Red' }
     } else {

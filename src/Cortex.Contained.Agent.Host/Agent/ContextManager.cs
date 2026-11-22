@@ -29,6 +29,17 @@ internal static class ContextManager
     internal const string PrunedToolResultPlaceholder = "[Old tool result content cleared]";
 
     /// <summary>
+    /// The stub that replaces a pruned tool result: names the recorded evidence when there is one,
+    /// and points the model at <c>event_get</c> only when that tool is actually available.
+    /// </summary>
+    internal static string PrunedContent(LlmMessage message, bool eventGetAvailable = false) =>
+        message.EvidenceId is { } evidenceId
+            ? eventGetAvailable
+                ? $"[Old tool result content cleared — evidence {evidenceId}; event_get returns what was recorded]"
+                : $"[Old tool result content cleared — recorded by the system (evidence {evidenceId})]"
+            : PrunedToolResultPlaceholder;
+
+    /// <summary>
     /// Token threshold for protecting recent tool results from pruning.
     /// Walking backwards from the most recent message, the first N estimated tokens
     /// of tool output are protected. Only tool results beyond this are pruned.
@@ -56,10 +67,11 @@ internal static class ContextManager
         int reserveForResponse,
         ImageAgingConfig imageAging,
         IImageDescriber? describer,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool eventGetAvailable = false)
     {
         var aged = await AgeImagesAsync(messages, imageAging, describer, ct).ConfigureAwait(false);
-        var pruned = PruneToolResults(aged);
+        var pruned = PruneToolResults(aged, eventGetAvailable);
         return TokenEstimator.TrimToFit(pruned, contextWindow, reserveForResponse);
     }
 
@@ -136,7 +148,7 @@ internal static class ContextManager
     /// Anthropic and OpenAI APIs.
     /// </para>
     /// </summary>
-    internal static List<LlmMessage> PruneToolResults(IReadOnlyList<LlmMessage> messages)
+    internal static List<LlmMessage> PruneToolResults(IReadOnlyList<LlmMessage> messages, bool eventGetAvailable = false)
     {
         // Find tool result indices that are candidates for pruning.
         // Walk backwards, protect the most recent turn, then protect PruneProtectTokens.
@@ -200,7 +212,7 @@ internal static class ContextManager
         {
             if (toPruneIndices.Contains(i))
             {
-                result.Add(messages[i] with { Content = PrunedToolResultPlaceholder });
+                result.Add(messages[i] with { Content = PrunedContent(messages[i], eventGetAvailable) });
             }
             else
             {

@@ -1,3 +1,4 @@
+using Cortex.Contained.Agent.Host.History;
 using Cortex.Contained.Agent.Host.Storage;
 
 namespace Cortex.Contained.Agent.Host.Tests;
@@ -57,6 +58,75 @@ public class AgentRuntimeToolHistoryTests
         Assert.Equal("ingest", afterRound3[0].Entries[1].Name);
         Assert.Equal("after", afterRound3[0].Entries[1].Pos);
     }
+
+    [Fact]
+    public void AttributeTools_RecallToolMidTurn_FinalAnswerIsLabelledRecallEcho()
+    {
+        var attributor = new ToolCallAttributor();
+
+        attributor.RecordResponseTools(textRecordId: 100, [new ToolCallSummaryEntry("history_search", "\"x\"", true, "after")]);
+        var preTool = attributor.DrainPatches();
+        attributor.RecordResponseTools(textRecordId: 200, []);
+        var final = attributor.DrainPatches();
+
+        Assert.Equal(HistoryLineLabel.RecallEcho, LabelOf(preTool.Single()));
+        Assert.Equal(200L, Assert.Single(final).MessageId);
+        Assert.Equal(HistoryLineLabel.RecallEcho, LabelOf(final.Single()));
+    }
+
+    [Fact]
+    public void AttributeTools_RecallToolInOrphanRound_MarksEarlierAndLaterTextRows()
+    {
+        var attributor = new ToolCallAttributor();
+
+        attributor.RecordResponseTools(textRecordId: 100, [new ToolCallSummaryEntry("web_search", "\"x\"", true, "after")]);
+        attributor.DrainPatches();
+        attributor.RecordResponseTools(textRecordId: null, [new ToolCallSummaryEntry("history_read", "\"y\"", true, "after")]);
+        var earlier = attributor.DrainPatches();
+        attributor.RecordResponseTools(textRecordId: 200, []);
+        var final = attributor.DrainPatches();
+
+        Assert.Equal(100L, Assert.Single(earlier).MessageId);
+        Assert.Equal(HistoryLineLabel.RecallEcho, LabelOf(earlier.Single()));
+        Assert.Equal("web_search", earlier.Single().Entries[0].Name);
+        Assert.Equal(HistoryLineLabel.RecallEcho, LabelOf(final.Single()));
+    }
+
+    [Fact]
+    public void AttributeTools_RecallToolAfterPlainTextRow_BackMarksThatRow()
+    {
+        var attributor = new ToolCallAttributor();
+
+        attributor.RecordResponseTools(textRecordId: 100, []);
+        Assert.Empty(attributor.DrainPatches());
+        attributor.RecordResponseTools(textRecordId: 101, [new ToolCallSummaryEntry("history_search", "\"x\"", true, "after")]);
+        var patches = attributor.DrainPatches();
+
+        Assert.Equal([100L, 101L], patches.Select(p => p.MessageId).Order().ToArray());
+        Assert.All(patches, p => Assert.Equal(HistoryLineLabel.RecallEcho, LabelOf(p)));
+    }
+
+    [Fact]
+    public void AttributeTools_NoRecallTool_NeverMarks()
+    {
+        var attributor = new ToolCallAttributor();
+
+        attributor.RecordResponseTools(textRecordId: 100, [new ToolCallSummaryEntry("memory_search", "\"x\"", true, "after")]);
+        attributor.RecordResponseTools(textRecordId: 200, []);
+
+        Assert.Equal(HistoryLineLabel.Assistant, LabelOf(attributor.DrainPatches().Single()));
+    }
+
+    private static HistoryLineLabel LabelOf(ToolCallPatch patch) => HistoryLabels.For(new MessageRecord
+    {
+        Id = patch.MessageId,
+        UserId = "assistant",
+        ChannelId = "c",
+        Role = "assistant",
+        Content = "answer",
+        Timestamp = DateTimeOffset.UnixEpoch,
+        ToolCalls = ToolCallSummary.SerializeJson(patch.Entries),
+    });
 
     [Fact]
     public void AttributeTools_TextOnly_NoEntries_ProducesNoPatch()

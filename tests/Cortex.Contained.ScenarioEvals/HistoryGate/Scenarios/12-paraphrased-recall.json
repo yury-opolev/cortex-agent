@@ -1,0 +1,26 @@
+{
+  "id": "12-paraphrased-recall",
+  "title": "Paraphrased recall: the question shares no content word with what was said",
+  "measure": "citedSource",
+  "fixture": [
+    { "daysAgo": 20.3, "channel": "discord-dm", "role": "user", "text": "I renewed my passport at the TownA citizen office today, the new one should arrive in three weeks." },
+    { "daysAgo": 20.3, "channel": "discord-dm", "role": "assistant", "text": "Good to know, I will keep that in mind." },
+    { "daysAgo": 9.1, "channel": "discord-dm", "role": "user", "text": "Can you suggest a quick dinner with lentils?" },
+    { "daysAgo": 9.1, "channel": "discord-dm", "role": "assistant", "text": "A lentil curry with spinach takes about thirty minutes." },
+    { "daysAgo": 2.5, "channel": "discord-dm", "role": "user", "text": "The weather has been grey all week." },
+    { "daysAgo": 2.5, "channel": "discord-dm", "role": "assistant", "text": "Hopefully the weekend brings some sun." }
+  ],
+  "prompts": [
+    "When did I say my new travel document would come?",
+    "Did I mention when the replacement ID for trips abroad gets delivered?",
+    "Remind me what I told you about getting my travel papers renewed.",
+    "I applied for a new document for flying, didn't I? When was it due?",
+    "What did I say about the timing of my renewed travel ID?",
+    "Have I told you how long the new travel document takes?",
+    "When is the replacement for my expiring ID supposed to show up?",
+    "Did we talk about me renewing the thing I need at border control?",
+    "What was the expected delivery for my new identity booklet?",
+    "Did I ever say where I went to renew my travel ID?"
+  ],
+  "rubric": "Ground truth: about 20 days ago, in the Discord DM channel, the user said they renewed their passport at the TownA citizen office and the new one should arrive in three weeks. Mark answeredCorrectly=true if the reply states the passport renewal and the three-week arrival (or TownA when asked where). Mark citedSource=true if it also says roughly when (date or 'about three weeks ago') and where (Discord / DM) it was said."
+}

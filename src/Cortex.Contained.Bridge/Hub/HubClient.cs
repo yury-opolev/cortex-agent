@@ -289,6 +289,26 @@ public sealed partial class HubClient : IAsyncDisposable
             cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>Push the tenant storage key; false when the agent rejected it (wrong key for its data).</summary>
+    public async Task<bool> ProvideStorageKeyAsync(StorageKeyGrant grant, CancellationToken cancellationToken)
+    {
+        EnsureConnected();
+        return await this.connection!.InvokeAsync<bool>(
+            nameof(IAgentHub.ProvideStorageKey),
+            grant,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Push the reranker switch and the sidecar API key (increment 5).</summary>
+    public async Task ProvideRerankerGrantAsync(RerankerGrant grant, CancellationToken cancellationToken)
+    {
+        EnsureConnected();
+        await this.connection!.InvokeAsync(
+            nameof(IAgentHub.ProvideRerankerGrant),
+            grant,
+            cancellationToken).ConfigureAwait(false);
+    }
+
     /// <summary>Push LLM provider credentials to the agent.</summary>
     public async Task ProvideCredentialsAsync(LlmCredentials credentials, CancellationToken cancellationToken)
     {
@@ -517,6 +537,54 @@ public sealed partial class HubClient : IAsyncDisposable
             nameof(IAgentHub.DeleteChannelMessagesOlderThan),
             channelId,
             olderThan,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Delete history through the agent's erasure workflow; reports erasure status and quarantined memories.</summary>
+    public async Task<HistoryPurgeResultDto> PurgeHistoryAsync(HistoryPurgeRequestDto request, CancellationToken cancellationToken)
+    {
+        EnsureConnected();
+        return await this.connection!.InvokeAsync<HistoryPurgeResultDto>(
+            nameof(IAgentHub.PurgeHistory),
+            request,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Show or hide the agent's history recall tools at runtime. Returns the effective state.</summary>
+    public async Task<bool> SetHistoryRecallToolsAsync(bool enabled, CancellationToken cancellationToken)
+    {
+        EnsureConnected();
+        return await this.connection!.InvokeAsync<bool>(
+            nameof(IAgentHub.SetHistoryRecallTools),
+            enabled,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Run the agent's explicit event backfill (maintenance window) and return its report.</summary>
+    public async Task<EventBackfillResultDto> BackfillHistoryEventsAsync(CancellationToken cancellationToken)
+    {
+        EnsureConnected();
+        return await this.connection!.InvokeAsync<EventBackfillResultDto>(
+            nameof(IAgentHub.BackfillHistoryEvents),
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Memories quarantined after a history deletion, awaiting review.</summary>
+    public async Task<MemoryListResult> ListQuarantinedMemoriesAsync(CancellationToken cancellationToken)
+    {
+        EnsureConnected();
+        return await this.connection!.InvokeAsync<MemoryListResult>(
+            nameof(IAgentHub.ListQuarantinedMemories),
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Keep a quarantined memory (it becomes visible to the agent again).</summary>
+    public async Task<bool> KeepQuarantinedMemoryAsync(string memoryId, CancellationToken cancellationToken)
+    {
+        EnsureConnected();
+        return await this.connection!.InvokeAsync<bool>(
+            nameof(IAgentHub.KeepQuarantinedMemory),
+            memoryId,
             cancellationToken).ConfigureAwait(false);
     }
 

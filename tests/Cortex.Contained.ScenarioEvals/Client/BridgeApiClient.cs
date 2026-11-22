@@ -129,6 +129,50 @@ public sealed class BridgeApiClient : IBridgeApiClient, IDisposable
 
     public void Dispose() => _httpClient.Dispose();
 
+    public async Task ImportMessagesAsync(IReadOnlyList<ExportMessageEntry> items, CancellationToken ct)
+    {
+        var response = await _httpClient.PostAsJsonAsync(
+            $"/api/tenants/{_tenantId}/import/messages",
+            new ImportMessagesRequest { Items = items, ClearExisting = true },
+            ct);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task<IReadOnlyList<ExportMessageEntry>> ExportMessagesAsync(CancellationToken ct)
+    {
+        var payload = await _httpClient.GetFromJsonAsync<ExportMessagesPayload>($"/api/tenants/{_tenantId}/export/messages", JsonOptions, ct);
+        return payload?.Items ?? [];
+    }
+
+    public async Task SetRecallToolsAsync(bool enabled, CancellationToken ct)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"/api/tenants/{_tenantId}/history/recall-tools", new { enabled }, ct);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task PurgeChannelAsync(string channelId, DateTimeOffset? olderThan, CancellationToken ct)
+    {
+        var url = $"/api/tenants/{_tenantId}/channels/{Uri.EscapeDataString(channelId)}/history";
+        if (olderThan is { } cutoff)
+        {
+            url += $"?olderThan={Uri.EscapeDataString(cutoff.ToString("O"))}";
+        }
+
+        var response = await _httpClient.DeleteAsync(url, ct);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task<string> GetSelfNotesAsync(CancellationToken ct)
+    {
+        var body = await _httpClient.GetFromJsonAsync<SelfNotesResponse>($"/api/tenants/{_tenantId}/self-notes", JsonOptions, ct);
+        return body?.SelfNotes ?? "";
+    }
+
+    private sealed class SelfNotesResponse
+    {
+        public string? SelfNotes { get; init; }
+    }
+
     private sealed class MessageResponse
     {
         public string? ConversationId { get; init; }

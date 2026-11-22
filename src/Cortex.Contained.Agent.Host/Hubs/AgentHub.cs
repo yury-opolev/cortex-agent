@@ -1,8 +1,9 @@
-﻿using System.Globalization;
+using System.Globalization;
 using Cortex.Contained.Contracts.Config;
 using Cortex.Contained.Contracts.Hub;
 using Cortex.Contained.Agent.Host.Agent;
 using Cortex.Contained.Agent.Host.Coding;
+using Cortex.Contained.Agent.Host.History;
 using Cortex.Contained.Agent.Host.Llm;
 using Cortex.Contained.Agent.Host.Memory;
 using Cortex.Contained.Agent.Host.Scheduler;
@@ -32,11 +33,19 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
     private readonly IOptionsMonitor<ConversationCompactionConfig> conversationCompactionOptions;
     private readonly MemoryCompactionService compactionService;
     private readonly Storage.MessageStore messageStore;
+    private readonly HistoryPurgeService historyPurge;
+    private readonly MemoryQuarantine memoryQuarantine;
+    private readonly HistoryToolsSwitch historyTools;
     private readonly SchedulerService scheduler;
     private readonly CodingAgentEventBus externalAgentBus;
     private readonly Cortex.Contained.Speech.SpeakerId.IVoiceprintStore voiceprintStore;
     private readonly Cortex.Contained.Agent.Host.SpeakerId.SpeakerIdSettingsStore speakerIdSettingsStore;
     private readonly Cortex.Contained.Agent.Host.SpeakerId.EnrollmentOrchestrator? enrollmentOrchestrator;
+    private readonly Cortex.Contained.Agent.Host.Events.KnownSecrets? knownSecrets;
+    private readonly Cortex.Contained.Agent.Host.Events.EventBackfillService? eventBackfill;
+    private readonly Storage.StorageKeyRing? storageKeys;
+    private readonly Cortex.Contained.Agent.Host.Reranking.RerankerAccess? rerankerAccess;
+    private readonly Cortex.Contained.Agent.Host.Recall.RecallControlService? recall;
     private readonly Cortex.Contained.Agent.Host.Mcp.McpToolStore mcpToolStore;
     private readonly IHttpClientFactory httpClientFactory;
     private readonly AgentMetrics metrics;
@@ -56,6 +65,9 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
         IOptionsMonitor<ConversationCompactionConfig> conversationCompactionOptions,
         MemoryCompactionService compactionService,
         Storage.MessageStore messageStore,
+        HistoryPurgeService historyPurge,
+        MemoryQuarantine memoryQuarantine,
+        HistoryToolsSwitch historyTools,
         SchedulerService scheduler,
         CodingAgentEventBus externalAgentBus,
         Cortex.Contained.Speech.SpeakerId.IVoiceprintStore voiceprintStore,
@@ -66,7 +78,12 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
         SubagentExecutionCoordinator subagentCoordinator,
         SubagentObservabilityService subagentObservability,
         ILogger<AgentHub> logger,
-        Cortex.Contained.Agent.Host.SpeakerId.EnrollmentOrchestrator? enrollmentOrchestrator = null)
+        Cortex.Contained.Agent.Host.SpeakerId.EnrollmentOrchestrator? enrollmentOrchestrator = null,
+        Cortex.Contained.Agent.Host.Events.KnownSecrets? knownSecrets = null,
+        Cortex.Contained.Agent.Host.Events.EventBackfillService? eventBackfill = null,
+        Storage.StorageKeyRing? storageKeys = null,
+        Cortex.Contained.Agent.Host.Reranking.RerankerAccess? rerankerAccess = null,
+        Cortex.Contained.Agent.Host.Recall.RecallControlService? recall = null)
     {
         this.runtime = runtime;
         this.llmClient = llmClient;
@@ -79,11 +96,19 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
         this.conversationCompactionOptions = conversationCompactionOptions;
         this.compactionService = compactionService;
         this.messageStore = messageStore;
+        this.historyPurge = historyPurge;
+        this.memoryQuarantine = memoryQuarantine;
+        this.historyTools = historyTools;
         this.scheduler = scheduler;
         this.externalAgentBus = externalAgentBus;
         this.voiceprintStore = voiceprintStore;
         this.speakerIdSettingsStore = speakerIdSettingsStore;
         this.enrollmentOrchestrator = enrollmentOrchestrator;
+        this.knownSecrets = knownSecrets;
+        this.eventBackfill = eventBackfill;
+        this.storageKeys = storageKeys;
+        this.rerankerAccess = rerankerAccess;
+        this.recall = recall;
         this.mcpToolStore = mcpToolStore;
         this.httpClientFactory = httpClientFactory;
         this.metrics = metrics;
@@ -186,9 +211,31 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
     }
 
     /// <inheritdoc />
+    public Task<bool> ProvideStorageKey(StorageKeyGrant grant)
+    {
+        ArgumentNullException.ThrowIfNull(grant);
+        var outcome = this.storageKeys?.Provide(grant.Key) ?? Storage.StorageKeyAcceptance.Rejected;
+        this.LogStorageKeyReceived(outcome);
+        return Task.FromResult(outcome != Storage.StorageKeyAcceptance.Rejected);
+    }
+
+    /// <inheritdoc />
+    public Task ProvideRerankerGrant(RerankerGrant grant)
+    {
+        ArgumentNullException.ThrowIfNull(grant);
+        this.rerankerAccess?.Apply(grant);
+        var hasKey = !string.IsNullOrWhiteSpace(grant.ApiKey);
+        this.LogRerankerGrantReceived(grant.Enabled, hasKey);
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
     public Task ProvideCredentials(LlmCredentials credentials)
     {
         this.LogCredentialsReceived(credentials.Providers.Count);
+
+        // The pushed credentials are the known-secret set that persistence redaction replaces exactly.
+        this.knownSecrets?.Load(credentials);
 
         // ConfigureCredentials must be called BEFORE wiring the callback so that any
         // Anthropic OAuth ProviderState objects exist when the callback fires.
@@ -428,43 +475,123 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
     /// <inheritdoc />
     public async Task<int> DeleteConversation(string conversationId)
     {
-        var deleted = await this.messageStore.DeleteChannelMessagesAsync(conversationId, Context.ConnectionAborted)
+        var result = await this.historyPurge.PurgeAsync(new HistoryPurgeScope(conversationId, null), null, Context.ConnectionAborted)
             .ConfigureAwait(false);
-        // Also reset the in-memory session for this channel
-        await this.runtime.ResetSessionAsync(conversationId, Context.ConnectionAborted)
-            .ConfigureAwait(false);
-        return deleted;
+        await this.ResetSessionsAfterChannelPurgeAsync(conversationId).ConfigureAwait(false);
+        return result.Deleted;
+    }
+
+    // Deleted text also survives as recall-tool output in the context of other channels' sessions.
+    private async Task ResetSessionsAfterChannelPurgeAsync(string channelId)
+    {
+        await this.runtime.ResetSessionAsync(channelId, Context.ConnectionAborted).ConfigureAwait(false);
+        await this.runtime.ResetRecallExposedSessionsAsync(Context.ConnectionAborted).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
     public async Task<int> ClearAllMessages()
     {
-        var deleted = await this.messageStore.DeleteAllMessagesAsync(Context.ConnectionAborted)
+        var result = await this.historyPurge.PurgeAsync(HistoryPurgeScope.All, null, Context.ConnectionAborted)
             .ConfigureAwait(false);
         await this.runtime.ResetAllSessionsAsync(Context.ConnectionAborted)
             .ConfigureAwait(false);
-        return deleted;
+        return result.Deleted;
     }
 
     /// <inheritdoc />
     public async Task<int> DeleteMessagesOlderThan(DateTimeOffset olderThan)
     {
-        var deleted = await this.messageStore.DeleteMessagesOlderThanAsync(olderThan, Context.ConnectionAborted)
+        var result = await this.historyPurge.PurgeAsync(new HistoryPurgeScope(null, olderThan), null, Context.ConnectionAborted)
             .ConfigureAwait(false);
         // Reset all sessions so they rebuild context from remaining messages
         await this.runtime.ResetAllSessionsAsync(Context.ConnectionAborted)
             .ConfigureAwait(false);
-        return deleted;
+        return result.Deleted;
     }
 
     /// <inheritdoc />
     public async Task<int> DeleteChannelMessagesOlderThan(string channelId, DateTimeOffset olderThan)
     {
-        var deleted = await this.messageStore.DeleteChannelMessagesOlderThanAsync(channelId, olderThan, Context.ConnectionAborted)
+        var result = await this.historyPurge.PurgeAsync(new HistoryPurgeScope(channelId, olderThan), null, Context.ConnectionAborted)
             .ConfigureAwait(false);
-        await this.runtime.ResetSessionAsync(channelId, Context.ConnectionAborted)
-            .ConfigureAwait(false);
-        return deleted;
+        await this.ResetSessionsAfterChannelPurgeAsync(channelId).ConfigureAwait(false);
+        return result.Deleted;
+    }
+
+    /// <inheritdoc />
+    public async Task<HistoryPurgeResultDto> PurgeHistory(HistoryPurgeRequestDto request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var scope = new HistoryPurgeScope(string.IsNullOrWhiteSpace(request.ChannelId) ? null : request.ChannelId, request.OlderThan, request.From);
+        if (scope.Problem() is { } problem)
+        {
+            throw new HubException(problem);
+        }
+
+        if (!DependentMemoryActions.IsValid(request.DependentMemories))
+        {
+            throw new HubException("dependentMemories must be review or delete.");
+        }
+
+        var dependentMemories = DependentMemoryActions.IsDelete(request.DependentMemories) ? DependentMemoryAction.Delete : DependentMemoryAction.Review;
+
+        HistoryPurgeResult result;
+        try
+        {
+            result = await this.historyPurge.PurgeAsync(
+                scope,
+                null,
+                Context.ConnectionAborted,
+                dependentMemories: dependentMemories,
+                expectedMessages: request.ExpectedMessages).ConfigureAwait(false);
+        }
+        catch (HistoryScopeChangedException ex)
+        {
+            throw new HubException(ex.Message);
+        }
+
+        if (request.ChannelId is { Length: > 0 } channelId)
+        {
+            await this.ResetSessionsAfterChannelPurgeAsync(channelId).ConfigureAwait(false);
+        }
+        else
+        {
+            await this.runtime.ResetAllSessionsAsync(Context.ConnectionAborted).ConfigureAwait(false);
+        }
+
+        return new HistoryPurgeResultDto
+        {
+            Deleted = result.Deleted,
+            ErasureComplete = result.ErasureComplete,
+            CleanupPending = result.CleanupPending,
+            QuarantinedMemories = result.QuarantinedMemories,
+            DeletedMemories = result.DeletedMemories,
+            DependentMemories = dependentMemories == DependentMemoryAction.Delete ? DependentMemoryActions.Delete : DependentMemoryActions.Review,
+        };
+    }
+
+    /// <inheritdoc />
+    public Task<bool> SetHistoryRecallTools(bool enabled)
+    {
+        this.historyTools.SetEnabled(enabled);
+        return Task.FromResult(this.historyTools.IsEnabled);
+    }
+
+    /// <inheritdoc />
+    public async Task<EventBackfillResultDto> BackfillHistoryEvents()
+    {
+        if (this.eventBackfill is null)
+        {
+            throw new HubException("The event backfill is not available on this agent.");
+        }
+
+        var report = await this.eventBackfill.RunAsync(Context.ConnectionAborted).ConfigureAwait(false);
+        return new EventBackfillResultDto
+        {
+            Scanned = report.Scanned,
+            Inserted = report.Inserted,
+            ElapsedMs = (long)report.Elapsed.TotalMilliseconds,
+        };
     }
 
     /// <inheritdoc />
@@ -484,11 +611,17 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
     /// <inheritdoc />
     public async Task ClearAllMemories()
     {
-        var memories = await this.memoryService.ListAsync(limit: 10000, offset: 0, Context.ConnectionAborted)
+        await this.DeleteListedMemoriesAsync(10000).ConfigureAwait(false);
+    }
+
+    private async Task DeleteListedMemoriesAsync(int limit)
+    {
+        var memories = await this.memoryService.ListAsync(limit, offset: 0, Context.ConnectionAborted)
             .ConfigureAwait(false);
-        foreach (var memory in memories.Items)
+        if (memories.Items.Count > 0)
         {
-            await this.memoryService.DeleteAsync(memory.MemoryId, Context.ConnectionAborted)
+            await this.memoryService.DeleteManyAsync(
+                memories.Items.Select(m => m.MemoryId).ToList(), Context.ConnectionAborted)
                 .ConfigureAwait(false);
         }
     }
@@ -496,19 +629,11 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
     /// <inheritdoc />
     public async Task ClearAll()
     {
-        // Clear messages
-        await this.messageStore.DeleteAllMessagesAsync(Context.ConnectionAborted)
+        // Clear messages through the erasure workflow
+        await this.historyPurge.PurgeAsync(HistoryPurgeScope.All, null, Context.ConnectionAborted)
             .ConfigureAwait(false);
 
-        // Clear all memories by listing and deleting each one
-        // (IMemoryManagementService has no bulk-delete; this is acceptable for a reset operation)
-        var memories = await this.memoryService.ListAsync(limit: 10000, offset: 0, Context.ConnectionAborted)
-            .ConfigureAwait(false);
-        foreach (var memory in memories.Items)
-        {
-            await this.memoryService.DeleteAsync(memory.MemoryId, Context.ConnectionAborted)
-                .ConfigureAwait(false);
-        }
+        await this.DeleteListedMemoriesAsync(10000).ConfigureAwait(false);
 
         // Reset sessions
         await this.runtime.ResetAllSessionsAsync(Context.ConnectionAborted)
@@ -553,6 +678,30 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
     {
         this.LogMemoryDelete(memoryId);
         return await this.memoryService.DeleteAsync(memoryId, Context.ConnectionAborted).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task<MemoryListResult> ListQuarantinedMemories()
+    {
+        var ids = await this.memoryQuarantine.GetQuarantinedIdsAsync(Context.ConnectionAborted).ConfigureAwait(false);
+        var items = new List<MemoryItem>();
+        foreach (var id in ids.Order(StringComparer.Ordinal))
+        {
+            if (await this.memoryService.GetAsync(id, Context.ConnectionAborted).ConfigureAwait(false) is { } item)
+            {
+                items.Add(item);
+            }
+        }
+
+        return new MemoryListResult { Items = items, TotalCount = items.Count };
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> KeepQuarantinedMemory(string memoryId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(memoryId);
+        await this.memoryQuarantine.KeepAsync(memoryId, Context.ConnectionAborted).ConfigureAwait(false);
+        return true;
     }
 
     /// <inheritdoc />
@@ -759,8 +908,17 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
     public async Task<ImportResult> ImportAll(ExportBundle bundle)
     {
         this.LogImportAll();
+        var importStartedAt = DateTimeOffset.UtcNow;
         try
         {
+            // The messages are validated first so a bad batch cannot leave memories already replaced.
+            var bundleErrors = Storage.MessageImportValidator.Validate(
+                bundle.Messages.Items.Select(ExportImportMapper.MapExportToMessageRecord).ToList());
+            if (bundleErrors.Count > 0)
+            {
+                return new ImportResult { Success = false, Error = "Import rejected: " + string.Join("; ", bundleErrors.Take(5)) };
+            }
+
             var memoriesResult = await ImportMemories(new ImportMemoriesRequest
             {
                 Items = bundle.Memories.Items.Select(m => new MemoryCreateRequest
@@ -772,11 +930,11 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
                 ClearExisting = true,
             }).ConfigureAwait(false);
 
-            var messagesResult = await ImportMessages(new ImportMessagesRequest
+            var messagesResult = await this.ImportMessagesCoreAsync(new ImportMessagesRequest
             {
                 Items = bundle.Messages.Items,
                 ClearExisting = true,
-            }).ConfigureAwait(false);
+            }, importStartedAt).ConfigureAwait(false);
 
             var tasksResult = await ImportTasks(new ImportTasksRequest
             {
@@ -805,21 +963,23 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
         {
             if (request.ClearExisting)
             {
-                var existing = await this.memoryService.ListAsync(limit: 100_000, offset: 0, Context.ConnectionAborted)
-                    .ConfigureAwait(false);
-                foreach (var memory in existing.Items)
-                {
-                    await this.memoryService.DeleteAsync(memory.MemoryId, Context.ConnectionAborted)
-                        .ConfigureAwait(false);
-                }
+                await this.DeleteListedMemoriesAsync(100_000).ConfigureAwait(false);
             }
 
             var imported = 0;
             foreach (var item in request.Items)
             {
-                await this.memoryService.CreateAsync(
+                var created = await this.memoryService.CreateAsync(
                     item.Content, item.Title, item.Tags,
                     force: true, Context.ConnectionAborted).ConfigureAwait(false);
+
+                // An import is the owner's deliberate content: exempt from the quarantine windows
+                // of the history purge that replaces messages (D10), whichever endpoint runs first.
+                if (created is not null)
+                {
+                    await this.memoryQuarantine.KeepAsync(created.MemoryId, Context.ConnectionAborted).ConfigureAwait(false);
+                }
+
                 imported++;
             }
 
@@ -832,22 +992,30 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
     }
 
     /// <inheritdoc />
-    public async Task<ImportResult> ImportMessages(ImportMessagesRequest request)
+    public Task<ImportResult> ImportMessages(ImportMessagesRequest request)
+        => this.ImportMessagesCoreAsync(request, DateTimeOffset.UtcNow);
+
+    private async Task<ImportResult> ImportMessagesCoreAsync(ImportMessagesRequest request, DateTimeOffset importStartedAt)
     {
         try
         {
-            if (request.ClearExisting)
-            {
-                await this.messageStore.DeleteAllMessagesAsync(Context.ConnectionAborted)
-                    .ConfigureAwait(false);
-            }
-
             var records = request.Items
                 .Select(ExportImportMapper.MapExportToMessageRecord)
                 .ToList();
 
-            var inserted = await this.messageStore.BulkInsertAsync(records, Context.ConnectionAborted)
-                .ConfigureAwait(false);
+            // Validate and stage the whole batch before touching any row (§4.1 atomic import).
+            var errors = Storage.MessageImportValidator.Validate(records);
+            if (errors.Count > 0)
+            {
+                return new ImportResult { Success = false, Error = "Import rejected: " + string.Join("; ", errors.Take(5)) };
+            }
+
+            // ClearExisting replaces everything in ONE transaction through the erasure workflow
+            // (delete-all + insert + restore-generation bump), so the old rows are erased too.
+            // Quarantine windows end where the import began, so memories created by it are not hidden.
+            var inserted = request.ClearExisting
+                ? (await this.historyPurge.PurgeAsync(HistoryPurgeScope.All, records, Context.ConnectionAborted, importStartedAt).ConfigureAwait(false)).Inserted
+                : await this.messageStore.BulkInsertAsync(records, Context.ConnectionAborted).ConfigureAwait(false);
 
             // Reset all sessions so they rebuild from the new message data
             await this.runtime.ResetAllSessionsAsync(Context.ConnectionAborted)
@@ -925,6 +1093,12 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
 
     [LoggerMessage(Level = LogLevel.Information, Message = "LLM credentials received: {ProviderCount} providers")]
     private partial void LogCredentialsReceived(int providerCount);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Storage key received: {Outcome}")]
+    private partial void LogStorageKeyReceived(Storage.StorageKeyAcceptance outcome);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Reranker grant received: enabled={Enabled}, key={HasKey}")]
+    private partial void LogRerankerGrantReceived(bool enabled, bool hasKey);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Seeding history for channel {ChannelId}: {MessageCount} messages")]
     private partial void LogSeedHistory(string channelId, int messageCount);

@@ -36,6 +36,7 @@
   <ItemGroup>
     <None Update="appsettings.scenarioevals.json" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Scenarios\*.json" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="HistoryGate\Scenarios\*.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

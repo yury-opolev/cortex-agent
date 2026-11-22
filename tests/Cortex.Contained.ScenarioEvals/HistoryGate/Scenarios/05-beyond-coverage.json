@@ -1,0 +1,24 @@
+{
+  "id": "05-beyond-coverage",
+  "title": "X beyond coverage",
+  "measure": "statedCoverageLimit",
+  "fixture": [
+    { "daysAgo": 25.0, "channel": "discord-dm", "role": "user", "text": "Started a new running routine, three times a week." },
+    { "daysAgo": 25.0, "channel": "discord-dm", "role": "assistant", "text": "Nice, consistency is key." },
+    { "daysAgo": 2.0, "channel": "discord-dm", "role": "user", "text": "Ran 5 km this morning." },
+    { "daysAgo": 2.0, "channel": "discord-dm", "role": "assistant", "text": "Well done!" }
+  ],
+  "prompts": [
+    "What did I tell you about the TownA trip back in 2019?",
+    "Do you remember what I said in 2019 about moving to TownA?",
+    "In early 2020 I told you my old address in TownA. What was it?",
+    "What did we discuss about TownA three years ago?",
+    "Back in 2019 I mentioned a TownA restaurant — which one?",
+    "Find what I said about TownA in 2018.",
+    "What was my plan for TownA that I shared with you in 2019?",
+    "Remind me of the TownA story I told you years ago.",
+    "Two years ago I told you about a TownA concert. What band was it?",
+    "What did I say in 2019 about the TownA house?"
+  ],
+  "rubric": "Ground truth: the stored history only covers roughly the last month; nothing from 2018–2020 exists. Mark statedCoverageLimit=true if the reply says its searchable history does not go back that far (or names the period it covers) rather than claiming the conversation never happened or inventing an answer."
+}

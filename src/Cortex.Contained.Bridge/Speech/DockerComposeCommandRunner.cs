@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Cortex.Contained.Common;
 using Microsoft.Extensions.Logging;
 
 namespace Cortex.Contained.Bridge.Speech;
@@ -9,15 +10,34 @@ namespace Cortex.Contained.Bridge.Speech;
 /// <see cref="Tenants.DockerContainerManager"/>. The compose file is resolved to
 /// <c>%LOCALAPPDATA%\Cortex\docker-compose.yml</c>.
 /// </summary>
-public sealed partial class DockerComposeCommandRunner : IComposeCommandRunner, ISttComposeRunner, IEmbeddingsComposeRunner, IVoiceIdComposeRunner
+public sealed partial class DockerComposeCommandRunner : IComposeCommandRunner, ISttComposeRunner, IEmbeddingsComposeRunner, IVoiceIdComposeRunner, IRerankerComposeRunner
 {
     private const string DanishContainerName = "cortex-uni-voices";
     private const string SttContainerName = "cortex-stt";
     private const string EmbeddingsContainerName = "cortex-embeddings";
     private const string VoiceIdContainerName = "cortex-voice-id";
+    private const string RerankerContainerName = "cortex-reranker";
+
+    /// <summary>Environment variable compose interpolates into the reranker's <c>LLAMA_API_KEY</c>.</summary>
+    internal const string RerankerKeyVariable = "CORTEX_RERANKER_API_KEY";
 
     /// <summary>Image pull/start can be slow on first run, so allow a generous window.</summary>
     private static readonly TimeSpan StartTimeout = TimeSpan.FromSeconds(60);
+
+    /// <summary>How long compose waits for the reranker to become healthy (model load).</summary>
+    internal const int RerankerWaitSeconds = 180;
+
+    /// <summary>How long compose waits for the embeddings sidecar to become healthy.</summary>
+    internal const int EmbeddingsWaitSeconds = 120;
+
+    /// <summary>The override that adds the NVIDIA device reservation to the embeddings service.</summary>
+    internal const string EmbeddingsGpuOverrideFileName = "docker-compose.embeddings-gpu.yml";
+
+    /// <summary>The compose wait plus headroom for the container to be created.</summary>
+    private static readonly TimeSpan EmbeddingsStartTimeout = TimeSpan.FromSeconds(EmbeddingsWaitSeconds + 30);
+
+    /// <summary>The compose wait plus headroom for the container to be created.</summary>
+    private static readonly TimeSpan RerankerStartTimeout = TimeSpan.FromSeconds(RerankerWaitSeconds + 30);
 
     /// <summary>Stop and ps are quick; cap them tightly.</summary>
     private static readonly TimeSpan ShortTimeout = TimeSpan.FromSeconds(20);
@@ -93,11 +113,28 @@ public sealed partial class DockerComposeCommandRunner : IComposeCommandRunner, 
             cancellationToken);
 
     /// <inheritdoc />
-    public Task<bool> StartEmbeddingsAsync(CancellationToken cancellationToken)
+    public Task<bool> StartEmbeddingsAsync(bool useGpu, bool recreate, CancellationToken cancellationToken)
         => this.RunCommandAsync(
-            $"compose -f \"{this.composeFilePath}\" --profile memory up -d embeddings",
-            StartTimeout,
+            EmbeddingsUpArguments(this.composeFilePath, useGpu, recreate),
+            EmbeddingsStartTimeout,
             cancellationToken);
+
+    /// <summary>
+    /// <c>up -d --wait</c> returns once the container's HEALTHCHECK (<c>ollama list</c>) passes. The GPU
+    /// override file lives next to the compose file (the Launcher syncs both) and is added only for the GPU.
+    /// </summary>
+    internal static string EmbeddingsUpArguments(string composeFilePath, bool useGpu, bool recreate)
+    {
+        var files = $"-f \"{composeFilePath}\"";
+        if (useGpu)
+        {
+            var overridePath = Path.Combine(Path.GetDirectoryName(composeFilePath) ?? string.Empty, EmbeddingsGpuOverrideFileName);
+            files += $" -f \"{overridePath}\"";
+        }
+
+        var force = recreate ? " --force-recreate" : string.Empty;
+        return $"compose {files} --profile memory up -d{force} --wait --wait-timeout {EmbeddingsWaitSeconds} embeddings";
+    }
 
     /// <inheritdoc />
     public Task<bool> StopEmbeddingsAsync(CancellationToken cancellationToken)
@@ -109,6 +146,19 @@ public sealed partial class DockerComposeCommandRunner : IComposeCommandRunner, 
     /// <inheritdoc />
     public Task<bool> IsEmbeddingsRunningAsync(CancellationToken cancellationToken)
         => this.IsContainerRunningAsync(EmbeddingsContainerName, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<bool> IsEmbeddingsOnGpuAsync(CancellationToken cancellationToken)
+    {
+        var output = await this.CaptureAsync(
+            $"inspect {EmbeddingsContainerName} --format \"{{{{len .HostConfig.DeviceRequests}}}}\"",
+            cancellationToken).ConfigureAwait(false);
+        return int.TryParse(output?.Trim(), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var requests) && requests > 0;
+    }
+
+    /// <inheritdoc />
+    public async Task<string?> GetEmbeddingsProcessorAsync(CancellationToken cancellationToken)
+        => OllamaPs.ParseProcessor(await this.CaptureAsync($"exec {EmbeddingsContainerName} ollama ps", cancellationToken).ConfigureAwait(false));
 
     /// <inheritdoc />
     public Task<bool> StartVoiceIdAsync(CancellationToken cancellationToken)
@@ -127,6 +177,78 @@ public sealed partial class DockerComposeCommandRunner : IComposeCommandRunner, 
     /// <inheritdoc />
     public Task<bool> IsVoiceIdRunningAsync(CancellationToken cancellationToken)
         => this.IsContainerRunningAsync(VoiceIdContainerName, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<bool> StartRerankerAsync(string apiKey, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(apiKey);
+        return this.RunCommandAsync(
+            RerankerUpArguments(this.composeFilePath),
+            RerankerStartTimeout,
+            cancellationToken,
+            new Dictionary<string, string> { [RerankerKeyVariable] = apiKey });
+    }
+
+    /// <summary>
+    /// <c>up -d --wait</c> returns once the container's HEALTHCHECK (llama-server <c>/health</c>) passes,
+    /// and fails when it exits or turns unhealthy, so "started" means "serving".
+    /// </summary>
+    internal static string RerankerUpArguments(string composeFilePath) =>
+        $"compose -f \"{composeFilePath}\" --profile reranker up -d --wait --wait-timeout {RerankerWaitSeconds} reranker";
+
+    /// <inheritdoc />
+    public Task<bool> StopRerankerAsync(CancellationToken cancellationToken)
+        => this.RunCommandAsync(
+            $"compose -f \"{this.composeFilePath}\" --profile reranker stop reranker",
+            ShortTimeout,
+            cancellationToken);
+
+    /// <inheritdoc />
+    public Task<bool> IsRerankerRunningAsync(CancellationToken cancellationToken)
+        => this.IsContainerRunningAsync(RerankerContainerName, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<bool> HasRerankerImageAsync(CancellationToken cancellationToken)
+        => this.RunCommandAsync("image inspect cortex-reranker:latest --format {{.Id}}", ShortTimeout, cancellationToken);
+
+    /// <summary>Runs `docker <paramref name="arguments"/>` and returns stdout, or null on a non-zero exit, a timeout or an error.</summary>
+    private async Task<string?> CaptureAsync(string arguments, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var process = new Process
+            {
+                StartInfo = new ProcessStartInfo
+                {
+                    FileName = "docker",
+                    Arguments = arguments,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                },
+            };
+
+            process.Start();
+
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutCts.CancelAfter(ShortTimeout);
+
+            var stdout = await process.StandardOutput.ReadToEndAsync(timeoutCts.Token).ConfigureAwait(false);
+            await process.WaitForExitAsync(timeoutCts.Token).ConfigureAwait(false);
+            return process.ExitCode == 0 ? stdout : null;
+        }
+        catch (OperationCanceledException)
+        {
+            this.LogCommandTimeout(arguments);
+            return null;
+        }
+        catch (Exception ex)
+        {
+            this.LogCommandError(arguments, ex.Message);
+            return null;
+        }
+    }
 
     private async Task<bool> IsContainerRunningAsync(string containerName, CancellationToken cancellationToken)
     {
@@ -167,7 +289,24 @@ public sealed partial class DockerComposeCommandRunner : IComposeCommandRunner, 
         }
     }
 
-    private async Task<bool> RunCommandAsync(string arguments, TimeSpan timeout, CancellationToken cancellationToken)
+    /// <summary>
+    /// The compose child's extra environment: the host time zone (so interpolating the agent's
+    /// <c>History__TimeZone</c> never differs from the Launcher's) overlaid with the caller's variables.
+    /// </summary>
+    internal static Dictionary<string, string> BuildEnvironment(
+        IReadOnlyDictionary<string, string>? extra, IReadOnlyDictionary<string, string> hostTimeZone)
+    {
+        var merged = new Dictionary<string, string>(hostTimeZone);
+        foreach (var (name, value) in extra ?? new Dictionary<string, string>())
+        {
+            merged[name] = value;
+        }
+
+        return merged;
+    }
+
+    private async Task<bool> RunCommandAsync(
+        string arguments, TimeSpan timeout, CancellationToken cancellationToken, IReadOnlyDictionary<string, string>? environment = null)
     {
         try
         {
@@ -185,6 +324,12 @@ public sealed partial class DockerComposeCommandRunner : IComposeCommandRunner, 
                     CreateNoWindow = true,
                 },
             };
+
+            // Secrets travel in the child's environment only: never on the command line, never logged.
+            foreach (var (name, value) in BuildEnvironment(environment, HostTimeZone.ComposeEnvironment()))
+            {
+                process.StartInfo.Environment[name] = value;
+            }
 
             process.Start();
 

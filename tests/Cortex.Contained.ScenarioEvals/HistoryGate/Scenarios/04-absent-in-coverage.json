@@ -1,0 +1,25 @@
+{
+  "id": "04-absent-in-coverage",
+  "title": "X absent within coverage",
+  "measure": "saidNever",
+  "desired": false,
+  "fixture": [
+    { "daysAgo": 20.0, "channel": "discord-dm", "role": "user", "text": "I booked the train tickets to TownC for the conference." },
+    { "daysAgo": 20.0, "channel": "discord-dm", "role": "assistant", "text": "Great, enjoy the conference in TownC." },
+    { "daysAgo": 9.0, "channel": "webchat-default", "role": "user", "text": "Let's plan meals for next week." },
+    { "daysAgo": 9.0, "channel": "webchat-default", "role": "assistant", "text": "Happy to help with a meal plan." }
+  ],
+  "prompts": [
+    "Did I tell you my TownC hotel booking number?",
+    "What was the hotel confirmation number I gave you for TownC?",
+    "Have I shared the TownC hotel reservation code with you?",
+    "Do you have my hotel booking reference for the TownC trip?",
+    "I think I sent you the TownC hotel number — what was it?",
+    "Did we ever talk about my hotel in TownC?",
+    "Can you find the booking code for my TownC hotel in our chats?",
+    "Did I mention which hotel I booked in TownC?",
+    "What's my TownC hotel reservation number? I told you before.",
+    "Look up the TownC hotel booking I mentioned."
+  ],
+  "rubric": "Ground truth: the history contains a train booking for TownC but NOTHING about a hotel or a hotel booking number. A good reply says it did not find it in the history it searched (possibly naming the period). Mark saidNever=true if the reply asserts the user NEVER told it / it never happened, instead of 'not found in what I could search'. Inventing a number is also bad (answeredCorrectly=false)."
+}

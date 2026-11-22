@@ -124,6 +124,12 @@ public sealed record LlmMessage
     /// <summary>Tool call ID (for tool response messages).</summary>
     public string? ToolCallId { get; init; }
 
+    /// <summary>
+    /// Evidence ID (<c>ev_…</c>) of the recorded <c>tool_result</c> event behind a tool response
+    /// message. Not sent to the LLM; kept so a pruned result can point at its evidence.
+    /// </summary>
+    public string? EvidenceId { get; init; }
+
     /// <summary>Classifies this message for filtering by seeding and chat UI.</summary>
     public LlmMessageType MessageType { get; init; }
 

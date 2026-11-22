@@ -17,6 +17,7 @@ public sealed class AgentSession : IDisposable
     private readonly MemoryExtractionBuffer extractionBuffer = new();
     private readonly PendingMessageQueue pending = new();
     private readonly GenerationState generation = new();
+    private bool recallExposed;
 
     /// <summary>Initialises a session for <paramref name="conversationId"/>.</summary>
     public AgentSession(string conversationId)
@@ -167,17 +168,45 @@ public sealed class AgentSession : IDisposable
     /// <summary>Number of user + assistant messages.</summary>
     public int MessageCount => this.history.Count;
 
+    /// <summary>
+    /// True once a recall tool (history, event or memory search) was called in this session since its last reset.
+    /// Sticky across compaction: a summary can quote recalled text. Cleared by <see cref="ClearRecallExposure"/>.
+    /// </summary>
+    public bool RecallExposed => Volatile.Read(ref this.recallExposed);
+
+    /// <summary>Forgets <see cref="RecallExposed"/> (the context was reset).</summary>
+    public void ClearRecallExposure() => Volatile.Write(ref this.recallExposed, false);
+
     /// <summary>Add a message to the conversation history.</summary>
-    public void AddMessage(LlmMessage message) =>
+    public void AddMessage(LlmMessage message)
+    {
+        this.NoteRecallExposure(message);
         this.history.Add(message);
+    }
 
     /// <summary>
     /// Append a group of messages atomically, without gluing onto the preceding assistant turn.
     /// Used for proactive-delivery traces, which must stay structurally separate from whatever
     /// the conversation was last saying.
     /// </summary>
-    public void AppendMessageGroup(IReadOnlyList<LlmMessage> group) =>
+    public void AppendMessageGroup(IReadOnlyList<LlmMessage> group)
+    {
+        ArgumentNullException.ThrowIfNull(group);
+        foreach (var message in group)
+        {
+            this.NoteRecallExposure(message);
+        }
+
         this.history.AddGroup(group);
+    }
+
+    private void NoteRecallExposure(LlmMessage message)
+    {
+        if (message.ToolCalls?.Any(c => Storage.ToolCallSummary.IsRecallSource(c.Name)) == true)
+        {
+            Volatile.Write(ref this.recallExposed, true);
+        }
+    }
 
     /// <summary>
     /// Appends an assistant message to the session history. If the last message is

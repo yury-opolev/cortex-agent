@@ -14,6 +14,9 @@ public sealed record AgentToolResult
     /// <summary>Optional error message if <see cref="Success"/> is false.</summary>
     public string? Error { get; init; }
 
+    /// <summary>The <c>tool_result</c> event recorded for this result (evidence ID), when recorded.</summary>
+    public string? EvidenceId { get; init; }
+
     /// <summary>A successful result carrying <paramref name="content"/>.</summary>
     public static AgentToolResult Ok(string content) => new() { Success = true, Content = content };
 
@@ -64,6 +67,12 @@ public sealed record ProactiveMessageRecord
 
     /// <summary>The message text that was sent.</summary>
     public required string Text { get; init; }
+
+    /// <summary>The send operation (<c>op_…</c>) whose events back the delivery report, when recorded.</summary>
+    public string? OperationId { get; init; }
+
+    /// <summary>When the send was attempted.</summary>
+    public DateTimeOffset? DeliveredAt { get; init; }
 }
 
 /// <summary>

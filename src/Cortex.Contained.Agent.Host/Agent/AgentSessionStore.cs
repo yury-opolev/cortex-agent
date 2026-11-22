@@ -69,9 +69,37 @@ public sealed partial class AgentSessionStore
         if (this.sessions.TryGetValue(conversationId, out var session))
         {
             session.ClearHistory();
+            session.ClearRecallExposure();
         }
 
         this.LogSessionReset(conversationId);
+    }
+
+    /// <summary>
+    /// Resets every session that called a recall tool since its last reset: its context may hold a
+    /// copy of text a purge just erased. Returns the conversation ids that were reset.
+    /// </summary>
+    public IReadOnlyList<string> ResetRecallExposed()
+    {
+        var reset = new List<string>();
+        foreach (var session in this.sessions.Values)
+        {
+            if (!session.RecallExposed)
+            {
+                continue;
+            }
+
+            session.ClearHistory();
+            session.ClearRecallExposure();
+            reset.Add(session.ConversationId);
+        }
+
+        if (reset.Count > 0)
+        {
+            this.LogRecallExposedSessionsReset(reset.Count);
+        }
+
+        return reset;
     }
 
     /// <summary>
@@ -82,6 +110,7 @@ public sealed partial class AgentSessionStore
         foreach (var session in this.sessions.Values)
         {
             session.ClearHistory();
+            session.ClearRecallExposure();
         }
 
         this.LogAllSessionsReset();
@@ -95,6 +124,7 @@ public sealed partial class AgentSessionStore
     {
         var session = GetOrCreate(conversationId);
         session.ClearHistory();
+        session.ClearRecallExposure();
 
         foreach (var message in messages)
         {
@@ -145,6 +175,9 @@ public sealed partial class AgentSessionStore
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Session reset: {ConversationId}")]
     private partial void LogSessionReset(string conversationId);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Reset {Count} session(s) that had used recall tools after a history purge")]
+    private partial void LogRecallExposedSessionsReset(int count);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "All sessions reset")]
     private partial void LogAllSessionsReset();

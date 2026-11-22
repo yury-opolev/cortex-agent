@@ -1,6 +1,7 @@
-﻿using System.Globalization;
+using System.Globalization;
 using Cortex.Contained.Agent.Host.Agent;
 using Cortex.Contained.Agent.Host.Agent.Autonomy;
+using Cortex.Contained.Agent.Host.History;
 using Cortex.Contained.Agent.Host.Hubs;
 using Cortex.Contained.Agent.Host.Llm;
 using Cortex.Contained.Agent.Host.Scheduler;
@@ -17,6 +18,32 @@ using MemoryMcp.Core.Storage;
 using Microsoft.Extensions.Options;
 using OllamaSharp;
 using Serilog;
+
+// Local smoke-evaluation CLI (§14.2), run with `docker exec`:
+// dotnet Cortex.Contained.Agent.Host.dll history-smoke <init|generate-queries|pool|register|run>
+if (args.Length > 0 && string.Equals(args[0], "history-smoke", StringComparison.Ordinal))
+{
+    Environment.ExitCode = await Cortex.Contained.Agent.Host.History.Evaluation.Smoke.HistorySmokeCli
+        .RunAsync(args[1..], Console.Out, CancellationToken.None).ConfigureAwait(false);
+    return;
+}
+
+// Hybrid-search evaluation protocol CLI (increment 3, §4.2): history-eval <init|validate|guard|register|ablate|holdout|kappa>
+if (args.Length > 0 && string.Equals(args[0], "history-eval", StringComparison.Ordinal))
+{
+    Environment.ExitCode = await Cortex.Contained.Agent.Host.History.Evaluation.HistoryEvalCli
+        .RunAsync(args[1..], Console.Out, CancellationToken.None).ConfigureAwait(false);
+    return;
+}
+
+// Hybrid memory-search evaluation CLI (increment 4, Gate H for memory):
+// memory-eval <init|sample|validate|guard|pool|register|ablate|holdout|kappa>
+if (args.Length > 0 && string.Equals(args[0], "memory-eval", StringComparison.Ordinal))
+{
+    Environment.ExitCode = await Cortex.Contained.Agent.Host.Memory.Evaluation.MemoryEvalCli
+        .RunAsync(args[1..], Console.Out, CancellationToken.None).ConfigureAwait(false);
+    return;
+}
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -99,11 +126,83 @@ builder.Services.AddSingleton(sp =>
 
 builder.Services.AddSingleton<AgentSessionStore>();
 
-// --- Message Store (per-tenant SQLite persistence) ---
+// --- Message Store (per-tenant SQLite persistence; encrypted at rest when Storage:EncryptAtRest, D4) ---
+var storageOptions = builder.Configuration.GetSection(StorageOptions.SectionName).Get<StorageOptions>() ?? new StorageOptions();
 builder.Services.AddSingleton(sp =>
     new Cortex.Contained.Agent.Host.Storage.MessageStore(
         Path.Combine(stateRoot, "messages.db"),
-        sp.GetRequiredService<ILoggerFactory>().CreateLogger<Cortex.Contained.Agent.Host.Storage.MessageStore>()));
+        sp.GetRequiredService<ILoggerFactory>().CreateLogger<Cortex.Contained.Agent.Host.Storage.MessageStore>(),
+        storageOptions.EncryptAtRest
+            ? new MessageStoreEncryption(sp.GetRequiredService<StorageKeyRing>(), TimeSpan.FromSeconds(storageOptions.KeyWaitSeconds))
+            : null));
+builder.Services.AddSingleton<IStorageState>(sp => sp.GetRequiredService<MessageStore>());
+
+// --- Episodic history locator (increment 1): journal-fed FTS5 index, recall tools, erasure ---
+builder.Services.Configure<HistoryOptions>(builder.Configuration.GetSection(HistoryOptions.SectionName));
+// Recall settings (owner's runtime overrides from the Bridge "Recall" page): <state>/recall-settings.json,
+// applied over History, Reranker and MemoryMcp:Search options via post-configure + change token.
+Cortex.Contained.Agent.Host.Recall.RecallSettingsRegistration.AddRecallSettings(builder.Services, stateRoot);
+builder.Services.AddSingleton<IHistorySource>(sp => sp.GetRequiredService<MessageStore>());
+builder.Services.AddSingleton<IHistoryErasureStore>(sp => sp.GetRequiredService<MessageStore>());
+builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Memory.IMemoryQuarantineSource>(sp => sp.GetRequiredService<MessageStore>());
+builder.Services.AddSingleton<HistoryAccessGate>();
+builder.Services.AddSingleton<HistoryStatus>();
+builder.Services.AddSingleton<HistoryToolsSwitch>();
+builder.Services.AddSingleton(sp => new HistoryIndexGenerations(
+    Path.Combine(stateRoot, "history"),
+    storageOptions.EncryptAtRest ? sp.GetRequiredService<StorageKeyRing>() : null,
+    sp.GetRequiredService<ILogger<HistoryIndexGenerations>>()));
+builder.Services.AddSingleton<IHistoryEmbedder, OllamaHistoryEmbedder>();
+builder.Services.AddSingleton<HistoryProjector>();
+builder.Services.AddSingleton<HistoryRecallService>();
+builder.Services.AddSingleton<IErasureStep, IndexErasureStep>();
+builder.Services.AddSingleton<IErasureStep, MessagesWalErasureStep>();
+builder.Services.AddSingleton<IErasureStep>(new ToolOutputErasureStep(Path.Combine(sandboxRoot, "tool-output")));
+builder.Services.AddSingleton<IErasureStep, SubagentErasureStep>();
+builder.Services.AddSingleton<IErasureStep, SmokeArtifactErasureStep>();
+builder.Services.AddSingleton<IErasureStep, VacuumErasureStep>();
+builder.Services.AddSingleton<IErasureStep, Cortex.Contained.Agent.Host.Memory.DependentMemoryErasureStep>();
+builder.Services.AddSingleton(sp =>
+    new HistoryPurgeService(
+        sp.GetRequiredService<IHistoryErasureStore>(),
+        sp.GetRequiredService<HistoryAccessGate>(),
+        sp.GetRequiredService<HistoryProjector>(),
+        sp.GetServices<IErasureStep>(),
+        sp.GetRequiredService<IOptionsMonitor<HistoryOptions>>(),
+        sp.GetRequiredService<TimeProvider>(),
+        sp.GetRequiredService<ILogger<HistoryPurgeService>>(),
+        sp.GetRequiredService<Cortex.Contained.Agent.Host.Memory.MemoryQuarantine>()));
+builder.Services.AddSingleton<HistoryHealthReporter>();
+builder.Services.AddHostedService<HistoryProjectorService>();
+builder.Services.AddHostedService<HistoryMaintenanceService>();
+builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Tools.IConversationToolGate, HistoryToolsGate>();
+
+// --- Reranker (increment 5): cortex-reranker sidecar after hybrid fusion; off until the Bridge grants it ---
+builder.Services.Configure<Cortex.Contained.Agent.Host.Reranking.RerankerOptions>(
+    builder.Configuration.GetSection(Cortex.Contained.Agent.Host.Reranking.RerankerOptions.SectionName));
+builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Reranking.RerankerAccess>();
+// Request logging off: the handler pipeline logs nothing about rerank calls (they carry history text).
+builder.Services.AddHttpClient(Cortex.Contained.Agent.Host.Reranking.LlamaServerReranker.HttpClientName).RemoveAllLoggers();
+builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Reranking.IReranker>(sp =>
+    new Cortex.Contained.Agent.Host.Reranking.LlamaServerReranker(
+        sp.GetRequiredService<IHttpClientFactory>(),
+        sp.GetRequiredService<IOptionsMonitor<Cortex.Contained.Agent.Host.Reranking.RerankerOptions>>(),
+        sp.GetRequiredService<Cortex.Contained.Agent.Host.Reranking.RerankerAccess>()));
+builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Reranking.RerankStage>();
+builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Reranking.IRerankStage>(
+    sp => sp.GetRequiredService<Cortex.Contained.Agent.Host.Reranking.RerankStage>());
+
+// --- Event log and provenance (increment 2): events in messages.db, tool payload policy ---
+builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Events.KnownSecrets>();
+builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Storage.StorageKeyRing>();
+builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Events.IEventLog>(sp => sp.GetRequiredService<MessageStore>());
+builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Events.ToolEventPayloads>();
+builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Events.IToolEventRecorder, Cortex.Contained.Agent.Host.Events.ToolEventRecorder>();
+builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Events.DeliveryRecorder>();
+builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Events.DeliveryReportBuilder>();
+builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Events.EventRecallService>();
+builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Events.IEventBackfillStore>(sp => sp.GetRequiredService<MessageStore>());
+builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Events.EventBackfillService>();
 
 // --- Operational metrics (thread-safe singleton; surfaced via health/ping) ---
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Agent.AgentMetrics>();
@@ -118,7 +217,8 @@ builder.Services.AddSingleton(sp =>
             agentConfig.LlmFirstTokenTimeoutSeconds,
             agentConfig.LlmStreamIdleTimeoutSeconds,
             agentConfig.LlmStreamMaxDurationSeconds),
-        sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.AgentMetrics>());
+        sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.AgentMetrics>(),
+        sp.GetRequiredService<Cortex.Contained.Agent.Host.Events.KnownSecrets>());
 });
 builder.Services.AddSingleton<ILlmClient>(sp => sp.GetRequiredService<DirectLlmClient>());
 
@@ -173,7 +273,22 @@ builder.Services.AddSingleton<IAgentTool>(new DateTimeTool());
 builder.Services.AddSingleton<IAgentTool>(sp =>
     new HistoryListChannelsTool(sp.GetRequiredService<MessageStore>()));
 builder.Services.AddSingleton<IAgentTool>(sp =>
-    new HistoryReadTool(sp.GetRequiredService<MessageStore>()));
+    new HistoryReadTool(
+        sp.GetRequiredService<MessageStore>(),
+        sp.GetRequiredService<HistoryRecallService>(),
+        sp.GetRequiredService<HistoryToolsSwitch>(),
+        sp.GetRequiredService<IOptionsMonitor<HistoryOptions>>(),
+        gate: sp.GetRequiredService<HistoryAccessGate>()));
+builder.Services.AddSingleton<IAgentTool>(sp =>
+    new HistorySearchTool(
+        sp.GetRequiredService<HistoryRecallService>(),
+        sp.GetRequiredService<HistoryToolsSwitch>(),
+        sp.GetRequiredService<IOptionsMonitor<HistoryOptions>>()));
+builder.Services.AddSingleton<IAgentTool>(sp =>
+    new EventGetTool(
+        sp.GetRequiredService<Cortex.Contained.Agent.Host.Events.EventRecallService>(),
+        sp.GetRequiredService<HistoryToolsSwitch>(),
+        sp.GetRequiredService<IOptionsMonitor<HistoryOptions>>()));
 // ContextBootstrapTool removed — replaced by self-notes (self_notes_read/write)
 
 // Self-notes: agent-managed operational knowledge (injected into system prompt)
@@ -373,7 +488,8 @@ builder.Services.AddSingleton<IProactiveMessageDispatcher>(sp =>
     new ProactiveMessageDispatcher(
         sp.GetRequiredService<BridgeClientAccessor>(),
         sp.GetRequiredService<MessageStore>(),
-        sp.GetRequiredService<ILogger<ProactiveMessageDispatcher>>()));
+        sp.GetRequiredService<ILogger<ProactiveMessageDispatcher>>(),
+        sp.GetRequiredService<Cortex.Contained.Agent.Host.Events.DeliveryRecorder>()));
 
 builder.Services.AddSingleton<IAgentTool>(sp =>
     new SendMessageTool(
@@ -407,11 +523,20 @@ builder.Services.AddSingleton<IAgentTool>(sp =>
         () => sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.IAgentRuntime>(),
         sp.GetRequiredService<ILogger<RevertTransferTool>>()));
 
+// --- Memory quarantine (D10): memories created in a purged window stay hidden until reviewed ---
+builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Memory.IMemoryCreationTimes>(sp =>
+    sp.GetRequiredService<Cortex.Contained.Agent.Host.Memory.MemoryManagementService>());
+builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Memory.MemoryQuarantine>();
+builder.Services.AddSingleton(sp =>
+    new Cortex.Contained.Agent.Host.Memory.QuarantineAwareMemoryService(
+        sp.GetRequiredService<IMemoryService>(),
+        sp.GetRequiredService<Cortex.Contained.Agent.Host.Memory.MemoryQuarantine>()));
+
 // --- Memory Consolidation (shared dedup logic for extraction + ingest tool + compaction) ---
 builder.Services.AddSingleton(sp =>
     new Cortex.Contained.Agent.Host.Memory.MemoryConsolidationService(
         sp.GetRequiredService<ILlmClient>(),
-        sp.GetRequiredService<IMemoryService>(),
+        sp.GetRequiredService<Cortex.Contained.Agent.Host.Memory.QuarantineAwareMemoryService>(),
         sp.GetRequiredService<ILogger<Cortex.Contained.Agent.Host.Memory.MemoryConsolidationService>>()));
 
 // --- Model Provider (shared between AgentRuntime and memory services/tools) ---
@@ -431,16 +556,37 @@ builder.Services.AddSingleton<IAgentTool>(sp =>
         sp.GetRequiredService<IEmbeddingService>()));
 builder.Services.AddSingleton<IAgentTool>(sp =>
     new MemoryDeleteTool(sp.GetRequiredService<IMemoryService>()));
+builder.Services.AddSingleton(sp =>
+    new Cortex.Contained.Agent.Host.Memory.QuarantineAwareHybridSearch(
+        sp.GetRequiredService<IHybridMemorySearch>(),
+        sp.GetRequiredService<Cortex.Contained.Agent.Host.Memory.MemoryQuarantine>()));
 builder.Services.AddSingleton<IAgentTool>(sp =>
     new MemorySearchTool(
-        sp.GetRequiredService<IMemoryService>(),
+        sp.GetRequiredService<Cortex.Contained.Agent.Host.Memory.QuarantineAwareHybridSearch>(),
         sp.GetRequiredService<IEmbeddingService>(),
-        sp.GetRequiredService<IOptions<MemoryMcp.Core.Configuration.MemoryMcpOptions>>()));
+        sp.GetRequiredService<IOptionsMonitor<MemoryMcp.Core.Configuration.MemoryMcpOptions>>(),
+        sp.GetRequiredService<Cortex.Contained.Agent.Host.Reranking.IRerankStage>()));
 
 // --- Memory Management (wraps IMemoryService + raw SQLite listing for web UI) ---
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Memory.MemoryManagementService>();
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Memory.IMemoryManagementService>(
     sp => sp.GetRequiredService<Cortex.Contained.Agent.Host.Memory.MemoryManagementService>());
+
+// --- Recall page (Bridge): settings, status, purge preview, quarantine review ---
+builder.Services.AddSingleton(sp => new Cortex.Contained.Agent.Host.Memory.QuarantineReviewService(
+    sp.GetRequiredService<Cortex.Contained.Agent.Host.Memory.MemoryQuarantine>(),
+    sp.GetRequiredService<Cortex.Contained.Agent.Host.Memory.IMemoryManagementService>()));
+builder.Services.AddSingleton(sp => new Cortex.Contained.Agent.Host.Recall.RecallControlService(
+    sp.GetRequiredService<Cortex.Contained.Agent.Host.Recall.RecallSettingsStore>(),
+    sp.GetRequiredService<IOptionsMonitor<HistoryOptions>>(),
+    sp.GetRequiredService<IOptionsMonitor<Cortex.Contained.Agent.Host.Reranking.RerankerOptions>>(),
+    sp.GetRequiredService<IOptionsMonitor<MemoryMcpOptions>>(),
+    sp.GetRequiredService<HistoryHealthReporter>(),
+    () => sp.GetRequiredService<Cortex.Contained.Agent.Host.Reranking.RerankStage>().Snapshot(),
+    sp.GetRequiredService<Cortex.Contained.Agent.Host.Memory.MemoryQuarantine>(),
+    sp.GetRequiredService<Cortex.Contained.Agent.Host.Memory.QuarantineReviewService>(),
+    sp.GetRequiredService<HistoryPurgeService>(),
+    sp.GetRequiredService<Cortex.Contained.Agent.Host.Events.EventBackfillService>()));
 
 // --- Automatic Memory Extraction (hosted background service with Channel<T> queue) ---
 builder.Services.AddSingleton(sp =>
@@ -463,14 +609,15 @@ builder.Services.Configure<Cortex.Contained.Agent.Host.Memory.MemoryCompactionOp
 builder.Services.AddSingleton(sp =>
     new Cortex.Contained.Agent.Host.Memory.MemoryCompactionService(
         sp.GetRequiredService<Cortex.Contained.Agent.Host.Memory.IMemoryManagementService>(),
-        sp.GetRequiredService<IMemoryService>(),
+        sp.GetRequiredService<Cortex.Contained.Agent.Host.Memory.QuarantineAwareMemoryService>(),
         sp.GetRequiredService<Cortex.Contained.Agent.Host.Memory.MemoryConsolidationService>(),
         sp.GetRequiredService<Cortex.Contained.Agent.Host.Memory.MemoryExtractionService>(),
         sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.IModelProvider>(),
         sp.GetRequiredService<Cortex.Contained.Agent.Host.Memory.MaintenanceStore>(),
         sp.GetRequiredService<Cortex.Contained.Agent.Host.Memory.MemorySettingsStore>(),
         sp.GetRequiredService<IOptions<Cortex.Contained.Agent.Host.Memory.MemoryCompactionOptions>>(),
-        sp.GetRequiredService<ILogger<Cortex.Contained.Agent.Host.Memory.MemoryCompactionService>>()));
+        sp.GetRequiredService<ILogger<Cortex.Contained.Agent.Host.Memory.MemoryCompactionService>>(),
+        sp.GetRequiredService<Cortex.Contained.Agent.Host.Memory.MemoryQuarantine>()));
 builder.Services.AddHostedService(sp =>
     sp.GetRequiredService<Cortex.Contained.Agent.Host.Memory.MemoryCompactionService>());
 
@@ -518,7 +665,7 @@ builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Agent.ISubagentExecuto
         sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.IModelProvider>(),
         stateRoot,
         sp.GetRequiredService<ILogger<Cortex.Contained.Agent.Host.Agent.SubagentExecutor>>(),
-        sp.GetRequiredService<IMemoryService>(),
+        sp.GetRequiredService<Cortex.Contained.Agent.Host.Memory.QuarantineAwareMemoryService>(),
         sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.SkillRegistry>(),
         sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.SystemPromptStore>()));
 
@@ -724,7 +871,10 @@ builder.Services.AddSingleton(sp =>
         // Loop-back edge of the at-least-once protocol: releasing a completion notification
         // must wake the coordinator's dispatch loop so it re-scans and redelivers.
         wakeSubagentCoordinator: sp.GetRequiredService<Cortex.Contained.Agent.Host.Agent.SubagentExecutionCoordinator>().SignalWorkAvailable,
-        reasoningEffort: sp.GetRequiredService<IOptions<AgentConfig>>().Value.ReasoningEffort));
+        reasoningEffort: sp.GetRequiredService<IOptions<AgentConfig>>().Value.ReasoningEffort,
+        deliveries: sp.GetRequiredService<Cortex.Contained.Agent.Host.Events.DeliveryRecorder>(),
+        deliveryReports: sp.GetRequiredService<Cortex.Contained.Agent.Host.Events.DeliveryReportBuilder>(),
+        historyTools: sp.GetRequiredService<Cortex.Contained.Agent.Host.History.HistoryToolsSwitch>()));
 builder.Services.AddSingleton<IAgentRuntime>(sp => sp.GetRequiredService<AgentRuntime>());
 
 // Bootstrap context store removed — replaced by self-notes
@@ -752,11 +902,35 @@ var app = builder.Build();
         reason => logSandboxEscapeBlocked(sandboxAuditLogger, reason, null);
 }
 
+// The process-wide SQLite engine is SQLite3 Multiple Ciphers (SQLite3MC.PCLRaw.bundle). It cannot
+// open a SQLCipher-encrypted memory.db with default settings, so refuse that configuration loudly
+// before the memory store opens memory.db.
+var sqliteCapabilities = Cortex.Contained.Agent.Host.History.SqliteRuntimeInfo.Capabilities;
+Log.Information(
+    "SQLite runtime {SqliteVersion}; history index supported: {Supported}",
+    sqliteCapabilities.Version,
+    sqliteCapabilities.SupportsHistoryIndex);
+if (app.Services.GetRequiredService<IOptions<MemoryMcpOptions>>().Value.Encryption.Enabled)
+{
+    throw new InvalidOperationException(
+        "MemoryMcp:Encryption:Enabled is not supported by the Agent Host: its SQLite engine (SQLite3 Multiple Ciphers) cannot open SQLCipher databases. Encrypt messages and history with Storage:EncryptAtRest; encrypting memory.db is not supported yet.");
+}
+
 // --- Initialize Memory Store (creates SQLite schema + data directories) ---
 using (var scope = app.Services.CreateScope())
 {
     var memoryStore = scope.ServiceProvider.GetRequiredService<IMemoryStore>();
     await memoryStore.InitializeAsync().ConfigureAwait(false);
+}
+
+        if (app.Services.GetRequiredService<IOptions<MemoryMcpOptions>>().Value.Search.Validate() is { Count: > 0 } memorySearchErrors)
+        {
+            throw new InvalidOperationException("Invalid memory search configuration: " + string.Join(" ", memorySearchErrors));
+        }
+
+if (app.Services.GetRequiredService<IOptions<Cortex.Contained.Agent.Host.Reranking.RerankerOptions>>().Value.Validate() is { Count: > 0 } rerankerErrors)
+{
+    throw new InvalidOperationException("Invalid reranker configuration: " + string.Join(" ", rerankerErrors));
 }
 
 // Queued/recovered subagent tasks are now dispatched by SubagentExecutionCoordinator (a hosted
@@ -815,11 +989,13 @@ _ = Task.Run(async () =>
 });
 
 // --- Health endpoint (unauthenticated) ---
-app.MapGet("/health", (ToolRegistry toolRegistry, AgentSessionStore sessionStore) =>
+app.MapGet("/health", async (ToolRegistry toolRegistry, AgentSessionStore sessionStore, HistoryHealthReporter historyHealth, Cortex.Contained.Agent.Host.Reranking.RerankStage rerankStage, CancellationToken cancellationToken) =>
 {
     var toolCount = toolRegistry.Count;
     var sessionCount = sessionStore.GetAll().Count;
     var healthy = toolCount > 0;
+    var history = await historyHealth.SnapshotAsync(cancellationToken).ConfigureAwait(false);
+    var reranker = rerankStage.Snapshot();
 
     return Results.Ok(new
     {
@@ -830,6 +1006,37 @@ app.MapGet("/health", (ToolRegistry toolRegistry, AgentSessionStore sessionStore
         {
             toolRegistry = new { status = toolCount > 0 ? "ok" : "degraded", toolCount },
             sessionStore = new { status = "ok", sessionCount },
+            history = new
+            {
+                status = history.Halted || history.PendingErasureTasks > 0 || history.Storage != "open" ? "degraded" : "ok",
+                history.Storage,
+                history.Enabled,
+                history.ToolsEnabled,
+                history.SqliteVersion,
+                history.Generation,
+                history.BuildComplete,
+                history.BuildInProgress,
+                history.CheckpointLag,
+                history.JournalBacklog,
+                history.Halted,
+                history.LastError,
+                history.PendingErasureTasks,
+                history.PendingErasureSteps,
+                history.MaintenancePendingTasks,
+                dense = history.Dense,
+            },
+            // Optional subsystem: a degraded reranker never makes the agent unhealthy (searches keep the fused order).
+            reranker = new
+            {
+                status = !reranker.Enabled ? "off" : reranker.State == "ok" ? "ok" : "degraded",
+                reranker.Enabled,
+                reranker.State,
+                reranker.ConsecutiveFailures,
+                reranker.CircuitOpenUntil,
+                reranker.LastError,
+                reranker.LastLatencyMs,
+                reranker.LastCallAt,
+            },
         },
     });
 });

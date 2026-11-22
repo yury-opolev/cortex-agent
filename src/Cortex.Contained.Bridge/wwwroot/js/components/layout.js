@@ -50,8 +50,8 @@ document.addEventListener("alpine:init", () => {
                 return;
             }
 
-            // /tenants/{id}/settings|history|memory
-            const match = path.match(/^\/tenants\/([^/]+)\/(settings|history|memory)$/);
+            // /tenants/{id}/settings|history|memory|recall
+            const match = path.match(/^\/tenants\/([^/]+)\/(settings|history|memory|recall)$/);
             if (match) {
                 this.tenantId = decodeURIComponent(match[1]);
                 this.channelId = null;
@@ -253,7 +253,7 @@ function appShell() {
 
 /**
  * Alpine data component for the tenant sub-page tabs
- * (breadcrumb back-link + Settings/History/Memory).
+ * (breadcrumb back-link + Settings/History/Memory/Recall).
  * Rendered once at the top of the content area and shared across all
  * /tenants/{id}/* sub-pages so the tab row stays DRY.
  * Usage: <div x-data="tenantTabs()">...</div>

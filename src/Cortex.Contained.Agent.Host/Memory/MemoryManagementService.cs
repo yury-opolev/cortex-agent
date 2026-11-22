@@ -15,7 +15,7 @@ namespace Cortex.Contained.Agent.Host.Memory;
 /// the MemoryMcp.Core library (which has no ListAsync) and the memory
 /// management web UI which needs pagination.
 /// </summary>
-public sealed class MemoryManagementService : IMemoryManagementService, IDisposable
+public sealed class MemoryManagementService : IMemoryManagementService, IMemoryCreationTimes, IDisposable
 {
     private readonly IMemoryService memoryService;
     private readonly MemoryMcpOptions options;
@@ -99,6 +99,34 @@ public sealed class MemoryManagementService : IMemoryManagementService, IDisposa
         return result is null ? null : ToMemoryItem(result);
     }
 
+    /// <summary>Creation time of every memory (chunk 0 metadata), for D10 quarantine. Uses its own connection.</summary>
+    public async Task<IReadOnlyList<MemoryCreationTime>> ListCreationTimesAsync(CancellationToken cancellationToken)
+    {
+        var times = new List<MemoryCreationTime>();
+        if (!File.Exists(this.options.DatabasePath))
+        {
+            return times;
+        }
+
+        await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = this.options.DatabasePath,
+            Mode = SqliteOpenMode.ReadOnly,
+        }.ToString());
+        await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT MemoryId, CreatedAt FROM chunks WHERE ChunkIndex = 0";
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            times.Add(new MemoryCreationTime(
+                reader.GetString(0),
+                DateTimeOffset.Parse(reader.GetString(1), System.Globalization.CultureInfo.InvariantCulture)));
+        }
+
+        return times;
+    }
+
     /// <summary>Create a new memory via ingest.</summary>
     public async Task<MemoryItem?> CreateAsync(string content, string? title, List<string>? tags, bool force = true, CancellationToken cancellationToken = default)
     {
@@ -123,6 +151,12 @@ public sealed class MemoryManagementService : IMemoryManagementService, IDisposa
     public Task<bool> DeleteAsync(string memoryId, CancellationToken cancellationToken = default)
     {
         return this.memoryService.DeleteAsync(memoryId, cancellationToken);
+    }
+
+    /// <summary>Delete many memories as one batch.</summary>
+    public Task<int> DeleteManyAsync(IReadOnlyCollection<string> memoryIds, CancellationToken cancellationToken = default)
+    {
+        return this.memoryService.DeleteManyAsync(memoryIds, cancellationToken);
     }
 
     /// <summary>Search memories by semantic similarity.</summary>

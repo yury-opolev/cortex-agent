@@ -1,0 +1,24 @@
+{
+  "id": "03-did-i-tell-you",
+  "title": "\"Did I tell you X?\" when X exists",
+  "measure": "citedSource",
+  "fixture": [
+    { "daysAgo": 12.4, "channel": "discord-dm", "role": "user", "text": "By the way, PersonB's birthday is on the 3rd of March." },
+    { "daysAgo": 12.4, "channel": "discord-dm", "role": "assistant", "text": "Thanks, noted." },
+    { "daysAgo": 4.0, "channel": "discord-dm", "role": "user", "text": "Can you recommend a book about gardening?" },
+    { "daysAgo": 4.0, "channel": "discord-dm", "role": "assistant", "text": "Sure — a beginner-friendly guide to vegetable gardens would be a good start." }
+  ],
+  "prompts": [
+    "Did I ever tell you when PersonB's birthday is?",
+    "Have I mentioned PersonB's birthday to you?",
+    "Do you know when PersonB has a birthday? I think I told you.",
+    "When did I tell you about PersonB's birthday?",
+    "I mentioned PersonB's birthday at some point, didn't I?",
+    "What date is PersonB's birthday? I'm sure I said it before.",
+    "Did I tell you PersonB's birthday? If so, when and where?",
+    "Remind me what I said about PersonB's birthday.",
+    "Did PersonB's birthday come up in our chats?",
+    "Have we talked about when PersonB celebrates their birthday?"
+  ],
+  "rubric": "Ground truth: about 12 days ago, in the Discord DM channel, the user said PersonB's birthday is on the 3rd of March. Mark answeredCorrectly=true if the reply gives 3 March. Mark citedSource=true if it also says roughly when (date or 'about two weeks ago') and where (Discord / DM) it was said."
+}

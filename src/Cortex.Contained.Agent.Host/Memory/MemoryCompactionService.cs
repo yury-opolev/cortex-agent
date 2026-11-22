@@ -25,6 +25,7 @@ public sealed partial class MemoryCompactionService : BackgroundService
     private readonly MemorySettingsStore memorySettingsStore;
     private readonly MemoryCompactionOptions options;
     private readonly ILogger<MemoryCompactionService> logger;
+    private readonly MemoryQuarantine? quarantine;
 
     /// <summary>Task name used for maintenance store tracking.</summary>
     internal const string TaskName = "memory-compaction";
@@ -47,7 +48,8 @@ public sealed partial class MemoryCompactionService : BackgroundService
         MaintenanceStore maintenanceStore,
         MemorySettingsStore memorySettingsStore,
         IOptions<MemoryCompactionOptions> options,
-        ILogger<MemoryCompactionService> logger)
+        ILogger<MemoryCompactionService> logger,
+        MemoryQuarantine? quarantine = null)
     {
         this.management = management;
         this.memoryService = memoryService;
@@ -58,6 +60,7 @@ public sealed partial class MemoryCompactionService : BackgroundService
         this.memorySettingsStore = memorySettingsStore;
         this.options = options.Value;
         this.logger = logger;
+        this.quarantine = quarantine;
     }
 
     /// <inheritdoc />
@@ -203,7 +206,12 @@ public sealed partial class MemoryCompactionService : BackgroundService
 
         // Track which memory IDs have already been processed (merged or checked)
         // to avoid processing them again as part of a different cluster.
+        // Quarantined memories (D10) are never merged into or out of until reviewed.
         var processedIds = new HashSet<string>(StringComparer.Ordinal);
+        if (this.quarantine is not null)
+        {
+            processedIds.UnionWith(await this.quarantine.GetQuarantinedIdsAsync(cancellationToken).ConfigureAwait(false));
+        }
         var totalMerged = 0;
         var totalChecked = 0;
 
@@ -229,67 +237,76 @@ public sealed partial class MemoryCompactionService : BackgroundService
                 processedIds.Add(memory.MemoryId);
                 totalChecked++;
 
-                // Search for similar memories
-                var similar = await this.memoryService.SearchAsync(
-                    memory.Content,
-                    CompactionSearchLimit,
-                    this.options.SimilarityThreshold,
-                    cancellationToken: cancellationToken).ConfigureAwait(false);
-
-                // Filter out the memory itself and already-processed memories
-                var duplicates = similar
-                    .Where(s => s.MemoryId != memory.MemoryId && !processedIds.Contains(s.MemoryId))
-                    .ToList();
-
-                if (duplicates.Count == 0)
+                try
                 {
-                    continue;
-                }
+                    // Dense-only near-duplicate lookup (pure cosine threshold)
+                    var similar = await this.memoryService.FindSimilarAsync(
+                        memory.Content,
+                        CompactionSearchLimit,
+                        this.options.SimilarityThreshold,
+                        cancellationToken).ConfigureAwait(false);
 
-                this.LogDuplicateClusterFound(memory.MemoryId, memory.Title ?? "(untitled)", duplicates.Count);
+                    // Filter out the memory itself and already-processed memories
+                    var duplicates = similar
+                        .Where(s => s.MemoryId != memory.MemoryId && !processedIds.Contains(s.MemoryId))
+                        .ToList();
 
-                // For each duplicate, use consolidation to merge it into the original memory.
-                // We treat the duplicate's content as a "new fact" and the original memory
-                // will be found by the consolidation search, leading to an UPDATE.
-                foreach (var duplicate in duplicates)
-                {
-                    processedIds.Add(duplicate.MemoryId);
-
-                    var fact = new MemoryConsolidationService.ConsolidationFact
+                    if (duplicates.Count == 0)
                     {
-                        Content = duplicate.Content,
-                        Title = duplicate.Title,
-                        Tags = duplicate.Tags.Count > 0 ? duplicate.Tags : null,
-                    };
-
-                    await this.consolidation.AcquireConsolidationLockAsync(cancellationToken).ConfigureAwait(false);
-                    MemoryConsolidationService.ConsolidationResult result;
-                    try
-                    {
-                        result = await this.consolidation.ConsolidateAsync(
-                            fact, this.modelProvider.MemoryModel, "compaction", batchMemories: null, cancellationToken).ConfigureAwait(false);
-                    }
-                    finally
-                    {
-                        this.consolidation.ReleaseConsolidationLock();
+                        continue;
                     }
 
-                    if (result.Action == MemoryConsolidationService.ConsolidationAction.Updated
-                        || result.Action == MemoryConsolidationService.ConsolidationAction.Noop)
+                    this.LogDuplicateClusterFound(memory.MemoryId, memory.Title ?? "(untitled)", duplicates.Count);
+
+                    // For each duplicate, use consolidation to merge it into the original memory.
+                    // We treat the duplicate's content as a "new fact" and the original memory
+                    // will be found by the consolidation search, leading to an UPDATE.
+                    foreach (var duplicate in duplicates)
                     {
-                        // The consolidation merged or recognized the duplicate.
-                        // If it was NOOP (already covered), delete the duplicate.
-                        if (result.Action == MemoryConsolidationService.ConsolidationAction.Noop)
+                        processedIds.Add(duplicate.MemoryId);
+
+                        var fact = new MemoryConsolidationService.ConsolidationFact
                         {
-                            await this.memoryService.DeleteAsync(duplicate.MemoryId, cancellationToken).ConfigureAwait(false);
-                            this.LogCompactionDeleted(duplicate.MemoryId, "already covered by existing memory");
+                            Content = duplicate.Content,
+                            Title = duplicate.Title,
+                            Tags = duplicate.Tags.Count > 0 ? duplicate.Tags : null,
+                        };
+
+                        await this.consolidation.AcquireConsolidationLockAsync(cancellationToken).ConfigureAwait(false);
+                        MemoryConsolidationService.ConsolidationResult result;
+                        try
+                        {
+                            result = await this.consolidation.ConsolidateAsync(
+                                fact, this.modelProvider.MemoryModel, "compaction", batchMemories: null, cancellationToken).ConfigureAwait(false);
+                        }
+                        finally
+                        {
+                            this.consolidation.ReleaseConsolidationLock();
                         }
 
-                        totalMerged++;
-                    }
+                        if (result.Action == MemoryConsolidationService.ConsolidationAction.Updated
+                            || result.Action == MemoryConsolidationService.ConsolidationAction.Noop)
+                        {
+                            // The consolidation merged or recognized the duplicate.
+                            // If it was NOOP (already covered), delete the duplicate.
+                            if (result.Action == MemoryConsolidationService.ConsolidationAction.Noop)
+                            {
+                                await this.memoryService.DeleteAsync(duplicate.MemoryId, cancellationToken).ConfigureAwait(false);
+                                this.LogCompactionDeleted(duplicate.MemoryId, "already covered by existing memory");
+                            }
 
-                    this.LogCompactionResult(duplicate.MemoryId, result.Action, result.Reason ?? "");
+                            totalMerged++;
+                        }
+
+                        this.LogCompactionResult(duplicate.MemoryId, result.Action, result.Reason ?? "");
+                    }
                 }
+#pragma warning disable CA1031 // One bad memory must not stop the sweep
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    this.LogCompactionMemoryFailed(memory.MemoryId, ex.Message);
+                }
+#pragma warning restore CA1031
             }
 
             offset += page.Items.Count;
@@ -339,4 +356,7 @@ public sealed partial class MemoryCompactionService : BackgroundService
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Compaction deleted memory {MemoryId}: {Reason}")]
     private partial void LogCompactionDeleted(string memoryId, string reason);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Compaction skipped memory {MemoryId}: {ErrorMessage}")]
+    private partial void LogCompactionMemoryFailed(string memoryId, string errorMessage);
 }

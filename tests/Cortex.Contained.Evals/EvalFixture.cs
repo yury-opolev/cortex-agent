@@ -69,7 +69,7 @@ public sealed class EvalFixture : IAsyncLifetime
         });
     }
 
-    public Task InitializeAsync()
+    public async Task InitializeAsync()
     {
         // --- LLM client setup ---
         var httpFactory = new SimpleHttpClientFactory();
@@ -138,9 +138,7 @@ public sealed class EvalFixture : IAsyncLifetime
         RecordingClient = new RecordingLlmClient(directClient);
 
         // --- Ollama config ---
-        OllamaEndpoint = Env("EVAL_OLLAMA_ENDPOINT")
-            ?? _config["Eval:Ollama:Endpoint"]
-            ?? "http://localhost:11434";
+        OllamaEndpoint = await ResolveOllamaEndpointAsync().ConfigureAwait(false);
         EmbeddingModel = _config["Eval:Ollama:EmbeddingModel"] ?? "qwen3-embedding:0.6b";
         EmbeddingDimensions = int.Parse(
             _config["Eval:Ollama:EmbeddingDimensions"] ?? "1024",
@@ -150,8 +148,6 @@ public sealed class EvalFixture : IAsyncLifetime
         Recorder.Model = Model;
         Recorder.Api = Api;
         Recorder.EmbeddingModel = EmbeddingModel;
-
-        return Task.CompletedTask;
     }
 
     public Task DisposeAsync()
@@ -274,6 +270,41 @@ public sealed class EvalFixture : IAsyncLifetime
         return string.Equals(api, "anthropic-messages", StringComparison.OrdinalIgnoreCase)
             ? CredentialKind.AnthropicOAuth
             : CredentialKind.GitHubOAuth;
+    }
+
+    private const string DefaultOllamaEndpoint = "http://localhost:11434";
+
+    // The embeddings container publishes no port, so there is no implicit default: use an explicit
+    // endpoint, or a host Ollama that actually answers on its standard port; otherwise fail clearly.
+    private async Task<string> ResolveOllamaEndpointAsync()
+    {
+        var configured = Env("EVAL_OLLAMA_ENDPOINT") ?? _config["Eval:Ollama:Endpoint"];
+        if (!string.IsNullOrWhiteSpace(configured))
+        {
+            return configured;
+        }
+
+        try
+        {
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
+            using var response = await http.GetAsync(new Uri(DefaultOllamaEndpoint + "/api/tags")).ConfigureAwait(false);
+            if (response.IsSuccessStatusCode)
+            {
+                return DefaultOllamaEndpoint;
+            }
+        }
+        catch (HttpRequestException)
+        {
+        }
+        catch (TaskCanceledException)
+        {
+        }
+
+        throw new InvalidOperationException(
+            "No Ollama embeddings endpoint for the evals. Set EVAL_OLLAMA_ENDPOINT (or Eval:Ollama:Endpoint in " +
+            "appsettings.eval.local.json); nothing answers on the default " + DefaultOllamaEndpoint + ". " +
+            "The embeddings container publishes no port: start it with docker-compose.eval.yml or run a host " +
+            "Ollama. See tests/Cortex.Contained.Evals/README.md.");
     }
 
     private static string? Env(string name) =>

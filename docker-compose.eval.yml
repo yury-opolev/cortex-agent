@@ -1,0 +1,13 @@
+# Compose override for LIVE EVAL RUNS ONLY (tests/Cortex.Contained.Evals).
+# Publishes the embeddings container on the loopback interface so the eval harness, which runs
+# on the host, can reach it. Never use it for a normal install: the embedder is meant to be
+# reachable from the cortex-internal network only.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.eval.yml --profile memory up -d embeddings
+#   $env:EVAL_OLLAMA_ENDPOINT = "http://127.0.0.1:11434"
+#
+# Stop it again afterwards: docker compose --profile memory stop embeddings
+services:
+  embeddings:
+    ports:
+      - "127.0.0.1:11434:11434"

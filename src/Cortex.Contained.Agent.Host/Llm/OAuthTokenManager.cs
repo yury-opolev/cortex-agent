@@ -50,10 +50,14 @@ internal sealed partial class OAuthTokenManager : IDisposable
     /// </summary>
     private volatile Func<string, Task<TokenRefreshResult>>? requestTokenReloadCallback;
 
+    private readonly Cortex.Contained.Agent.Host.Events.KnownSecrets? knownSecrets;
+
     public OAuthTokenManager(
         ILogger logger,
-        Cortex.Contained.Agent.Host.Agent.AgentMetrics? metrics)
+        Cortex.Contained.Agent.Host.Agent.AgentMetrics? metrics,
+        Cortex.Contained.Agent.Host.Events.KnownSecrets? knownSecrets = null)
     {
+        this.knownSecrets = knownSecrets;
         this.logger = logger;
         this.metrics = metrics;
     }
@@ -180,6 +184,7 @@ internal sealed partial class OAuthTokenManager : IDisposable
                     result.AccessToken,
                     result.RefreshToken,
                     result.ExpiresAtMs);
+                this.knownSecrets?.Add(result.AccessToken, result.RefreshToken);
                 this.metrics?.IncrementTokenRefreshSuccess();
                 this.LogTokenRefreshReceived(provider.Credential.Name);
             }
@@ -266,6 +271,7 @@ internal sealed partial class OAuthTokenManager : IDisposable
                     result.AccessToken,
                     result.RefreshToken,
                     result.ExpiresAtMs);
+                this.knownSecrets?.Add(result.AccessToken, result.RefreshToken);
                 this.metrics?.IncrementTokenRefreshSuccess();
                 this.LogTokenReloadReceived(provider.Credential.Name);
             }

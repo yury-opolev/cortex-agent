@@ -60,6 +60,10 @@ ASP.NET Core app running inside Docker. Key subsystems:
 | `SchedulerService` | One-shot and recurring task scheduling (SQLite-backed) |
 | `ModelProvider` | Shared model name provider (avoids circular DI with `IAgentRuntime`) |
 | `MemorySettingsStore` | Runtime-mutable memory settings with `IOptionsMonitor` change tokens |
+| `IHybridMemorySearch` / `QuarantineAwareHybridSearch` | `memory_search` in dense, keyword (FTS5/BM25) or hybrid (RRF) mode on the engine shared with history search (`MemoryMcp.Core.Retrieval`); quarantined memories excluded before scoring (see [memory-hybrid-search.md](memory-hybrid-search.md)) |
+| `HistoryProjector` / `HistoryRecallService` | Episodic history locator: journal-fed contentless FTS5 index plus exact dense search over transcript chunks (hybrid, RRF), verified `history_search` / `history_read` (see [history-locator.md](history-locator.md), [history-hybrid-search.md](history-hybrid-search.md)) |
+| `HistoryPurgeService` | History erasure workflow (index, WAL, tool output, subagents, smoke and history-eval run artifacts) and D10 memory quarantine |
+| `Events` (event log) | Content-free provenance events for every message, tool call/result and send; delivery reports, `event_get`, backfill (see [event-log.md](event-log.md)) |
 
 ### Cortex.Contained.Bridge
 
@@ -218,7 +222,10 @@ SQLite-backed (`/app/state/scheduler/tasks.db`). Tick interval: 15 seconds. Recu
 
 | Data | Path | Format |
 |------|------|--------|
-| Messages | `/app/state/messages.db` | SQLite |
+| Messages | `/app/state/messages.db` | SQLite (WAL, `secure_delete`; SQLite3MC-encrypted with `Storage:EncryptAtRest`), incl. `Events`, `HistoryJournal`, `Meta`, memory-quarantine tables |
+| History index | `/app/state/history/history-index.<gen>.db` + `history-index.current` | Contentless FTS5 plus chunk vectors (derived, no message text; vectors erased and encrypted with the generation) |
+| Smoke-eval workspace | `/app/state/eval/smoke` | Local only, never committed; `runs` destroyed by overlapping purges |
+| History-eval workspace | `/app/state/eval/hybrid` | Local only, never committed; `runs` (raw copies) destroyed by overlapping purges |
 | Memories (encrypted DB) | `/app/state/memory/memory.db` | SQLite (SQLCipher) + sqlite-vec |
 | Maintenance state | `/app/state/maintenance/maintenance.db` | SQLite |
 | Scheduled tasks | `/app/state/scheduler/tasks.db` | SQLite |

@@ -34,6 +34,25 @@
 | GET | `/api/memory/settings` | Yes | Get memory configuration |
 | PUT | `/api/memory/settings` | Yes | Update memory configuration (runtime) |
 | GET | `/api/messages/{channelId}` | Yes | Get message history for a channel |
+| DELETE | `/api/tenants/{tenantId}/history` | Yes | Delete all (or `?olderThan=`) history through the erasure workflow. `?dependentMemories=review` (default) quarantines the memories created in that period, `delete` erases them with the history. Returns `{ deletedCount, erasureComplete, cleanupPending, quarantinedMemories, deletedMemories, dependentMemories, message }` |
+| DELETE | `/api/tenants/{tenantId}/channels/{channelId}/history` | Yes | Same for one channel (previously `204`; now returns the same body; same `dependentMemories` query) |
+| PUT | `/api/tenants/{tenantId}/history/recall-tools` | Yes | Body `{ enabled }`: show/hide `history_search` / recall-mode `history_read` at runtime (no effect unless `History:Enabled`) |
+| POST | `/api/tenants/{tenantId}/history/event-backfill` | Yes | Run the explicit event backfill (maintenance window). Returns `{ scanned, inserted, elapsedMs }`. Driven by `scripts/Invoke-HistoryBackfill.ps1` and the Recall page |
+| GET | `/api/tenants/{tenantId}/memories/quarantine` | Yes | Memories quarantined after a history deletion (D10), awaiting review |
+| POST | `/api/tenants/{tenantId}/memories/{memoryId}/keep` | Yes | Keep a quarantined memory (visible to the agent again) |
+| GET | `/api/tenants/{tenantId}/recall/settings` | Yes | Effective recall settings of the tenant's agent: `{ historyEnabled, historySearchMode, historyDenseEnabled, memorySearchMode, rerankHistoryTopN, rerankHistoryMaxDocChars, rerankMemoryTopN, rerankMemoryMaxDocChars, rerankTimeoutMs, overridden[] }`. `503` while the agent is disconnected |
+| PUT | `/api/tenants/{tenantId}/recall/settings` | Yes | Patch (null members unchanged; `resetToDefaults: true` drops every override first). Persisted in the agent's state volume (`recall-settings.json`) and applied live. Returns `{ applied, errors[], notices[], settings }`; `400` with the same body when validation fails |
+| GET | `/api/tenants/{tenantId}/recall/status` | Yes | `{ connected, agent: { settings, history, dense, reranker, eventBackfill, quarantinedMemories }, reranker: { enabled, sidecar: { state, problem, at } } }` (`503` with `connected: false` and the reranker block while disconnected) |
+| POST | `/api/tenants/{tenantId}/recall/purge/preview` | Yes | Body `{ channelId?, from?, olderThan?, dependentMemories? }`. Deletes nothing. Returns `{ messages, dependentMemories, rangeFrom, rangeTo, confirmations: { review, delete } }` |
+| POST | `/api/tenants/{tenantId}/recall/purge` | Yes | Same body plus optional `expectedMessages` (the preview count); deletes through the erasure workflow (`from` inclusive, `olderThan` exclusive; `from ≥ olderThan` is `400`). `409` when more than 50 messages beyond `expectedMessages` are now in scope — preview again. Returns the history DELETE body |
+| GET | `/api/tenants/{tenantId}/recall/quarantine` | Yes | `?offset=0&limit=200` (limit 1–500). `{ items: [{ memory, purgeId, purgedAt, purgeChannelId, windowFrom, windowTo }], total, offset, limit }`, newest first; only the page loads memory content |
+| GET | `/api/tenants/{tenantId}/recall/quarantine/ids` | Yes | `{ ids: [...] }` — every quarantined memory id (no content), for "select all"; the UI keeps/deletes them in sequential batches of 1000 |
+| POST | `/api/tenants/{tenantId}/recall/quarantine/keep` | Yes | Body `{ memoryIds: [...] }` (1–1000). Keeps the quarantined ones; returns `{ affected, skipped[] }` |
+| POST | `/api/tenants/{tenantId}/recall/quarantine/delete` | Yes | Same body; erases the quarantined ones in one batch (`DeleteManyAsync`); ids not in quarantine are skipped |
+| GET | `/api/recall/reranker` | Yes | Bridge-wide reranker switch and sidecar state `{ enabled, sidecar: { state, problem, at } }` |
+| PUT | `/api/recall/reranker` | Yes | Body `{ enabled }`. Persists `reranker: enabled` in `cortex.yml`, then (in the background) starts the sidecar and grants every agent, or withdraws the grant and stops the sidecar |
+| GET | `/api/recall/embeddings-gpu` | Yes | Bridge-wide "run embeddings on the GPU" switch, the sidecar state and where it really runs: `{ enabled, sidecar: { state, problem, at }, mode, processor }` — `mode` is `gpu`/`cpu` (the running container's device request) or null when it is not running; `processor` is the `ollama ps` PROCESSOR (`100% GPU`) or null while no model is loaded. `sidecar.problem` is set when the GPU start failed and the sidecar fell back to the CPU |
+| PUT | `/api/recall/embeddings-gpu` | Yes | Body `{ enabled }`. Persists `embeddings: gpu` in `cortex.yml` (`500` if it cannot be written; the switch is restored), then (in the background) recreates the `embeddings` container with or without `docker-compose.embeddings-gpu.yml`; falls back to the CPU when the GPU start fails |
 | POST | `/api/channels/{type}` | Yes | Update channel configuration |
 | GET | `/api/mcp/actions` | Yes | List approval-gated MCP mutation actions (filter by `serverKey`, `toolName`, `state`, `workerId`; paged with `before`/`limit`) |
 | GET | `/api/mcp/actions/{actionId}` | Yes | One action, including its canonical arguments (for review) and result |
@@ -134,6 +153,45 @@ Update memory settings at runtime. Takes effect immediately (no restart).
 | `UpdateMemory(request)` | Update a memory |
 | `DeleteMemory(memoryId)` | Delete a memory |
 | `SearchMemories(request)` | Semantic search (query, limit, minScore, tags) |
+| `ListQuarantinedMemories()` | Memories hidden by the D10 quarantine, awaiting review |
+| `KeepQuarantinedMemory(memoryId)` | Keep a quarantined memory |
+
+#### `PurgeHistory(HistoryPurgeRequestDto)` -> `HistoryPurgeResultDto`
+
+Delete history (optional `channelId`; optional `from` (inclusive) and `olderThan` (exclusive);
+none = everything) through the erasure workflow. `dependentMemories` is `review` (default:
+curated memories created in the purged period are quarantined) or `delete` (they are erased
+with the history by the `dependent-memories` erasure step; until it completes they stay
+quarantined). Returns `{ deleted, erasureComplete, cleanupPending[], quarantinedMemories,
+deletedMemories, dependentMemories }`. An inverted range or an unknown action is a `HubException`.
+All other delete methods (`DeleteConversation`, `ClearAllMessages`, `DeleteMessagesOlderThan`,
+`DeleteChannelMessagesOlderThan`, `ClearAll`, `ImportMessages` with `clearExisting`) use the
+same workflow (always `review`).
+
+#### Recall (`IRecallHub`)
+
+| Method | Description |
+|--------|-------------|
+| `GetRecallSettings()` -> `RecallSettingsDto` | Effective settings (configured defaults + persisted overrides; `overridden[]` names the overrides) |
+| `UpdateRecallSettings(RecallSettingsPatchDto)` -> `RecallSettingsUpdateResultDto` | Validate, persist (`<state>/recall-settings.json`) and apply live; returns errors or notices (index rebuild, tools hidden, …) |
+| `GetRecallStatus()` -> `RecallStatusDto` | History index build, dense embedding progress, reranker health, event backfill, quarantined count |
+| `PreviewHistoryPurge(HistoryPurgeRequestDto)` -> `HistoryPurgePreviewDto` | Messages and dependent memories a purge would affect; deletes nothing |
+| `ListQuarantineReview(offset, limit)` -> `QuarantineReviewListDto` | One page of quarantined memories with the purge (id, time, channel, window) that quarantined each, plus `Total` |
+| `ListQuarantineReviewIds()` -> `string[]` | Every quarantined memory id (no content) |
+| `KeepQuarantinedMemories(ids)` / `DeleteQuarantinedMemories(ids)` -> `QuarantineDecisionResultDto` | Bulk keep / bulk erase (one `DeleteManyAsync` batch); at most 1000 ids; ids not in quarantine are returned as `skipped` |
+
+#### `SetHistoryRecallTools(enabled)` -> `bool`
+
+Show or hide the history recall tools at runtime; returns the effective state.
+
+#### `BackfillHistoryEvents()` -> `EventBackfillResultDto`
+
+`legacy_import` events for messages stored before the event log; idempotent.
+
+#### `ProvideStorageKey(StorageKeyGrant)` -> `bool`
+
+The tenant storage master key (Base64, 256-bit), pushed before `ProvideCredentials`. `false` when
+malformed or different from the key already in use.
 
 ### Hub Callbacks (Agent -> Bridge)
 
@@ -244,3 +302,12 @@ server, the action resolves to `outcome_unknown`, never `cancelled`.
 | Tool | Description |
 |------|-------------|
 | `date_time` | Get current date/time in any timezone |
+
+### History (on by default; off with `History:Enabled=false`)
+
+| Tool | Description |
+|------|-------------|
+| `history_list_channels` | List channels with message counts and last activity |
+| `history_search` | Find when/where something was said (keyword, phrase, `stem*`; `order=relevance\|time`; coverage-limited, verified hits with honest labels) |
+| `history_read` | Read the exact source: `channelId` window, or `aroundMessageId` from a `history_search` hit |
+| `event_get` | Read one recorded event by evidence ID (`ev_…`): tool calls and result digests, deliveries and their evidence, or a message with its current text |

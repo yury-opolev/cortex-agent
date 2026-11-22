@@ -32,6 +32,7 @@ internal sealed partial class TurnResponseDelivery
     private readonly string correlationId;
     private readonly bool useProactiveDelivery;
     private readonly ILogger logger;
+    private readonly Events.DeliveryRecorder? deliveries;
     private readonly ToolCallAttributor attributor = new();
 
     public TurnResponseDelivery(
@@ -41,7 +42,8 @@ internal sealed partial class TurnResponseDelivery
         string channelId,
         string correlationId,
         bool useProactiveDelivery,
-        ILogger logger)
+        ILogger logger,
+        Events.DeliveryRecorder? deliveries = null)
     {
         this.client = client;
         this.messageStore = messageStore;
@@ -50,6 +52,7 @@ internal sealed partial class TurnResponseDelivery
         this.correlationId = correlationId;
         this.useProactiveDelivery = useProactiveDelivery;
         this.logger = logger;
+        this.deliveries = deliveries;
     }
 
     public async Task StreamChunkAsync(string text, int sequenceNumber)
@@ -233,6 +236,7 @@ internal sealed partial class TurnResponseDelivery
         string messageId,
         CancellationToken cancellationToken)
     {
+        Events.DeliveryAttempt? attempt = null;
         if (this.useProactiveDelivery)
         {
             // Scheduled tasks and timers: report the instruction + response on the scheduled-tasks
@@ -253,32 +257,19 @@ internal sealed partial class TurnResponseDelivery
         }
         else
         {
-            // User messages: deliver via streaming chunks + completion signal.
-            await this.client.OnResponseChunk(new ResponseChunkMessage
+            // User messages: deliver via streaming chunks + completion signal, recorded as a send.
+            attempt = this.deliveries is null
+                ? null
+                : await this.deliveries.AttemptAsync(this.channelId, "reply", cancellationToken).ConfigureAwait(false);
+            try
             {
-                ConversationId = this.replyConversationId,
-                Text = string.Empty,
-                SequenceNumber = sequenceNumber,
-                IsComplete = true,
-                CorrelationId = this.correlationId,
-            }).ConfigureAwait(false);
-
-            await this.client.OnResponseComplete(new ResponseCompleteMessage
+                await this.SendReplyAsync(responseText, usage, sequenceNumber, messageId).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (attempt is not null && ex is not OperationCanceledException)
             {
-                ConversationId = this.replyConversationId,
-                MessageId = messageId,
-                FullText = responseText,
-                Timestamp = DateTimeOffset.UtcNow,
-                CorrelationId = this.correlationId,
-                Usage = usage is not null
-                    ? new TokenUsage
-                    {
-                        PromptTokens = usage.PromptTokens,
-                        CompletionTokens = usage.CompletionTokens,
-                        TotalTokens = usage.TotalTokens,
-                    }
-                    : null,
-            }).ConfigureAwait(false);
+                await this.deliveries!.UnknownAsync(attempt, this.channelId, ex.GetType().Name, CancellationToken.None).ConfigureAwait(false);
+                throw;
+            }
 
             this.LogResponseComplete(session.ConversationId, messageId, responseText.Length,
                 usage?.PromptTokens ?? 0, usage?.CompletionTokens ?? 0, usage?.TotalTokens ?? 0);
@@ -305,6 +296,10 @@ internal sealed partial class TurnResponseDelivery
             cancellationToken: cancellationToken).ConfigureAwait(false);
 
         session.SetLastAssistantRecordId(finalRecordId);
+        if (attempt is not null)
+        {
+            await this.deliveries!.AcknowledgedAsync(attempt, this.channelId, delivered: true, finalRecordId, CancellationToken.None).ConfigureAwait(false);
+        }
 
         // Reconcile: an interrupt's MarkInterrupted can land during the
         // await SaveMessageAsync above (interrupt runs on the hub
@@ -331,6 +326,35 @@ internal sealed partial class TurnResponseDelivery
             var json = ToolCallSummary.SerializeJson(patch.Entries);
             await this.messageStore.UpdateToolCallsAsync(patch.MessageId, json, cancellationToken).ConfigureAwait(false);
         }
+    }
+
+    private async Task SendReplyAsync(string responseText, LlmTokenUsage? usage, int sequenceNumber, string messageId)
+    {
+        await this.client.OnResponseChunk(new ResponseChunkMessage
+        {
+            ConversationId = this.replyConversationId,
+            Text = string.Empty,
+            SequenceNumber = sequenceNumber,
+            IsComplete = true,
+            CorrelationId = this.correlationId,
+        }).ConfigureAwait(false);
+
+        await this.client.OnResponseComplete(new ResponseCompleteMessage
+        {
+            ConversationId = this.replyConversationId,
+            MessageId = messageId,
+            FullText = responseText,
+            Timestamp = DateTimeOffset.UtcNow,
+            CorrelationId = this.correlationId,
+            Usage = usage is not null
+                ? new TokenUsage
+                {
+                    PromptTokens = usage.PromptTokens,
+                    CompletionTokens = usage.CompletionTokens,
+                    TotalTokens = usage.TotalTokens,
+                }
+                : null,
+        }).ConfigureAwait(false);
     }
 
     /// <summary>

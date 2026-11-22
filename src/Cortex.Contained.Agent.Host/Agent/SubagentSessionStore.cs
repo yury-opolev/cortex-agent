@@ -1037,6 +1037,98 @@ public sealed partial class SubagentSessionStore : SqliteStoreBase
         }
     }
 
+    /// <summary>
+    /// Erasure (§11): deletes terminal tasks whose run window <c>[created_at, completed_at]</c>
+    /// overlaps <c>[from, to]</c> (optionally only for <paramref name="parentChannel"/>), with
+    /// <c>secure_delete</c> and a truncating WAL checkpoint. Active overlapping tasks are left
+    /// alone and counted so the caller can retry once they finish.
+    /// </summary>
+    public (int Deleted, int ActiveSkipped) PurgeOverlapping(DateTimeOffset? from, DateTimeOffset to, string? parentChannel)
+    {
+        const string overlap = """
+            created_at <= $to
+              AND ($from IS NULL OR completed_at IS NULL OR completed_at >= $from)
+              AND ($channel IS NULL OR parent_channel = $channel)
+            """;
+
+        lock (this.syncLock)
+        {
+            this.ExecuteNonQuery("PRAGMA secure_delete=ON");
+
+            using var count = this.Connection.CreateCommand();
+            count.CommandText = $"SELECT COUNT(*) FROM subagent_tasks WHERE {overlap} AND state NOT IN ('completed', 'failed', 'cancelled')";
+            Bind(count, from, to, parentChannel);
+            var active = Convert.ToInt32(count.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
+
+            using var delete = this.Connection.CreateCommand();
+            delete.CommandText = $"DELETE FROM subagent_tasks WHERE {overlap} AND state IN ('completed', 'failed', 'cancelled')";
+            Bind(delete, from, to, parentChannel);
+            var deleted = delete.ExecuteNonQuery();
+
+            this.ExecuteNonQuery("PRAGMA wal_checkpoint(TRUNCATE)");
+            return (deleted, active);
+        }
+
+        static void Bind(SqliteCommand cmd, DateTimeOffset? from, DateTimeOffset to, string? channel)
+        {
+            cmd.Parameters.AddWithValue("$from", from is { } f ? FormatDto(f) : DBNull.Value);
+            cmd.Parameters.AddWithValue("$to", FormatDto(to));
+            cmd.Parameters.AddWithValue("$channel", (object?)channel ?? DBNull.Value);
+        }
+    }
+
+    /// <summary>
+    /// Erasure (§11): deletes terminal tasks of any parent channel whose run window overlaps
+    /// <c>[from, to]</c> and that may have read the purged text through a recall tool. A task whose
+    /// messages were already cleared by retention cannot be inspected and is treated as exposed.
+    /// Active exposed tasks are left alone and counted so the caller can retry once they finish.
+    /// </summary>
+    public (int Deleted, int ActiveSkipped) PurgeRecallExposed(DateTimeOffset? from, DateTimeOffset to)
+    {
+        lock (this.syncLock)
+        {
+            this.ExecuteNonQuery("PRAGMA secure_delete=ON");
+
+            var doomed = new List<string>();
+            var active = 0;
+            using (var select = this.Connection.CreateCommand())
+            {
+                select.CommandText = """
+                    SELECT task_id, state, messages_json FROM subagent_tasks
+                    WHERE created_at <= $to AND ($from IS NULL OR completed_at IS NULL OR completed_at >= $from)
+                    """;
+                select.Parameters.AddWithValue("$from", from is { } f ? FormatDto(f) : DBNull.Value);
+                select.Parameters.AddWithValue("$to", FormatDto(to));
+                using var reader = select.ExecuteReader();
+                while (reader.Read())
+                {
+                    var terminal = reader.GetString(1) is "completed" or "failed" or "cancelled";
+                    var messages = DeserializeMessages(reader.GetString(2));
+                    var exposed = messages.Any(m => m.ToolCalls?.Any(c => ToolCallSummary.IsRecallSource(c.Name)) == true);
+                    if (terminal && (exposed || messages.Count == 0))
+                    {
+                        doomed.Add(reader.GetString(0));
+                    }
+                    else if (exposed)
+                    {
+                        active++;
+                    }
+                }
+            }
+
+            foreach (var taskId in doomed)
+            {
+                using var delete = this.Connection.CreateCommand();
+                delete.CommandText = "DELETE FROM subagent_tasks WHERE task_id = $id";
+                delete.Parameters.AddWithValue("$id", taskId);
+                delete.ExecuteNonQuery();
+            }
+
+            this.ExecuteNonQuery("PRAGMA wal_checkpoint(TRUNCATE)");
+            return (doomed.Count, active);
+        }
+    }
+
     /// <inheritdoc/>
     public override void Dispose()
     {

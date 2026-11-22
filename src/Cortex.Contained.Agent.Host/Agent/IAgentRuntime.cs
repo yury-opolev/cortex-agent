@@ -103,6 +103,13 @@ public interface IAgentRuntime
     Task ResetAllSessionsAsync(CancellationToken cancellationToken);
 
     /// <summary>
+    /// Reset every session whose context may hold output of a recall tool (history, event or
+    /// memory search). Called after a channel-scoped history purge: those sessions can carry
+    /// copies of the deleted text even though they belong to other channels (§11).
+    /// </summary>
+    Task ResetRecallExposedSessionsAsync(CancellationToken cancellationToken);
+
+    /// <summary>
     /// Bridge → Agent barge-in entrypoint. Replace the conversation's trailing
     /// assistant turn with the truncated text the user actually heard (already
     /// ends with "…"). Idempotent per turn.

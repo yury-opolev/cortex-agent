@@ -29,6 +29,7 @@ internal sealed partial class PromptAssembler
     private readonly IOptionsMonitor<ImageAgingConfig> imageAgingOptions;
     private readonly IImageDescriber? imageDescriber;
     private readonly SystemPromptStore? systemPromptStore;
+    private readonly History.HistoryToolsSwitch? historyTools;
     private readonly ILogger<PromptAssembler> logger;
 
     /// <summary>
@@ -52,8 +53,10 @@ internal sealed partial class PromptAssembler
         SubagentSessionStore? subagentStore = null,
         TodoStoreResolver? todoResolver = null,
         IImageDescriber? imageDescriber = null,
-        SystemPromptStore? systemPromptStore = null)
+        SystemPromptStore? systemPromptStore = null,
+        History.HistoryToolsSwitch? historyTools = null)
     {
+        this.historyTools = historyTools;
         this.loadPersonality = loadPersonality;
         this.modelProvider = modelProvider;
         this.imageAgingOptions = imageAgingOptions;
@@ -144,7 +147,8 @@ internal sealed partial class PromptAssembler
             reserveForResponse,
             this.imageAgingOptions.CurrentValue,
             this.imageDescriber,
-            ct).ConfigureAwait(false);
+            ct,
+            this.historyTools?.IsEnabled ?? false).ConfigureAwait(false);
         var preparedTokens = TokenEstimator.EstimateTokens(prepared);
 
         this.LogBuildPrompt(session.ConversationId, historyCount, estimatedTokens, prepared.Count - 1, preparedTokens, contextWindow, reserveForResponse);

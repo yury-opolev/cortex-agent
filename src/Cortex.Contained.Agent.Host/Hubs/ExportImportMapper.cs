@@ -21,6 +21,7 @@ public static class ExportImportMapper
             Content = record.Content,
             Timestamp = record.Timestamp,
             Category = record.Category,
+            ToolCalls = record.ToolCalls,
         };
     }
 
@@ -35,6 +36,7 @@ public static class ExportImportMapper
             Timestamp = entry.Timestamp,
             MessageId = entry.MessageId,
             Category = entry.Category,
+            ToolCalls = entry.ToolCalls,
         };
     }
 

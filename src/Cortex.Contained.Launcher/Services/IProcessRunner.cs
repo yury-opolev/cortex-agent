@@ -8,6 +8,7 @@ public interface IProcessRunner
         string fileName,
         string arguments,
         TimeSpan? timeout = null,
+        IReadOnlyDictionary<string, string>? environmentVariables = null,
         CancellationToken cancellationToken = default);
 
     Process StartBackground(

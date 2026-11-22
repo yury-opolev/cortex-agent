@@ -1,10 +1,8 @@
-﻿using System.Collections.Concurrent;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Text;
-using System.Text.Json;
-using System.Text.Json.Serialization;
 using System.Threading.Channels;
 using Cortex.Contained.Agent.Host.Hubs;
 using Cortex.Contained.Agent.Host.Mcp;
@@ -119,6 +117,9 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
     /// are cheap classification work that gains nothing from longer deliberation.
     /// </summary>
     private readonly string? reasoningEffort;
+    private readonly Events.DeliveryRecorder? deliveries;
+    private readonly Events.DeliveryReportBuilder? deliveryReports;
+    private readonly History.HistoryToolsSwitch? historyTools;
 
     /// <summary>
     /// Safety-net round limit. The real termination signals are: model stops calling tools,
@@ -192,8 +193,14 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
         Memory.MemorySettingsStore? memorySettingsStore = null,
         SubagentRunnerRegistry? subagentRegistry = null,
         Action? wakeSubagentCoordinator = null,
-        string? reasoningEffort = null)
+        string? reasoningEffort = null,
+        Events.DeliveryRecorder? deliveries = null,
+        Events.DeliveryReportBuilder? deliveryReports = null,
+        History.HistoryToolsSwitch? historyTools = null)
     {
+        this.historyTools = historyTools;
+        this.deliveries = deliveries;
+        this.deliveryReports = deliveryReports;
         this.reasoningEffort = Llm.LlmReasoningEffort.IsLevel(reasoningEffort) ? reasoningEffort : null;
         this.subagentStore = subagentStore;
         this.todoResolver = todoResolver;
@@ -252,7 +259,8 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
             subagentStore,
             todoResolver,
             imageDescriber,
-            systemPromptStore);
+            systemPromptStore,
+            historyTools);
         this.slashCommandHandler = new SlashCommandHandler(
             bridgeClientAccessor,
             this.messageStore,
@@ -501,6 +509,9 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
     {
         this.metrics?.IncrementMessagesProcessed();
 
+        // Every event this turn records (messages, tool calls, deliveries) carries this run's identity.
+        using var runScope = Events.RunScope.Begin(Events.RunProvenance.ForMessage(message));
+
         // Resolve the per-source processing policy once; all source-conditional branches below use it.
         var behavior = MessageSourceBehavior.For(message.Source);
 
@@ -688,7 +699,7 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
             // since clocks across processes aren't perfectly aligned.
             var queueWaitMs = (long)Math.Max(0, (DateTimeOffset.UtcNow - message.Timestamp).TotalMilliseconds);
 
-            var turn = await GenerateResponseAsync(session, message.ConversationId, message.ChannelId, message.CorrelationId, useProactiveDelivery, sanitizedText, message.IsVoice, queueWaitMs, consumedSubagentTaskIds, message.TriggerLabel, generationToken)
+            var turn = await GenerateResponseAsync(session, message.ConversationId, message.ChannelId, message.CorrelationId, useProactiveDelivery, sanitizedText, message.IsVoice, queueWaitMs, consumedSubagentTaskIds, generationToken)
                 .ConfigureAwait(false);
 
             // The composer session is discarded. Anything it produced but did NOT send is recorded
@@ -842,7 +853,6 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
         bool isVoice,
         long queueWaitMs,
         HashSet<string> consumedSubagentTaskIds,
-        string? deliveryTrigger,
         CancellationToken cancellationToken)
     {
         var client = this.bridgeClientAccessor.Client;
@@ -870,7 +880,7 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
         string? finalText = null;
 
         var delivery = new TurnResponseDelivery(
-            client, this.messageStore, replyConversationId, channelId, correlationId, useProactiveDelivery, this.logger);
+            client, this.messageStore, replyConversationId, channelId, correlationId, useProactiveDelivery, this.logger, this.deliveries);
 
         // Per-turn latency profiling (queue-wait, TTFT, LLM, tools, e2e).
         var latency = new TurnLatencyTracker(TimeProvider.System);
@@ -992,8 +1002,12 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
                 }
                 else
                 {
-                    targetSession.AppendMessageGroup(
-                        BuildProactiveDeliveryGroup(proactive, deliveryTrigger, DateTimeOffset.UtcNow));
+                    // Built without the generation token: the text was already sent, so a cancelled
+                    // generation must not drop it from the target conversation.
+                    var report = this.deliveryReports is null
+                        ? Events.DeliveryReportBuilder.Unrecorded(proactive, Events.RunScope.Current)
+                        : await this.deliveryReports.BuildAsync(proactive, Events.RunScope.Current, CancellationToken.None).ConfigureAwait(false);
+                    targetSession.AppendMessageGroup(BuildProactiveDeliveryGroup(proactive, report, this.historyTools?.IsEnabled ?? false));
                 }
 
                 this.LogProactiveMessageInjected(proactive.ChannelId, proactive.Text.Length);
@@ -1204,6 +1218,7 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
                 Role = "tool",
                 Content = toolContent,
                 ToolCallId = toolCall.Id,
+                EvidenceId = result.EvidenceId,
             });
 
             // Capture a compact summary entry for this round's tool block (redacted for MCP tools).
@@ -1299,73 +1314,39 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
         => proactive.Text;
 
     /// <summary>
-    /// Rebuilds a proactive delivery as a complete turn in the TARGET conversation: the automated
-    /// trigger notice, the <c>send_message</c> call, its delivery receipt, and the delivered text.
+    /// Records a proactive delivery in the TARGET conversation as two messages: a system-recorded
+    /// delivery report (who produced the message, when, in which run, with which evidence — rendered
+    /// from the event log) and the delivered text.
     /// <para>
     /// The send is issued from a session the target conversation cannot see — an ephemeral
-    /// scheduled-task run, or a fired timer's focused run — so previously the text simply
-    /// materialised there as a bare assistant message with no cause. Telemetry showed the model
-    /// reading that missing trace as proof of invention and retracting true messages to the user
-    /// ("those sleep numbers were not real; I made no tool call"). The explanation cannot go in the
-    /// text itself — that was tried and rejected on 2026-05-15 because the annotation leaked into
-    /// what the user saw — so it goes in the surrounding trace instead.
+    /// scheduled-task run, a fired timer's focused run, or another channel's turn. With no cause in
+    /// sight the model read the bare text as proof of invention and retracted true messages; the
+    /// first fix reconstructed a <c>send_message</c> call and receipt here, which was itself a forged
+    /// trace. The report states the provenance honestly instead, and its evidence IDs resolve through
+    /// <c>event_get</c>. The explanation never goes into the delivered text itself (rejected on
+    /// 2026-05-15 because it leaked into what the user saw).
     /// </para>
     /// <para>
-    /// The group opens on a <c>user</c>-role notice so it is a well-formed turn wherever it lands:
-    /// the target conversation usually ends on an assistant message, and two assistant messages in
-    /// a row are rejected by the OpenAI and Copilot APIs.
+    /// The group opens on a <c>user</c>-role note so it is a well-formed turn wherever it lands: the
+    /// target conversation usually ends on an assistant message, and two assistant messages in a row
+    /// are rejected by the OpenAI and Copilot APIs.
     /// </para>
     /// </summary>
-    /// <param name="proactive">The delivered message.</param>
-    /// <param name="trigger">What caused the send, e.g. <c>scheduled task 1bffa504 ("…")</c>.</param>
-    /// <param name="deliveredAt">Delivery time, reported in the receipt.</param>
-    internal static IReadOnlyList<LlmMessage> BuildProactiveDeliveryGroup(
-        ProactiveMessageRecord proactive,
-        string? trigger,
-        DateTimeOffset deliveredAt)
-    {
-        var text = FormatProactiveHistoryEntry(proactive);
-        var toolCallId = "call_delivery_" + Guid.NewGuid().ToString("N")[..12];
-
-        // The real tool name and argument shape: this reconstructs a call that genuinely happened,
-        // and send_message is never hidden by a tool gate, so the model always recognises it.
-        var arguments = JsonSerializer.Serialize(new SendMessageArguments(proactive.ChannelId, text));
-
-        var receipt = string.Create(
-            CultureInfo.InvariantCulture,
-            $"Delivered to {proactive.ChannelId} at {deliveredAt:yyyy-MM-dd HH:mm:ss} UTC. The user "
-            + $"has already received this message. It is real — do not retract it, do not call it "
-            + $"fabricated, and do not send it again.");
-
-        return
-        [
-            new LlmMessage
-            {
-                Role = "user",
-                Content = AutomatedNotice(trigger),
-                MessageType = LlmMessageType.ProactiveDeliveryTrace,
-            },
-            new LlmMessage
-            {
-                Role = "assistant",
-                ToolCalls = [new LlmToolCall { Id = toolCallId, Name = "send_message", Arguments = arguments }],
-                MessageType = LlmMessageType.ProactiveDeliveryTrace,
-            },
-            new LlmMessage
-            {
-                Role = "tool",
-                ToolCallId = toolCallId,
-                Content = receipt,
-                MessageType = LlmMessageType.ProactiveDeliveryTrace,
-            },
-            new LlmMessage
-            {
-                Role = "assistant",
-                Content = text,
-                MessageType = LlmMessageType.Proactive,
-            },
-        ];
-    }
+    internal static IReadOnlyList<LlmMessage> BuildProactiveDeliveryGroup(ProactiveMessageRecord proactive, Events.DeliveryReport report, bool eventGetAvailable = false) =>
+    [
+        new LlmMessage
+        {
+            Role = "user",
+            Content = Events.DeliveryReportRenderer.Render(report, eventGetAvailable),
+            MessageType = LlmMessageType.ProactiveDeliveryTrace,
+        },
+        new LlmMessage
+        {
+            Role = "assistant",
+            Content = FormatProactiveHistoryEntry(proactive),
+            MessageType = LlmMessageType.Proactive,
+        },
+    ];
 
     /// <summary>
     /// The trigger notice that opens a delivery trace. Marked as automated because it occupies the
@@ -1378,11 +1359,6 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
               + "leads up to it."
             : $"Your {trigger} fired and ran in its own session, which is why nothing here leads "
               + "up to what follows.");
-
-    /// <summary>Argument shape of the <c>send_message</c> tool, for the reconstructed call.</summary>
-    private sealed record SendMessageArguments(
-        [property: JsonPropertyName("channel")] string Channel,
-        [property: JsonPropertyName("text")] string Text);
 
     /// <summary>
     /// Replace the session's trailing assistant message with the barge-in
@@ -2003,6 +1979,17 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
         // via a later revert_transfer call.
         this.transferSnapshots.TryRemove(channelId, out _);
         this.LogSessionReset(channelId);
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public Task ResetRecallExposedSessionsAsync(CancellationToken cancellationToken)
+    {
+        foreach (var channelId in this.sessions.ResetRecallExposed())
+        {
+            this.transferSnapshots.TryRemove(channelId, out _);
+        }
+
         return Task.CompletedTask;
     }
 

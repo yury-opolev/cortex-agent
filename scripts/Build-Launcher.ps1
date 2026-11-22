@@ -102,8 +102,9 @@ if (Test-Path $codaRustBuild) {
     Write-Warning "coda Rust build script not found at $codaRustBuild (submodule missing?); MSIX will rely on coda being on PATH."
 }
 
-# Copy docker-compose.yml
+# Copy docker-compose.yml (and the opt-in embeddings GPU override the Bridge layers on top of it)
 Copy-Item "$repoRoot\docker-compose.yml" "$OutputDir\docker-compose.yml" -Force
+Copy-Item "$repoRoot\docker-compose.embeddings-gpu.yml" "$OutputDir\docker-compose.embeddings-gpu.yml" -Force
 
 # Copy version.json for runtime version display
 Copy-Item "$repoRoot\version.json" "$OutputDir\version.json" -Force
@@ -222,5 +223,21 @@ $manifest = [ordered]@{
     }
     builtAt   = (Get-Date).ToUniversalTime().ToString('o')
 }
+
+# The reranker sidecar is opt-in: only a machine that built it records it, together with an image pin
+# (the id the tag had at build time). Self-Update refuses to deploy when the tag no longer points at
+# the pinned image and gates the sidecar on running exactly it. Manifests without it behave as before.
+try {
+    & docker image inspect cortex-reranker:latest *> $null
+    if ($LASTEXITCODE -eq 0) {
+        $rerankerId = "$(& docker image inspect cortex-reranker:latest --format '{{.Id}}')".Trim()
+        if ($rerankerId) {
+            $manifest.images['cortex-reranker'] = 'cortex-reranker:latest'
+            $manifest['imageIds'] = [ordered]@{ 'cortex-reranker' = $rerankerId }
+        }
+    }
+} catch { }
+# A missing image makes the probe exit 1; that must not become this script's exit code.
+$global:LASTEXITCODE = 0
 $manifest | ConvertTo-Json -Depth 5 | Set-Content -Path $manifestPath -Encoding UTF8
 Write-Host "Build manifest: $manifestPath" -ForegroundColor Green
