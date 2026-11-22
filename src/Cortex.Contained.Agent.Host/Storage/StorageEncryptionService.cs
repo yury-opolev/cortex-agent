@@ -74,10 +74,28 @@ public sealed partial class StorageEncryptionService
             KeyFingerprint = this.keys.Fingerprint,
             ExpectedKeyFingerprint = this.context.Marker is { KeyFingerprint.Length: > 0 } marker ? marker.KeyFingerprint : null,
             HasEncryptedData = covered.Any(i => i.State is StorageItemStates.Encrypted or StorageItemStates.Mixed),
+            Unavailable = covered.Any(i => i.State == StorageItemStates.Unknown),
+            Error = covered.Any(i => i.State == StorageItemStates.Unknown) ? "Some stores could not be read; their state is unknown." : null,
             MessagesState = health.MessagesState,
             MemoryState = health.MemoryState,
             Items = items,
         };
+    }
+
+    /// <summary>Like <see cref="GetStatus"/>, but a failure is reported as an unavailable status instead of an exception.</summary>
+    public StorageEncryptionStatusDto GetStatusOrUnavailable()
+    {
+        try
+        {
+            return this.GetStatus();
+        }
+#pragma warning disable CA1031 // A status the Bridge cannot get must not look like "no encrypted data": report the failure as a flag
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            this.LogStatusUnavailable(ex.GetType().Name);
+            return new StorageEncryptionStatusDto { Unavailable = true, Error = "The storage status could not be read (" + ex.GetType().Name + ")." };
+        }
+#pragma warning restore CA1031
     }
 
     /// <summary>The cheap part of <see cref="GetStatus"/> for <c>/health</c> (no file scan, no fingerprints).</summary>
@@ -214,6 +232,9 @@ public sealed partial class StorageEncryptionService
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Encryption at rest enabled (key {Fingerprint}); self-restart scheduled: {SelfRestart}")]
     private partial void LogEnabled(string fingerprint, bool selfRestart);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "The storage status could not be determined ({ErrorType}); reporting it as unavailable")]
+    private partial void LogStatusUnavailable(string errorType);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Erased {Files} files of plaintext evaluation runs before enabling encryption")]
     private partial void LogEvaluationErased(int files);

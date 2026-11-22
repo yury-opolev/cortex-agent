@@ -23,7 +23,7 @@ function tenantStoragePage() {
         kit: { password: "", passphrase: "", passphrase2: "" },
         exporting: false,
 
-        restore: { password: "", passphrase: "", text: "", fileName: "" },
+        restore: { password: "", passphrase: "", text: "", fileName: "", replaceExisting: false },
         restoring: false,
 
         showEnableModal: false,
@@ -139,9 +139,10 @@ function tenantStoragePage() {
                     password: this.restore.password,
                     passphrase: this.restore.passphrase,
                     kit: this.restore.text,
+                    replaceExistingKey: this.restore.replaceExisting,
                 });
                 Alpine.store("toast").success(r?.message || "Key restored");
-                this.restore = { password: "", passphrase: "", text: "", fileName: "" };
+                this.restore = { password: "", passphrase: "", text: "", fileName: "", replaceExisting: false };
                 await this.loadStatus();
             } catch (e) {
                 Alpine.store("toast").error("Restore: " + e.message);

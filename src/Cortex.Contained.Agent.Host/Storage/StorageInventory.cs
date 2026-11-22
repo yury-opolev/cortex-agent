@@ -65,6 +65,9 @@ public sealed class StorageInventory
         this.layout = layout;
     }
 
+    /// <summary>Test seam: called with each path before it is read.</summary>
+    internal Action<string>? BeforeRead { get; set; }
+
     /// <summary>Items that encryption at rest covers.</summary>
     public IReadOnlyList<StorageItemDto> Covered() =>
     [
@@ -78,7 +81,7 @@ public sealed class StorageInventory
     /// <summary>Plaintext copies of history and memory made by the evaluation commands (null when there are none).</summary>
     public StorageItemDto? Evaluation()
     {
-        var (bytes, files) = Measure(this.layout.EvaluationDirectory);
+        var (bytes, files) = this.Measure(this.layout.EvaluationDirectory);
         return files == 0
             ? null
             : new StorageItemDto
@@ -100,14 +103,14 @@ public sealed class StorageInventory
         foreach (var (name, id, label, detail) in NotCoveredItems)
         {
             var path = Path.Combine(this.layout.StateRoot, name);
-            var (bytes, files) = Measure(path);
+            var (bytes, files) = this.Measure(path);
             if (files > 0)
             {
                 items.Add(new StorageItemDto { Id = id, Label = label, Path = name, State = StorageItemStates.NotCovered, Bytes = bytes, Files = files, Detail = detail });
             }
         }
 
-        var toolOutput = Measure(Path.Combine(this.layout.DataRoot, "tool-output"));
+        var toolOutput = this.Measure(Path.Combine(this.layout.DataRoot, "tool-output"));
         if (toolOutput.Files > 0)
         {
             items.Add(new StorageItemDto
@@ -122,9 +125,9 @@ public sealed class StorageInventory
             });
         }
 
-        if (Directory.Exists(this.layout.StateRoot))
+        if (this.TryRead(this.layout.StateRoot, () => Directory.Exists(this.layout.StateRoot) ? Directory.EnumerateFileSystemEntries(this.layout.StateRoot).Order(StringComparer.Ordinal).ToList() : [], out var entries))
         {
-            foreach (var entry in Directory.EnumerateFileSystemEntries(this.layout.StateRoot).Order(StringComparer.Ordinal))
+            foreach (var entry in entries)
             {
                 var name = Path.GetFileName(entry);
                 if (KnownStateEntries.Contains(name))
@@ -132,7 +135,7 @@ public sealed class StorageInventory
                     continue;
                 }
 
-                var (bytes, files) = Measure(entry);
+                var (bytes, files) = this.Measure(entry);
                 items.Add(new StorageItemDto
                 {
                     Id = "other:" + name,
@@ -152,25 +155,68 @@ public sealed class StorageInventory
     /// <summary>True when any covered item holds encrypted bytes.</summary>
     public bool HasEncryptedData() => this.Covered().Any(i => i.State is StorageItemStates.Encrypted or StorageItemStates.Mixed);
 
-    private static (long Bytes, int Files) Measure(string path)
+    // A file that vanishes or cannot be read mid-scan is skipped here; the covered items turn Unknown instead.
+    private (long Bytes, int Files) Measure(string path)
     {
-        if (File.Exists(path))
-        {
-            return (new FileInfo(path).Length, 1);
-        }
-
-        if (!Directory.Exists(path))
+        if (!this.TryRead(path, () => (Bytes: File.Exists(path) ? new FileInfo(path).Length : -1L, IsDirectory: Directory.Exists(path)), out var shape))
         {
             return (0, 0);
         }
 
-        var files = Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories).Select(f => new FileInfo(f)).ToList();
-        return (files.Sum(f => f.Length), files.Count);
+        if (shape.Bytes >= 0)
+        {
+            return (shape.Bytes, 1);
+        }
+
+        if (!shape.IsDirectory || !this.TryRead(path, () => Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories).ToList(), out var files))
+        {
+            return (0, 0);
+        }
+
+        long bytes = 0;
+        var count = 0;
+        foreach (var file in files)
+        {
+            if (this.TryRead(file, () => new FileInfo(file).Length, out var length))
+            {
+                bytes += length;
+                count++;
+            }
+        }
+
+        return (bytes, count);
     }
 
-    private static string Combine(IEnumerable<StoredFileState> states)
+    private bool TryRead<T>(string path, Func<T> read, out T value)
     {
-        var present = states.Where(s => s is StoredFileState.Plaintext or StoredFileState.Encrypted).Distinct().ToList();
+        try
+        {
+            this.BeforeRead?.Invoke(path);
+            value = read();
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            value = default!;
+            return false;
+        }
+    }
+
+    private StoredFileState? Classify(string path) =>
+        this.TryRead(path, () => SqliteFileHeader.Classify(path), out var state) ? state : null;
+
+    private StoredFileState? ClassifyContent(string path) =>
+        this.TryRead(path, () => StorageFileCipher.IsEncryptedFile(path) ? StoredFileState.Encrypted : StoredFileState.Plaintext, out var state) ? state : null;
+
+    private static string Combine(IEnumerable<StoredFileState?> states)
+    {
+        var all = states.ToList();
+        if (all.Any(s => s is null))
+        {
+            return StorageItemStates.Unknown;
+        }
+
+        var present = all.Where(s => s is StoredFileState.Plaintext or StoredFileState.Encrypted).Distinct().ToList();
         return present.Count switch
         {
             0 => StorageItemStates.Absent,
@@ -186,38 +232,38 @@ public sealed class StorageInventory
         Id = id,
         Label = label,
         Path = this.Relative(path),
-        State = Combine([SqliteFileHeader.Classify(path)]),
-        Bytes = SqliteSidecars.Select(s => path + s).Where(File.Exists).Sum(f => new FileInfo(f).Length),
+        State = Combine([this.Classify(path)]),
+        Bytes = SqliteSidecars.Select(s => path + s).Sum(f => this.Measure(f).Bytes),
     };
 
     private StorageItemDto HistoryIndex()
     {
-        var generations = Directory.Exists(this.layout.HistoryDirectory)
+        var generationsKnown = this.TryRead(this.layout.HistoryDirectory, () => Directory.Exists(this.layout.HistoryDirectory)
             ? Directory.EnumerateFiles(this.layout.HistoryDirectory, "history-index.*.db").ToList()
-            : [];
+            : [], out var generations);
         return new StorageItemDto
         {
             Id = "history-index",
             Label = "History search index (keyword postings, vectors)",
             Path = "history/",
-            State = Combine(generations.Select(SqliteFileHeader.Classify)),
-            Bytes = Measure(this.layout.HistoryDirectory).Bytes,
+            State = generationsKnown ? Combine(generations.Select(this.Classify)) : StorageItemStates.Unknown,
+            Bytes = this.Measure(this.layout.HistoryDirectory).Bytes,
             Files = generations.Count,
         };
     }
 
     private StorageItemDto MemoryContent()
     {
-        var files = Directory.Exists(this.layout.MemoriesDirectory)
+        var filesKnown = this.TryRead(this.layout.MemoriesDirectory, () => Directory.Exists(this.layout.MemoriesDirectory)
             ? Directory.EnumerateFiles(this.layout.MemoriesDirectory, "*.memory.data").Where(f => f.EndsWith(".memory.data", StringComparison.Ordinal)).ToList()
-            : [];
+            : [], out var files);
         return new StorageItemDto
         {
             Id = "memory-content",
             Label = "Memory content files (*.memory.data)",
             Path = this.Relative(this.layout.MemoriesDirectory) + "/",
-            State = Combine(files.Select(f => StorageFileCipher.IsEncryptedFile(f) ? StoredFileState.Encrypted : StoredFileState.Plaintext)),
-            Bytes = files.Sum(f => new FileInfo(f).Length),
+            State = filesKnown ? Combine(files.Select(this.ClassifyContent)) : StorageItemStates.Unknown,
+            Bytes = files.Sum(f => this.Measure(f).Bytes),
             Files = files.Count,
         };
     }
@@ -225,16 +271,16 @@ public sealed class StorageInventory
     private StorageItemDto Snapshot()
     {
         var path = this.layout.SessionsSnapshot;
-        var state = !File.Exists(path)
+        var state = this.TryRead(path, () => !File.Exists(path)
             ? StoredFileState.Absent
-            : StorageFileCipher.IsEncryptedFile(path) ? StoredFileState.Encrypted : StoredFileState.Plaintext;
+            : StorageFileCipher.IsEncryptedFile(path) ? StoredFileState.Encrypted : StoredFileState.Plaintext, out var read) ? read : (StoredFileState?)null;
         return new StorageItemDto
         {
             Id = "sessions-snapshot",
             Label = "Live sessions saved at shutdown (sessions-snapshot.json)",
             Path = Path.GetFileName(path),
             State = Combine([state]),
-            Bytes = File.Exists(path) ? new FileInfo(path).Length : 0,
+            Bytes = this.Measure(path).Bytes,
         };
     }
 }

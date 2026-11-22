@@ -1,6 +1,7 @@
 using Cortex.Contained.Bridge.Hosting;
 using Cortex.Contained.Bridge.Security;
 using Cortex.Contained.Contracts.Hub;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Cortex.Contained.Bridge.Tests.StorageEncryption;
@@ -71,5 +72,52 @@ public sealed class StorageKeyPushPolicyTests : IDisposable
 
         Assert.Equal(StorageKeyPushDecision.MintAndPush, decision);
         Assert.Equal(pushed, this.secrets.TryGetTenantStorageKey("default"));
+    }
+
+    [Fact]
+    public async Task NoKey_AgentStatusUnavailable_NothingMintedAndTheNextPushAsksAgain()
+    {
+        var status = new StorageEncryptionStatusDto { Unavailable = true, Error = "x" };
+
+        var (pushed, decision) = await StorageKeyPushPolicy.ResolveAsync(this.secrets, "default", () => Task.FromResult<StorageEncryptionStatusDto?>(status));
+
+        Assert.Null(pushed);
+        Assert.Equal(StorageKeyPushDecision.WithholdUnknownStatus, decision);
+        Assert.Null(this.secrets.TryGetTenantStorageKey("default"));
+    }
+
+    [Theory]
+    [InlineData("Method does not exist")]
+    [InlineData("Unknown hub method 'GetStorageEncryptionStatus'")]
+    [InlineData("An unexpected error occurred invoking 'GetStorageEncryptionStatus' on the server. HubException: Method does not exist.")]
+    public async Task ReadAgentStatus_MissingHubMethod_IsAnAgentWithoutTheStorageHub(string message)
+    {
+        var status = await StorageKeyPushPolicy.ReadAgentStatusAsync(() => throw new HubException(message));
+
+        Assert.Null(status);
+    }
+
+    [Theory]
+    [InlineData("Storage encryption is not available on this agent.")]
+    [InlineData("Failed to invoke 'GetStorageEncryptionStatus' due to an error on the server.")]
+    public async Task ReadAgentStatus_AnyOtherHubFailure_IsUnavailableNotAnOldAgent(string message)
+    {
+        var status = await StorageKeyPushPolicy.ReadAgentStatusAsync(() => throw new HubException(message));
+
+        Assert.True(status!.Unavailable);
+    }
+
+    [Fact]
+    public async Task ReadAgentStatus_TransportFailure_IsUnavailable()
+    {
+        var status = await StorageKeyPushPolicy.ReadAgentStatusAsync(() => throw new IOException("connection reset"));
+
+        Assert.True(status!.Unavailable);
+    }
+
+    [Fact]
+    public async Task ReadAgentStatus_Cancellation_Propagates()
+    {
+        await Assert.ThrowsAsync<OperationCanceledException>(() => StorageKeyPushPolicy.ReadAgentStatusAsync(() => throw new OperationCanceledException()));
     }
 }

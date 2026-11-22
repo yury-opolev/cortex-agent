@@ -7,7 +7,7 @@ namespace Cortex.Contained.Agent.Host.Hubs;
 public sealed partial class AgentHub
 {
     /// <inheritdoc />
-    public Task<StorageEncryptionStatusDto> GetStorageEncryptionStatus() => Task.FromResult(this.StorageEncryption.GetStatus());
+    public Task<StorageEncryptionStatusDto> GetStorageEncryptionStatus() => Task.FromResult(this.StorageEncryption.GetStatusOrUnavailable());
 
     /// <inheritdoc />
     public Task<StorageEncryptionPreviewDto> PreviewStorageEncryption() => Task.FromResult(this.StorageEncryption.Preview());

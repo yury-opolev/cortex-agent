@@ -38,11 +38,11 @@ public sealed class StorageEncryptionServiceTests : IDisposable
         try { Directory.Delete(this.root, recursive: true); } catch (IOException) { /* best effort */ }
     }
 
-    private StorageEncryptionService Service(StorageKeyRing ring, StorageOptions? options = null) => new(
+    private StorageEncryptionService Service(StorageKeyRing ring, StorageOptions? options = null, StorageInventory? inventory = null) => new(
         StorageEncryptionContext.Resolve(options ?? new StorageOptions(), this.layout),
         ring,
         this.messages,
-        new StorageInventory(this.layout),
+        inventory ?? new StorageInventory(this.layout),
         this.disk,
         this.lifetime,
         this.time,
@@ -171,6 +171,30 @@ public sealed class StorageEncryptionServiceTests : IDisposable
         Assert.Equal(4096 + StorageEncryptionService.MigrationMarginBytes, preview.RequiredFreeBytes);
         Assert.Empty(preview.Blockers);
         Assert.Equal(StorageKeyFingerprint.Compute(KeyA), preview.KeyFingerprint);
+    }
+
+    [Fact]
+    public void Status_AStoreCannotBeRead_IsReportedUnavailableSoNoKeyIsMintedFromIt()
+    {
+        File.WriteAllBytes(this.layout.MessagesDatabase, [.. "SQLite format 3\0"u8.ToArray(), .. new byte[4080]]);
+        var inventory = new StorageInventory(this.layout) { BeforeRead = p => { if (p.EndsWith("messages.db", StringComparison.Ordinal)) { throw new UnauthorizedAccessException(); } } };
+
+        var status = this.Service(Ring(KeyA), inventory: inventory).GetStatusOrUnavailable();
+
+        Assert.True(status.Unavailable);
+        Assert.False(status.HasEncryptedData);
+        Assert.NotNull(status.Error);
+    }
+
+    [Fact]
+    public void GetStatusOrUnavailable_AnUnexpectedFailure_ReturnsAnErrorFlagInsteadOfThrowing()
+    {
+        var inventory = new StorageInventory(this.layout) { BeforeRead = _ => throw new InvalidOperationException("boom with /secret/path") };
+
+        var status = this.Service(Ring(KeyA), inventory: inventory).GetStatusOrUnavailable();
+
+        Assert.True(status.Unavailable);
+        Assert.DoesNotContain("/secret/path", status.Error, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -17,6 +17,9 @@ internal enum StorageKeyPushDecision
 
     /// <summary>No key but the agent holds encrypted data: never mint (that key could not open it); the owner restores the recovery kit.</summary>
     WithholdMissingKey,
+
+    /// <summary>The agent could not say whether it holds encrypted data (a transient failure): nothing is minted; the next push asks again.</summary>
+    WithholdUnknownStatus,
 }
 
 /// <summary>
@@ -44,8 +47,37 @@ internal static class StorageKeyPushPolicy
             return StorageKeyPushDecision.WithholdMissingKey;
         }
 
+        if (agent.Unavailable)
+        {
+            return StorageKeyPushDecision.WithholdUnknownStatus;
+        }
+
         return agent.EncryptAtRest ? StorageKeyPushDecision.MintAndPush : StorageKeyPushDecision.Withhold;
     }
+
+    /// <summary>The agent's status, or null for an agent without the storage hub (the hub method does not exist); any other failure yields an unavailable status.</summary>
+    public static async Task<StorageEncryptionStatusDto?> ReadAgentStatusAsync(Func<Task<StorageEncryptionStatusDto>> call)
+    {
+        try
+        {
+            return await call().ConfigureAwait(false);
+        }
+        catch (Microsoft.AspNetCore.SignalR.HubException ex) when (IsMissingHubMethod(ex))
+        {
+            return null;
+        }
+#pragma warning disable CA1031 // Any other failure must not look like "old agent" (that would mint a key): report it as unavailable
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return new StorageEncryptionStatusDto { Unavailable = true, Error = ex.GetType().Name };
+        }
+#pragma warning restore CA1031
+    }
+
+    /// <summary>True when SignalR reports that the hub has no such method (an agent that predates the call).</summary>
+    internal static bool IsMissingHubMethod(Microsoft.AspNetCore.SignalR.HubException ex) =>
+        ex.Message.Contains("Method does not exist", StringComparison.OrdinalIgnoreCase)
+        || ex.Message.Contains("Unknown hub method", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>The key to push for <paramref name="tenantId"/> (null when none may be pushed) and the decision behind it.</summary>
     public static async Task<(string? Key, StorageKeyPushDecision Decision)> ResolveAsync(

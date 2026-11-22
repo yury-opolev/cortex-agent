@@ -36,6 +36,9 @@ public static class StorageItemStates
 
     /// <summary>Stored in plaintext and outside encryption at rest (see the detail).</summary>
     public const string NotCovered = "notCovered";
+
+    /// <summary>A file of the item could not be read (it vanished, or access was denied); its state is not known.</summary>
+    public const string Unknown = "unknown";
 }
 
 /// <summary>String values of <see cref="StorageEncryptionStatusDto.KeyState"/>.</summary>
@@ -108,6 +111,12 @@ public sealed record StorageEncryptionStatusDto
 
     /// <summary>The memory store: <c>plaintext</c>, <c>open</c>, <c>awaitingKey</c> or <c>failed</c>.</summary>
     public string MemoryState { get; init; } = "plaintext";
+
+    /// <summary>The status could not be determined reliably (an unreadable store, a transient failure): <see cref="HasEncryptedData"/> may be wrong, so no key may be created from it.</summary>
+    public bool Unavailable { get; init; }
+
+    /// <summary>Why <see cref="Unavailable"/> (no paths, no content).</summary>
+    public string? Error { get; init; }
 
     /// <summary>Every known stored item and its state.</summary>
     public IReadOnlyList<StorageItemDto> Items { get; init; } = [];

@@ -177,6 +177,70 @@ public sealed class StorageEndpointsTests : IDisposable
         Assert.Equal(OtherKey, this.secrets.TryGetTenantStorageKey("default"));
     }
 
+    [Theory]
+    [InlineData(StorageKeyStates.Rejected, "open")]
+    [InlineData(StorageKeyStates.Absent, "failed")]
+    public async Task Restore_TheAgentRejectsTheBridgeKeyForItsEncryptedData_ReplacesIt(string keyState, string messagesState)
+    {
+        this.secrets.GetOrCreateTenantStorageKey("default");
+        this.agent.GetStatusAsync(Arg.Any<CancellationToken>())
+            .Returns(new StorageEncryptionStatusDto { EncryptAtRest = true, HasEncryptedData = true, KeyState = keyState, MessagesState = messagesState });
+
+        var result = await StorageEndpoints.RestoreKitAsync(
+            "default", this.agent, this.secrets, Verify, new RecoveryKitRestoreRequest(Password, Passphrase, KitFor("default", OtherKey)), CancellationToken.None);
+
+        Assert.Equal(200, StatusOf(result));
+        Assert.Equal(OtherKey, this.secrets.TryGetTenantStorageKey("default"));
+    }
+
+    [Fact]
+    public async Task Restore_ExplicitOwnerOverride_ReplacesAWorkingKey()
+    {
+        this.secrets.GetOrCreateTenantStorageKey("default");
+
+        var result = await StorageEndpoints.RestoreKitAsync(
+            "default", this.agent, this.secrets, Verify, new RecoveryKitRestoreRequest(Password, Passphrase, KitFor("default", OtherKey), ReplaceExistingKey: true), CancellationToken.None);
+
+        Assert.Equal(200, StatusOf(result));
+        Assert.Equal(OtherKey, this.secrets.TryGetTenantStorageKey("default"));
+    }
+
+    [Fact]
+    public async Task Restore_OverrideWithoutThePassword_RefusedAndTheKeyKept()
+    {
+        var current = this.secrets.GetOrCreateTenantStorageKey("default");
+
+        var result = await StorageEndpoints.RestoreKitAsync(
+            "default", this.agent, this.secrets, Verify, new RecoveryKitRestoreRequest("wrong", Passphrase, KitFor("default", OtherKey), ReplaceExistingKey: true), CancellationToken.None);
+
+        Assert.Equal(403, StatusOf(result));
+        Assert.Equal(current, this.secrets.TryGetTenantStorageKey("default"));
+    }
+
+    [Fact]
+    public async Task Restore_OverrideDoesNotBypassAnAgentThatNamesAnotherKey()
+    {
+        var current = this.secrets.GetOrCreateTenantStorageKey("default");
+        this.agent.GetStatusAsync(Arg.Any<CancellationToken>())
+            .Returns(new StorageEncryptionStatusDto { EncryptAtRest = true, HasEncryptedData = true, ExpectedKeyFingerprint = StorageKeyFingerprint.Compute(current) });
+
+        var result = await StorageEndpoints.RestoreKitAsync(
+            "default", this.agent, this.secrets, Verify, new RecoveryKitRestoreRequest(Password, Passphrase, KitFor("default", OtherKey), ReplaceExistingKey: true), CancellationToken.None);
+
+        Assert.Equal(409, StatusOf(result));
+        Assert.Equal(current, this.secrets.TryGetTenantStorageKey("default"));
+    }
+
+    [Fact]
+    public async Task Enable_AgentStatusUnavailable_ConflictAndNothingMinted()
+    {
+        this.agent.GetStatusAsync(Arg.Any<CancellationToken>()).Returns(new StorageEncryptionStatusDto { Unavailable = true, Error = "x" });
+
+        var result = await this.Enable(new StorageEnableRequest(Password, "ENCRYPT", AcceptNoRecoveryKit: true));
+
+        Assert.Equal(409, StatusOf(result));
+        Assert.Null(this.secrets.TryGetTenantStorageKey("default"));
+    }
     [Fact]
     public async Task Restore_KitOfAnotherTenantOrWrongPassphrase_Refused()
     {

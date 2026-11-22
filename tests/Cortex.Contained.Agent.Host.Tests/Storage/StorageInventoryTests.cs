@@ -90,4 +90,54 @@ public sealed class StorageInventoryTests : IDisposable
         Assert.Null(inventory.Evaluation());
         Assert.All(inventory.Covered(), i => Assert.Equal(StorageItemStates.Absent, i.State));
     }
+
+    public static TheoryData<Exception> ReadFailures => new()
+    {
+        new FileNotFoundException("gone"),
+        new DirectoryNotFoundException("gone"),
+        new UnauthorizedAccessException("denied"),
+    };
+
+    [Theory]
+    [MemberData(nameof(ReadFailures))]
+    public void Covered_AFileCannotBeRead_ThatItemIsUnknownAndTheScanContinues(Exception failure)
+    {
+        Write(this.layout.MessagesDatabase, SqliteHeader);
+        Write(Path.Combine(this.layout.MemoriesDirectory, "a.memory.data"), "plain"u8.ToArray());
+        var inventory = new StorageInventory(this.layout)
+        {
+            BeforeRead = path => { if (path.EndsWith("messages.db", StringComparison.Ordinal)) { throw failure; } },
+        };
+
+        var items = inventory.Covered().ToDictionary(i => i.Id);
+
+        Assert.Equal(StorageItemStates.Unknown, items["messages"].State);
+        Assert.Equal(StorageItemStates.Plaintext, items["memory-content"].State);
+    }
+
+    [Theory]
+    [MemberData(nameof(ReadFailures))]
+    public void Covered_AContentFileVanishes_TheGroupIsUnknown(Exception failure)
+    {
+        Write(Path.Combine(this.layout.MemoriesDirectory, "a.memory.data"), "plain"u8.ToArray());
+        Write(Path.Combine(this.layout.MemoriesDirectory, "b.memory.data"), "plain"u8.ToArray());
+        var inventory = new StorageInventory(this.layout)
+        {
+            BeforeRead = path => { if (path.EndsWith("b.memory.data", StringComparison.Ordinal)) { throw failure; } },
+        };
+
+        Assert.Equal(StorageItemStates.Unknown, inventory.Covered().Single(i => i.Id == "memory-content").State);
+    }
+
+    [Theory]
+    [MemberData(nameof(ReadFailures))]
+    public void NotCoveredAndEvaluation_AFolderCannotBeRead_AreSkippedWithoutThrowing(Exception failure)
+    {
+        Write(Path.Combine(this.layout.StateRoot, "subagents", "subagents.db"), SqliteHeader);
+        Write(Path.Combine(this.layout.EvaluationDirectory, "hybrid", "messages.db"), SqliteHeader);
+        var inventory = new StorageInventory(this.layout) { BeforeRead = _ => throw failure };
+
+        Assert.DoesNotContain(inventory.NotCovered(), i => i.Id == "subagents");
+        Assert.Null(inventory.Evaluation());
+    }
 }

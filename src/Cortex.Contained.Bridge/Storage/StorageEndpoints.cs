@@ -16,7 +16,7 @@ public sealed record StorageEnableRequest(string? Password, string? Confirm, boo
 public sealed record RecoveryKitExportRequest(string? Password, string? Passphrase);
 
 /// <summary>Body of <c>POST /api/tenants/{tenantId}/storage/recovery-kit/restore</c>.</summary>
-public sealed record RecoveryKitRestoreRequest(string? Password, string? Passphrase, string? Kit);
+public sealed record RecoveryKitRestoreRequest(string? Password, string? Passphrase, string? Kit, bool ReplaceExistingKey = false);
 
 /// <summary>
 /// The Storage page API (all require authorization; the sensitive ones also the Bridge password again):
@@ -244,9 +244,11 @@ internal static class StorageEndpoints
             return Conflict("This kit holds another key than the one the agent's data is encrypted with.");
         }
 
-        if (current is not null && expected is null)
+        // A working-looking Bridge key is replaced only on evidence (the agent cannot use it for its encrypted data) or by explicit owner decision.
+        var agentRejectsCurrent = status is { HasEncryptedData: true } && (status.KeyState == StorageKeyStates.Rejected || status.MessagesState == "failed" || status.MemoryState == "failed");
+        if (current is not null && expected is null && !agentRejectsCurrent && !body.ReplaceExistingKey)
         {
-            return Conflict("The Bridge already holds a working storage key and the agent does not report another one; it is not replaced.");
+            return Conflict("The Bridge already holds a working storage key and the agent does not report another one; it is not replaced. Confirm the replacement explicitly to override.");
         }
 
         secrets.ReplaceTenantStorageKey(tenantId, recovered.Base64Key);
@@ -296,6 +298,11 @@ internal static class StorageEndpoints
         if (status.HasEncryptedData)
         {
             return (null, Conflict("The agent holds encrypted data but the Bridge has no key for it; restore the recovery kit."));
+        }
+
+        if (status.Unavailable)
+        {
+            return (null, Conflict("The agent could not report its storage status; no key is created. Try again in a moment."));
         }
 
         return (secrets.GetOrCreateTenantStorageKey(tenantId), null);
