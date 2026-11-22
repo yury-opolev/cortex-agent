@@ -43,11 +43,12 @@ public interface IMemoryCreationTimes
 /// Time-window quarantine remains the mechanism; recording which events a memory was extracted
 /// from (event provenance for memories) is a possible future refinement.
 /// </summary>
-public sealed class MemoryQuarantine
+public sealed class MemoryQuarantine : IDisposable
 {
     private readonly IMemoryQuarantineSource source;
     private readonly IMemoryCreationTimes memories;
     private readonly TimeProvider time;
+    private readonly SemaphoreSlim decisionLock = new(1, 1);
 
     public MemoryQuarantine(IMemoryQuarantineSource source, IMemoryCreationTimes memories, TimeProvider time)
     {
@@ -55,6 +56,9 @@ public sealed class MemoryQuarantine
         this.memories = memories;
         this.time = time;
     }
+
+    /// <inheritdoc />
+    public void Dispose() => this.decisionLock.Dispose();
 
     /// <summary>Ids of memories currently quarantined.</summary>
     public async Task<IReadOnlySet<string>> GetQuarantinedIdsAsync(CancellationToken cancellationToken)
@@ -68,6 +72,33 @@ public sealed class MemoryQuarantine
         return await this.InWindowsAsync(windows, cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Runs <paramref name="action"/> while holding the lock that serializes every keep and every deletion of
+    /// quarantined memories, so a decision made while a deletion is running is applied before or after it, never
+    /// halfway. <paramref name="action"/> must not call <see cref="KeepAsync"/> or <see cref="KeepManyAsync"/>.
+    /// </summary>
+    public async Task<T> WithDecisionLockAsync<T>(Func<CancellationToken, Task<T>> action, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        await this.decisionLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return await action(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            this.decisionLock.Release();
+        }
+    }
+
+    /// <summary><paramref name="memoryIds"/> without the memories the owner has kept (read fresh).</summary>
+    public async Task<IReadOnlyList<string>> WithoutKeptAsync(IReadOnlyCollection<string> memoryIds, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(memoryIds);
+        var kept = await this.source.ReadKeptMemoryIdsAsync(cancellationToken).ConfigureAwait(false);
+        return memoryIds.Where(id => !kept.Contains(id)).ToList();
+    }
+
     /// <summary>How many not-kept memories fall in <paramref name="windows"/> (for the delete confirmation).</summary>
     public async Task<int> CountInWindowsAsync(IReadOnlyList<QuarantineWindow> windows, CancellationToken cancellationToken)
     {
@@ -79,7 +110,13 @@ public sealed class MemoryQuarantine
     public Task KeepAsync(string memoryId, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(memoryId);
-        return this.source.RecordKeptMemoryAsync(memoryId, this.time.GetUtcNow(), cancellationToken);
+        return this.WithDecisionLockAsync(
+            async ct =>
+            {
+                await this.source.RecordKeptMemoryAsync(memoryId, this.time.GetUtcNow(), ct).ConfigureAwait(false);
+                return true;
+            },
+            cancellationToken);
     }
 
     /// <summary>Quarantined memories with the latest purge whose window contains each one (the Recall review list).</summary>
@@ -126,16 +163,21 @@ public sealed class MemoryQuarantine
     public async Task<(IReadOnlyList<string> Kept, IReadOnlyList<string> Skipped)> KeepManyAsync(IReadOnlyCollection<string> memoryIds, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(memoryIds);
-        var quarantined = await this.GetQuarantinedIdsAsync(cancellationToken).ConfigureAwait(false);
-        var requested = memoryIds.Where(id => !string.IsNullOrWhiteSpace(id)).Distinct(StringComparer.Ordinal).ToList();
-        var keep = requested.Where(quarantined.Contains).ToList();
-        var skipped = requested.Where(id => !quarantined.Contains(id)).ToList();
-        if (keep.Count > 0)
-        {
-            await this.source.RecordKeptMemoriesAsync(keep, this.time.GetUtcNow(), cancellationToken).ConfigureAwait(false);
-        }
+        return await this.WithDecisionLockAsync(
+            async ct =>
+            {
+                var quarantined = await this.GetQuarantinedIdsAsync(ct).ConfigureAwait(false);
+                var requested = memoryIds.Where(id => !string.IsNullOrWhiteSpace(id)).Distinct(StringComparer.Ordinal).ToList();
+                var keep = requested.Where(quarantined.Contains).ToList();
+                var skipped = requested.Where(id => !quarantined.Contains(id)).ToList();
+                if (keep.Count > 0)
+                {
+                    await this.source.RecordKeptMemoriesAsync(keep, this.time.GetUtcNow(), ct).ConfigureAwait(false);
+                }
 
-        return (keep, skipped);
+                return ((IReadOnlyList<string>)keep, (IReadOnlyList<string>)skipped);
+            },
+            cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<IReadOnlySet<string>> InWindowsAsync(IReadOnlyList<QuarantineWindow> windows, CancellationToken cancellationToken)

@@ -59,12 +59,17 @@ public sealed class QuarantineReviewService
     public async Task<QuarantineDecisionResultDto> DeleteAsync(IReadOnlyList<string> memoryIds, CancellationToken cancellationToken)
     {
         CheckBatch(memoryIds);
-        var quarantined = await this.quarantine.GetQuarantinedIdsAsync(cancellationToken).ConfigureAwait(false);
-        var requested = memoryIds.Where(id => !string.IsNullOrWhiteSpace(id)).Distinct(StringComparer.Ordinal).ToList();
-        var delete = requested.Where(quarantined.Contains).ToList();
-        var skipped = requested.Where(id => !quarantined.Contains(id)).ToList();
-        var deleted = delete.Count == 0 ? 0 : await this.memories.DeleteManyAsync(delete, cancellationToken).ConfigureAwait(false);
-        return new QuarantineDecisionResultDto { Affected = deleted, Skipped = skipped };
+        return await this.quarantine.WithDecisionLockAsync(
+            async ct =>
+            {
+                var quarantined = await this.quarantine.GetQuarantinedIdsAsync(ct).ConfigureAwait(false);
+                var requested = memoryIds.Where(id => !string.IsNullOrWhiteSpace(id)).Distinct(StringComparer.Ordinal).ToList();
+                var delete = requested.Where(quarantined.Contains).ToList();
+                var skipped = requested.Where(id => !quarantined.Contains(id)).ToList();
+                var deleted = delete.Count == 0 ? 0 : await this.memories.DeleteManyAsync(delete, ct).ConfigureAwait(false);
+                return new QuarantineDecisionResultDto { Affected = deleted, Skipped = skipped };
+            },
+            cancellationToken).ConfigureAwait(false);
     }
 
     private static void CheckBatch(IReadOnlyList<string> memoryIds)

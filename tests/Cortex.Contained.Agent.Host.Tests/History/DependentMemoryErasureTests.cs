@@ -88,6 +88,39 @@ public sealed class DependentMemoryErasureTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task PurgeAsync_KeepIssuedMidErasure_IsHonouredForTheRemainingBatches()
+    {
+        var count = (DependentMemoryErasureStep.ChunkSize * 2) + 1;
+        var ids = Enumerable.Range(0, count).Select(i => $"d{i:D5}").ToList();
+        this.times.ListCreationTimesAsync(Arg.Any<CancellationToken>())
+            .Returns(ids.Select(id => new MemoryCreationTime(id, T0.AddHours(2))).ToList());
+        await this.SeedAsync();
+        var lastId = ids[^1];
+        var deleted = new List<string>();
+        Task<(IReadOnlyList<string> Kept, IReadOnlyList<string> Skipped)>? keep = null;
+        this.memories.DeleteManyAsync(Arg.Any<IReadOnlyCollection<string>>(), Arg.Any<CancellationToken>()).Returns(async call =>
+        {
+            var batch = call.Arg<IReadOnlyCollection<string>>();
+            deleted.AddRange(batch);
+            if (keep is null)
+            {
+                // The owner presses Keep while the first batch is being erased; it queues behind the batch.
+                keep = this.quarantine.KeepManyAsync([lastId], CancellationToken.None);
+                await Task.Delay(200);
+            }
+
+            return batch.Count;
+        });
+
+        await this.purge.PurgeAsync(new HistoryPurgeScope("x", null), null, CancellationToken.None, dependentMemories: DependentMemoryAction.Delete);
+
+        Assert.NotNull(keep);
+        Assert.Equal([lastId], (await keep).Kept);
+        Assert.DoesNotContain(lastId, deleted);
+        Assert.Equal(count - 1, deleted.Count);
+    }
+
+    [Fact]
     public void ForPurge_Delete_AddsTheStepBeforeVacuum()
     {
         Assert.Equal(
