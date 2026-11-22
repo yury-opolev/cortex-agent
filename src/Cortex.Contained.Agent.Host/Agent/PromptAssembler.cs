@@ -76,17 +76,16 @@ internal sealed partial class PromptAssembler
     /// Builds the system prompt + conversation history message list for an LLM
     /// turn, then prunes/strips/trims it to fit the context window.
     /// <para>
-    /// When <paramref name="turnStamper"/> is supplied, the current-time stamp is added to the final
-    /// user message of the RETURNED list only (after trimming), never to the session history. The
-    /// system prompt carries just the static explanation of the stamp, never the time itself.
+    /// When an <see cref="OwnerClock"/> is configured, every user message of the RETURNED list is
+    /// stamped with the time it was sent (after trimming; the session history keeps the raw
+    /// messages). The system prompt carries just the static explanation of the stamps.
     /// </para>
     /// </summary>
     public async Task<List<LlmMessage>> BuildPromptAsync(
         AgentSession session,
         CancellationToken ct,
         string? channelId = null,
-        bool isVoice = false,
-        TurnTimeStamper? turnStamper = null)
+        bool isVoice = false)
     {
         // Part 1: Personality (who I am — set by user)
         var personality = this.loadPersonality();
@@ -169,8 +168,8 @@ internal sealed partial class PromptAssembler
             this.historyTools?.IsEnabled ?? false).ConfigureAwait(false);
         var preparedTokens = TokenEstimator.EstimateTokens(prepared);
 
-        // After trimming and token accounting, on a copy: the history keeps the raw message.
-        turnStamper?.Apply(prepared);
+        // After trimming and token accounting, on copies: the history keeps the raw messages.
+        this.ownerClock?.StampUserMessages(prepared);
 
         this.LogBuildPrompt(session.ConversationId, historyCount, estimatedTokens, prepared.Count - 1, preparedTokens, contextWindow, reserveForResponse);
 

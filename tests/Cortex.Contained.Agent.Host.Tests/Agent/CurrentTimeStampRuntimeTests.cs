@@ -14,31 +14,31 @@ using Microsoft.Extensions.Time.Testing;
 namespace Cortex.Contained.Agent.Host.Tests;
 
 /// <summary>
-/// The current local date and time reaches the model on every turn as a transient stamp on the
-/// FINAL user message of the prompt. Nothing in the (cached) prefix changes, and the stamp is never
-/// persisted: not in session history, not in the message store.
+/// Every user-role message reaches the model with the time it was sent, taken from the message's
+/// OWN timestamp. A message therefore renders byte-identically on every later request, which keeps
+/// the provider's prefix cache warm across turns, tool rounds and mid-turn drains. The stamp is
+/// prompt-only: never in session history or the message store.
 /// </summary>
 public sealed class CurrentTimeStampRuntimeTests : IAsyncLifetime
 {
-    private const string Winter = "[Current time: Sunday 22 November 2026, 16:45 (Europe/Berlin, UTC+01:00)]";
-    private const string WinterPlus5 = "[Current time: Sunday 22 November 2026, 16:50 (Europe/Berlin, UTC+01:00)]";
-    private const string Summer = "[Current time: Thursday 15 July 2027, 14:05 (Europe/Berlin, UTC+02:00)]";
+    private const string Winter = "[Sunday 22 November 2026, 16:45 (Europe/Berlin, UTC+01:00)]";
+    private const string Winter1650 = "[Sunday 22 November 2026, 16:50 (Europe/Berlin, UTC+01:00)]";
+    private const string Summer = "[Thursday 15 July 2027, 14:05 (Europe/Berlin, UTC+02:00)]";
 
     private readonly FakeTimeProvider time = new(new DateTimeOffset(2026, 11, 22, 15, 45, 0, TimeSpan.Zero));
     private readonly AgentSessionStore sessions;
-    private AgentMessageChannel messageChannel = new();
     private readonly IMessageStore messageStore = Substitute.For<IMessageStore>();
     private readonly List<List<LlmMessage>> requests = [];
-    private readonly AdvancingTool tool;
+    private readonly HookTool tool;
+    private AgentMessageChannel messageChannel = new();
     private AgentRuntime runtime = null!;
     private int calls;
 
     public CurrentTimeStampRuntimeTests()
     {
-        this.tool = new AdvancingTool(this.time);
-        var sessionConfig = new SessionConfig { TimerComposerTailTurns = 4 };
+        this.tool = new HookTool(this.time);
         this.sessions = new AgentSessionStore(
-            sessionConfig, new MemorySettingsStore(), NullLogger<AgentSessionStore>.Instance);
+            new SessionConfig { TimerComposerTailTurns = 4 }, new MemorySettingsStore(), NullLogger<AgentSessionStore>.Instance);
     }
 
     public async Task InitializeAsync()
@@ -48,6 +48,13 @@ public sealed class CurrentTimeStampRuntimeTests : IAsyncLifetime
     }
 
     public async Task DisposeAsync() => await this.runtime.StopProcessingAsync(CancellationToken.None);
+
+    private async Task RestartAsync(bool enabled = true, int toolCallRounds = 0)
+    {
+        await this.runtime.StopProcessingAsync(CancellationToken.None);
+        this.runtime = this.CreateRuntime(enabled, toolCallRounds);
+        await this.runtime.StartProcessingAsync(CancellationToken.None);
+    }
 
     private AgentRuntime CreateRuntime(bool enabled, int toolCallRounds)
     {
@@ -103,13 +110,13 @@ public sealed class CurrentTimeStampRuntimeTests : IAsyncLifetime
         await Task.CompletedTask;
         yield return new LlmStreamChunk
         {
-            ToolCallDeltas = [new LlmToolCallDelta { Index = 0, Id = "call-1", Name = "advance", ArgumentsDelta = "{}" }],
+            ToolCallDeltas = [new LlmToolCallDelta { Index = 0, Id = "call-1", Name = "hook", ArgumentsDelta = "{}" }],
             IsComplete = true,
             FinishReason = "tool_calls",
         };
     }
 
-    private static AgentMessage Message(string text, AgentMessageSource source, bool isVoice = false) => new()
+    private AgentMessage Message(string text, AgentMessageSource source, bool isVoice = false) => new()
     {
         ConversationId = source == AgentMessageSource.ScheduledTask ? "scheduled-task-1" : "conv-1",
         ChannelId = "webchat-default",
@@ -117,11 +124,11 @@ public sealed class CurrentTimeStampRuntimeTests : IAsyncLifetime
         Source = source,
         IsVoice = isVoice,
         CorrelationId = Guid.NewGuid().ToString("N"),
-        Timestamp = DateTimeOffset.UtcNow,
+        Timestamp = this.time.GetUtcNow(),
     };
 
     private void Send(string text, AgentMessageSource source = AgentMessageSource.User, bool isVoice = false) =>
-        Assert.True(this.messageChannel.TryEnqueue(Message(text, source, isVoice)));
+        Assert.True(this.messageChannel.TryEnqueue(this.Message(text, source, isVoice)));
 
     private async Task<List<List<LlmMessage>>> WaitForRequestsAsync(int count)
     {
@@ -160,8 +167,11 @@ public sealed class CurrentTimeStampRuntimeTests : IAsyncLifetime
         Assert.Fail("turn never finished");
     }
 
+    private static string Shape(LlmMessage m) =>
+        $"{m.Role}|{m.Content}|{string.Join(",", m.ToolCalls?.Select(c => c.Id) ?? [])}|{m.ToolCallId}";
+
     [Fact]
-    public async Task UserTurn_FinalUserMessageCarriesTheStamp()
+    public async Task UserTurn_FinalUserMessageCarriesTheTimeItWasSent()
     {
         this.Send("what time is it?");
 
@@ -172,14 +182,13 @@ public sealed class CurrentTimeStampRuntimeTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task UserTurn_SystemPromptExplainsTheStamp()
+    public async Task UserTurn_SystemPromptExplainsTheStamps()
     {
         this.Send("hi");
 
         var request = Assert.Single(await this.WaitForRequestsAsync(1));
 
-        Assert.Contains("[Current time: ...]", request[0].Content, StringComparison.Ordinal);
-        Assert.DoesNotContain("2026", request[0].Content, StringComparison.Ordinal);
+        Assert.Contains(OwnerClock.SystemPromptNote, request[0].Content, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -190,51 +199,75 @@ public sealed class CurrentTimeStampRuntimeTests : IAsyncLifetime
 
         var session = this.sessions.GetOrCreateWithIdleCheck("conv-1");
         Assert.Equal("what time is it?", session.GetHistory().First(m => m.Role == "user").Content);
-        Assert.All(session.GetHistory(), m => Assert.DoesNotContain("Current time", m.Content ?? string.Empty, StringComparison.Ordinal));
+        Assert.All(session.GetHistory(), m => Assert.DoesNotContain("UTC+", m.Content ?? string.Empty, StringComparison.Ordinal));
 
         var saved = this.messageStore.ReceivedCalls()
             .Where(c => c.GetMethodInfo().Name == nameof(IMessageStore.SaveMessageAsync))
             .Select(c => c.GetArguments()[3] as string)
             .ToList();
         Assert.Contains("what time is it?", saved);
-        Assert.All(saved, content => Assert.DoesNotContain("Current time", content ?? string.Empty, StringComparison.Ordinal));
+        Assert.All(saved, content => Assert.DoesNotContain("UTC+", content ?? string.Empty, StringComparison.Ordinal));
     }
 
     [Fact]
-    public async Task SecondTurn_EarlierMessagesAreRenderedWithoutTheirStamp_SoThePrefixStaysStable()
+    public async Task NextTurnAfterToolRounds_StartsWithTheEarlierRequestByteForByte()
     {
+        await this.RestartAsync(toolCallRounds: 1);
+
         this.Send("first");
         await this.WaitForAssistantReplyAsync("conv-1", 1);
-        this.time.Advance(TimeSpan.FromMinutes(5));
+        this.time.Advance(TimeSpan.FromHours(3));
         this.Send("second");
         await this.WaitForAssistantReplyAsync("conv-1", 2);
 
-        var requests = await this.WaitForRequestsAsync(2);
-        var first = requests[0];
-        var second = requests[1];
+        var requests = await this.WaitForRequestsAsync(3);
+        var lastOfTurnOne = requests[1];
+        var turnTwo = requests[2];
 
-        // Everything the first request sent except its stamped final message is a byte-identical
-        // prefix of the second request; the old message is back to its raw text.
-        Assert.Equal(first[0].Content, second[0].Content);
-        Assert.Equal("first", second[1].Content);
-        Assert.Equal("done", second[2].Content);
-        Assert.Equal(WinterPlus5 + "\nsecond", second[^1].Content);
-        Assert.Equal(1, second.Count(m => m.Content?.Contains("Current time", StringComparison.Ordinal) == true && m.Role == "user"));
+        Assert.Equal(lastOfTurnOne.Select(Shape), turnTwo.Take(lastOfTurnOne.Count).Select(Shape));
+        Assert.Equal(Winter + "\nfirst", turnTwo[1].Content);
+        Assert.StartsWith("[Sunday 22 November 2026, 19:5", turnTwo[^1].Content, StringComparison.Ordinal);
+        Assert.EndsWith("\nsecond", turnTwo[^1].Content, StringComparison.Ordinal);
     }
 
     [Fact]
-    public async Task ToolRounds_KeepOneStampForTheWholeTurn()
+    public async Task MessageDrainedMidTurn_KeepsEarlierStampsUnchanged_AndGetsItsOwn()
     {
-        await this.runtime.StopProcessingAsync(CancellationToken.None);
-        this.runtime = this.CreateRuntime(enabled: true, toolCallRounds: 2);
-        await this.runtime.StartProcessingAsync(CancellationToken.None);
+        await this.RestartAsync(toolCallRounds: 1);
+        this.tool.OnExecute = () =>
+        {
+            this.time.Advance(TimeSpan.FromMinutes(5));
+            this.sessions.GetOrCreateWithIdleCheck("conv-1").EnqueuePending(this.Message("and one more thing", AgentMessageSource.User));
+        };
 
-        this.Send("work");
+        this.Send("first");
         await this.WaitForAssistantReplyAsync("conv-1", 1);
 
-        var requests = await this.WaitForRequestsAsync(3);
-        Assert.All(requests, r => Assert.Equal(Winter + "\nwork", r.First(m => m.Role == "user").Content));
-        Assert.Equal(DateTimeOffset.Parse("2026-11-22T15:55:00Z", null), this.time.GetUtcNow());
+        var requests = await this.WaitForRequestsAsync(2);
+        Assert.Equal(requests[0].Select(Shape), requests[1].Take(requests[0].Count).Select(Shape));
+        Assert.Equal(Winter1650 + "\nand one more thing", requests[1][^1].Content);
+        Assert.Equal(Winter + "\nfirst", requests[1][1].Content);
+    }
+
+    [Fact]
+    public async Task SeededHistory_UsesItsOwnTimestamps_AndAMessageWithoutOneGetsNone()
+    {
+        await this.runtime.SeedHistoryAsync(
+            "conv-1",
+            [
+                new HubChatMessage { MessageId = "1", Role = "user", Text = "yesterday's question", Timestamp = new DateTimeOffset(2026, 11, 21, 9, 0, 0, TimeSpan.Zero) },
+                new HubChatMessage { MessageId = "2", Role = "assistant", Text = "yesterday's answer", Timestamp = new DateTimeOffset(2026, 11, 21, 9, 1, 0, TimeSpan.Zero) },
+                new HubChatMessage { MessageId = "3", Role = "user", Text = "undated question" },
+                new HubChatMessage { MessageId = "4", Role = "assistant", Text = "undated answer" },
+            ],
+            CancellationToken.None);
+
+        this.Send("today");
+
+        var request = Assert.Single(await this.WaitForRequestsAsync(1));
+        Assert.Equal("[Saturday 21 November 2026, 10:00 (Europe/Berlin, UTC+01:00)]\nyesterday's question", request[1].Content);
+        Assert.Equal("undated question", request[3].Content);
+        Assert.Equal(Winter + "\ntoday", request[^1].Content);
     }
 
     [Fact]
@@ -249,17 +282,17 @@ public sealed class CurrentTimeStampRuntimeTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task SessionTimer_IntentCarriesTheStamp()
+    public async Task SessionTimer_IntentAndTailAreStampedFromTheirOwnTimes()
     {
         var session = this.sessions.GetOrCreateWithIdleCheck("conv-1");
-        session.AddMessage(new LlmMessage { Role = "user", Content = "remind me later" });
+        session.AddMessage(new LlmMessage { Role = "user", Content = "remind me later", Timestamp = new DateTimeOffset(2026, 11, 22, 14, 0, 0, TimeSpan.Zero) });
         session.AddMessage(new LlmMessage { Role = "assistant", Content = "ok" });
 
         this.Send("call the next round", AgentMessageSource.SessionTimer);
 
         var request = Assert.Single(await this.WaitForRequestsAsync(1));
+        Assert.Equal("[Sunday 22 November 2026, 15:00 (Europe/Berlin, UTC+01:00)]\nremind me later", request.First(m => m.Role == "user").Content);
         Assert.Equal(Winter + "\ncall the next round", request[^1].Content);
-        Assert.Equal("remind me later", request.First(m => m.Role == "user").Content);
     }
 
     [Fact]
@@ -287,20 +320,20 @@ public sealed class CurrentTimeStampRuntimeTests : IAsyncLifetime
     [Fact]
     public async Task Disabled_NeitherStampNorSystemNoteIsAdded()
     {
-        await this.runtime.StopProcessingAsync(CancellationToken.None);
-        this.runtime = this.CreateRuntime(enabled: false, toolCallRounds: 0);
-        await this.runtime.StartProcessingAsync(CancellationToken.None);
+        await this.RestartAsync(enabled: false);
 
         this.Send("hi");
 
         var request = Assert.Single(await this.WaitForRequestsAsync(1));
         Assert.Equal("hi", request[^1].Content);
-        Assert.DoesNotContain("[Current time: ...]", request[0].Content, StringComparison.Ordinal);
+        Assert.DoesNotContain("Each user message starts with", request[0].Content, StringComparison.Ordinal);
     }
 
-    private sealed class AdvancingTool(FakeTimeProvider time) : IAgentTool
+    private sealed class HookTool(FakeTimeProvider time) : IAgentTool
     {
-        public string Name => "advance";
+        public Action? OnExecute { get; set; }
+
+        public string Name => "hook";
 
         public string Description => "Takes five minutes.";
 
@@ -308,7 +341,15 @@ public sealed class CurrentTimeStampRuntimeTests : IAsyncLifetime
 
         public Task<AgentToolResult> ExecuteAsync(string argumentsJson, ToolExecutionContext context, CancellationToken cancellationToken)
         {
-            time.Advance(TimeSpan.FromMinutes(5));
+            if (this.OnExecute is { } hook)
+            {
+                hook();
+            }
+            else
+            {
+                time.Advance(TimeSpan.FromMinutes(5));
+            }
+
             return Task.FromResult(AgentToolResult.Ok("ok"));
         }
     }

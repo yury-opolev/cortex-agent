@@ -28,7 +28,6 @@ public sealed partial class SubagentCallbacks : IAgentLoopCallbacks
     private readonly ImageAgingConfig imageAging;
     private readonly IImageDescriber? imageDescriber;
     private readonly OwnerClock? ownerClock;
-    private readonly TurnTimeStamper timeStamper;
     /// <summary>Tool actions seen in the current round, fed to the stuck detector at round end.</summary>
     private readonly List<StuckDetectorAction> roundActions = [];
 
@@ -75,7 +74,6 @@ public sealed partial class SubagentCallbacks : IAgentLoopCallbacks
         this.imageAging = imageAging ?? new ImageAgingConfig();
         this.imageDescriber = imageDescriber;
         this.ownerClock = ownerClock;
-        this.timeStamper = new TurnTimeStamper(ownerClock);
     }
 
     public async Task<List<LlmMessage>> PrepareMessagesAsync(int round, CancellationToken cancellationToken)
@@ -124,8 +122,8 @@ public sealed partial class SubagentCallbacks : IAgentLoopCallbacks
             }
         }
 
-        // Last, on a copy: the stored subagent history keeps the raw user message.
-        this.timeStamper.Apply(prepared);
+        // Last, on copies: the stored subagent history keeps the raw user messages.
+        this.ownerClock?.StampUserMessages(prepared);
 
         return prepared;
     }
@@ -140,7 +138,12 @@ public sealed partial class SubagentCallbacks : IAgentLoopCallbacks
         var pending = this.pendingSession.DrainPendingMessages();
         foreach (var msg in pending)
         {
-            this.OnAssistantMessage(new LlmMessage { Role = "user", Content = msg.Text });
+            this.OnAssistantMessage(new LlmMessage
+            {
+                Role = "user",
+                Content = msg.Text,
+                Timestamp = this.ownerClock?.UtcNow ?? DateTimeOffset.UtcNow,
+            });
         }
     }
 

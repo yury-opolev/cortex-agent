@@ -639,7 +639,7 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
         {
             liveConversation = session;
             session = composerSession = await this.intentComposer
-                .CreateSessionAsync(liveConversation, sanitizedText, cancellationToken)
+                .CreateSessionAsync(liveConversation, sanitizedText, cancellationToken, this.SentAt(message))
                 .ConfigureAwait(false);
         }
         else
@@ -654,6 +654,7 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
                 Content = sanitizedText,
                 ContentBlocks = contentBlocks,
                 MessageType = isInternal ? LlmMessageType.ScheduledTaskInstruction : LlmMessageType.Normal,
+                Timestamp = this.SentAt(message),
             });
 
             // Persist inbound message to local MessageStore. Skipped for composer sources: the
@@ -847,6 +848,14 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
         this.LogComposedOutcomeRecorded(liveConversation.ConversationId, turn.FinalText?.Length ?? 0);
     }
 
+    /// <summary>
+    /// When a queued message was sent: its own timestamp, which is also what the message store
+    /// records, so the time the model is shown for it matches the stored history. An undated
+    /// message falls back to now.
+    /// </summary>
+    private DateTimeOffset SentAt(AgentMessage message) =>
+        message.Timestamp == default ? this.ownerClock?.UtcNow ?? DateTimeOffset.UtcNow : message.Timestamp;
+
     private async Task<TurnOutcome> GenerateResponseAsync(
         AgentSession session,
         string replyConversationId,
@@ -888,10 +897,6 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
 
         // Per-turn latency profiling (queue-wait, TTFT, LLM, tools, e2e).
         var latency = new TurnLatencyTracker(TimeProvider.System);
-
-        // One stamper per turn: the current-time stamp is pinned to the final user message so every
-        // tool round of this turn sends an identical prompt prefix.
-        var turnStamper = new TurnTimeStamper(this.ownerClock);
         LlmTokenUsage? lastUsage = null;
 
         // Shared context for the entire turn — collects proactive messages
@@ -906,7 +911,7 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
         for (var round = 0; round < MaxToolRounds; round++)
         {
             // Build the LLM request with tool definitions
-            var messages = await this.promptAssembler.BuildPromptAsync(session, cancellationToken, channelId, isVoice, turnStamper).ConfigureAwait(false);
+            var messages = await this.promptAssembler.BuildPromptAsync(session, cancellationToken, channelId, isVoice).ConfigureAwait(false);
             var requestId = Guid.NewGuid().ToString("N");
 
             var request = new LlmCompletionRequest
@@ -1285,6 +1290,7 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
                     Role = "user",
                     Content = userText,
                     MessageType = pendingBehavior.PendingInjectionMessageType,
+                    Timestamp = this.SentAt(pending),
                 });
 
                 var sourceLabel = pending.Source.ToString();
@@ -1952,10 +1958,13 @@ public sealed partial class AgentRuntime : IAgentRuntime, IBootstrapContextStore
             return;
         }
 
+        // Seeded messages keep the time they were really sent (the stamp the model sees is derived
+        // from it); a message the Bridge could not date stays undated and is simply not stamped.
         var llmMessages = messages.Select(m => new LlmMessage
         {
             Role = m.Role,
             Content = m.Text,
+            Timestamp = m.Timestamp,
         }).ToList();
 
         this.sessions.Seed(channelId, llmMessages, this.sessionConfig.MaxHistory);

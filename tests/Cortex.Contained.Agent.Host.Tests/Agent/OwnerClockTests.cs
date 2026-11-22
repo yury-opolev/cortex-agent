@@ -7,74 +7,88 @@ namespace Cortex.Contained.Agent.Host.Tests;
 
 public sealed class OwnerClockTests
 {
-    private static OwnerClock Berlin(DateTimeOffset utc) =>
-        new(new FakeTimeProvider(utc), TimeZoneInfo.FindSystemTimeZoneById("Europe/Berlin"));
+    private static OwnerClock Berlin() =>
+        new(new FakeTimeProvider(), TimeZoneInfo.FindSystemTimeZoneById("Europe/Berlin"));
+
+    private static DateTimeOffset Utc(int y, int mo, int d, int h, int mi, int s = 0) =>
+        new(y, mo, d, h, mi, s, TimeSpan.Zero);
 
     [Fact]
     public void FormatStamp_WinterTime_UsesStandardOffset()
     {
-        var clock = Berlin(new DateTimeOffset(2026, 11, 22, 15, 45, 0, TimeSpan.Zero));
-
-        Assert.Equal("[Current time: Sunday 22 November 2026, 16:45 (Europe/Berlin, UTC+01:00)]", clock.FormatStamp());
+        Assert.Equal(
+            "[Sunday 22 November 2026, 16:45 (Europe/Berlin, UTC+01:00)]",
+            Berlin().FormatStamp(Utc(2026, 11, 22, 15, 45)));
     }
 
     [Fact]
     public void FormatStamp_SummerTime_UsesDaylightOffset()
     {
-        var clock = Berlin(new DateTimeOffset(2026, 7, 15, 12, 5, 0, TimeSpan.Zero));
-
-        Assert.Equal("[Current time: Wednesday 15 July 2026, 14:05 (Europe/Berlin, UTC+02:00)]", clock.FormatStamp());
+        Assert.Equal(
+            "[Wednesday 15 July 2026, 14:05 (Europe/Berlin, UTC+02:00)]",
+            Berlin().FormatStamp(Utc(2026, 7, 15, 12, 5)));
     }
 
     [Fact]
     public void FormatStamp_AcrossSpringForward_OffsetFollowsTheInstant()
     {
         // 2026-03-29 01:00 UTC is the instant Berlin jumps from 02:00 CET to 03:00 CEST.
-        var before = Berlin(new DateTimeOffset(2026, 3, 29, 0, 59, 0, TimeSpan.Zero)).FormatStamp();
-        var after = Berlin(new DateTimeOffset(2026, 3, 29, 1, 0, 0, TimeSpan.Zero)).FormatStamp();
-
-        Assert.Equal("[Current time: Sunday 29 March 2026, 01:59 (Europe/Berlin, UTC+01:00)]", before);
-        Assert.Equal("[Current time: Sunday 29 March 2026, 03:00 (Europe/Berlin, UTC+02:00)]", after);
+        Assert.Equal(
+            "[Sunday 29 March 2026, 01:59 (Europe/Berlin, UTC+01:00)]",
+            Berlin().FormatStamp(Utc(2026, 3, 29, 0, 59)));
+        Assert.Equal(
+            "[Sunday 29 March 2026, 03:00 (Europe/Berlin, UTC+02:00)]",
+            Berlin().FormatStamp(Utc(2026, 3, 29, 1, 0)));
     }
 
     [Fact]
-    public void FormatStamp_SecondsAreDropped_SoTheStampChangesOnlyOncePerMinute()
+    public void FormatStamp_AcrossFallBack_RepeatedLocalHourIsToldApartByTheOffset()
     {
-        var a = Berlin(new DateTimeOffset(2026, 11, 22, 15, 45, 1, TimeSpan.Zero)).FormatStamp();
-        var b = Berlin(new DateTimeOffset(2026, 11, 22, 15, 45, 59, TimeSpan.Zero)).FormatStamp();
+        // 2026-10-25: 02:30 happens twice in Berlin, once at UTC+02:00 and once at UTC+01:00.
+        Assert.Equal(
+            "[Sunday 25 October 2026, 02:30 (Europe/Berlin, UTC+02:00)]",
+            Berlin().FormatStamp(Utc(2026, 10, 25, 0, 30)));
+        Assert.Equal(
+            "[Sunday 25 October 2026, 02:30 (Europe/Berlin, UTC+01:00)]",
+            Berlin().FormatStamp(Utc(2026, 10, 25, 1, 30)));
+    }
 
-        Assert.Equal(a, b);
+    [Fact]
+    public void FormatStamp_SecondsAreDropped()
+    {
+        Assert.Equal(
+            Berlin().FormatStamp(Utc(2026, 11, 22, 15, 45, 1)),
+            Berlin().FormatStamp(Utc(2026, 11, 22, 15, 45, 59)));
     }
 
     [Fact]
     public void FormatStamp_FractionalOffsetZone_ShowsMinutes()
     {
-        var clock = new OwnerClock(
-            new FakeTimeProvider(new DateTimeOffset(2026, 11, 22, 15, 45, 0, TimeSpan.Zero)),
-            TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata"));
+        var clock = new OwnerClock(new FakeTimeProvider(), TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata"));
 
-        Assert.Equal("[Current time: Sunday 22 November 2026, 21:15 (Asia/Kolkata, UTC+05:30)]", clock.FormatStamp());
+        Assert.Equal(
+            "[Sunday 22 November 2026, 21:15 (Asia/Kolkata, UTC+05:30)]",
+            clock.FormatStamp(Utc(2026, 11, 22, 15, 45)));
     }
 
     [Fact]
     public void FormatStamp_WindowsZoneId_IsShownAsIana()
     {
         // TimeZoneInfo.Local on a Windows host carries a Windows id; the model should still see IANA.
-        var windows = TimeZoneInfo.FindSystemTimeZoneById("W. Europe Standard Time");
-        var clock = new OwnerClock(
-            new FakeTimeProvider(new DateTimeOffset(2026, 11, 22, 15, 45, 0, TimeSpan.Zero)), windows);
+        var clock = new OwnerClock(new FakeTimeProvider(), TimeZoneInfo.FindSystemTimeZoneById("W. Europe Standard Time"));
 
-        Assert.Contains("(Europe/", clock.FormatStamp(), StringComparison.Ordinal);
-        Assert.DoesNotContain("Standard Time", clock.FormatStamp(), StringComparison.Ordinal);
+        var stamp = clock.FormatStamp(Utc(2026, 11, 22, 15, 45));
+
+        Assert.Contains("(Europe/", stamp, StringComparison.Ordinal);
+        Assert.DoesNotContain("Standard Time", stamp, StringComparison.Ordinal);
     }
 
     [Fact]
     public void FormatStamp_Utc_IsLabelledUtc()
     {
-        var clock = new OwnerClock(
-            new FakeTimeProvider(new DateTimeOffset(2026, 11, 22, 15, 45, 0, TimeSpan.Zero)), TimeZoneInfo.Utc);
+        var clock = new OwnerClock(new FakeTimeProvider(), TimeZoneInfo.Utc);
 
-        Assert.Equal("[Current time: Sunday 22 November 2026, 15:45 (UTC, UTC+00:00)]", clock.FormatStamp());
+        Assert.Equal("[Sunday 22 November 2026, 15:45 (UTC, UTC+00:00)]", clock.FormatStamp(Utc(2026, 11, 22, 15, 45)));
     }
 
     [Fact]
@@ -84,9 +98,8 @@ public sealed class OwnerClockTests
         try
         {
             CultureInfo.CurrentCulture = new CultureInfo("de-DE");
-            var clock = Berlin(new DateTimeOffset(2026, 11, 22, 15, 45, 0, TimeSpan.Zero));
 
-            Assert.StartsWith("[Current time: Sunday 22 November 2026", clock.FormatStamp(), StringComparison.Ordinal);
+            Assert.StartsWith("[Sunday 22 November 2026", Berlin().FormatStamp(Utc(2026, 11, 22, 15, 45)), StringComparison.Ordinal);
         }
         finally
         {
@@ -97,11 +110,9 @@ public sealed class OwnerClockTests
     [Fact]
     public void FromHistoryOptions_UsesTheConfiguredHistoryZone()
     {
-        var options = new HistoryOptions { TimeZone = "Europe/Berlin" };
-        var clock = OwnerClock.FromHistoryOptions(
-            new FakeTimeProvider(new DateTimeOffset(2026, 7, 15, 12, 0, 0, TimeSpan.Zero)), options);
+        var clock = OwnerClock.FromHistoryOptions(new FakeTimeProvider(), new HistoryOptions { TimeZone = "Europe/Berlin" });
 
-        Assert.Equal("[Current time: Wednesday 15 July 2026, 14:00 (Europe/Berlin, UTC+02:00)]", clock.FormatStamp());
+        Assert.Equal("[Wednesday 15 July 2026, 14:00 (Europe/Berlin, UTC+02:00)]", clock.FormatStamp(Utc(2026, 7, 15, 12, 0)));
     }
 
     [Fact]
@@ -121,25 +132,34 @@ public sealed class OwnerClockTests
     }
 
     [Fact]
-    public void AppendSystemPromptNote_Enabled_AddsTheStaticExplanation()
+    public void UtcNow_ReadsTheTimeProvider()
     {
-        var clock = Berlin(DateTimeOffset.UnixEpoch);
+        var time = new FakeTimeProvider(Utc(2026, 11, 22, 15, 45));
+        var clock = new OwnerClock(time, TimeZoneInfo.Utc);
 
-        var result = clock.AppendSystemPromptNote("base prompt");
+        time.Advance(TimeSpan.FromMinutes(3));
 
-        Assert.StartsWith("base prompt", result, StringComparison.Ordinal);
-        Assert.Contains("[Current time: ...]", result, StringComparison.Ordinal);
-        Assert.Contains("authoritative", result, StringComparison.Ordinal);
-        Assert.Contains("earlier messages", result, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(Utc(2026, 11, 22, 15, 48), clock.UtcNow);
     }
 
     [Fact]
-    public void AppendSystemPromptNote_IsIdenticalForEveryTime()
+    public void AppendSystemPromptNote_Enabled_ExplainsThePerMessageTimestamps()
     {
-        var first = Berlin(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero)).AppendSystemPromptNote("p");
-        var second = Berlin(new DateTimeOffset(2026, 8, 9, 10, 11, 0, TimeSpan.Zero)).AppendSystemPromptNote("p");
+        var result = Berlin().AppendSystemPromptNote("base prompt");
 
-        Assert.Equal(first, second);
+        Assert.StartsWith("base prompt", result, StringComparison.Ordinal);
+        Assert.Contains("Each user message starts with", result, StringComparison.Ordinal);
+        Assert.Contains("supplied by the system", result, StringComparison.Ordinal);
+        Assert.Contains("latest", result, StringComparison.Ordinal);
+        Assert.Contains("UTC", result, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AppendSystemPromptNote_IsStaticText()
+    {
+        Assert.Equal(
+            new OwnerClock(new FakeTimeProvider(Utc(2026, 1, 1, 0, 0)), TimeZoneInfo.Utc).AppendSystemPromptNote("p"),
+            new OwnerClock(new FakeTimeProvider(Utc(2026, 8, 9, 10, 11)), TimeZoneInfo.Utc).AppendSystemPromptNote("p"));
     }
 
     [Fact]

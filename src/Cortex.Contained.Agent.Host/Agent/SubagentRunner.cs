@@ -197,7 +197,7 @@ public sealed partial class SubagentRunner : IDisposable
         var messages = new List<LlmMessage>
         {
             new() { Role = "system", Content = systemPrompt },
-            new() { Role = "user", Content = userPrompt },
+            new() { Role = "user", Content = userPrompt, Timestamp = this.ownerClock?.UtcNow ?? DateTimeOffset.UtcNow },
         };
 
         return await ExecuteAsync(model, messages, conversationId, cancellationToken).ConfigureAwait(false);
