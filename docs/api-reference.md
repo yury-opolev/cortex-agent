@@ -45,7 +45,8 @@
 | GET | `/api/tenants/{tenantId}/recall/status` | Yes | `{ connected, agent: { settings, history, dense, reranker, eventBackfill, quarantinedMemories }, reranker: { enabled, sidecar: { state, problem, at } } }` (`503` with `connected: false` and the reranker block while disconnected) |
 | POST | `/api/tenants/{tenantId}/recall/purge/preview` | Yes | Body `{ channelId?, from?, olderThan?, dependentMemories? }`. Deletes nothing. Returns `{ messages, dependentMemories, rangeFrom, rangeTo, confirmations: { review, delete } }` |
 | POST | `/api/tenants/{tenantId}/recall/purge` | Yes | Same body plus optional `expectedMessages` (the preview count); deletes through the erasure workflow (`from` inclusive, `olderThan` exclusive; `from ≥ olderThan` is `400`). `409` when more than 50 messages beyond `expectedMessages` are now in scope — preview again. Returns the history DELETE body |
-| GET | `/api/tenants/{tenantId}/recall/quarantine` | Yes | `{ items: [{ memory, purgeId, purgedAt, purgeChannelId, windowFrom, windowTo }] }`, newest first |
+| GET | `/api/tenants/{tenantId}/recall/quarantine` | Yes | `?offset=0&limit=200` (limit 1–500). `{ items: [{ memory, purgeId, purgedAt, purgeChannelId, windowFrom, windowTo }], total, offset, limit }`, newest first; only the page loads memory content |
+| GET | `/api/tenants/{tenantId}/recall/quarantine/ids` | Yes | `{ ids: [...] }` — every quarantined memory id (no content), for "select all"; the UI keeps/deletes them in sequential batches of 1000 |
 | POST | `/api/tenants/{tenantId}/recall/quarantine/keep` | Yes | Body `{ memoryIds: [...] }` (1–1000). Keeps the quarantined ones; returns `{ affected, skipped[] }` |
 | POST | `/api/tenants/{tenantId}/recall/quarantine/delete` | Yes | Same body; erases the quarantined ones in one batch (`DeleteManyAsync`); ids not in quarantine are skipped |
 | GET | `/api/recall/reranker` | Yes | Bridge-wide reranker switch and sidecar state `{ enabled, sidecar: { state, problem, at } }` |
@@ -173,7 +174,8 @@ same workflow (always `review`).
 | `UpdateRecallSettings(RecallSettingsPatchDto)` -> `RecallSettingsUpdateResultDto` | Validate, persist (`<state>/recall-settings.json`) and apply live; returns errors or notices (index rebuild, tools hidden, …) |
 | `GetRecallStatus()` -> `RecallStatusDto` | History index build, dense embedding progress, reranker health, event backfill, quarantined count |
 | `PreviewHistoryPurge(HistoryPurgeRequestDto)` -> `HistoryPurgePreviewDto` | Messages and dependent memories a purge would affect; deletes nothing |
-| `ListQuarantineReview()` -> `QuarantineReviewListDto` | Quarantined memories with the purge (id, time, channel, window) that quarantined each |
+| `ListQuarantineReview(offset, limit)` -> `QuarantineReviewListDto` | One page of quarantined memories with the purge (id, time, channel, window) that quarantined each, plus `Total` |
+| `ListQuarantineReviewIds()` -> `string[]` | Every quarantined memory id (no content) |
 | `KeepQuarantinedMemories(ids)` / `DeleteQuarantinedMemories(ids)` -> `QuarantineDecisionResultDto` | Bulk keep / bulk erase (one `DeleteManyAsync` batch); at most 1000 ids; ids not in quarantine are returned as `skipped` |
 
 #### `SetHistoryRecallTools(enabled)` -> `bool`

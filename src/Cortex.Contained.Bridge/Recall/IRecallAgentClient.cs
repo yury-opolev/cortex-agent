@@ -16,7 +16,9 @@ public interface IRecallAgentClient
 
     Task<HistoryPurgeResultDto> PurgeAsync(HistoryPurgeRequestDto request, CancellationToken cancellationToken);
 
-    Task<QuarantineReviewListDto> ListQuarantineAsync(CancellationToken cancellationToken);
+    Task<QuarantineReviewListDto> ListQuarantineAsync(int offset, int limit, CancellationToken cancellationToken);
+
+    Task<IReadOnlyList<string>> ListQuarantineIdsAsync(CancellationToken cancellationToken);
 
     Task<QuarantineDecisionResultDto> KeepAsync(IReadOnlyList<string> memoryIds, CancellationToken cancellationToken);
 
@@ -42,7 +44,10 @@ public sealed class HubRecallAgentClient(HubClient client) : IRecallAgentClient
     public Task<HistoryPurgeResultDto> PurgeAsync(HistoryPurgeRequestDto request, CancellationToken cancellationToken) =>
         client.PurgeHistoryAsync(request, cancellationToken);
 
-    public Task<QuarantineReviewListDto> ListQuarantineAsync(CancellationToken cancellationToken) => client.ListQuarantineReviewAsync(cancellationToken);
+    public Task<QuarantineReviewListDto> ListQuarantineAsync(int offset, int limit, CancellationToken cancellationToken) =>
+        client.ListQuarantineReviewAsync(offset, limit, cancellationToken);
+
+    public Task<IReadOnlyList<string>> ListQuarantineIdsAsync(CancellationToken cancellationToken) => client.ListQuarantineReviewIdsAsync(cancellationToken);
 
     public Task<QuarantineDecisionResultDto> KeepAsync(IReadOnlyList<string> memoryIds, CancellationToken cancellationToken) =>
         client.KeepQuarantinedMemoriesAsync(memoryIds, cancellationToken);

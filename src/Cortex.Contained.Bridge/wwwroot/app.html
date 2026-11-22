@@ -1453,23 +1453,26 @@
             <div class="card mb-3 border-warning" id="recall-review">
                 <div class="card-body">
                     <h6 class="text-uppercase text-secondary border-bottom pb-2 mb-2">
-                        Needs review (<span x-text="quarantine.length"></span>)
+                        Needs review (<span x-text="quarantineTotal"></span>)
                     </h6>
                     <p class="small text-body-secondary">
                         Memories created while history you deleted was recent. They are hidden from the agent until you keep or delete them.
                     </p>
-                    <div x-show="quarantine.length === 0" class="text-body-secondary small">Nothing to review.</div>
-                    <div x-show="quarantine.length > 0" class="d-flex align-items-center gap-2 mb-2">
+                    <div x-show="quarantineTotal === 0" class="text-body-secondary small">Nothing to review.</div>
+                    <div x-show="quarantine.length > 0" class="d-flex align-items-center gap-2 mb-2 flex-wrap">
                         <div class="form-check mb-0">
                             <input class="form-check-input" type="checkbox" id="review-all" :checked="allSelected" @change="toggleAll($event.target.checked)">
                             <label class="form-check-label small" for="review-all">Select all</label>
                         </div>
+                        <a href="#" class="small" x-show="hasMoreQuarantine" @click.prevent="selectEverything()"
+                           x-text="'Select all ' + quarantineTotal"></a>
                         <button class="btn btn-sm btn-outline-success" :disabled="selectedIds.length === 0 || reviewBusy" @click="decide(selectedIds, true)">
                             <i class="bi bi-check-lg"></i> Keep selected (<span x-text="selectedIds.length"></span>)
                         </button>
                         <button class="btn btn-sm btn-outline-danger" :disabled="selectedIds.length === 0 || reviewBusy" @click="showBulkDeleteModal = true">
                             <i class="bi bi-trash"></i> Delete selected (<span x-text="selectedIds.length"></span>)
                         </button>
+                        <span class="small text-body-secondary" x-show="reviewProgress" x-text="reviewProgress"></span>
                     </div>
                     <template x-for="q in quarantine" :key="'rq-' + q.memory.memoryId">
                         <div class="d-flex gap-2 align-items-start border-top pt-2 mt-2">
@@ -1496,6 +1499,11 @@
                             </div>
                         </div>
                     </template>
+                    <div class="mt-2" x-show="hasMoreQuarantine">
+                        <button class="btn btn-sm btn-outline-secondary" :disabled="reviewBusy" @click="loadQuarantine(true)">
+                            Load more (<span x-text="quarantine.length"></span> of <span x-text="quarantineTotal"></span> shown)
+                        </button>
+                    </div>
                 </div>
             </div>
 

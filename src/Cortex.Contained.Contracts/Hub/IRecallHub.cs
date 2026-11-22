@@ -18,8 +18,11 @@ public interface IRecallHub
     /// <summary>Counts what <see cref="IHistoryHub.PurgeHistory"/> would delete for the same request; deletes nothing.</summary>
     Task<HistoryPurgePreviewDto> PreviewHistoryPurge(HistoryPurgeRequestDto request);
 
-    /// <summary>Quarantined memories with the purge that quarantined each one.</summary>
-    Task<QuarantineReviewListDto> ListQuarantineReview();
+    /// <summary>One page of the quarantined memories (newest first) with the purge that quarantined each one, and the total.</summary>
+    Task<QuarantineReviewListDto> ListQuarantineReview(int offset, int limit);
+
+    /// <summary>The id of every quarantined memory in list order (no content), for "select all".</summary>
+    Task<IReadOnlyList<string>> ListQuarantineReviewIds();
 
     /// <summary>Keeps the given quarantined memories (visible to the agent again). Ids not in quarantine are skipped.</summary>
     Task<QuarantineDecisionResultDto> KeepQuarantinedMemories(IReadOnlyList<string> memoryIds);

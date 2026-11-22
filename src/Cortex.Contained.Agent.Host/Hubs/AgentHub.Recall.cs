@@ -33,7 +33,20 @@ public sealed partial class AgentHub
     }
 
     /// <inheritdoc />
-    public Task<QuarantineReviewListDto> ListQuarantineReview() => this.Recall.ListQuarantineAsync(Context.ConnectionAborted);
+    public async Task<QuarantineReviewListDto> ListQuarantineReview(int offset, int limit)
+    {
+        try
+        {
+            return await this.Recall.ListQuarantineAsync(offset, limit, Context.ConnectionAborted).ConfigureAwait(false);
+        }
+        catch (ArgumentException ex)
+        {
+            throw new HubException(ex.Message);
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<string>> ListQuarantineReviewIds() => this.Recall.ListQuarantineIdsAsync(Context.ConnectionAborted);
 
     /// <inheritdoc />
     public async Task<QuarantineDecisionResultDto> KeepQuarantinedMemories(IReadOnlyList<string> memoryIds)

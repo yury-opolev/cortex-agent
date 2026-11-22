@@ -34,11 +34,18 @@ public sealed partial class HubClient
         return await this.connection!.InvokeAsync<HistoryPurgePreviewDto>(nameof(IAgentHub.PreviewHistoryPurge), request, cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Quarantined memories with the purge that quarantined each.</summary>
-    public async Task<QuarantineReviewListDto> ListQuarantineReviewAsync(CancellationToken cancellationToken)
+    /// <summary>One page of quarantined memories with the purge that quarantined each.</summary>
+    public async Task<QuarantineReviewListDto> ListQuarantineReviewAsync(int offset, int limit, CancellationToken cancellationToken)
     {
         EnsureConnected();
-        return await this.connection!.InvokeAsync<QuarantineReviewListDto>(nameof(IAgentHub.ListQuarantineReview), cancellationToken).ConfigureAwait(false);
+        return await this.connection!.InvokeAsync<QuarantineReviewListDto>(nameof(IAgentHub.ListQuarantineReview), offset, limit, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Every quarantined memory id (no content).</summary>
+    public async Task<IReadOnlyList<string>> ListQuarantineReviewIdsAsync(CancellationToken cancellationToken)
+    {
+        EnsureConnected();
+        return await this.connection!.InvokeAsync<IReadOnlyList<string>>(nameof(IAgentHub.ListQuarantineReviewIds), cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Bulk keep of quarantined memories.</summary>

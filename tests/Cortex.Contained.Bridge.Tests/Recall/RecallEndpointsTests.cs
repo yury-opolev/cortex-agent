@@ -42,7 +42,7 @@ public sealed class RecallEndpointsTests
             .OfType<RouteEndpoint>()
             .ToList();
 
-        Assert.Equal(10, endpoints.Count);
+        Assert.Equal(11, endpoints.Count);
         Assert.All(endpoints, endpoint => Assert.NotNull(endpoint.Metadata.GetMetadata<IAuthorizeData>()));
         Assert.All(endpoints, endpoint => Assert.Contains("/recall", endpoint.RoutePattern.RawText, StringComparison.Ordinal));
     }
@@ -148,6 +148,39 @@ public sealed class RecallEndpointsTests
     {
         Assert.Equal(400, StatusOf(await RecallEndpoints.RelayAsync<int>(() => throw new HubException("bad"), _ => Results.Ok())));
         Assert.Equal(503, StatusOf(await RecallEndpoints.RelayAsync<int>(() => throw new InvalidOperationException("gone"), _ => Results.Ok())));
+    }
+
+    [Fact]
+    public async Task ListQuarantine_DefaultsToTheFirstPage()
+    {
+        this.agent.ListQuarantineAsync(Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(new QuarantineReviewListDto { Items = [], Total = 450, Offset = 0, Limit = 200 });
+
+        var result = await RecallEndpoints.ListQuarantineAsync(this.agent, null, null, CancellationToken.None);
+
+        Assert.Equal(200, StatusOf(result));
+        Assert.Equal(450, BodyOf(result).GetProperty("total").GetInt32());
+        await this.agent.Received(1).ListQuarantineAsync(0, QuarantineLimits.DefaultPageSize, Arg.Any<CancellationToken>());
+    }
+
+    [Theory]
+    [InlineData(-1, 10)]
+    [InlineData(0, 0)]
+    [InlineData(0, QuarantineLimits.MaxPageSize + 1)]
+    public async Task ListQuarantine_InvalidPaging_Returns400(int offset, int limit)
+    {
+        Assert.Equal(400, StatusOf(await RecallEndpoints.ListQuarantineAsync(this.agent, offset, limit, CancellationToken.None)));
+        await this.agent.DidNotReceive().ListQuarantineAsync(Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ListQuarantineIds_ReturnsTheIds()
+    {
+        this.agent.ListQuarantineIdsAsync(Arg.Any<CancellationToken>()).Returns(["a", "b"]);
+
+        var body = BodyOf(await RecallEndpoints.ListQuarantineIdsAsync(this.agent, CancellationToken.None));
+
+        Assert.Equal(["a", "b"], body.GetProperty("ids").EnumerateArray().Select(e => e.GetString()));
     }
 
     [Fact]

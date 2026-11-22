@@ -9,7 +9,7 @@ namespace Cortex.Contained.Bridge.Endpoints;
 /// <summary>
 /// The Recall page API (all require authorization). Per tenant, relayed to that tenant's agent:
 /// <c>/api/tenants/{tenantId}/recall/settings</c> (GET, PUT), <c>/status</c>, <c>/purge/preview</c>,
-/// <c>/purge</c>, <c>/quarantine</c>, <c>/quarantine/keep</c>, <c>/quarantine/delete</c>. Bridge-wide:
+/// <c>/purge</c>, <c>/quarantine</c> (paged), <c>/quarantine/ids</c>, <c>/quarantine/keep</c>, <c>/quarantine/delete</c>. Bridge-wide:
 /// <c>/api/recall/reranker</c> (GET, PUT) — the reranker sidecar is shared by every tenant.
 /// The handlers are internal static seams so they are tested without a web host.
 /// </summary>
@@ -36,8 +36,11 @@ internal static class RecallEndpoints
         app.MapPost("/api/tenants/{tenantId}/recall/purge", (string tenantId, HistoryPurgeRequestDto body, [FromServices] TenantRouter router, CancellationToken ct) =>
             PurgeAsync(HubRecallAgentClient.For(router.GetClient(tenantId)), body, ct)).RequireAuthorization();
 
-        app.MapGet("/api/tenants/{tenantId}/recall/quarantine", (string tenantId, [FromServices] TenantRouter router, CancellationToken ct) =>
-            ListQuarantineAsync(HubRecallAgentClient.For(router.GetClient(tenantId)), ct)).RequireAuthorization();
+        app.MapGet("/api/tenants/{tenantId}/recall/quarantine", (string tenantId, int? offset, int? limit, [FromServices] TenantRouter router, CancellationToken ct) =>
+            ListQuarantineAsync(HubRecallAgentClient.For(router.GetClient(tenantId)), offset, limit, ct)).RequireAuthorization();
+
+        app.MapGet("/api/tenants/{tenantId}/recall/quarantine/ids", (string tenantId, [FromServices] TenantRouter router, CancellationToken ct) =>
+            ListQuarantineIdsAsync(HubRecallAgentClient.For(router.GetClient(tenantId)), ct)).RequireAuthorization();
 
         app.MapPost("/api/tenants/{tenantId}/recall/quarantine/keep", (string tenantId, QuarantineIdsRequest body, [FromServices] TenantRouter router, CancellationToken ct) =>
             DecideAsync(HubRecallAgentClient.For(router.GetClient(tenantId)), body, keep: true, ct)).RequireAuthorization();
@@ -110,8 +113,22 @@ internal static class RecallEndpoints
             : RelayAsync(() => agent.PurgeAsync(Normalize(body!), ct), result => Results.Ok(HistoryDeletionResponse.From(result)));
     }
 
-    internal static Task<IResult> ListQuarantineAsync(IRecallAgentClient? agent, CancellationToken ct) =>
-        agent is null ? Task.FromResult(NotConnected()) : RelayAsync(() => agent.ListQuarantineAsync(ct), Results.Ok);
+    /// <summary>One page (default <see cref="QuarantineLimits.DefaultPageSize"/>) of the quarantined memories plus the total.</summary>
+    internal static Task<IResult> ListQuarantineAsync(IRecallAgentClient? agent, int? offset, int? limit, CancellationToken ct)
+    {
+        var skip = offset ?? 0;
+        var take = limit ?? QuarantineLimits.DefaultPageSize;
+        if (skip < 0 || take < 1 || take > QuarantineLimits.MaxPageSize)
+        {
+            return Task.FromResult(BadRequest($"offset must not be negative and limit must be between 1 and {QuarantineLimits.MaxPageSize}"));
+        }
+
+        return agent is null ? Task.FromResult(NotConnected()) : RelayAsync(() => agent.ListQuarantineAsync(skip, take, ct), Results.Ok);
+    }
+
+    /// <summary>Every quarantined memory id, for "select all".</summary>
+    internal static Task<IResult> ListQuarantineIdsAsync(IRecallAgentClient? agent, CancellationToken ct) =>
+        agent is null ? Task.FromResult(NotConnected()) : RelayAsync(() => agent.ListQuarantineIdsAsync(ct), ids => Results.Ok(new { ids }));
 
     internal static Task<IResult> DecideAsync(IRecallAgentClient? agent, QuarantineIdsRequest? body, bool keep, CancellationToken ct)
     {
@@ -234,4 +251,10 @@ public static class QuarantineLimits
 {
     /// <summary>Largest id list per request (the agent enforces the same bound).</summary>
     public const int MaxBatch = 1000;
+
+    /// <summary>Page size of the review list when the caller does not choose one.</summary>
+    public const int DefaultPageSize = 200;
+
+    /// <summary>Largest review-list page (the agent enforces the same bound).</summary>
+    public const int MaxPageSize = 500;
 }

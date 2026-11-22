@@ -39,6 +39,10 @@ function tenantRecallPage() {
 
         // ── Needs review ─────────────────────────────────────────
         quarantine: [],
+        quarantineTotal: 0,
+        quarantineNext: 0,
+        reviewPageSize: 200,
+        reviewProgress: "",
         selected: {},
         expanded: {},
         reviewBusy: false,
@@ -241,17 +245,27 @@ function tenantRecallPage() {
         prettyName(id) { return prettifyChannelId(id); },
 
         // ── Needs review ─────────────────────────────────────────
-        async loadQuarantine() {
+        async loadQuarantine(more = false) {
+            const offset = more ? this.quarantineNext : 0;
             try {
-                const data = await api.get(`${this.base}/quarantine`);
-                this.quarantine = data?.items || [];
+                const data = await api.get(`${this.base}/quarantine?offset=${offset}&limit=${this.reviewPageSize}`);
+                const items = data?.items || [];
+                if (more) {
+                    const have = new Set(this.quarantine.map((q) => q.memory.memoryId));
+                    this.quarantine = this.quarantine.concat(items.filter((q) => !have.has(q.memory.memoryId)));
+                } else {
+                    this.quarantine = items;
+                }
+                this.quarantineTotal = data?.total ?? this.quarantine.length;
+                this.quarantineNext = offset + (data?.limit ?? this.reviewPageSize);
             } catch {
-                this.quarantine = [];
+                if (!more) {
+                    this.quarantine = [];
+                    this.quarantineTotal = 0;
+                    this.quarantineNext = 0;
+                }
             }
-            const ids = new Set(this.quarantine.map((q) => q.memory.memoryId));
-            for (const id of Object.keys(this.selected)) {
-                if (!ids.has(id)) delete this.selected[id];
-            }
+            if (this.quarantineTotal === 0) this.selected = {};
         },
 
         get selectedIds() {
@@ -259,7 +273,11 @@ function tenantRecallPage() {
         },
 
         get allSelected() {
-            return this.quarantine.length > 0 && this.selectedIds.length === this.quarantine.length;
+            return this.quarantine.length > 0 && this.quarantine.every((q) => this.selected[q.memory.memoryId]);
+        },
+
+        get hasMoreQuarantine() {
+            return this.quarantine.length < this.quarantineTotal;
         },
 
         toggleAll(checked) {
@@ -267,6 +285,19 @@ function tenantRecallPage() {
             if (checked) {
                 for (const q of this.quarantine) this.selected[q.memory.memoryId] = true;
             }
+        },
+
+        /** Selects every quarantined memory, not just the loaded page. */
+        async selectEverything() {
+            this.reviewBusy = true;
+            try {
+                const data = await api.get(`${this.base}/quarantine/ids`);
+                this.selected = {};
+                for (const id of data?.ids || []) this.selected[id] = true;
+            } catch (e) {
+                Alpine.store("toast").error("Could not select all: " + e.message);
+            }
+            this.reviewBusy = false;
         },
 
         preview300(text) {
@@ -283,18 +314,33 @@ function tenantRecallPage() {
             this.showBulkDeleteModal = true;
         },
 
+        /** Keeps or deletes ids in sequential batches of at most 1000 (the server limit); stops at the first error. */
         async decide(ids, keep) {
             if (ids.length === 0) return;
+            const batchSize = 1000;
             this.reviewBusy = true;
+            let done = 0;
+            let affected = 0;
+            let skipped = 0;
             try {
-                const r = await api.post(`${this.base}/quarantine/${keep ? "keep" : "delete"}`, { memoryIds: ids });
-                const skipped = r.skipped?.length ? ` (${r.skipped.length} no longer in review)` : "";
-                Alpine.store("toast").success(`${keep ? "Kept" : "Deleted"} ${r.affected} memories${skipped}`);
-                this.showBulkDeleteModal = false;
-                await Promise.all([this.loadQuarantine(), this.loadStatus()]);
+                for (let i = 0; i < ids.length; i += batchSize) {
+                    const batch = ids.slice(i, i + batchSize);
+                    this.reviewProgress = ids.length > batchSize ? `${done} of ${ids.length}…` : "";
+                    const r = await api.post(`${this.base}/quarantine/${keep ? "keep" : "delete"}`, { memoryIds: batch });
+                    done += batch.length;
+                    affected += r.affected;
+                    skipped += r.skipped?.length || 0;
+                    for (const id of batch) delete this.selected[id];
+                }
+                const note = skipped ? ` (${skipped} no longer in review)` : "";
+                Alpine.store("toast").success(`${keep ? "Kept" : "Deleted"} ${affected} memories${note}`);
             } catch (e) {
-                Alpine.store("toast").error(e.message);
+                const progress = ids.length > batchSize ? ` after ${done} of ${ids.length}` : "";
+                Alpine.store("toast").error(`${keep ? "Keep" : "Delete"} stopped${progress}: ${e.message}`);
             }
+            this.reviewProgress = "";
+            this.showBulkDeleteModal = false;
+            await Promise.all([this.loadQuarantine(), this.loadStatus()]);
             this.reviewBusy = false;
         },
     };

@@ -238,10 +238,19 @@ public sealed record QuarantinedMemoryDto
     public DateTimeOffset WindowTo { get; init; }
 }
 
-/// <summary>Quarantined memories awaiting review.</summary>
+/// <summary>One page of the quarantined memories awaiting review.</summary>
 public sealed record QuarantineReviewListDto
 {
     public required IReadOnlyList<QuarantinedMemoryDto> Items { get; init; }
+
+    /// <summary>Quarantined memories in total (the page holds at most <see cref="Limit"/> of them).</summary>
+    public int Total { get; init; }
+
+    /// <summary>Entries skipped before this page.</summary>
+    public int Offset { get; init; }
+
+    /// <summary>The page size that was applied.</summary>
+    public int Limit { get; init; }
 }
 
 /// <summary>Outcome of a bulk keep or delete of quarantined memories.</summary>

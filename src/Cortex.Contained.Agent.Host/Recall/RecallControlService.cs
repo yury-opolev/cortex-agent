@@ -99,8 +99,12 @@ public sealed class RecallControlService
         };
     }
 
-    /// <summary>Quarantined memories with their purge source.</summary>
-    public Task<QuarantineReviewListDto> ListQuarantineAsync(CancellationToken cancellationToken) => this.review.ListAsync(cancellationToken);
+    /// <summary>One page of quarantined memories with their purge source.</summary>
+    public Task<QuarantineReviewListDto> ListQuarantineAsync(int offset, int limit, CancellationToken cancellationToken) =>
+        this.review.ListAsync(offset, limit, cancellationToken);
+
+    /// <summary>Every quarantined memory id (no content).</summary>
+    public Task<IReadOnlyList<string>> ListQuarantineIdsAsync(CancellationToken cancellationToken) => this.review.ListIdsAsync(cancellationToken);
 
     /// <summary>Bulk keep.</summary>
     public Task<QuarantineDecisionResultDto> KeepAsync(IReadOnlyList<string> memoryIds, CancellationToken cancellationToken) =>

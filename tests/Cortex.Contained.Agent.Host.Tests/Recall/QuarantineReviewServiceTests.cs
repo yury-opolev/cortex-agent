@@ -50,12 +50,47 @@ public sealed class QuarantineReviewServiceTests : IAsyncDisposable
     {
         await this.PurgeAsync();
 
-        var list = await this.review.ListAsync(CancellationToken.None);
+        var list = await this.review.ListAsync(0, 10, CancellationToken.None);
 
         Assert.Equal(["m2", "m1"], list.Items.Select(i => i.Memory.MemoryId));
+        Assert.Equal(2, list.Total);
         Assert.All(list.Items, i => Assert.Equal("ch", i.PurgeChannelId));
         Assert.Equal("content of m2", list.Items[0].Memory.Content);
         Assert.Equal(T0.AddDays(2), list.Items[0].PurgedAt);
+    }
+
+    [Fact]
+    public async Task ListAsync_Page_ReturnsOnlyThatPageAndLoadsOnlyItsContent()
+    {
+        await this.PurgeAsync();
+
+        var list = await this.review.ListAsync(1, 1, CancellationToken.None);
+
+        Assert.Equal(["m1"], list.Items.Select(i => i.Memory.MemoryId));
+        Assert.Equal(2, list.Total);
+        Assert.Equal(1, list.Offset);
+        Assert.Equal(1, list.Limit);
+        await this.memories.Received(1).GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Theory]
+    [InlineData(-1, 10)]
+    [InlineData(0, 0)]
+    [InlineData(0, QuarantineReviewService.MaxPageSize + 1)]
+    public async Task ListAsync_InvalidPaging_Rejected(int offset, int limit)
+    {
+        await Assert.ThrowsAsync<ArgumentException>(() => this.review.ListAsync(offset, limit, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task ListIdsAsync_ReturnsEveryQuarantinedIdWithoutLoadingContent()
+    {
+        await this.PurgeAsync();
+
+        var ids = await this.review.ListIdsAsync(CancellationToken.None);
+
+        Assert.Equal(["m2", "m1"], ids);
+        await this.memories.DidNotReceive().GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -89,7 +124,7 @@ public sealed class QuarantineReviewServiceTests : IAsyncDisposable
 
         Assert.Equal(1, result.Affected);
         Assert.Equal(["outside"], result.Skipped);
-        Assert.Equal(["m2"], (await this.review.ListAsync(CancellationToken.None)).Items.Select(i => i.Memory.MemoryId));
+        Assert.Equal(["m2"], (await this.review.ListAsync(0, 10, CancellationToken.None)).Items.Select(i => i.Memory.MemoryId));
     }
 
     [Fact]
