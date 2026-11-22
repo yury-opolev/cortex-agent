@@ -43,6 +43,12 @@ public static partial class SessionSnapshotSerializer
     /// <summary>Key purpose (and associated-data label) of an encrypted snapshot.</summary>
     public const string Purpose = "sessions-snapshot";
 
+    /// <summary>Name prefix of an unrestored snapshot an earlier shutdown set aside.</summary>
+    public const string PendingPrefix = "sessions-snapshot.pending-";
+
+    /// <summary>Name suffix of a set-aside snapshot.</summary>
+    public const string PendingSuffix = ".enc";
+
     private static readonly JsonSerializerOptions jsonOptions = new()
     {
         WriteIndented = false,
@@ -99,6 +105,7 @@ public static partial class SessionSnapshotSerializer
         try
         {
             Directory.CreateDirectory(stateDir);
+            SetAsideUnrestored(filePath);
 
             var bytes = JsonSerializer.SerializeToUtf8Bytes(snapshot, jsonOptions);
             if (cipher is not null)
@@ -137,11 +144,30 @@ public static partial class SessionSnapshotSerializer
         }
     }
 
-    /// <summary>True when the snapshot file exists and is encrypted (restoring it needs the storage key).</summary>
+    /// <summary>True when the snapshot file, or one set aside by an earlier shutdown, is encrypted (restoring it needs the storage key).</summary>
     public static bool IsEncrypted(string stateDir)
     {
         var filePath = Path.Combine(stateDir, SnapshotFileName);
-        return File.Exists(filePath) && Storage.StorageFileCipher.IsEncryptedFile(filePath);
+        return (File.Exists(filePath) && Storage.StorageFileCipher.IsEncryptedFile(filePath)) || PendingSnapshots(stateDir).Count > 0;
+    }
+
+    // An unrestored snapshot (the key never arrived) must survive the next shutdown: it is renamed aside, not overwritten.
+    private static void SetAsideUnrestored(string filePath)
+    {
+        if (!File.Exists(filePath) || !Storage.StorageFileCipher.IsEncryptedFile(filePath))
+        {
+            return;
+        }
+
+        var directory = Path.GetDirectoryName(filePath)!;
+        var stamp = DateTimeOffset.UtcNow.ToString("yyyyMMddHHmmssfff", System.Globalization.CultureInfo.InvariantCulture);
+        var target = Path.Combine(directory, PendingPrefix + stamp + PendingSuffix);
+        for (var n = 1; File.Exists(target); n++)
+        {
+            target = Path.Combine(directory, PendingPrefix + stamp + "-" + n.ToString(System.Globalization.CultureInfo.InvariantCulture) + PendingSuffix);
+        }
+
+        File.Move(filePath, target);
     }
 
     /// <summary>
@@ -150,9 +176,33 @@ public static partial class SessionSnapshotSerializer
     /// The snapshot file is deleted after successful restore (one-shot); a plaintext one is overwritten first.
     /// An encrypted snapshot without <paramref name="cipher"/>, or one that does not authenticate, is kept.
     /// </summary>
-    public static int TryRestore(AgentSessionStore sessionStore, string stateDir, ILogger logger, Storage.StorageFileCipher? cipher = null)
+    public static int TryRestore(AgentSessionStore sessionStore, string stateDir, ILogger logger, Storage.StorageFileCipher? cipher = null) =>
+        TryRestoreFile(sessionStore, Path.Combine(stateDir, SnapshotFileName), logger, cipher, onlyMissingSessions: false);
+
+    /// <summary>
+    /// Restores the snapshot file and every snapshot set aside by <see cref="SaveAsync"/> (newest first) into
+    /// sessions that do not exist yet: a session that has history already is newer than the snapshot and is left
+    /// alone. Each file that restores is deleted; one that cannot be decrypted is kept. Returns the sessions restored.
+    /// </summary>
+    public static int RestoreUnrestored(AgentSessionStore sessionStore, string stateDir, ILogger logger, Storage.StorageFileCipher? cipher)
     {
-        var filePath = Path.Combine(stateDir, SnapshotFileName);
+        var restored = TryRestoreFile(sessionStore, Path.Combine(stateDir, SnapshotFileName), logger, cipher, onlyMissingSessions: true);
+        foreach (var pending in PendingSnapshots(stateDir))
+        {
+            restored += TryRestoreFile(sessionStore, pending, logger, cipher, onlyMissingSessions: true);
+        }
+
+        return restored;
+    }
+
+    /// <summary>Snapshots an earlier shutdown set aside rather than overwrite (they were never restored), newest first.</summary>
+    public static IReadOnlyList<string> PendingSnapshots(string stateDir) =>
+        Directory.Exists(stateDir)
+            ? [.. Directory.EnumerateFiles(stateDir, PendingPrefix + "*" + PendingSuffix).OrderByDescending(f => f, StringComparer.Ordinal)]
+            : [];
+
+    private static int TryRestoreFile(AgentSessionStore sessionStore, string filePath, ILogger logger, Storage.StorageFileCipher? cipher, bool onlyMissingSessions)
+    {
         if (!File.Exists(filePath))
         {
             return 0;
@@ -196,6 +246,10 @@ public static partial class SessionSnapshotSerializer
                     continue;
                 }
 
+                if (onlyMissingSessions && sessionStore.TryGet(entry.ConversationId, out var existing) && existing?.GetHistory().Count > 0)
+                {
+                    continue;
+                }
                 var session = sessionStore.GetOrCreate(entry.ConversationId);
                 RestoreSession(session, entry);
                 restored++;

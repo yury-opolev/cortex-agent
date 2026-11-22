@@ -130,7 +130,7 @@ public sealed class StorageInventory
             foreach (var entry in entries)
             {
                 var name = Path.GetFileName(entry);
-                if (KnownStateEntries.Contains(name))
+                if (KnownStateEntries.Contains(name) || name.StartsWith(Agent.SessionSnapshotSerializer.PendingPrefix, StringComparison.Ordinal))
                 {
                     continue;
                 }
@@ -271,16 +271,24 @@ public sealed class StorageInventory
     private StorageItemDto Snapshot()
     {
         var path = this.layout.SessionsSnapshot;
-        var state = this.TryRead(path, () => !File.Exists(path)
-            ? StoredFileState.Absent
-            : StorageFileCipher.IsEncryptedFile(path) ? StoredFileState.Encrypted : StoredFileState.Plaintext, out var read) ? read : (StoredFileState?)null;
+        var pending = this.TryRead(this.layout.StateRoot, () => Directory.Exists(this.layout.StateRoot)
+            ? Agent.SessionSnapshotSerializer.PendingSnapshots(this.layout.StateRoot)
+            : [], out var found) ? found : [];
+        var states = new List<StoredFileState?>();
+        foreach (var file in new[] { path }.Concat(pending))
+        {
+            states.Add(this.TryRead(file, () => !File.Exists(file)
+                ? StoredFileState.Absent
+                : StorageFileCipher.IsEncryptedFile(file) ? StoredFileState.Encrypted : StoredFileState.Plaintext, out var read) ? read : null);
+        }
+
         return new StorageItemDto
         {
             Id = "sessions-snapshot",
             Label = "Live sessions saved at shutdown (sessions-snapshot.json)",
             Path = Path.GetFileName(path),
-            State = Combine([state]),
-            Bytes = this.Measure(path).Bytes,
+            State = Combine(states),
+            Bytes = new[] { path }.Concat(pending).Sum(f => this.Measure(f).Bytes),
         };
     }
 }

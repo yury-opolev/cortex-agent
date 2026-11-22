@@ -140,4 +140,18 @@ public sealed class StorageInventoryTests : IDisposable
         Assert.DoesNotContain(inventory.NotCovered(), i => i.Id == "subagents");
         Assert.Null(inventory.Evaluation());
     }
+
+    [Fact]
+    public void SnapshotSetAsideByAShutdown_IsPartOfTheSnapshotItemNotAnUnrecognizedEntry()
+    {
+        var cipher = new StorageFileCipher(RandomNumberGenerator.GetBytes(32), "sessions-snapshot");
+        Write(Path.Combine(this.layout.StateRoot, "sessions-snapshot.pending-20261122100000000.enc"), cipher.Encrypt("{}"u8.ToArray()));
+        var inventory = new StorageInventory(this.layout);
+
+        var snapshot = inventory.Covered().Single(i => i.Id == "sessions-snapshot");
+
+        Assert.Equal(StorageItemStates.Encrypted, snapshot.State);
+        Assert.True(snapshot.Bytes > 0);
+        Assert.DoesNotContain(inventory.NotCovered(), i => i.Id.StartsWith("other:", StringComparison.Ordinal));
+    }
 }

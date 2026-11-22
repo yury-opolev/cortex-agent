@@ -31,12 +31,12 @@ public sealed class EncryptedSessionSnapshotTests : IDisposable
 
     private string SnapshotPath => Path.Combine(this.dir, SessionSnapshotSerializer.SnapshotFileName);
 
-    private static AgentSessionStore Sessions(string? text = null)
+    private static AgentSessionStore Sessions(string? text = null, string conversationId = "ch")
     {
         var store = new AgentSessionStore(new SessionConfig(), new MemorySettingsStore(), NullLogger<AgentSessionStore>.Instance);
         if (text is not null)
         {
-            store.GetOrCreate("ch").AddMessage(new LlmMessage { Role = "user", Content = text });
+            store.GetOrCreate(conversationId).AddMessage(new LlmMessage { Role = "user", Content = text });
         }
 
         return store;
@@ -119,6 +119,94 @@ public sealed class EncryptedSessionSnapshotTests : IDisposable
 
         Assert.True(sessions.TryGet("ch", out _));
         await runtime.Received(1).StartProcessingAsync(Arg.Any<CancellationToken>());
+        Assert.False(File.Exists(this.SnapshotPath));
+    }
+
+    private string[] PendingFiles() => Directory.GetFiles(this.dir, "sessions-snapshot.pending-*.enc");
+
+    private StorageEncryptionContext EncryptedContext() => StorageEncryptionContext.Resolve(new StorageOptions { EncryptAtRest = true }, this.layout);
+
+    [Fact]
+    public async Task Stop_AnUnrestoredSnapshotExists_IsSetAsideInsteadOfOverwritten()
+    {
+        var ring = Ring(provided: true);
+        await SessionSnapshotSerializer.SaveAsync(SessionSnapshotSerializer.CaptureSnapshot(Sessions("zqoldmarker", "old")), this.dir, NullLogger.Instance, Cipher(ring));
+        using var service = new AgentProcessingService(
+            Substitute.For<IAgentRuntime>(), Sessions("zqnewmarker", "new"), this.dir, NullLogger<AgentProcessingService>.Instance, this.EncryptedContext(), ring);
+
+        await service.StopAsync(CancellationToken.None);
+
+        var pending = Assert.Single(this.PendingFiles());
+        var restored = Sessions();
+        Assert.Equal(1, SessionSnapshotSerializer.TryRestore(restored, this.dir, NullLogger.Instance, Cipher(ring)));
+        Assert.True(restored.TryGet("new", out _));
+        Assert.False(restored.TryGet("old", out _));
+        Assert.True(File.Exists(pending));
+        Assert.False(File.ReadAllBytes(pending).AsSpan().IndexOf("zqoldmarker"u8) >= 0);
+    }
+
+    [Fact]
+    public async Task Start_KeyArrivesAfterTheWait_TheKeptSnapshotIsRestoredLateIntoMissingSessions()
+    {
+        var writer = Ring(provided: true);
+        await SessionSnapshotSerializer.SaveAsync(SessionSnapshotSerializer.CaptureSnapshot(Sessions("zqlatemarker", "late")), this.dir, NullLogger.Instance, Cipher(writer));
+        var runtime = Substitute.For<IAgentRuntime>();
+        var sessions = Sessions();
+        var ring = Ring(provided: false);
+        using var service = new AgentProcessingService(
+            runtime, sessions, this.dir, NullLogger<AgentProcessingService>.Instance, this.EncryptedContext(), ring, TimeSpan.FromMilliseconds(50));
+
+        await service.StartAsync(CancellationToken.None);
+        await service.DeferredStart.WaitAsync(TimeSpan.FromSeconds(10));
+        await runtime.Received(1).StartProcessingAsync(Arg.Any<CancellationToken>());
+        Assert.False(sessions.TryGet("late", out _));
+        ring.Provide(Key);
+        await service.LateRestore.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.True(sessions.TryGet("late", out _));
+        Assert.False(File.Exists(this.SnapshotPath));
+    }
+
+    [Fact]
+    public async Task LateRestore_ASessionThatExistsAlready_IsNotMergedWithTheStaleSnapshot()
+    {
+        var writer = Ring(provided: true);
+        await SessionSnapshotSerializer.SaveAsync(SessionSnapshotSerializer.CaptureSnapshot(Sessions("zqstalemarker")), this.dir, NullLogger.Instance, Cipher(writer));
+        var sessions = Sessions("fresh");
+        var ring = Ring(provided: false);
+        using var service = new AgentProcessingService(
+            Substitute.For<IAgentRuntime>(), sessions, this.dir, NullLogger<AgentProcessingService>.Instance, this.EncryptedContext(), ring, TimeSpan.FromMilliseconds(50));
+
+        await service.StartAsync(CancellationToken.None);
+        await service.DeferredStart.WaitAsync(TimeSpan.FromSeconds(10));
+        ring.Provide(Key);
+        await service.LateRestore.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.True(sessions.TryGet("ch", out var session));
+        Assert.Equal("fresh", Assert.Single(session!.GetHistory()).Content);
+        Assert.False(File.Exists(this.SnapshotPath));
+    }
+
+    [Fact]
+    public async Task Start_SnapshotSetAsideByAnEarlierShutdown_IsRestoredAndRemoved()
+    {
+        var ring = Ring(provided: true);
+        await SessionSnapshotSerializer.SaveAsync(SessionSnapshotSerializer.CaptureSnapshot(Sessions("zqoldmarker", "old")), this.dir, NullLogger.Instance, Cipher(ring));
+        using (var stopping = new AgentProcessingService(
+            Substitute.For<IAgentRuntime>(), Sessions("zqnewmarker", "new"), this.dir, NullLogger<AgentProcessingService>.Instance, this.EncryptedContext(), ring))
+        {
+            await stopping.StopAsync(CancellationToken.None);
+        }
+
+        var sessions = Sessions();
+        using var service = new AgentProcessingService(
+            Substitute.For<IAgentRuntime>(), sessions, this.dir, NullLogger<AgentProcessingService>.Instance, this.EncryptedContext(), ring);
+        await service.StartAsync(CancellationToken.None);
+        await service.DeferredStart.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.True(sessions.TryGet("new", out _));
+        Assert.True(sessions.TryGet("old", out _));
+        Assert.Empty(this.PendingFiles());
         Assert.False(File.Exists(this.SnapshotPath));
     }
 }

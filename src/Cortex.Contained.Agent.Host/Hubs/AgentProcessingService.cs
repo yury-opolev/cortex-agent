@@ -22,6 +22,7 @@ internal sealed partial class AgentProcessingService : IHostedService, IDisposab
     private readonly TimeSpan keyWait;
     private readonly CancellationTokenSource stopping = new();
     private Task deferredStart = Task.CompletedTask;
+    private Task lateRestore = Task.CompletedTask;
 
     public AgentProcessingService(
         IAgentRuntime runtime,
@@ -43,6 +44,9 @@ internal sealed partial class AgentProcessingService : IHostedService, IDisposab
 
     /// <summary>The deferred restore-then-start of an encrypted snapshot (completed when there is none).</summary>
     internal Task DeferredStart => this.deferredStart;
+
+    /// <summary>The restore of a snapshot whose key arrived after the wait (completed when none is pending).</summary>
+    internal Task LateRestore => this.lateRestore;
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
@@ -68,6 +72,7 @@ internal sealed partial class AgentProcessingService : IHostedService, IDisposab
     {
         await this.stopping.CancelAsync().ConfigureAwait(false);
         await this.deferredStart.ConfigureAwait(false);
+        await this.lateRestore.ConfigureAwait(false);
 
         // Stop processing first — drains in-flight work so sessions are in a clean state.
         await this.runtime.StopProcessingAsync(cancellationToken).ConfigureAwait(false);
@@ -101,7 +106,7 @@ internal sealed partial class AgentProcessingService : IHostedService, IDisposab
         try
         {
             var key = await this.keys!.WaitForKeyAsync(SessionSnapshotSerializer.Purpose, this.keyWait, cancellationToken).ConfigureAwait(false);
-            var restored = SessionSnapshotSerializer.TryRestore(
+            var restored = SessionSnapshotSerializer.RestoreUnrestored(
                 this.sessionStore, this.stateDir, this.logger, new StorageFileCipher(key, SessionSnapshotSerializer.Purpose));
             if (restored > 0)
             {
@@ -111,6 +116,7 @@ internal sealed partial class AgentProcessingService : IHostedService, IDisposab
         catch (TimeoutException)
         {
             this.LogSnapshotRestoreDeferred();
+            this.lateRestore = Task.Run(() => this.RestoreWhenKeyArrivesAsync(this.stopping.Token), CancellationToken.None);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -120,12 +126,32 @@ internal sealed partial class AgentProcessingService : IHostedService, IDisposab
         await this.runtime.StartProcessingAsync(CancellationToken.None).ConfigureAwait(false);
     }
 
+    private async Task RestoreWhenKeyArrivesAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await this.keys!.WhenAvailableAsync(cancellationToken).ConfigureAwait(false);
+            var cipher = new StorageFileCipher(this.keys.KeyFor(SessionSnapshotSerializer.Purpose), SessionSnapshotSerializer.Purpose);
+            var restored = SessionSnapshotSerializer.RestoreUnrestored(this.sessionStore, this.stateDir, this.logger, cipher);
+            if (restored > 0)
+            {
+                this.LogSessionsRestoredLate(restored);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+    }
+
     [LoggerMessage(Level = LogLevel.Information, Message = "Restored {Count} sessions from snapshot")]
     private partial void LogSessionsRestored(int count);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "The storage key arrived late: restored {Count} sessions from the kept snapshot into sessions that did not exist yet")]
+    private partial void LogSessionsRestoredLate(int count);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Session snapshot of {Count} sessions not saved: encryption at rest is on and the storage key is not available")]
     private partial void LogSnapshotSkipped(int count);
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Encrypted session snapshot not restored: the storage key did not arrive in time; processing starts without it and the snapshot is kept")]
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Encrypted session snapshot not restored yet: the storage key did not arrive in time; processing starts without it and the snapshot is kept until the key arrives")]
     private partial void LogSnapshotRestoreDeferred();
 }
