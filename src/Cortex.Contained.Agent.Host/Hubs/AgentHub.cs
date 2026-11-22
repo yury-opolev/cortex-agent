@@ -661,7 +661,7 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
     /// <inheritdoc />
     public async Task<MemoryItem?> CreateMemory(MemoryCreateRequest request)
     {
-        this.LogMemoryCreate(request.Title);
+        this.LogMemoryCreate(request.Title?.Length ?? 0, request.Content.Length);
         return await this.memoryService.CreateAsync(
             request.Content, request.Title, request.Tags,
             force: true, Context.ConnectionAborted).ConfigureAwait(false);
@@ -710,7 +710,7 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
     /// <inheritdoc />
     public Task<IReadOnlyList<MemorySearchItem>> SearchMemories(MemorySearchRequest request)
     {
-        this.LogMemorySearch(request.Query);
+        this.LogMemorySearch(request.Query.Length);
         return this.memoryService.SearchAsync(
             request.Query, request.Limit, request.MinScore, request.Tags,
             Context.ConnectionAborted);
@@ -1118,8 +1118,8 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
     [LoggerMessage(Level = LogLevel.Debug, Message = "Listing memories: limit={Limit}, offset={Offset}")]
     private partial void LogMemoryList(int limit, int offset);
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "Creating memory: title={Title}")]
-    private partial void LogMemoryCreate(string? title);
+    [LoggerMessage(Level = LogLevel.Information, Message = "Creating memory ({TitleLength} title chars, {ContentLength} content chars)")]
+    private partial void LogMemoryCreate(int titleLength, int contentLength);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Updating memory: {MemoryId}")]
     private partial void LogMemoryUpdate(string memoryId);
@@ -1127,8 +1127,8 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
     [LoggerMessage(Level = LogLevel.Information, Message = "Deleting memory: {MemoryId}")]
     private partial void LogMemoryDelete(string memoryId);
 
-    [LoggerMessage(Level = LogLevel.Debug, Message = "Searching memories: query={Query}")]
-    private partial void LogMemorySearch(string query);
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Searching memories ({QueryLength} chars)")]
+    private partial void LogMemorySearch(int queryLength);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Memory config update: duplicateThreshold={DuplicateThreshold}, compactionThreshold={CompactionThreshold}, compactionEnabled={CompactionEnabled}")]
     private partial void LogMemoryConfigUpdate(float duplicateThreshold, float compactionThreshold, bool compactionEnabled);

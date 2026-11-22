@@ -183,7 +183,7 @@ public sealed partial class MemoryConsolidationService : IDisposable
             // No similar memories and no batch context — just ADD
             var ingestResult = await this.memoryService.IngestAsync(
                 fact.Content, fact.Title, fact.Tags, force: true, cancellationToken).ConfigureAwait(false);
-            this.LogMemoryAdded(conversationId, ingestResult.MemoryId!, fact.Title ?? "(untitled)", fact.Content);
+            this.LogMemoryAdded(conversationId, ingestResult.MemoryId!, fact.Content.Length);
             batchMemories?.Add(new BatchMemoryEntry(ingestResult.MemoryId!, fact.Title, fact.Content));
             return new ConsolidationResult
             {
@@ -267,7 +267,7 @@ public sealed partial class MemoryConsolidationService : IDisposable
             // Fallback: just ADD to avoid losing the fact (this is a connectivity issue, not a duplicate risk)
             var fallbackResult = await this.memoryService.IngestAsync(
                 fact.Content, fact.Title, fact.Tags, force: true, cancellationToken).ConfigureAwait(false);
-            this.LogMemoryAdded(conversationId, fallbackResult.MemoryId!, fact.Title ?? "(untitled)", fact.Content);
+            this.LogMemoryAdded(conversationId, fallbackResult.MemoryId!, fact.Content.Length);
             batchMemories?.Add(new BatchMemoryEntry(fallbackResult.MemoryId!, fact.Title, fact.Content));
             return new ConsolidationResult
             {
@@ -303,8 +303,8 @@ public sealed partial class MemoryConsolidationService : IDisposable
             // The fact will be re-extracted in future conversations if it's important.
             if (json.Length == 0 || (json[0] != '{' && json[0] != '['))
             {
-                this.LogConsolidationNonJson(json);
-                this.LogMemoryNoop(conversationId, fact.Title ?? "(untitled)", "consolidation returned non-JSON, skipping to avoid duplicate");
+                this.LogConsolidationNonJson(json.Length);
+                this.LogMemoryNoop(conversationId, "consolidation returned non-JSON, skipping to avoid duplicate");
                 return new ConsolidationResult
                 {
                     Action = ConsolidationAction.Noop,
@@ -315,7 +315,7 @@ public sealed partial class MemoryConsolidationService : IDisposable
             var decision = JsonSerializer.Deserialize<ConsolidationDecision>(json, JsonOptions);
             if (decision is null)
             {
-                this.LogParsingFailed("consolidation", json, "deserialized to null");
+                this.LogParsingFailed("consolidation", json.Length, "deserialized to null");
                 return new ConsolidationResult
                 {
                     Action = ConsolidationAction.Error,
@@ -329,7 +329,7 @@ public sealed partial class MemoryConsolidationService : IDisposable
                 {
                     var addResult = await this.memoryService.IngestAsync(
                         fact.Content, fact.Title, fact.Tags, force: true, cancellationToken).ConfigureAwait(false);
-                    this.LogMemoryAdded(conversationId, addResult.MemoryId!, fact.Title ?? "(untitled)", fact.Content);
+                    this.LogMemoryAdded(conversationId, addResult.MemoryId!, fact.Content.Length);
                     batchMemories?.Add(new BatchMemoryEntry(addResult.MemoryId!, fact.Title, fact.Content));
                     return new ConsolidationResult
                     {
@@ -347,7 +347,7 @@ public sealed partial class MemoryConsolidationService : IDisposable
                         : fact.Content;
                     await this.memoryService.UpdateAsync(
                         decision.MemoryId, content, cancellationToken: cancellationToken).ConfigureAwait(false);
-                    this.LogMemoryUpdated(conversationId, decision.MemoryId, decision.Reason ?? "merged", content);
+                    this.LogMemoryUpdated(conversationId, decision.MemoryId, content.Length);
 
                     // Update the batch entry if it exists, so subsequent facts see the merged content
                     if (batchMemories is not null)
@@ -377,13 +377,13 @@ public sealed partial class MemoryConsolidationService : IDisposable
                 {
                     await this.memoryService.DeleteAsync(
                         decision.MemoryId, cancellationToken).ConfigureAwait(false);
-                    this.LogMemoryDeleted(conversationId, decision.MemoryId, decision.Reason ?? "contradicted");
+                    this.LogMemoryDeleted(conversationId, decision.MemoryId);
                     batchMemories?.RemoveAll(b => b.MemoryId == decision.MemoryId);
 
                     // After deleting the contradicted memory, ADD the new fact
                     var replaceResult = await this.memoryService.IngestAsync(
                         fact.Content, fact.Title, fact.Tags, force: true, cancellationToken).ConfigureAwait(false);
-                    this.LogMemoryAdded(conversationId, replaceResult.MemoryId!, fact.Title ?? "(untitled)", fact.Content);
+                    this.LogMemoryAdded(conversationId, replaceResult.MemoryId!, fact.Content.Length);
                     batchMemories?.Add(new BatchMemoryEntry(replaceResult.MemoryId!, fact.Title, fact.Content));
                     return new ConsolidationResult
                     {
@@ -396,7 +396,7 @@ public sealed partial class MemoryConsolidationService : IDisposable
 
                 case "NOOP":
                 {
-                    this.LogMemoryNoop(conversationId, fact.Title ?? "(untitled)", decision.Reason ?? "already exists");
+                    this.LogMemoryNoop(conversationId, "already exists");
                     return new ConsolidationResult
                     {
                         Action = ConsolidationAction.Noop,
@@ -407,8 +407,8 @@ public sealed partial class MemoryConsolidationService : IDisposable
                 default:
                 {
                     var unknownAction = decision.Action ?? "(null)";
-                    this.LogParsingFailed("consolidation", unknownAction, "unknown action");
-                    this.LogMemoryNoop(conversationId, fact.Title ?? "(untitled)", "unknown action, skipping to avoid duplicate");
+                    this.LogParsingFailed("consolidation", unknownAction.Length, "unknown action");
+                    this.LogMemoryNoop(conversationId, "unknown action, skipping to avoid duplicate");
                     return new ConsolidationResult
                     {
                         Action = ConsolidationAction.Noop,
@@ -419,8 +419,8 @@ public sealed partial class MemoryConsolidationService : IDisposable
         }
         catch (JsonException ex)
         {
-            this.LogParsingFailed("consolidation", llmResponse, ex.Message);
-            this.LogMemoryNoop(conversationId, fact.Title ?? "(untitled)", "JSON parse error, skipping to avoid duplicate");
+            this.LogParsingFailed("consolidation", llmResponse.Length, ex.Message);
+            this.LogMemoryNoop(conversationId, "JSON parse error, skipping to avoid duplicate");
             return new ConsolidationResult
             {
                 Action = ConsolidationAction.Noop,
@@ -557,21 +557,21 @@ public sealed partial class MemoryConsolidationService : IDisposable
     [LoggerMessage(Level = LogLevel.Warning, Message = "LLM call failed during {Phase}: {ErrorMessage}")]
     private partial void LogLlmCallFailed(string phase, string errorMessage);
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Consolidation LLM returned prose instead of JSON, skipping. Full response: {LlmResponse}")]
-    private partial void LogConsolidationNonJson(string llmResponse);
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Consolidation LLM returned prose instead of JSON ({ResponseLength} chars), skipping")]
+    private partial void LogConsolidationNonJson(int responseLength);
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to parse {Phase} JSON — response: {Response} — error: {ErrorMessage}")]
-    private partial void LogParsingFailed(string phase, string response, string errorMessage);
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to parse {Phase} JSON ({ResponseLength} chars): {ErrorMessage}")]
+    private partial void LogParsingFailed(string phase, int responseLength, string errorMessage);
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "[{ConversationId}] Memory ADD: {MemoryId} \"{Title}\" — {Content}")]
-    private partial void LogMemoryAdded(string conversationId, string memoryId, string title, string content);
+    [LoggerMessage(Level = LogLevel.Information, Message = "[{ConversationId}] Memory ADD: {MemoryId} ({ContentLength} chars)")]
+    private partial void LogMemoryAdded(string conversationId, string memoryId, int contentLength);
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "[{ConversationId}] Memory UPDATE: {MemoryId} — {Reason} — new content: {Content}")]
-    private partial void LogMemoryUpdated(string conversationId, string memoryId, string reason, string content);
+    [LoggerMessage(Level = LogLevel.Information, Message = "[{ConversationId}] Memory UPDATE: {MemoryId} ({ContentLength} chars)")]
+    private partial void LogMemoryUpdated(string conversationId, string memoryId, int contentLength);
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "[{ConversationId}] Memory DELETE: {MemoryId} — {Reason}")]
-    private partial void LogMemoryDeleted(string conversationId, string memoryId, string reason);
+    [LoggerMessage(Level = LogLevel.Information, Message = "[{ConversationId}] Memory DELETE: {MemoryId}")]
+    private partial void LogMemoryDeleted(string conversationId, string memoryId);
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "[{ConversationId}] Memory NOOP: \"{Title}\" — {Reason}")]
-    private partial void LogMemoryNoop(string conversationId, string title, string reason);
+    [LoggerMessage(Level = LogLevel.Information, Message = "[{ConversationId}] Memory NOOP: {Cause}")]
+    private partial void LogMemoryNoop(string conversationId, string cause);
 }
