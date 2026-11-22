@@ -128,11 +128,21 @@ builder.Services.AddSingleton<AgentSessionStore>();
 
 // --- Message Store (per-tenant SQLite persistence; encrypted at rest when Storage:EncryptAtRest, D4) ---
 var storageOptions = builder.Configuration.GetSection(StorageOptions.SectionName).Get<StorageOptions>() ?? new StorageOptions();
+// Encryption at rest is on when configured, when the owner enabled it (marker in the state volume) or when
+// encrypted files already exist: a reset configuration can never make the agent write plaintext again.
+var storageEncryption = StorageEncryptionContext.Resolve(
+    storageOptions,
+    StorageLayout.From(stateRoot, sandboxRoot, builder.Configuration.GetSection(MemoryMcpOptions.SectionName).Get<MemoryMcpOptions>() ?? new MemoryMcpOptions()));
+builder.Services.AddSingleton(storageEncryption);
+builder.Services.AddSingleton(sp => new Cortex.Contained.Agent.Host.Storage.StorageKeyRing
+{
+    ExpectedFingerprint = storageEncryption.Marker?.KeyFingerprint,
+});
 builder.Services.AddSingleton(sp =>
     new Cortex.Contained.Agent.Host.Storage.MessageStore(
         Path.Combine(stateRoot, "messages.db"),
         sp.GetRequiredService<ILoggerFactory>().CreateLogger<Cortex.Contained.Agent.Host.Storage.MessageStore>(),
-        storageOptions.EncryptAtRest
+        storageEncryption.Enabled
             ? new MessageStoreEncryption(sp.GetRequiredService<StorageKeyRing>(), TimeSpan.FromSeconds(storageOptions.KeyWaitSeconds))
             : null));
 builder.Services.AddSingleton<IStorageState>(sp => sp.GetRequiredService<MessageStore>());
@@ -150,7 +160,7 @@ builder.Services.AddSingleton<HistoryStatus>();
 builder.Services.AddSingleton<HistoryToolsSwitch>();
 builder.Services.AddSingleton(sp => new HistoryIndexGenerations(
     Path.Combine(stateRoot, "history"),
-    storageOptions.EncryptAtRest ? sp.GetRequiredService<StorageKeyRing>() : null,
+    storageEncryption.Enabled ? sp.GetRequiredService<StorageKeyRing>() : null,
     sp.GetRequiredService<ILogger<HistoryIndexGenerations>>()));
 builder.Services.AddSingleton<IHistoryEmbedder, OllamaHistoryEmbedder>();
 builder.Services.AddSingleton<HistoryProjector>();
@@ -194,7 +204,6 @@ builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Reranking.IRerankStage
 
 // --- Event log and provenance (increment 2): events in messages.db, tool payload policy ---
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Events.KnownSecrets>();
-builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Storage.StorageKeyRing>();
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Events.IEventLog>(sp => sp.GetRequiredService<MessageStore>());
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Events.ToolEventPayloads>();
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Events.IToolEventRecorder, Cortex.Contained.Agent.Host.Events.ToolEventRecorder>();
