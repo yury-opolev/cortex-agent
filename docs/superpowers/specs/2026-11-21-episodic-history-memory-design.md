@@ -87,7 +87,7 @@ The work is also the foundation for the ambient-agent model: an event log as the
 
 ### 4.2 Binding commitments for increment 3 (dense + hybrid)
 
-- **Text to embed.** The deterministic segment transcript (no digest) in ~256-word chunks with overlap, scored by the best chunk per segment. Set Ollama `num_ctx` explicitly and assert no truncation.
+- **Text to embed.** The deterministic segment transcript (no digest) in ~512-word chunks with a 64-word overlap (owner decision 2026-11-22, matching curated memory; originally ~256 words), scored by the best chunk per segment. Set Ollama `num_ctx` explicitly and assert no truncation.
 - **Query instruction prefix.** Add a configurable Qwen3 instruction prefix (`IEmbeddingService`) and run an ablation with and without it.
 - **Exact vector search** with filters applied before scoring (D8). Add an int8 copy plus full-precision rescore when the corpus passes 100k chunks.
 - **Embedder exposure.** History text goes only to the in-compose embeddings sidecar: internal network, no published port, authentication required for any remote endpoint, request logging off.

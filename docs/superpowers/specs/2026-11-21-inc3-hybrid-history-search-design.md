@@ -25,7 +25,7 @@ evaluation on raw data and the Gate H decision are owner tasks (§12), not part 
 ## 2. Scope
 
 **In scope**
-- Deterministic transcript chunks per segment (~256 words, overlap), written atomically with their segments.
+- Deterministic transcript chunks per segment (~512 words, 64-word overlap), written atomically with their segments.
 - Embedding jobs with generation, purge-generation and document-revision fencing; open-segment debounce.
 - `IEmbeddingService` (MemoryMcp.Core): explicit `num_ctx`, `truncate=false`, a Qwen3 query instruction.
 - Exact dense search inside the history index generation with filters applied before scoring; int8 copy plus full-precision rescore above 100k chunks.
@@ -46,7 +46,7 @@ evaluation on raw data and the Gate H decision are owner tasks (§12), not part 
 
 | ID | Decision |
 |---|---|
-| I3-1 | **Chunks are transcript windows, never stored.** A segment's rows render as deterministic lines `label: content [tools: a, b]` (honest labels, attachment markers, no timestamps). `HistoryChunker` cuts ~`ChunkWords`=256 whitespace words with `ChunkOverlapWords`=32 overlap, prefers a message boundary in the second half of the window, and enforces `MaxChunkChars`=3000 (long tokens are hard-split). The index stores each chunk's member ids, word count, an `AllInternal` flag and `TextHash` = SHA-256 of its text — the chunk's **document revision**. Its text is recomputed from the source whenever it is needed. A segment's score is its **best chunk**. |
+| I3-1 | **Chunks are transcript windows, never stored.** A segment's rows render as deterministic lines `label: content [tools: a, b]` (honest labels, attachment markers, no timestamps). `HistoryChunker` cuts ~`ChunkWords`=512 whitespace words with `ChunkOverlapWords`=64 overlap (owner decision 2026-11-22: the same window as curated memory chunks; originally 256/32), prefers a message boundary in the second half of the window, and enforces `MaxChunkChars`=6000 (long tokens are hard-split). The index stores each chunk's member ids, word count, an `AllInternal` flag and `TextHash` = SHA-256 of its text — the chunk's **document revision**. Its text is recomputed from the source whenever it is needed. A segment's score is its **best chunk**. |
 | I3-2 | **Embedding contract** (`MemoryMcp.Core`). `OllamaOptions.NumCtx` (default 4096) is sent with every `/api/embed` request together with `truncate=false`. Ollama's context-length error becomes `EmbeddingInputTooLongException`; a vector count mismatch throws. `IEmbeddingService.EmbedQueryAsync(query, instruction)` (default interface method) formats Qwen3's `Instruct: {task}\nQuery:{query}`; documents never get an instruction. `History:Dense:QueryInstruction`/`UseQueryInstruction` configure it and the grid ablates it. |
 | I3-3 | **Vector storage: a plain `chunks` table plus an exact scan in .NET, not sqlite-vec `vec0`.** Reasons: (1) filters are joins on `segments` (channel, time) plus the chunk's `AllInternal` flag — a SQL `WHERE` gives exact pre-filtering for free, while `vec0` KNN caps `k` at 4096 and needs the slower exact-join fallback beyond (increment 0 measurement); (2) the history index runs on SQLite3 Multiple Ciphers with encrypted generations — a plain table is encrypted and `secure_delete`-erased by the same mechanisms already tested, with no second native library to load into that connection; (3) incremental-equals-rebuild and byte-level erasure tests stay simple; (4) the scale-path record measured an exact .NET scan at 1.5 ms (10k) to 67 ms (1M, all threads) — far inside budget at today's ~10k chunks. |
 | I3-4 | **Exact search with filters before scoring.** `HistoryIndexReader.SearchDense` selects only candidate chunks (`segments.ChannelId`, segment time overlap, `AllInternal`), scores each with a SIMD dot product of unit vectors, and keeps the top `k` in a bounded heap (ties by lower `ChunkId`). Above `Int8Threshold` (100,000) embedded chunks it scans the int8 copy (`[float32 scale][sbyte×dims]`, stored for every vector) and rescores the best `k × Int8Oversample` (8) with float32. |
@@ -161,8 +161,8 @@ no plaintext vector bytes.
 
 `History:KeywordVariant` = `Plain` | `Stemmed` | `Trigram` (fingerprinted).
 
-`History:Dense`: `Enabled` (false), `ChunkWords` (256), `ChunkOverlapWords` (32), `MaxChunkChars`
-(3000), `QueryInstruction`, `UseQueryInstruction` (true), `AllowedEndpointHosts` ("embeddings"),
+`History:Dense`: `Enabled` (false), `ChunkWords` (512), `ChunkOverlapWords` (64), `MaxChunkChars`
+(6000), `QueryInstruction`, `UseQueryInstruction` (true), `AllowedEndpointHosts` ("embeddings"),
 `OpenSegmentDebounceMessages` (10), `OpenSegmentDebounceSeconds` (120), `EmbedBatchSize` (16),
 `QueryTimeoutMs` (3000), `Candidates` (100), `Int8Threshold` (100000), `Int8Oversample` (8).
 Chunking values and the embedder fingerprint are part of the index fingerprint when `Enabled`.
@@ -265,7 +265,7 @@ settings in production, and any evaluation run in CI.
 
 | §4.2 commitment | Where |
 |---|---|
-| Deterministic transcript, ~256-word chunks with overlap, best chunk per segment | I3-1, §6 |
+| Deterministic transcript, ~512-word chunks with overlap, best chunk per segment | I3-1, §6 |
 | `num_ctx` explicit, assert no truncation | I3-2, `embedder-check` |
 | Configurable Qwen3 query instruction on `IEmbeddingService`; ablation | I3-2, grid `hybrid-no-instruction` |
 | Exact vector search, filters before scoring; int8 + rescore beyond 100k | I3-3, I3-4 |

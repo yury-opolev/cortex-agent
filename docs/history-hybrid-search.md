@@ -12,7 +12,7 @@ Design: [`docs/superpowers/specs/2026-11-21-inc3-hybrid-history-search-design.md
 
 | Step | Where | What happens |
 |---|---|---|
-| Chunk | `HistoryChunker`, called by `HistorySegmenter` | Each segment's transcript (`label: content [tools: …]`, no timestamps) is split into ~256-word chunks with a 32-word overlap, preferring message boundaries, with a 3,000-character hard cap. Chunk text is never stored; its SHA-256 (`TextHash`) is its revision. |
+| Chunk | `HistoryChunker`, called by `HistorySegmenter` | Each segment's transcript (`label: content [tools: …]`, no timestamps) is split into ~512-word chunks with a 64-word overlap (the same window as curated memory chunks), preferring message boundaries, with a 6,000-character hard cap. Chunk text is never stored; its SHA-256 (`TextHash`) is its revision. |
 | Queue | `HistoryIndexDatabase.Apply` | Chunk rows are written in the same index transaction as their segments. A chunk without a vector **is** the embedding job. Unchanged chunk texts keep their vectors when a channel is recomputed. |
 | Debounce | `ReadPendingChunks` | A channel's last (open) segment is embedded only after 10 new messages or 2 minutes; closed segments immediately. |
 | Embed | `HistoryProjector.EmbedPendingAsync` | Reads due jobs, recomputes each chunk text from the source, embeds outside every lock, and publishes in one transaction only if the generation, the purge generation and the `TextHash` are unchanged. Rejected (too long) chunks count attempts and are reported as `failed` after 3. |
@@ -31,7 +31,7 @@ Design: [`docs/superpowers/specs/2026-11-21-inc3-hybrid-history-search-design.md
 | Key | Default | Meaning |
 |---|---|---|
 | `Enabled` | `false` | Chunk, embed and enable hybrid search. |
-| `ChunkWords` / `ChunkOverlapWords` / `MaxChunkChars` | `256` / `32` / `3000` | Chunking (fingerprinted: changing them rebuilds and re-embeds). |
+| `ChunkWords` / `ChunkOverlapWords` / `MaxChunkChars` | `512` / `64` / `6000` | Chunking (fingerprinted: changing them rebuilds and re-embeds). |
 | `QueryInstruction` / `UseQueryInstruction` | Qwen3 retrieval instruction / `true` | Query-side instruction prefix (ablated). |
 | `AllowedEndpointHosts` | `embeddings` | Hosts that may receive history text without an API key. |
 | `OpenSegmentDebounceMessages` / `OpenSegmentDebounceSeconds` | `10` / `120` | Open-segment debounce. |

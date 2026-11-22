@@ -35,14 +35,14 @@ public sealed class HistoryDenseOptions
     /// <summary>Chunks segments and embeds them; enables <c>mode=hybrid</c>. Default false.</summary>
     public bool Enabled { get; set; }
 
-    /// <summary>Target words per transcript chunk.</summary>
-    public int ChunkWords { get; set; } = 256;
+    /// <summary>Target words per transcript chunk (same window as curated memory chunks).</summary>
+    public int ChunkWords { get; set; } = 512;
 
     /// <summary>Words repeated from the end of one chunk at the start of the next.</summary>
-    public int ChunkOverlapWords { get; set; } = 32;
+    public int ChunkOverlapWords { get; set; } = 64;
 
     /// <summary>Hard character cap per chunk, so one long token can never overflow <c>num_ctx</c>.</summary>
-    public int MaxChunkChars { get; set; } = 3000;
+    public int MaxChunkChars { get; set; } = 6000;
 
     /// <summary>Qwen3 query instruction (task description); documents are embedded without one.</summary>
     public string QueryInstruction { get; set; } =
