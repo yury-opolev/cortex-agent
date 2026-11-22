@@ -1,7 +1,7 @@
 # HANDOFF — Feature 4: coda relay simplify + coda-source setting
 
 **Parked:** 2026-07-05
-**Branch:** `feat/coda-relay-simplify` (in `C:\Users\yurio\Documents\github\cortex-agent`)
+**Branch:** `feat/coda-relay-simplify` (in `<repo root>`)
 **Method:** Superpowers Subagent-Driven Development (SDD)
 **Spec:** `docs/superpowers/specs/2026-07-05-coda-relay-simplify-and-source-setting-design.md`
 **Plan:** `docs/superpowers/plans/2026-07-05-coda-relay-simplify-and-source-setting.md` (7 tasks)
@@ -60,7 +60,7 @@ Two cleanups to the cortex↔coda coding relay, enabled by coda now being single
 - **Test filter syntax:** `--filter "FullyQualifiedName~X|FullyQualifiedName~Y"` (tilde, NOT `ClassName=`).
 - **Do NOT pipe `dotnet test` through `grep | head`** — it buffers and can yield a 0-byte log; redirect full output to a file and grep the file.
 - Style (CLAUDE.md): `this.` on instance members, braces on all blocks, `static readonly` fields camelCase no prefix, source-generated `[LoggerMessage]`, one type per file (endpoints files mirror `CodingMcpEndpoints` and hold DTO+class+request together — accepted).
-- SDD scripts live at: `C:\Users\yurio\.claude\plugins\cache\claude-plugins-official\superpowers\6.1.1\skills\subagent-driven-development\scripts\` (`task-brief`, `review-package`).
+- SDD scripts live at: `<user home>\.claude\plugins\cache\claude-plugins-official\superpowers\6.1.1\skills\subagent-driven-development\scripts\` (`task-brief`, `review-package`).
 
 ## Resume prompt
 See the message that accompanied this file (or paste the "RESUME PROMPT" block below into a fresh session).

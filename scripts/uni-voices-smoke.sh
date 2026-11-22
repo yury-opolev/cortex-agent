@@ -2,10 +2,10 @@
 # Rebuild the uni-voices image (now baking models at build time), recreate the
 # container, wait until all three engines actually load, then synth one sentence
 # per engine. Proves: image builds, no runtime internet needed, GPU used, audio
-# produced. Run from the cortex repo root.
+# produced. Run from the repo root (the script cds there itself).
 set +e
 export MSYS_NO_PATHCONV=1   # stop git-bash translating /paths passed to docker exec
-cd "C:/Users/yurio/Documents/github/cortex" || exit 1
+cd "$(dirname "$0")/.." || exit 1
 
 echo "===== BUILD (bakes Kokoro/Røst/Silero weights) ====="
 docker compose --profile tts build uni-voices 2>&1 | tail -50

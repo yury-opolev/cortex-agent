@@ -393,7 +393,7 @@ public sealed partial class MemoryExtractionService : BackgroundService
             Respond with a JSON array. If there is nothing worth remembering, respond with an empty array [].
             Example:
             [
-              {"content": "User's name is Yury and he lives in Copenhagen", "title": "User identity", "tags": ["personal", "location"]},
+              {"content": "User's name is Alex and he lives in Lisbon", "title": "User identity", "tags": ["personal", "location"]},
               {"content": "User prefers Claude over GPT for coding tasks", "title": "LLM preference", "tags": ["preferences", "technical"]}
             ]
 
@@ -403,9 +403,9 @@ public sealed partial class MemoryExtractionService : BackgroundService
             - "User decided not to set a reminder for it" (for what?)
 
             GOOD versions of the same facts:
-            - "Danish citizenship application processing can take more than 2 years"
-            - "User submitted a Danish citizenship application approximately 1 year and 5 months ago"
-            - "User declined to set a reminder for the Danish citizenship application"
+            - "Residence permit application processing can take more than 2 years"
+            - "User submitted a residence permit application approximately 1 year and 5 months ago"
+            - "User declined to set a reminder for the residence permit application"
 
             Respond with exactly one JSON array and nothing else — no commentary, no explanation, no markdown.
             """);

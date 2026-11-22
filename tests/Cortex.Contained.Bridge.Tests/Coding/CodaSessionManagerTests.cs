@@ -764,8 +764,8 @@ public sealed class CodaSessionManagerHistoryTests : IDisposable
         await WaitForStateAsync(session, CodingSessionState.Idle, TimeSpan.FromSeconds(5));
         Assert.Equal(CodingSessionState.Idle, session.State);
 
-        // A follow-up message is accepted as a real NEW turn (Steered=false), proving the fitbit-sync
-        // regression (a limit-hit session refusing further messages) is fixed end-to-end.
+        // A follow-up message is accepted as a real NEW turn (Steered=false), proving the regression
+        // from an example project (a limit-hit session refusing further messages) is fixed end-to-end.
         server.Scenario = FakeCoda.FakeCodaScenario.Happy;
         var response = await manager.SendMessageAsync(
             new CodingSendRequest { SessionId = "limit-1", Message = "continue" }, CancellationToken.None)

@@ -77,8 +77,8 @@ public sealed class MemoryConsolidationEvals
             var inputs = new List<EvalExtractionInput>();
 
             // First conversation mentions location
-            var u1 = "I live in Copenhagen, Denmark.";
-            var a1 = "Copenhagen is beautiful! How long have you lived there?";
+            var u1 = "I live in Lisbon, Portugal.";
+            var a1 = "Lisbon is beautiful! How long have you lived there?";
             await RunExtractionAsync(env, u1, a1);
             inputs.Add(new EvalExtractionInput { UserMessage = u1, AssistantResponse = a1 });
 
@@ -90,8 +90,8 @@ public sealed class MemoryConsolidationEvals
             }
 
             // Second conversation mentions the same location with more detail
-            var u2 = "I've been in Copenhagen for about 3 years now. I live near Nørrebro.";
-            var a2 = "Nørrebro is a great neighborhood! Very lively area.";
+            var u2 = "I've been in Lisbon for about 3 years now. I live near Alfama.";
+            var a2 = "Alfama is a great neighborhood! Very lively area.";
             await RunExtractionAsync(env, u2, a2);
             inputs.Add(new EvalExtractionInput { UserMessage = u2, AssistantResponse = a2 });
 
@@ -105,7 +105,7 @@ public sealed class MemoryConsolidationEvals
             // Should have merged or updated, not duplicated.
             // At most 2 memories about location (one merged, possibly one about duration)
             var locationMemories = afterSecond
-                .Where(m => m.Content.Contains("Copenhagen", StringComparison.OrdinalIgnoreCase))
+                .Where(m => m.Content.Contains("Lisbon", StringComparison.OrdinalIgnoreCase))
                 .ToList();
 
             _output.WriteLine($"Location-related memories: {locationMemories.Count}");

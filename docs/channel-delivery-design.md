@@ -2,7 +2,7 @@
 
 **Status:** Design proposal for review; no production changes applied.
 
-**Repository:** `C:\Users\yurio\Documents\github\cortex-agent` (`https://github.com/yury-opolev/cortex-agent.git`). This is the repository containing the Agent Host tools, Bridge, and Discord/webchat adapters described as “assistant-bridge” in the incident report.
+**Repository:** `<repo root>` (`https://github.com/yury-opolev/cortex-agent.git`). This is the repository containing the Agent Host tools, Bridge, and Discord/webchat adapters described as “assistant-bridge” in the incident report.
 
 **Source baseline:** HEAD `b082e47` (`Merge pull request #57 from yury-opolev/feat/autonomous-subagents`). Line references below describe the working-tree source inspected during this investigation. `version.json` was already modified before investigation and was left alone.
 
@@ -43,7 +43,7 @@ Those records identify a wrong destination **at task creation**, before any sche
 
 ### 2.2 Verification performed
 
-Read the actual source, related tests, and repository identity; searched the available Coda diagnostic directory `C:\Users\yurio\.coda\logs\diagnostics\`. At the time of the incident search it contained one active 2026-10-03 JSONL log, not a three-session archive. No incident-specific task/cue record was found in that search. No app was started, no live cue sent, and no tests were run. The findings are a source-level diagnosis consistent with the supplied incident, not a claim that the deployed binary or all three historical prompts were verified.
+Read the actual source, related tests, and repository identity; searched the available Coda diagnostic directory `<user home>\.coda\logs\diagnostics\`. At the time of the incident search it contained one active 2026-10-03 JSONL log, not a three-session archive. No incident-specific task/cue record was found in that search. No app was started, no live cue sent, and no tests were run. The findings are a source-level diagnosis consistent with the supplied incident, not a claim that the deployed binary or all three historical prompts were verified.
 
 To close that remaining evidentiary gap, obtain the deployed build ID, original tool arguments and results, rendered prompt, active-channel snapshot, persisted task row, and Bridge/adapter events for `fe637c75`. Correlate creation, firing, and delivery; do not assume a Coda tool log is a Discord playback receipt.
 

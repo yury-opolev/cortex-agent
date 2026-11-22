@@ -129,8 +129,8 @@ public class DaveEventStatsTests
     [Fact]
     public void TryParseUserId_ValidDecryptFailureMessage_ReturnsId()
     {
-        var id = DaveEventStats.TryParseUserId("Failed to decrypt audio packet for 806798098839765047: DecryptionFailure");
-        Assert.Equal(806798098839765047UL, id);
+        var id = DaveEventStats.TryParseUserId("Failed to decrypt audio packet for 111111111111111111: DecryptionFailure");
+        Assert.Equal(111111111111111111UL, id);
     }
 
     [Theory]

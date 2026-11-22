@@ -17,7 +17,7 @@ public sealed class DiscordVoiceHandlerDispatchTests
 {
     private const string TenantId = "tenant-a";
     private const ulong UserId = 42UL;
-    private const string DisplayName = "Yuri";
+    private const string DisplayName = "Alex";
 
     [Fact]
     public async Task RejectGate_DoesNotInvokeOnTranscription()

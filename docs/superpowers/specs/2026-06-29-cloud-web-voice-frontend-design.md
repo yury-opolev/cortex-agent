@@ -152,7 +152,7 @@ history, and memory are untouched.
 ## 7. Authentication & Security
 
 - **Browser → frontend/relay:** **Cloudflare Access** in front of both, scoped to the
-  owner's identity (Google / email OTP for yuri.opolev@gmail.com). Zero passwords to manage;
+  owner's identity (Google / email OTP for the owner's email address). Zero passwords to manage;
   the relay trusts the validated Access JWT. (Alternative: an app-level passkey/password if
   CF Access is undesirable.)
 - **Home → relay:** strong shared secret or mTLS client cert; the relay rejects any home

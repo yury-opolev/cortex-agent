@@ -2,7 +2,7 @@
 # Stop the old single-engine danish-tts container (it squats on :8000), then
 # start the unified uni-voices sidecar and validate GPU + all three engines.
 set +e
-cd "C:/Users/yurio/Documents/github/cortex" || exit 1
+cd "$(dirname "$0")/.." || exit 1
 
 echo "===== CURRENT CONTAINERS ====="
 docker ps --format '{{.Names}}\t{{.Image}}\t{{.Ports}}'

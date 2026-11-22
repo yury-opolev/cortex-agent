@@ -77,6 +77,6 @@ public class DaveSessionLifecycleClassifierTests
         // messages; the message check must carry the disambiguation.
         Assert.Equal(
             DaveLifecycleEvent.None,
-            DaveSessionLifecycleClassifier.Classify("Dave decrypt stream 806798098839765047", "Failed to decrypt audio packet for 806798098839765047: MissingKeyRatchet"));
+            DaveSessionLifecycleClassifier.Classify("Dave decrypt stream 111111111111111111", "Failed to decrypt audio packet for 111111111111111111: MissingKeyRatchet"));
     }
 }

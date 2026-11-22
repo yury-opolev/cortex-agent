@@ -108,11 +108,11 @@ public class MemoryConsolidationServiceTests : IDisposable
         var batch = new List<BatchMemoryEntry>();
 
         await _sut.ConsolidateAsync(
-            MakeFact("User lives in Copenhagen"), Model, "conv-1", batch, CancellationToken.None);
+            MakeFact("User lives in Lisbon"), Model, "conv-1", batch, CancellationToken.None);
 
         Assert.Single(batch);
         Assert.Equal("mem-456", batch[0].MemoryId);
-        Assert.Equal("User lives in Copenhagen", batch[0].Content);
+        Assert.Equal("User lives in Lisbon", batch[0].Content);
     }
 
     // ── LLM decides ADD ────────────────────────────────────────────────
@@ -214,14 +214,14 @@ public class MemoryConsolidationServiceTests : IDisposable
         SetupIngest("replacement-1");
 
         var result = await _sut.ConsolidateAsync(
-            MakeFact("User moved to Copenhagen"), Model, "conv-1", null, CancellationToken.None);
+            MakeFact("User moved to Lisbon"), Model, "conv-1", null, CancellationToken.None);
 
         Assert.Equal(ConsolidationAction.Replaced, result.Action);
         Assert.Equal("replacement-1", result.MemoryId);
 
         await _memoryService.Received(1).DeleteAsync("old-1", Arg.Any<CancellationToken>());
         await _memoryService.Received(1).IngestAsync(
-            "User moved to Copenhagen", Arg.Any<string?>(), Arg.Any<List<string>?>(),
+            "User moved to Lisbon", Arg.Any<string?>(), Arg.Any<List<string>?>(),
             true, Arg.Any<CancellationToken>());
     }
 
