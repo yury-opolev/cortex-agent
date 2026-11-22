@@ -58,6 +58,20 @@ public sealed class BridgeConfig
 
     /// <summary>Reranker sidecar for history and memory search (episodic history, increment 5).</summary>
     public RerankerSettingsConfig Reranker { get; set; } = new();
+
+    /// <summary>Embeddings sidecar placement (opt-in GPU).</summary>
+    public EmbeddingsSettingsConfig Embeddings { get; set; } = new();
+}
+
+/// <summary>Embeddings sidecar settings persisted on the Bridge host.</summary>
+public sealed class EmbeddingsSettingsConfig
+{
+    /// <summary>
+    /// Run the <c>cortex-embeddings</c> sidecar on the NVIDIA GPU (<c>Embeddings:Gpu</c>, default false = CPU).
+    /// When true the Bridge adds <c>docker-compose.embeddings-gpu.yml</c> to the compose commands for the
+    /// sidecar, and falls back to the CPU (reporting why) when the GPU start fails.
+    /// </summary>
+    public bool Gpu { get; set; }
 }
 
 /// <summary>Reranker settings persisted on the Bridge host.</summary>

@@ -193,6 +193,9 @@ internal static class BridgeSettingsWriter
         // Reranker switch (Bridge-wide; the Recall page toggles it)
         RerankerConfigYamlWriter.AppendRerankerSection(sb, config.Reranker);
 
+        // Embeddings GPU switch (Bridge-wide; the Recall page toggles it)
+        EmbeddingsConfigYamlWriter.AppendEmbeddingsSection(sb, config.Embeddings);
+
         // MCP servers section (non-secret: secretRef ids + ${secret:id} tokens only)
         Cortex.Contained.Bridge.Mcp.McpConfigYamlWriter.AppendMcpSection(sb, config.Mcp);
 

@@ -42,7 +42,7 @@ public sealed class RecallEndpointsTests
             .OfType<RouteEndpoint>()
             .ToList();
 
-        Assert.Equal(11, endpoints.Count);
+        Assert.Equal(13, endpoints.Count);
         Assert.All(endpoints, endpoint => Assert.NotNull(endpoint.Metadata.GetMetadata<IAuthorizeData>()));
         Assert.All(endpoints, endpoint => Assert.Contains("/recall", endpoint.RoutePattern.RawText, StringComparison.Ordinal));
     }
@@ -224,5 +224,53 @@ public sealed class RecallEndpointsTests
         Assert.True(config.Reranker.Enabled);
         Assert.Equal([true], persisted);
         Assert.Equal(1, converging);
+    }
+
+    private static EmbeddingsGpuSwitch NewGpuSwitch(BridgeConfig config, Action<BridgeConfig> persist)
+    {
+        var runner = Substitute.For<IEmbeddingsComposeRunner>();
+        return new EmbeddingsGpuSwitch(
+            config,
+            persist,
+            new EmbeddingsSidecarLifecycle(runner, () => config.Embeddings.Gpu, NullLogger<EmbeddingsSidecarLifecycle>.Instance),
+            runner);
+    }
+
+    [Fact]
+    public void SetEmbeddingsGpu_PersistsThenStartsConverging()
+    {
+        var config = new BridgeConfig();
+        var persisted = new List<bool>();
+        var gpu = NewGpuSwitch(config, c => persisted.Add(c.Embeddings.Gpu));
+        var converging = 0;
+
+        var result = RecallEndpoints.SetEmbeddingsGpu(gpu, new EmbeddingsGpuToggleRequest(true), _ => converging++);
+
+        Assert.Equal(200, StatusOf(result));
+        Assert.True(config.Embeddings.Gpu);
+        Assert.Equal([true], persisted);
+        Assert.Equal(1, converging);
+    }
+
+    [Fact]
+    public void SetEmbeddingsGpu_SaveFails_Is500AndTheSwitchIsRestored()
+    {
+        var config = new BridgeConfig();
+        var gpu = NewGpuSwitch(config, _ => throw new IOException("disk full"));
+        var converging = 0;
+
+        var result = RecallEndpoints.SetEmbeddingsGpu(gpu, new EmbeddingsGpuToggleRequest(true), _ => converging++);
+
+        Assert.Equal(500, StatusOf(result));
+        Assert.False(config.Embeddings.Gpu);
+        Assert.Equal(0, converging);
+    }
+
+    [Fact]
+    public void SetEmbeddingsGpu_NoBody_Is400()
+    {
+        var gpu = NewGpuSwitch(new BridgeConfig(), _ => { });
+
+        Assert.Equal(400, StatusOf(RecallEndpoints.SetEmbeddingsGpu(gpu, null, _ => { })));
     }
 }

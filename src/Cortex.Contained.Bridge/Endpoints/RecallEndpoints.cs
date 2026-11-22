@@ -10,7 +10,8 @@ namespace Cortex.Contained.Bridge.Endpoints;
 /// The Recall page API (all require authorization). Per tenant, relayed to that tenant's agent:
 /// <c>/api/tenants/{tenantId}/recall/settings</c> (GET, PUT), <c>/status</c>, <c>/purge/preview</c>,
 /// <c>/purge</c>, <c>/quarantine</c> (paged), <c>/quarantine/ids</c>, <c>/quarantine/keep</c>, <c>/quarantine/delete</c>. Bridge-wide:
-/// <c>/api/recall/reranker</c> (GET, PUT) — the reranker sidecar is shared by every tenant.
+/// <c>/api/recall/reranker</c> (GET, PUT) — the reranker sidecar is shared by every tenant — and
+/// <c>/api/recall/embeddings-gpu</c> (GET, PUT) — so is the embeddings sidecar, whose GPU switch lives here.
 /// The handlers are internal static seams so they are tested without a web host.
 /// </summary>
 internal static class RecallEndpoints
@@ -52,6 +53,12 @@ internal static class RecallEndpoints
 
         app.MapPut("/api/recall/reranker", (RerankerToggleRequest body, [FromServices] RerankerSwitch reranker) =>
             SetReranker(reranker, body, converge => _ = Task.Run(() => converge(CancellationToken.None), CancellationToken.None))).RequireAuthorization();
+
+        app.MapGet("/api/recall/embeddings-gpu", async ([FromServices] EmbeddingsGpuSwitch gpu, CancellationToken ct) =>
+            Results.Ok(await gpu.ProbeAsync(ct).ConfigureAwait(false))).RequireAuthorization();
+
+        app.MapPut("/api/recall/embeddings-gpu", (EmbeddingsGpuToggleRequest body, [FromServices] EmbeddingsGpuSwitch gpu) =>
+            SetEmbeddingsGpu(gpu, body, converge => _ = Task.Run(() => converge(CancellationToken.None), CancellationToken.None))).RequireAuthorization();
     }
 
     internal static Task<IResult> GetSettingsAsync(IRecallAgentClient? agent, CancellationToken ct) =>
@@ -170,6 +177,29 @@ internal static class RecallEndpoints
         return Results.Ok(reranker.Current);
     }
 
+    /// <summary>Persists the GPU switch, starts converging (recreating the sidecar) and returns the new view.</summary>
+    internal static IResult SetEmbeddingsGpu(EmbeddingsGpuSwitch gpu, EmbeddingsGpuToggleRequest? body, Action<Func<CancellationToken, Task>> startConverge)
+    {
+        ArgumentNullException.ThrowIfNull(gpu);
+        ArgumentNullException.ThrowIfNull(startConverge);
+        if (body is null)
+        {
+            return BadRequest("Request body is required");
+        }
+
+        try
+        {
+            gpu.Set(body.Enabled);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return Results.Json(new { error = "Could not save cortex.yml: " + ex.Message }, statusCode: 500);
+        }
+
+        startConverge(gpu.ConvergeAsync);
+        return Results.Ok(gpu.Current);
+    }
+
     /// <summary>Null when <paramref name="body"/> is a usable purge request; otherwise the error.</summary>
     internal static string? ValidatePurge(HistoryPurgeRequestDto? body)
     {
@@ -245,6 +275,9 @@ public sealed record QuarantineIdsRequest(IReadOnlyList<string>? MemoryIds);
 
 /// <summary>Body of <c>PUT /api/recall/reranker</c>.</summary>
 public sealed record RerankerToggleRequest(bool Enabled);
+
+/// <summary>Body of <c>PUT /api/recall/embeddings-gpu</c>.</summary>
+public sealed record EmbeddingsGpuToggleRequest(bool Enabled);
 
 /// <summary>Limits shared by the quarantine endpoints and the agent.</summary>
 public static class QuarantineLimits

@@ -1094,7 +1094,16 @@ builder.Services.AddSingleton<Cortex.Contained.Bridge.Speech.DanishTtsLifecycle>
 // (poisoned CUDA context) — otherwise voice stays dead until someone notices by ear.
 builder.Services.AddSingleton<Cortex.Contained.Bridge.Speech.SpeechSidecarFaultRecovery>();
 builder.Services.AddSingleton<Cortex.Contained.Bridge.Speech.SttSidecarLifecycle>();
-builder.Services.AddSingleton<Cortex.Contained.Bridge.Speech.EmbeddingsSidecarLifecycle>();
+builder.Services.AddSingleton(sp => new Cortex.Contained.Bridge.Speech.EmbeddingsSidecarLifecycle(
+    sp.GetRequiredService<Cortex.Contained.Bridge.Speech.IEmbeddingsComposeRunner>(),
+    () => sp.GetRequiredService<BridgeConfig>().Embeddings.Gpu,
+    sp.GetRequiredService<ILogger<Cortex.Contained.Bridge.Speech.EmbeddingsSidecarLifecycle>>()));
+// Recall page embeddings GPU switch: persists Embeddings:Gpu to cortex.yml, then recreates the sidecar on the chosen processor.
+builder.Services.AddSingleton(sp => new Cortex.Contained.Bridge.Recall.EmbeddingsGpuSwitch(
+    sp.GetRequiredService<BridgeConfig>(),
+    cfg => Cortex.Contained.Bridge.Setup.BridgeSettingsWriter.PersistSettingsToYaml(cfg, cortexConfigPath),
+    sp.GetRequiredService<Cortex.Contained.Bridge.Speech.EmbeddingsSidecarLifecycle>(),
+    sp.GetRequiredService<Cortex.Contained.Bridge.Speech.IEmbeddingsComposeRunner>()));
 builder.Services.AddSingleton<Cortex.Contained.Bridge.Speech.VoiceIdSidecarLifecycle>();
 builder.Services.AddSingleton(sp => new Cortex.Contained.Bridge.Speech.RerankerSidecarLifecycle(
     sp.GetRequiredService<Cortex.Contained.Bridge.Speech.IRerankerComposeRunner>(),
