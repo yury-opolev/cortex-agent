@@ -270,6 +270,23 @@ else
 {
     builder.Services.AddSingleton<IMemoryAtRest, PlaintextMemoryAtRest>();
 }
+
+// --- Owner switch and status of encryption at rest (Bridge Storage page, /health) ---
+builder.Services.AddSingleton(new StorageInventory(storageEncryption.Layout));
+builder.Services.AddSingleton<IDiskSpace, DriveDiskSpace>();
+builder.Services.AddSingleton(sp => new StorageEncryptionService(
+    storageEncryption,
+    sp.GetRequiredService<StorageKeyRing>(),
+    sp.GetRequiredService<IStorageState>(),
+    sp.GetRequiredService<StorageInventory>(),
+    sp.GetRequiredService<IDiskSpace>(),
+    sp.GetRequiredService<IHostApplicationLifetime>(),
+    sp.GetRequiredService<TimeProvider>(),
+    sp.GetRequiredService<ILogger<StorageEncryptionService>>(),
+    storageEncryption.Enabled ? sp.GetRequiredService<EncryptedMemoryStore>() : null,
+    // Inside the container Docker restarts the agent (restart: unless-stopped) after it stops itself.
+    selfRestart: string.Equals(Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER"), "true", StringComparison.OrdinalIgnoreCase)));
+
 // --- Memory Settings Store (runtime-mutable overrides for memory options) ---
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Memory.MemorySettingsStore>();
 builder.Services.AddSingleton<IPostConfigureOptions<MemoryMcpOptions>,
@@ -1027,13 +1044,14 @@ _ = Task.Run(async () =>
 });
 
 // --- Health endpoint (unauthenticated) ---
-app.MapGet("/health", async (ToolRegistry toolRegistry, AgentSessionStore sessionStore, HistoryHealthReporter historyHealth, Cortex.Contained.Agent.Host.Reranking.RerankStage rerankStage, CancellationToken cancellationToken) =>
+app.MapGet("/health", async (ToolRegistry toolRegistry, AgentSessionStore sessionStore, HistoryHealthReporter historyHealth, Cortex.Contained.Agent.Host.Reranking.RerankStage rerankStage, StorageEncryptionService storageEncryptionService, CancellationToken cancellationToken) =>
 {
     var toolCount = toolRegistry.Count;
     var sessionCount = sessionStore.GetAll().Count;
     var healthy = toolCount > 0;
     var history = await historyHealth.SnapshotAsync(cancellationToken).ConfigureAwait(false);
     var reranker = rerankStage.Snapshot();
+    var storage = storageEncryptionService.GetHealth();
 
     return Results.Ok(new
     {
@@ -1074,6 +1092,17 @@ app.MapGet("/health", async (ToolRegistry toolRegistry, AgentSessionStore sessio
                 reranker.LastError,
                 reranker.LastLatencyMs,
                 reranker.LastCallAt,
+            },
+            // Encryption at rest: mode and whether the encrypted stores are open (no fingerprints, no paths).
+            storage = new
+            {
+                status = storage.Status,
+                storage.EncryptAtRest,
+                storage.Source,
+                storage.RestartPending,
+                key = storage.KeyState,
+                messages = storage.MessagesState,
+                memory = storage.MemoryState,
             },
         },
     });
