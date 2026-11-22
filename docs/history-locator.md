@@ -34,8 +34,8 @@ fingerprints. The agent always reads the text from `messages.db`.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `Enabled` | `false` | Runs the projector and exposes the recall tools. Switchable at runtime on the Recall page (see below). |
-| `DefaultSearchMode` | `Auto` | What `history_search mode=auto` (the default) means: `Auto`/`Hybrid` = hybrid when embeddings are available, `Keyword` = keyword-only unless the model asks for `mode=hybrid`. Query time. |
+| `Enabled` | `true` | Runs the projector and exposes the recall tools. On by default (owner decision 2026-11-22); set `History__Enabled=false` (or switch it off on the Recall page) to turn history recall off. Switchable at runtime on the Recall page (see below). |
+| `DefaultSearchMode` | `Hybrid` | What `history_search mode=auto` (the default) means: `Hybrid`/`Auto` = hybrid when embeddings are available (otherwise keyword, and the result says so), `Keyword` = keyword-only unless the model asks for `mode=hybrid`. Query time. |
 | `TimeZone` | empty (machine local zone) | IANA zone for local dates, segment cuts, displayed times. Empty uses `TimeZoneInfo.Local`, i.e. the `TZ` environment variable of the container (UTC when unset); set an explicit IANA id such as `Europe/Berlin` to override. The effective zone is part of the config fingerprint, so changing `TZ` rebuilds the index. |
 | `IdleGapMinutes` | `30` | Idle gap that starts a new segment. |
 | `MaxSegmentWords` | `1500` | Segment word (FTS token) cap. |
@@ -169,15 +169,22 @@ The confirmation names the chosen option and the number of memories affected.
 
 ## Rollout
 
-1. Deploy with `History:Enabled=false` (default) — the journal is written, nothing else runs.
-2. Switch **History search** on in Bridge → tenant → **Recall** (or set `History__Enabled=true` /
-   `history: enabled: true` and restart). The projector builds generation 1 in bounded batches; watch
-   **Status** (or `/health`) until `buildComplete=true`.
+History recall is on by default (owner decision 2026-11-22, ahead of the Gate H evaluation), together with
+dense embeddings and hybrid search; only the reranker stays opt-in.
+
+1. A new or upgraded install starts the projector on its own: the journal is written and the projector builds
+   generation 1 in bounded batches. Watch **Status** in Bridge → tenant → **Recall** (or `/health`) until
+   `buildComplete=true`; until then searches cover only recent messages.
+2. Dense embeddings are on too. If the `embeddings` sidecar (compose profile `memory`) is not running, the
+   embedder reports itself unavailable, nothing is sent, and `history_search` falls back to keyword search
+   and says so; chunks are embedded once it is reachable.
 3. Add one line to the agent's self-notes: *"history_search finds when/where something was said;
    check current facts elsewhere before acting on a hit."*
 4. Run the smoke evaluation and the behaviour gate below before relying on the tools.
-5. Rollback: switch History search off on the Recall page (or `History__Enabled=false`) — the tools are
-   hidden at once and the next erasure pass deletes every index generation.
+5. Turning it off: switch History search off on the Recall page (or `History__Enabled=false`) — the tools are
+   hidden at once and the next erasure pass deletes every index generation. `History__Dense__Enabled=false`
+   keeps history keyword-only and stops sending history text to the embedder; `History__DefaultSearchMode=Keyword`
+   keeps embeddings but makes `mode=auto` keyword-only.
 
 ## Smoke evaluation (§14.2, local only)
 

@@ -147,10 +147,10 @@ Per tenant, under **Tenants → *tenant* → Recall** (no restart, no compose or
 
 | Setting | Shipped default | What it does |
 |---------|-----------------|--------------|
-| History search | off | Builds the history index and gives the agent `history_search` / `event_get`. Switching it on builds the index in the background; switching it off hides the tools at once. |
-| Default history search mode | hybrid when embeddings are available | `keyword` keeps searches to exact words unless the agent asks for hybrid. |
-| Dense embeddings for history | off | Embeds history chunks for meaning-based (hybrid) search. Changing it rebuilds the index. |
-| Default memory search mode | dense (semantic) | `hybrid` or `keyword` for `memory_search mode=auto`. |
+| History search | on | Builds the history index and gives the agent `history_search` / `event_get`. Switching it on builds the index in the background; switching it off hides the tools at once. |
+| Default history search mode | hybrid (keyword + semantic when embeddings are available, else keyword) | `keyword` keeps searches to exact words unless the agent asks for hybrid. |
+| Dense embeddings for history | on | Embeds history chunks for meaning-based (hybrid) search via the in-compose `embeddings` sidecar; while it is not running, searches stay keyword-only. Changing it rebuilds the index. |
+| Default memory search mode | hybrid | `dense` (semantic only) or `keyword` for `memory_search mode=auto`. |
 | Reranker budget | top 15, 1200 chars, 2000 ms | How many hybrid results the reranker reorders and how long it may take. |
 | Reranker (shared) | off | Starts the `cortex-reranker` sidecar for all tenants; needs the image (`scripts\Build-RerankerImage.ps1`). |
 

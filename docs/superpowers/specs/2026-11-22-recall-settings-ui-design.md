@@ -24,9 +24,14 @@ and observes the recall stack at runtime, without editing environment variables,
    per-item and **bulk** keep/delete (bulk delete = one batched `DeleteManyAsync`).
 9. A button to run the event backfill.
 
-The shipped defaults do not change (History off, `auto` → keyword while dense is off, dense off, memory
-`dense`, reranker off). The owner's choices (e.g. "hybrid by default" on one machine) are persisted locally
-and never committed.
+The shipped defaults did not change in this increment (History off, `auto` → keyword while dense is off, dense
+off, memory `dense`, reranker off). The owner's choices (e.g. "hybrid by default" on one machine) are persisted
+locally and never committed.
+
+> **2026-11-22 (owner decision):** the shipped defaults changed after this spec: History, dense embeddings,
+> `History:DefaultSearchMode=Hybrid` and `MemoryMcp:Search:DefaultMode=Hybrid` are on by default (ahead of the
+> Gate H evaluation); the reranker remains opt-in. The page's *custom* badges still mean "a persisted override
+> exists", so they now appear when the owner turns one of these off.
 
 ## 2. What exists today (investigation summary)
 

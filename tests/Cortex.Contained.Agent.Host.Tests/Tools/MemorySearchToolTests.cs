@@ -17,7 +17,7 @@ public class MemorySearchToolTests
     private static readonly DateTimeOffset Created = new(2026, 5, 4, 8, 0, 0, TimeSpan.Zero);
 
     private readonly IHybridMemorySearch search = Substitute.For<IHybridMemorySearch>();
-    private readonly MemoryMcpOptions options = new() { SearchMaxContentLength = 20 };
+    private readonly MemoryMcpOptions options = new() { SearchMaxContentLength = 20, Search = { DefaultMode = MemorySearchMode.Dense } };
 
     public MemorySearchToolTests() => this.Returns(MemorySearchMode.Dense);
 

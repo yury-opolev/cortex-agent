@@ -53,6 +53,7 @@ public sealed class HistorySearchToolTests : IAsyncDisposable
     [Fact]
     public async Task ExecuteAsync_DenseDisabled_RendersNoDenseOrModeLines()
     {
+        this.h.Options = new HistoryOptions { Enabled = true, TimeZone = "UTC", Dense = { Enabled = false } };
         await this.h.SayAsync("the ferry to TownA", 0);
         await this.IndexAsync();
 

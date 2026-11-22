@@ -5,9 +5,11 @@ search, as before) or by both fused with reciprocal rank fusion. The keyword eng
 stemming and the evaluation statistics are the ones proven by hybrid history search
 ([history-hybrid-search.md](history-hybrid-search.md)), now shared from `MemoryMcp.Core`.
 
-**Default behaviour is unchanged:** `MemoryMcp:Search:DefaultMode` is `Dense`, so `memory_search` without
-a `mode` searches by meaning and renders exactly as before. Hybrid becomes the default only after the
-owner's evaluation (Gate H for memory, below).
+**Hybrid is the default (owner decision 2026-11-22, ahead of the Gate H evaluation):**
+`MemoryMcp:Search:DefaultMode` is `Hybrid`, so `memory_search` without a `mode` fuses keyword and meaning
+rankings. When the keyword index or the embedder is unavailable it falls back honestly (to dense or keyword)
+and the footer says so. Set `MemoryMcp:Search:DefaultMode=Dense` (or choose *Semantic* on the Recall page) to
+get the previous by-meaning-only behaviour; `mode=dense` always renders exactly as before.
 
 Design: [`docs/superpowers/specs/2026-11-21-inc4-memory-shared-engine-design.md`](superpowers/specs/2026-11-21-inc4-memory-shared-engine-design.md).
 
@@ -40,7 +42,7 @@ hits ≠ never happened).
 
 | Key | Default | Meaning |
 |---|---|---|
-| `DefaultMode` | `Dense` | What `mode=auto` runs (`Dense`, `Keyword`, `Hybrid`). |
+| `DefaultMode` | `Hybrid` | What `mode=auto` runs (`Hybrid`, `Dense`, `Keyword`). |
 | `KeywordVariant` | `Plain` | `Stemmed` also matches Snowball stems (ru/da/en). Query time only: no re-index. |
 | `Fusion` / `RrfK` | `Rrf` / `60` | `Rrf`, `WeightedRrf`, `Convex`. |
 | `KeywordWeight` / `DenseWeight` / `ExactIntentKeywordBoost` | `1` / `1` / `2` | Weights (weighted RRF, convex) and the exact-intent keyword boost. |
@@ -55,7 +57,7 @@ Invalid values stop the agent at startup.
 With the reranker enabled (Bridge `Reranker:Enabled`, default false), `memory_search` in hybrid mode asks
 for `Reranker:Memory:TopN` fused memories, has the `cortex-reranker` sidecar reorder them by their title and
 content lines (≤ `MaxDocChars` each), returns `limit` of them and adds a `rerank: …` line to the footer.
-Dense (the default mode) and keyword searches are not reranked, so the default output is unchanged.
+Dense and keyword searches are not reranked; hybrid (the default mode) is.
 Evaluation: `memory-eval rerank-curve` and `gate-r`. See [reranker.md](reranker.md).
 
 ## Erasure
@@ -100,5 +102,5 @@ Evaluation runs disable the 3 s query-embedding budget, and a hybrid configurati
 
 ## Rollout
 
-1. Deploy. The first start backfills the keyword index (log: `Rebuilt the memory keyword index: N memories indexed`). `memory_search` behaves as before.
-2. Run the evaluation above. If Gate H passes, set `MemoryMcp:Search:DefaultMode=Hybrid` (plus the chosen `MemoryMcp:Search` values) and restart.
+1. Deploy. The first start backfills the keyword index (log: `Rebuilt the memory keyword index: N memories indexed`). `memory_search` now runs hybrid by default (since 2026-11-22).
+2. Run the evaluation above (Gate H). The owner's default was set ahead of it; if Gate H fails, set `MemoryMcp:Search:DefaultMode=Dense` (plus the chosen `MemoryMcp:Search` values) and restart, or change it on the Recall page.

@@ -1,7 +1,9 @@
 # Reranker (episodic history, increment 5)
 
 A cross-encoder reranker reorders the head of the **fused** hybrid results of `history_search` and
-`memory_search`. It is **off by default** and is enabled only after the owner's Gate R decision.
+`memory_search`. It is **off by default** and is enabled only after the owner's Gate R decision. It stays
+opt-in even though history, dense embeddings and hybrid search are on by default (owner decision 2026-11-22);
+the reranker only reorders hybrid results, so it needs those defaults but nothing turns it on for you.
 
 Design: [superpowers/specs/2026-11-21-inc5-reranker-design.md](superpowers/specs/2026-11-21-inc5-reranker-design.md).
 

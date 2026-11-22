@@ -41,10 +41,10 @@ public sealed class RecallPostConfigureTests : IDisposable
         var history = this.provider.GetRequiredService<IOptionsMonitor<HistoryOptions>>().CurrentValue;
         var memory = this.provider.GetRequiredService<IOptionsMonitor<MemoryMcpOptions>>().CurrentValue;
 
-        Assert.False(history.Enabled);
-        Assert.False(history.Dense.Enabled);
-        Assert.Equal(HistorySearchMode.Auto, history.DefaultSearchMode);
-        Assert.Equal(MemorySearchMode.Dense, memory.Search.DefaultMode);
+        Assert.True(history.Enabled);
+        Assert.True(history.Dense.Enabled);
+        Assert.Equal(HistorySearchMode.Hybrid, history.DefaultSearchMode);
+        Assert.Equal(MemorySearchMode.Hybrid, memory.Search.DefaultMode);
     }
 
     [Fact]
@@ -83,11 +83,11 @@ public sealed class RecallPostConfigureTests : IDisposable
     public void Apply_Reset_RestoresConfiguredDefaults()
     {
         var history = this.provider.GetRequiredService<IOptionsMonitor<HistoryOptions>>();
-        this.Store.Apply(new RecallSettingsPatchDto { HistoryEnabled = true });
-        Assert.True(history.CurrentValue.Enabled);
+        this.Store.Apply(new RecallSettingsPatchDto { HistoryEnabled = false });
+        Assert.False(history.CurrentValue.Enabled);
 
         this.Store.Apply(new RecallSettingsPatchDto { ResetToDefaults = true });
 
-        Assert.False(history.CurrentValue.Enabled);
+        Assert.True(history.CurrentValue.Enabled);
     }
 }

@@ -32,8 +32,8 @@ public enum HistoryFusionMethod
 /// </summary>
 public sealed class HistoryDenseOptions
 {
-    /// <summary>Chunks segments and embeds them; enables <c>mode=hybrid</c>. Default false.</summary>
-    public bool Enabled { get; set; }
+    /// <summary>Chunks segments and embeds them;     enables <c>mode=hybrid</c>. Default true; the embedder being unreachable degrades to keyword search.</summary>
+        public bool Enabled { get; set; } = true;
 
     /// <summary>Target words per transcript chunk (same window as curated memory chunks).</summary>
     public int ChunkWords { get; set; } = 512;

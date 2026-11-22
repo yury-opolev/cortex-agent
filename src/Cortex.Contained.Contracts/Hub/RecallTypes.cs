@@ -26,16 +26,16 @@ public static class DependentMemoryActions
 public sealed record RecallSettingsDto
 {
     /// <summary><c>History:Enabled</c>: projector running and recall tools exposed.</summary>
-    public bool HistoryEnabled { get; init; }
+    public bool HistoryEnabled { get; init; } = true;
 
-    /// <summary>What <c>history_search mode=auto</c> means: <c>auto</c> / <c>hybrid</c> (hybrid when embeddings are available) or <c>keyword</c>.</summary>
-    public string HistorySearchMode { get; init; } = "auto";
+    /// <summary>What <c>history_search mode=auto</c> means: <c>hybrid</c> / <c>auto</c> (hybrid when embeddings are available, else keyword) or <c>keyword</c>.</summary>
+    public string HistorySearchMode { get; init; } = "hybrid";
 
     /// <summary><c>History:Dense:Enabled</c>: chunks are embedded and hybrid search is possible.</summary>
-    public bool HistoryDenseEnabled { get; init; }
+    public bool HistoryDenseEnabled { get; init; } = true;
 
     /// <summary><c>MemoryMcp:Search:DefaultMode</c>: <c>dense</c>, <c>hybrid</c> or <c>keyword</c>.</summary>
-    public string MemorySearchMode { get; init; } = "dense";
+    public string MemorySearchMode { get; init; } = "hybrid";
 
     /// <summary><c>Reranker:History:TopN</c>.</summary>
     public int RerankHistoryTopN { get; init; }

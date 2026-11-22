@@ -30,7 +30,7 @@ Design: [`docs/superpowers/specs/2026-11-21-inc3-hybrid-history-search-design.md
 
 | Key | Default | Meaning |
 |---|---|---|
-| `Enabled` | `false` | Chunk, embed and enable hybrid search. |
+| `Enabled` | `true` | Chunk, embed and enable hybrid search (on by default since 2026-11-22; `History__Dense__Enabled=false` keeps history keyword-only and sends nothing to the embedder). |
 | `ChunkWords` / `ChunkOverlapWords` / `MaxChunkChars` | `512` / `64` / `6000` | Chunking (fingerprinted: changing them rebuilds and re-embeds). |
 | `QueryInstruction` / `UseQueryInstruction` | Qwen3 retrieval instruction / `true` | Query-side instruction prefix (ablated). |
 | `AllowedEndpointHosts` | `embeddings` | Hosts that may receive history text without an API key. |
@@ -52,7 +52,9 @@ coverage block reports the embedding lag.
 ## Embedder exposure
 
 History text is sent only to the in-compose `embeddings` sidecar: it publishes no host port, runs with
-`OLLAMA_DEBUG=0` (no request bodies in logs), and is reachable only on `cortex-internal`. A remote
+`OLLAMA_DEBUG=0` (no request bodies in logs), and is reachable only on `cortex-internal`. This happens by
+default now that `History:Dense:Enabled` is on; if the sidecar is not running (compose profile `memory`),
+the embedder reports itself unavailable, nothing is sent and searches stay keyword-only until it is. A remote
 embedder needs HTTPS and an API key (or an explicit entry in `AllowedEndpointHosts`); otherwise dense
 search reports `unavailable: …` and nothing is sent. `OllamaHistoryEmbedder` re-checks this on every call.
 
@@ -122,6 +124,11 @@ is the owner's; a result on a mostly-legacy snapshot is provisional (re-run afte
 
 ## Rollout
 
-1. Deploy with `History:Dense:Enabled=false` (only the schema v3 rebuild happens).
-2. Run `history-smoke embedder-check`; enable `History:Dense:Enabled`; watch `history.dense.pending` drain.
+Dense embeddings and hybrid search are on by default (owner decision 2026-11-22, ahead of the Gate H
+evaluation); the reranker stays opt-in.
+
+1. A new or upgraded install keeps `History:Dense:Enabled=true` and `History:DefaultSearchMode=Hybrid`: the
+   schema rebuild runs, then chunks are embedded in the background.
+2. Run `history-smoke embedder-check`; watch `history.dense.pending` drain. To switch it off, set
+   `History:Dense:Enabled=false` (or use the Recall page).
 3. Run the evaluation and the behaviour gate (above); ship the chosen ranking settings.

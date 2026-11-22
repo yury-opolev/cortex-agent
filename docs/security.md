@@ -88,10 +88,13 @@ provider-side copies.
 
 ## Dense history search: embedder exposure and vectors
 
-With `History:Dense:Enabled`, transcript chunks of the history are sent to the embeddings sidecar. Only
+With `History:Dense:Enabled` (on by default since 2026-11-22), transcript chunks of the history are sent to
+the embeddings sidecar. Only
 the in-compose `embeddings` service may receive them (no published host port, `OLLAMA_DEBUG=0`, internal
 network only); a remote embedder needs HTTPS and an API key, otherwise nothing is sent and dense search
-reports `unavailable`. Inputs are sent with an explicit `num_ctx` and `truncate=false`. Vectors can leak
+reports `unavailable`. To stop history text leaving the agent process for the embedder, set
+`History__Dense__Enabled=false` (or switch **Dense embeddings for history** off on the Recall page);
+search then stays keyword-only. Inputs are sent with an explicit `num_ctx` and `truncate=false`. Vectors can leak
 content (embedding inversion), so they are treated like text: they live only in the history index
 generation (encrypted with it, erased with it under `secure_delete`, byte-level tested) and are served
 only while the source segment is unchanged. `history-eval` run directories hold raw copies of

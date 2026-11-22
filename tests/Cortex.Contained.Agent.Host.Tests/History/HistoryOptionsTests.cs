@@ -47,11 +47,13 @@ public class HistoryOptionsTests
     }
 
     [Fact]
-    public void Defaults_HybridSettings_MatchSpec()
+    public void Defaults_RecallStackIsOn_AndHybridSettingsMatchSpec()
     {
         var options = new HistoryOptions();
 
-        Assert.False(options.Dense.Enabled);
+        Assert.True(options.Enabled);
+        Assert.True(options.Dense.Enabled);
+        Assert.Equal(HistorySearchMode.Hybrid, options.DefaultSearchMode);
         Assert.Equal(HistoryKeywordVariant.Plain, options.KeywordVariant);
         Assert.Equal(60, options.Ranking.RrfK);
         Assert.Equal(["embeddings"], options.Dense.AllowedHosts());
@@ -92,5 +94,22 @@ public class HistoryOptionsTests
         Assert.True(options.Dense.Enabled);
         Assert.Equal(["embeddings", "gpu-box"], options.Dense.AllowedHosts());
         Assert.Equal(HistoryFusionMethod.Convex, options.Ranking.Fusion);
+    }
+
+    [Fact]
+    public void ShippedAppsettings_AgreeWithTheCodeDefaults()
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
+        var configuration = new ConfigurationBuilder().AddJsonFile(path, optional: false).Build();
+
+        var history = new HistoryOptions { Enabled = false, DefaultSearchMode = HistorySearchMode.Keyword, Dense = { Enabled = false } };
+        configuration.GetSection(HistoryOptions.SectionName).Bind(history);
+        var memory = new MemoryMcp.Core.Configuration.MemorySearchOptions { DefaultMode = MemoryMcp.Core.Configuration.MemorySearchMode.Dense };
+        configuration.GetSection("MemoryMcp:Search").Bind(memory);
+
+        Assert.True(history.Enabled);
+        Assert.True(history.Dense.Enabled);
+        Assert.Equal(HistorySearchMode.Hybrid, history.DefaultSearchMode);
+        Assert.Equal(MemoryMcp.Core.Configuration.MemorySearchMode.Hybrid, memory.DefaultMode);
     }
 }

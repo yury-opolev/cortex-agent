@@ -301,7 +301,7 @@ server, the action resolves to `outcome_unknown`, never `cancelled`.
 |------|-------------|
 | `date_time` | Get current date/time in any timezone |
 
-### History (when `History:Enabled`)
+### History (on by default; off with `History:Enabled=false`)
 
 | Tool | Description |
 |------|-------------|

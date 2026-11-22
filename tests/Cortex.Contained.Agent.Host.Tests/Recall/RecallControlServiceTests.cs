@@ -24,7 +24,12 @@ public sealed class RecallControlServiceTests : IAsyncDisposable
         var services = new ServiceCollection();
         services.AddSingleton<ILoggerFactory>(NullLoggerFactory.Instance);
         services.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
-        services.Configure<HistoryOptions>(o => o.TimeZone = "UTC");
+        services.Configure<HistoryOptions>(o =>
+        {
+            o.TimeZone = "UTC";
+            o.Enabled = false;
+            o.Dense.Enabled = false;
+        });
         services.Configure<RerankerOptions>(_ => { });
         services.Configure<MemoryMcpOptions>(_ => { });
         services.AddRecallSettings(Path.Combine(this.h.Root, "state"));

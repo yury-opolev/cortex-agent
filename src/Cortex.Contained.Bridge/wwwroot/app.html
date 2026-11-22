@@ -1226,8 +1226,8 @@
                                 <label class="form-label small mb-1" for="recall-history-mode">Default history search mode
                                     <span x-show="isOverridden('historySearchMode')" class="badge bg-info text-dark ms-1">custom</span></label>
                                 <select id="recall-history-mode" class="form-select form-select-sm" x-model="form.historySearchMode">
-                                    <option value="auto">Hybrid (keyword + semantic when embeddings are available)</option>
-                                    <option value="hybrid">Hybrid (same as auto)</option>
+                                    <option value="hybrid">Hybrid (keyword + semantic when embeddings are available)</option>
+                                    <option value="auto">Auto (same as hybrid)</option>
                                     <option value="keyword">Keyword only</option>
                                 </select>
                             </div>
@@ -1247,8 +1247,8 @@
                             <label class="form-label small mb-1" for="recall-memory-mode">Default memory search mode
                                 <span x-show="isOverridden('memorySearchMode')" class="badge bg-info text-dark ms-1">custom</span></label>
                             <select id="recall-memory-mode" class="form-select form-select-sm" x-model="form.memorySearchMode">
-                                <option value="dense">Semantic (dense)</option>
                                 <option value="hybrid">Hybrid (keyword + semantic)</option>
+                                <option value="dense">Semantic (dense)</option>
                                 <option value="keyword">Keyword only</option>
                             </select>
                         </div>

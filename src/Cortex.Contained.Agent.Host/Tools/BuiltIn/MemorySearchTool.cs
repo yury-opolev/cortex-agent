@@ -11,8 +11,8 @@ namespace Cortex.Contained.Agent.Host.Tools.BuiltIn;
 
 /// <summary>
 /// Searches curated memories in semantic, keyword or hybrid mode (<see cref="IHybridMemorySearch"/>).
-/// <c>mode=auto</c> uses <c>MemoryMcp:Search:DefaultMode</c> (semantic until the memory evaluation shows
-/// hybrid is better); a semantic search renders exactly as before, other modes add the match kind per
+/// <c>mode=auto</c> uses <c>MemoryMcp:Search:DefaultMode</c> (hybrid by default, with an honest fallback to
+/// the available list); a semantic search renders exactly as before, other modes add the match kind per
 /// memory and a <c>mode:</c> footer that states any fallback.
 /// </summary>
 internal sealed class MemorySearchTool : IAgentTool

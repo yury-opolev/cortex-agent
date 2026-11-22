@@ -11,8 +11,8 @@ public sealed class HistoryOptions
     /// <summary>Configuration section name.</summary>
     public const string SectionName = "History";
 
-    /// <summary>Master switch: runs the projector and exposes the recall tools. Default false.</summary>
-    public bool Enabled { get; set; }
+    /// <summary>Master switch: runs the projector and exposes the     recall tools. Default true.</summary>
+        public bool Enabled { get; set; } = true;
 
     /// <summary>
     /// IANA time zone used for local dates, segment cuts and displayed times. Empty (the default) means
@@ -57,12 +57,13 @@ public sealed class HistoryOptions
     public string EvalArtifactsDirectory { get; set; } = "/app/state/eval/hybrid";
 
     /// <summary>
-    /// What <c>history_search mode=auto</c> (the default) means: <see cref="HistorySearchMode.Auto"/> or
-    /// <see cref="HistorySearchMode.Hybrid"/> use hybrid search when embeddings are available,
+    /// What <c>history_search mode=auto</c> (the default) means: <see cref="HistorySearchMode.Hybrid"/> (the
+    /// shipped default) or <see cref="HistorySearchMode.Auto"/> use hybrid search when embeddings are available
+    /// and fall back to keyword search, saying so, when they are not;
     /// <see cref="HistorySearchMode.Keyword"/> keeps relevance searches keyword-only unless the caller asks
     /// for <c>mode=hybrid</c>. Applies at query time.
     /// </summary>
-    public HistorySearchMode DefaultSearchMode { get; set; } = HistorySearchMode.Auto;
+    public HistorySearchMode DefaultSearchMode { get; set; } = HistorySearchMode.Hybrid;
 
     /// <summary>Keyword index variant; part of the index fingerprint (§4.2 stemming ablation).</summary>
     public HistoryKeywordVariant KeywordVariant { get; set; } = HistoryKeywordVariant.Plain;

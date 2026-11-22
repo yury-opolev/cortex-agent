@@ -68,14 +68,14 @@ public sealed class HistoryIndexVariantsTests : IDisposable
     [Fact]
     public void Fingerprint_CoversVariantChunkingAndEmbedder()
     {
-        var plain = new HistoryOptions();
-        var stemmed = new HistoryOptions { KeywordVariant = HistoryKeywordVariant.Stemmed };
+        var plain = new HistoryOptions { Dense = { Enabled = false } };
+        var stemmed = new HistoryOptions { KeywordVariant = HistoryKeywordVariant.Stemmed, Dense = { Enabled = false } };
         var dense = new HistoryOptions();
         dense.Dense.Enabled = true;
         var denseOtherChunks = new HistoryOptions();
         denseOtherChunks.Dense.Enabled = true;
         denseOtherChunks.Dense.ChunkWords = 128;
-        var ranking = new HistoryOptions();
+        var ranking = new HistoryOptions { Dense = { Enabled = false } };
         ranking.Ranking.RrfK = 5;
 
         var baseline = HistoryConfigFingerprint.Compute(plain);

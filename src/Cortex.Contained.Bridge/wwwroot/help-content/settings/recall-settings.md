@@ -7,16 +7,17 @@ shared by all tenants).
 
 ## Settings
 
-- **History search** — lets the assistant search its own conversation history. When you switch it on,
-  the history index is built in the background (watch **Status**); until it is complete, searches cover
-  only recent messages. Switching it off hides the search tools at once.
-- **Default history search mode** — *Hybrid* finds matching words and similar meaning (when dense
-  embeddings are on); *Keyword only* finds exact words.
-- **Dense embeddings for history** — needed for hybrid history search. Changing it rebuilds the
-  history index.
-- **Default memory search mode** — *Semantic*, *Hybrid* or *Keyword only* for memory searches.
+- **History search** — lets the assistant search its own conversation history. It is on by default. While
+  the history index is being built in the background (watch **Status**), searches cover only recent
+  messages. Switching it off hides the search tools at once.
+- **Default history search mode** — *Hybrid* (the default) finds matching words and similar meaning (when
+  dense embeddings are on and reachable, otherwise keyword only); *Keyword only* finds exact words.
+- **Dense embeddings for history** — on by default; needed for hybrid history search. History text is sent
+  to the embeddings service inside the Cortex network. Switch it off to keep it keyword-only. Changing it
+  rebuilds the history index.
+- **Default memory search mode** — *Hybrid* (the default), *Semantic* or *Keyword only* for memory searches.
 - **Reranker budget** — how many hybrid results the reranker reorders, how much text it reads per result,
-  and how long it may take.
+  and how long it may take. The reranker itself stays off until you switch it on below.
 
 Values you changed are marked *custom*. **Reset to defaults** removes all of them.
 

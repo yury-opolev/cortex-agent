@@ -67,6 +67,12 @@ The work is also the foundation for the ambient-agent model: an event log as the
 | **4** | Curated memory on the shared engine | Extract the proven engine into MemoryMcp.Core; `memory_search` hybrid mode | ≥ 250 memory queries; Gate H for memory |
 | **5** | Reranker | `cortex-reranker` sidecar covered by Self-Update (build, pin, health, upgrade/rollback) | Gate R: significant paired gain, p95 ≤ 2.5 s |
 
+> **2026-11-22 (owner decision):** the owner shipped History, dense embeddings and hybrid search (history and
+> memory) **on by default** ahead of the Gate H evaluation; the reranker remains opt-in (Gate R still governs it).
+> The gates above still apply to the ranking settings that are finally chosen, and any default can be turned
+> back off with `History:Enabled`, `History:Dense:Enabled`, `History:DefaultSearchMode` and
+> `MemoryMcp:Search:DefaultMode`.
+
 ### 4.1 Binding commitments for increment 2 (event log)
 
 - **One writer boundary.** A single component owns the writer connection and the transaction for `messages.db`. Every insert, update and delete of `Messages` (including `UpdateContentAsync`, `UpdateToolCallsAsync`, `BulkInsertAsync`, all delete paths, slash commands and session transfer) has a defined event operation **in the same transaction**. Readers use separate connections.
@@ -470,6 +476,7 @@ A delete request (per channel, older than, per channel older than, all, or a ten
 
 1. Spike: verify the bundled SQLite version and the FTS5 options. Upgrade the bundle if needed.
 2. Ship with `history.enabled=false`. Run the initial build; verify health, coverage and erasure on a copy.
+   *(2026-11-22: owner shipped History, dense and hybrid search on by default ahead of the Gate H evaluation; the reranker remains opt-in. The initial build now runs on every new or upgraded install.)*
 3. Run the smoke evaluation and the behaviour gate in staging.
 4. Enable the tools, then add the self-notes line: "When unsure whether something was said or done, search history and verify instead of guessing or apologising. Do not infer invention from a missing source; acknowledge a real error when evidence supports it."
 5. Monitor for one week against the tools-off baseline: retraction rate, re-ask rate, recall calls per turn, voice latency.
