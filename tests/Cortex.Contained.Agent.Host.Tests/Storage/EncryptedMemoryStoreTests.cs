@@ -177,7 +177,11 @@ public sealed class EncryptedMemoryStoreTests : IDisposable
     }
 
     [Theory]
-    [InlineData("before-rekey")]
+    [InlineData("before-export")]
+    [InlineData("after-export")]
+    [InlineData("after-verify")]
+    [InlineData("after-plaintext-erase")]
+    [InlineData("after-swap")]
     [InlineData("after-encrypted-copy")]
     [InlineData("after-plaintext-overwrite")]
     public async Task CrashMidMigration_CompletedOnTheNextOpen(string stage)

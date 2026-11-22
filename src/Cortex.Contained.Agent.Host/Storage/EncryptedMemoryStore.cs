@@ -29,7 +29,7 @@ public sealed class PlaintextMemoryAtRest : IMemoryAtRest
 /// <summary>
 /// The curated memory store encrypted with the tenant key (D4): <c>memory.db</c> (chunks, sqlite-vec vectors,
 /// FTS5 keyword index) through SQLite3 Multiple Ciphers and every <c>*.memory.data</c> file through
-/// AES-256-GCM. Opens lazily once the Bridge has pushed the key, migrating a plaintext store in place first
+/// AES-256-GCM. Opens lazily once the Bridge has pushed the key, migrating a plaintext store first (database by export to a sibling file, then content files)
 /// (database, then content files). Fail closed: nothing is served or created before the key arrives, and a
 /// key that does not open the data locks the store for the process lifetime without touching a byte.
 /// </summary>
@@ -67,7 +67,7 @@ public sealed partial class EncryptedMemoryStore : IMemoryStore, IMemoryAtRest, 
     /// <summary>Whether the store is serving.</summary>
     public StorageState State => this.state;
 
-    /// <summary>Test seam for the content migration (<see cref="MemoryContentMigrator.Migrate"/>) and <c>before-rekey</c> of the database.</summary>
+    /// <summary>Test seam for the content migration (<see cref="MemoryContentMigrator.Migrate"/>) and the export stages of <see cref="EncryptedSqlite.Prepare"/>.</summary>
     internal Action<string>? FaultInjector { get; set; }
 
     /// <inheritdoc />

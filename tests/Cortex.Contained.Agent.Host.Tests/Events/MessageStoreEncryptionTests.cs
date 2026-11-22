@@ -118,7 +118,7 @@ public sealed class MessageStoreEncryptionTests : IDisposable
     }
 
     [Fact]
-    public async Task MigrationInterruptedBeforeRekey_RetriedOnNextOpen()
+    public async Task MigrationInterruptedAfterExport_RetriedOnNextOpen()
     {
         await using (var plain = new MessageStore(this.DbPath, NullLogger<MessageStore>.Instance))
         {
@@ -128,7 +128,7 @@ public sealed class MessageStoreEncryptionTests : IDisposable
         SqliteConnection.ClearAllPools();
         await using (var crashing = this.Encrypted(Ring()))
         {
-            crashing.FaultInjector = stage => { if (stage == "before-rekey") { throw new IOException("power loss"); } };
+            crashing.FaultInjector = stage => { if (stage == "after-export") { throw new IOException("power loss"); } };
             await Assert.ThrowsAsync<IOException>(() => crashing.GetMessagesAsync("ch"));
         }
 
