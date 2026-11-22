@@ -116,7 +116,12 @@ public sealed partial class StorageEncryptionService
         var notCovered = this.inventory.NotCovered();
         var largestDatabase = covered.Where(i => i.Id is "messages" or "memory-db").Select(i => i.Bytes).DefaultIfEmpty(0).Max();
         var indexBytes = covered.Where(i => i.Id == "history-index").Sum(i => i.Bytes);
-        var requiredFree = largestDatabase + indexBytes + MigrationMarginBytes;
+
+        // Each database is exported to a keyed copy beside the plaintext, which is erased only after the copy verifies;
+        // both stores may be converting at once, and the content files are rewritten next to their originals.
+        var databaseCopies = covered.Where(i => i.Id is "messages" or "memory-db").Sum(i => i.Bytes);
+        var contentBytes = covered.Where(i => i.Id == "memory-content").Sum(i => i.Bytes);
+        var requiredFree = databaseCopies + contentBytes + indexBytes + MigrationMarginBytes;
         var availableFree = this.disk.AvailableBytes(this.context.Layout.StateRoot);
         var availableTemp = this.disk.AvailableBytes(Path.GetTempPath());
 

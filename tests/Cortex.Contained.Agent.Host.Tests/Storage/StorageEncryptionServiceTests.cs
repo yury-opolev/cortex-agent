@@ -174,6 +174,20 @@ public sealed class StorageEncryptionServiceTests : IDisposable
     }
 
     [Fact]
+    public void Preview_CountsACopyOfEveryDatabaseAndTheContentFiles()
+    {
+        var header = "SQLite format 3\0"u8.ToArray();
+        File.WriteAllBytes(this.layout.MessagesDatabase, [.. header, .. new byte[4080]]);
+        Directory.CreateDirectory(Path.GetDirectoryName(this.layout.MemoryDatabasePath)!);
+        File.WriteAllBytes(this.layout.MemoryDatabasePath, [.. header, .. new byte[8176]]);
+        File.WriteAllBytes(Path.Combine(this.layout.MemoriesDirectory, "a.memory.data"), new byte[1000]);
+
+        var preview = this.Service(Ring(KeyA)).Preview();
+
+        Assert.Equal(4096 + 8192 + 1000 + StorageEncryptionService.MigrationMarginBytes, preview.RequiredFreeBytes);
+    }
+
+    [Fact]
     public void Status_AStoreCannotBeRead_IsReportedUnavailableSoNoKeyIsMintedFromIt()
     {
         File.WriteAllBytes(this.layout.MessagesDatabase, [.. "SQLite format 3\0"u8.ToArray(), .. new byte[4080]]);
