@@ -831,10 +831,16 @@ public static class TenantEndpoints
             }
         }).RequireAuthorization();
 
-        // DELETE /api/tenants/{tenantId}/history — delete messages older than a date (or all)
+        // DELETE /api/tenants/{tenantId}/history — delete messages older than a date (or all).
+        // ?dependentMemories=review (default) | delete chooses what happens to memories created in that period.
         app.MapDelete("/api/tenants/{tenantId}/history", async (
-            string tenantId, string? olderThan, TenantRouter router) =>
+            string tenantId, string? olderThan, string? dependentMemories, TenantRouter router) =>
         {
+            if (!DependentMemoryActions.IsValid(dependentMemories))
+            {
+                return Results.BadRequest(new { error = "dependentMemories must be review or delete" });
+            }
+
             var client = router.GetClient(tenantId);
             if (client is null || !client.IsConnected)
             {
@@ -850,7 +856,7 @@ public static class TenantEndpoints
 
             try
             {
-                var result = await client.PurgeHistoryAsync(new HistoryPurgeRequestDto { OlderThan = cutoff }, CancellationToken.None)
+                var result = await client.PurgeHistoryAsync(new HistoryPurgeRequestDto { OlderThan = cutoff, DependentMemories = dependentMemories ?? DependentMemoryActions.Review }, CancellationToken.None)
                     .ConfigureAwait(false);
                 return Results.Ok(HistoryDeletionResponse.From(result));
             }
@@ -882,9 +888,15 @@ public static class TenantEndpoints
         }).RequireAuthorization();
 
         // DELETE /api/tenants/{tenantId}/channels/{channelId}/history — clear messages for a single channel
+        // (?dependentMemories=review|delete as above).
         app.MapDelete("/api/tenants/{tenantId}/channels/{channelId}/history", async (
-            string tenantId, string channelId, string? olderThan, TenantRouter router) =>
+            string tenantId, string channelId, string? olderThan, string? dependentMemories, TenantRouter router) =>
         {
+            if (!DependentMemoryActions.IsValid(dependentMemories))
+            {
+                return Results.BadRequest(new { error = "dependentMemories must be review or delete" });
+            }
+
             var client = router.GetClient(tenantId);
             if (client is null || !client.IsConnected)
             {
@@ -904,7 +916,7 @@ public static class TenantEndpoints
             try
             {
                 var result = await client.PurgeHistoryAsync(
-                    new HistoryPurgeRequestDto { ChannelId = decodedChannelId, OlderThan = cutoff == DateTimeOffset.MaxValue ? null : cutoff },
+                    new HistoryPurgeRequestDto { ChannelId = decodedChannelId, OlderThan = cutoff == DateTimeOffset.MaxValue ? null : cutoff, DependentMemories = dependentMemories ?? DependentMemoryActions.Review },
                     CancellationToken.None).ConfigureAwait(false);
                 return Results.Ok(HistoryDeletionResponse.From(result));
             }
