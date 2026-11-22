@@ -19,6 +19,13 @@ public sealed record HistoryPurgeScope(string? ChannelId, DateTimeOffset? OlderT
             : null;
 }
 
+/// <summary>What a purge would delete (shown before the owner confirms).</summary>
+/// <param name="Messages">Rows the purge would delete.</param>
+/// <param name="DependentMemories">Not-kept curated memories inside the purge's quarantine windows.</param>
+/// <param name="RangeFrom">Oldest affected row, or null.</param>
+/// <param name="RangeTo">Newest affected row, or null.</param>
+public sealed record HistoryPurgePreview(int Messages, int DependentMemories, DateTimeOffset? RangeFrom, DateTimeOffset? RangeTo);
+
 /// <summary>Input to the single purge transaction in <c>MessageStore.PurgeAsync</c>.</summary>
 public sealed record MessagePurgeRequest(HistoryPurgeScope Scope)
 {

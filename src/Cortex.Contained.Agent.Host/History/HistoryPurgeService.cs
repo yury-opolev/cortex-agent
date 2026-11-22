@@ -88,6 +88,28 @@ public sealed partial class HistoryPurgeService
         return new HistoryPurgeResult(outcome.Deleted, outcome.Inserted, pending.Count == 0, pending, quarantined);
     }
 
+    /// <summary>
+    /// Counts what <see cref="PurgeAsync"/> would delete for <paramref name="scope"/> now: the messages and the
+    /// not-kept curated memories its quarantine windows would cover (the dependent memories). Deletes nothing.
+    /// </summary>
+    public async Task<HistoryPurgePreview> PreviewAsync(HistoryPurgeScope scope, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+        var settings = this.options.CurrentValue;
+        var timestamps = await this.store.ReadPurgeTimestampsAsync(scope, cancellationToken).ConfigureAwait(false);
+        var windows = QuarantineWindowBuilder.Build(
+            timestamps,
+            TimeSpan.FromHours(settings.QuarantineClusterGapHours),
+            TimeSpan.FromHours(settings.QuarantineExtractionSlackHours),
+            this.time.GetUtcNow());
+        var dependent = this.quarantine is null ? 0 : await this.quarantine.CountInWindowsAsync(windows, cancellationToken).ConfigureAwait(false);
+        return new HistoryPurgePreview(
+            timestamps.Count,
+            dependent,
+            timestamps.Count > 0 ? timestamps[0] : null,
+            timestamps.Count > 0 ? timestamps[^1] : null);
+    }
+
     /// <summary>Resumes every pending erasure step (maintenance tick and startup). Returns what is still pending.</summary>
     public async Task<IReadOnlyList<string>> ResumePendingAsync(CancellationToken cancellationToken)
     {

@@ -38,4 +38,7 @@ public interface IHistoryErasureStore
 
     /// <summary>When <see cref="VacuumAsync"/> last ran, or null.</summary>
     Task<DateTimeOffset?> ReadLastVacuumAsync(CancellationToken cancellationToken);
+
+    /// <summary>Ascending timestamps of the rows a purge of <paramref name="scope"/> would delete (read-only; the purge preview).</summary>
+    Task<IReadOnlyList<DateTimeOffset>> ReadPurgeTimestampsAsync(HistoryPurgeScope scope, CancellationToken cancellationToken);
 }
