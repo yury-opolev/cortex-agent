@@ -1100,6 +1100,13 @@ builder.Services.AddSingleton(sp => new Cortex.Contained.Bridge.Speech.RerankerS
     sp.GetRequiredService<Cortex.Contained.Bridge.Speech.IRerankerComposeRunner>(),
     secretManager.GetOrCreateRerankerKey,
     sp.GetRequiredService<ILogger<Cortex.Contained.Bridge.Speech.RerankerSidecarLifecycle>>()));
+// Recall page reranker switch: persists Reranker:Enabled to cortex.yml, then converges sidecar + agent grants.
+builder.Services.AddSingleton(sp => new Cortex.Contained.Bridge.Recall.RerankerSwitch(
+    sp.GetRequiredService<BridgeConfig>(),
+    cfg => Cortex.Contained.Bridge.Setup.BridgeSettingsWriter.PersistSettingsToYaml(cfg, cortexConfigPath),
+    sp.GetRequiredService<Cortex.Contained.Bridge.Speech.RerankerSidecarLifecycle>(),
+    ct => sp.GetRequiredService<Cortex.Contained.Bridge.Hosting.CredentialsPusher>().PushRerankerGrantAsync(ct),
+    sp.GetRequiredService<ILogger<Cortex.Contained.Bridge.Recall.RerankerSwitch>>()));
 
 var app = builder.Build();
 

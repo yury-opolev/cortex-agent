@@ -190,6 +190,9 @@ internal static class BridgeSettingsWriter
         // Memory settings section
         MemoryConfigYamlWriter.AppendMemorySection(sb, config.Memory);
 
+        // Reranker switch (Bridge-wide; the Recall page toggles it)
+        RerankerConfigYamlWriter.AppendRerankerSection(sb, config.Reranker);
+
         // MCP servers section (non-secret: secretRef ids + ${secret:id} tokens only)
         Cortex.Contained.Bridge.Mcp.McpConfigYamlWriter.AppendMcpSection(sb, config.Mcp);
 

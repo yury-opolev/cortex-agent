@@ -159,7 +159,7 @@ public sealed partial class CredentialsPusher : ICredentialReplisher
     /// key to every connected tenant's agent. A disabled switch is pushed too, so a running agent turns
     /// reranking off when the owner disables it.
     /// </summary>
-    private async Task PushRerankerGrantAsync(CancellationToken cancellationToken)
+    public async Task PushRerankerGrantAsync(CancellationToken cancellationToken)
     {
         RerankerGrant grant;
         try
