@@ -14,6 +14,7 @@ namespace Cortex.Contained.Bridge.Auth;
 public sealed partial class SessionManager
 {
     private readonly ConcurrentDictionary<string, SessionInfo> sessions = new();
+    private readonly ConcurrentDictionary<string, int> reauthFailures = new();
     private readonly SecretManager secretManager;
     private readonly ILogger<SessionManager> logger;
     private readonly TimeProvider timeProvider;
@@ -90,6 +91,7 @@ public sealed partial class SessionManager
     public void Logout(string sessionToken)
     {
         this.sessions.TryRemove(sessionToken, out _);
+        this.reauthFailures.TryRemove(sessionToken, out _);
         this.LogLogout();
     }
 
@@ -127,6 +129,9 @@ public sealed partial class SessionManager
         return true;
     }
 
+    /// <summary>Failed re-authentications in a row after which the session is invalidated.</summary>
+    public const int MaxReauthFailures = 3;
+
     /// <summary>
     /// Returns the number of active sessions (useful for diagnostics).
     /// </summary>
@@ -136,21 +141,35 @@ public sealed partial class SessionManager
     /// Re-authentication for sensitive actions (exporting or restoring the storage recovery kit, enabling
     /// encryption at rest): the signed-in owner types the Bridge password again. Failures are logged.
     /// </summary>
-    public bool VerifyPassword(string? password)
+    public bool VerifyPassword(string? password) => this.VerifyPassword(password, null);
+
+    /// <summary>
+    /// <see cref="VerifyPassword(string?)"/> for the signed-in <paramref name="sessionToken"/>: after
+    /// <see cref="MaxReauthFailures"/> failures in a row that session is invalidated, so the next attempt needs a
+    /// fresh (rate-limited) login. A success resets the count.
+    /// </summary>
+    public bool VerifyPassword(string? password, string? sessionToken)
     {
         var storedHash = this.secretManager.GetPasswordHash();
-        if (storedHash is null || string.IsNullOrEmpty(password))
+        if (storedHash is not null && !string.IsNullOrEmpty(password) && BCrypt.Net.BCrypt.EnhancedVerify(password, storedHash))
         {
-            this.LogReauthenticationFailed();
-            return false;
-        }
+            if (sessionToken is not null)
+            {
+                this.reauthFailures.TryRemove(sessionToken, out _);
+            }
 
-        if (BCrypt.Net.BCrypt.EnhancedVerify(password, storedHash))
-        {
             return true;
         }
 
         this.LogReauthenticationFailed();
+        if (sessionToken is not null && this.sessions.ContainsKey(sessionToken)
+            && this.reauthFailures.AddOrUpdate(sessionToken, 1, (_, count) => count + 1) >= MaxReauthFailures)
+        {
+            this.sessions.TryRemove(sessionToken, out _);
+            this.reauthFailures.TryRemove(sessionToken, out _);
+            this.LogReauthenticationSessionInvalidated(MaxReauthFailures);
+        }
+
         return false;
     }
 
@@ -181,6 +200,9 @@ public sealed partial class SessionManager
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Re-authentication for a sensitive storage action failed")]
     private partial void LogReauthenticationFailed();
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "A session was invalidated after {Failures} failed re-authentications for sensitive storage actions; signing in again is required")]
+    private partial void LogReauthenticationSessionInvalidated(int failures);
 
     internal sealed record SessionInfo(DateTimeOffset CreatedAt);
 }

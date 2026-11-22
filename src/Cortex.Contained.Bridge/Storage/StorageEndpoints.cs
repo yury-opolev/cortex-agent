@@ -39,18 +39,22 @@ internal static class StorageEndpoints
         app.MapPost("/api/tenants/{tenantId}/storage/encryption/preview", (string tenantId, [FromServices] TenantRouter router, [FromServices] SecretManager secrets, CancellationToken ct) =>
             PreviewAsync(tenantId, HubStorageAgentClient.For(router.GetClient(tenantId)), secrets, ct)).RequireAuthorization();
 
-        app.MapPost("/api/tenants/{tenantId}/storage/encryption/enable", (string tenantId, StorageEnableRequest body, [FromServices] TenantRouter router, [FromServices] SecretManager secrets, [FromServices] SessionManager sessions, CancellationToken ct) =>
-            EnableAsync(tenantId, HubStorageAgentClient.For(router.GetClient(tenantId)), secrets, sessions.VerifyPassword, body, ct)).RequireAuthorization();
+        app.MapPost("/api/tenants/{tenantId}/storage/encryption/enable", (string tenantId, StorageEnableRequest body, HttpContext http, [FromServices] TenantRouter router, [FromServices] SecretManager secrets, [FromServices] SessionManager sessions, CancellationToken ct) =>
+            EnableAsync(tenantId, HubStorageAgentClient.For(router.GetClient(tenantId)), secrets, Reauthenticate(sessions, http), body, ct)).RequireAuthorization().RequireRateLimiting(ReauthRateLimit.PolicyName);
 
         app.MapPost("/api/tenants/{tenantId}/storage/recovery-kit", async (string tenantId, RecoveryKitExportRequest body, HttpContext http, [FromServices] TenantRouter router, [FromServices] SecretManager secrets, [FromServices] SessionManager sessions, [FromServices] TimeProvider time, CancellationToken ct) =>
         {
             http.Response.Headers.CacheControl = "no-store";
-            return await ExportKitAsync(tenantId, HubStorageAgentClient.For(router.GetClient(tenantId)), secrets, sessions.VerifyPassword, body, time, ct).ConfigureAwait(false);
-        }).RequireAuthorization();
+            return await ExportKitAsync(tenantId, HubStorageAgentClient.For(router.GetClient(tenantId)), secrets, Reauthenticate(sessions, http), body, time, ct).ConfigureAwait(false);
+        }).RequireAuthorization().RequireRateLimiting(ReauthRateLimit.PolicyName);
 
-        app.MapPost("/api/tenants/{tenantId}/storage/recovery-kit/restore", (string tenantId, RecoveryKitRestoreRequest body, [FromServices] TenantRouter router, [FromServices] SecretManager secrets, [FromServices] SessionManager sessions, CancellationToken ct) =>
-            RestoreKitAsync(tenantId, HubStorageAgentClient.For(router.GetClient(tenantId)), secrets, sessions.VerifyPassword, body, ct)).RequireAuthorization();
+        app.MapPost("/api/tenants/{tenantId}/storage/recovery-kit/restore", (string tenantId, RecoveryKitRestoreRequest body, HttpContext http, [FromServices] TenantRouter router, [FromServices] SecretManager secrets, [FromServices] SessionManager sessions, CancellationToken ct) =>
+            RestoreKitAsync(tenantId, HubStorageAgentClient.For(router.GetClient(tenantId)), secrets, Reauthenticate(sessions, http), body, ct)).RequireAuthorization().RequireRateLimiting(ReauthRateLimit.PolicyName);
     }
+
+    // Failed re-authentications are counted per session; the third invalidates it (see SessionManager.VerifyPassword).
+    private static Func<string?, bool> Reauthenticate(SessionManager sessions, HttpContext http) =>
+        password => sessions.VerifyPassword(password, http.Request.Cookies.TryGetValue(CortexSessionAuthHandler.CookieName, out var token) ? token : null);
 
     internal static async Task<IResult> GetStatusAsync(string tenantId, IStorageAgentClient? agent, SecretManager secrets, string cortexDataDir, CancellationToken ct)
     {

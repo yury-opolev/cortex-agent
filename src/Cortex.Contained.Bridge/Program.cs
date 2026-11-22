@@ -167,11 +167,12 @@ builder.Services.AddRateLimiter(options =>
                 PermitLimit = 5,
                 Window = TimeSpan.FromMinutes(1),
             }));
+    options.AddPolicy(ReauthRateLimit.PolicyName, ReauthRateLimit.Partition);
     options.OnRejected = async (ctx, ct) =>
     {
         ctx.HttpContext.Response.StatusCode = 429;
         await ctx.HttpContext.Response.WriteAsJsonAsync(
-            new { error = "Too many login attempts. Try again later." }, ct).ConfigureAwait(false);
+            new { error = "Too many attempts. Try again later." }, ct).ConfigureAwait(false);
     };
 });
 

@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.HttpResults;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
@@ -68,6 +69,21 @@ public sealed class StorageEndpointsTests : IDisposable
         Assert.Equal(5, endpoints.Count);
         Assert.All(endpoints, e => Assert.NotNull(e.Metadata.GetMetadata<IAuthorizeData>()));
         Assert.All(endpoints, e => Assert.StartsWith("/api/tenants/{tenantId}/storage/", e.RoutePattern.RawText, StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("/api/tenants/{tenantId}/storage/encryption/enable")]
+    [InlineData("/api/tenants/{tenantId}/storage/recovery-kit")]
+    [InlineData("/api/tenants/{tenantId}/storage/recovery-kit/restore")]
+    public void EveryRouteThatChecksThePasswordAgain_IsRateLimited(string route)
+    {
+        var builder = WebApplication.CreateBuilder();
+        using var app = builder.Build();
+        app.MapStorageEndpoints(this.dir);
+
+        var endpoint = ((IEndpointRouteBuilder)app).DataSources.SelectMany(s => s.Endpoints).OfType<RouteEndpoint>().Single(e => e.RoutePattern.RawText == route);
+
+        Assert.Equal("reauth", endpoint.Metadata.GetMetadata<EnableRateLimitingAttribute>()?.PolicyName);
     }
 
     [Fact]
