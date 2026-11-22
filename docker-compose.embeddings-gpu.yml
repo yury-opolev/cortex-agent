@@ -1,0 +1,14 @@
+# Opt-in GPU for the embeddings sidecar. The Bridge adds this file with
+#   docker compose -f docker-compose.yml -f docker-compose.embeddings-gpu.yml ...
+# only when `embeddings: gpu: true` is set in cortex.yml (Recall page: "Run embeddings on the GPU").
+# It needs an NVIDIA GPU with Docker GPU support; the base file stays CPU-only so hosts
+# without one keep working. Same reservation as the reranker service.
+services:
+  embeddings:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

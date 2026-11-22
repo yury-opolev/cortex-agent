@@ -102,8 +102,9 @@ if (Test-Path $codaRustBuild) {
     Write-Warning "coda Rust build script not found at $codaRustBuild (submodule missing?); MSIX will rely on coda being on PATH."
 }
 
-# Copy docker-compose.yml
+# Copy docker-compose.yml (and the opt-in embeddings GPU override the Bridge layers on top of it)
 Copy-Item "$repoRoot\docker-compose.yml" "$OutputDir\docker-compose.yml" -Force
+Copy-Item "$repoRoot\docker-compose.embeddings-gpu.yml" "$OutputDir\docker-compose.embeddings-gpu.yml" -Force
 
 # Copy version.json for runtime version display
 Copy-Item "$repoRoot\version.json" "$OutputDir\version.json" -Force

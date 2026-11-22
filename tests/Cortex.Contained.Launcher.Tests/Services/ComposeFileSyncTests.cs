@@ -41,6 +41,43 @@ public sealed class ComposeFileSyncTests : IDisposable
     }
 
     [Fact]
+    public void Refresh_BundledGpuOverride_IsCopiedNextToTheStableCompose()
+    {
+        File.WriteAllText(Path.Combine(this.bundle, "docker-compose.yml"), "services: {}");
+        File.WriteAllText(Path.Combine(this.bundle, "docker-compose.embeddings-gpu.yml"), "services: { embeddings: { deploy: {} } }");
+
+        ComposeFileSync.Refresh(this.bundle, this.dataDirectory);
+
+        var copied = Path.Combine(this.dataDirectory, "docker-compose.embeddings-gpu.yml");
+        Assert.Contains("deploy", File.ReadAllText(copied), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Refresh_BundledGpuOverrideIsNewer_ReplacesTheStableCopy()
+    {
+        Directory.CreateDirectory(this.dataDirectory);
+        var stable = Path.Combine(this.dataDirectory, "docker-compose.embeddings-gpu.yml");
+        File.WriteAllText(stable, "old");
+        File.WriteAllText(Path.Combine(this.bundle, "docker-compose.yml"), "services: {}");
+        File.WriteAllText(Path.Combine(this.bundle, "docker-compose.embeddings-gpu.yml"), "new");
+
+        ComposeFileSync.Refresh(this.bundle, this.dataDirectory);
+
+        Assert.Equal("new", File.ReadAllText(stable));
+    }
+
+    [Fact]
+    public void Refresh_NoBundledGpuOverride_StillSyncsTheComposeFile()
+    {
+        File.WriteAllText(Path.Combine(this.bundle, "docker-compose.yml"), "services: {}");
+
+        var path = ComposeFileSync.Refresh(this.bundle, this.dataDirectory);
+
+        Assert.True(File.Exists(path));
+        Assert.False(File.Exists(Path.Combine(this.dataDirectory, "docker-compose.embeddings-gpu.yml")));
+    }
+
+    [Fact]
     public void Refresh_NoBundledCompose_ReturnsNullAndKeepsTheStableCopy()
     {
         Directory.CreateDirectory(this.dataDirectory);
