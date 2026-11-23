@@ -15,7 +15,7 @@
     .\scripts\Invoke-CortexEval.ps1 -Tool memory-eval -- holdout
     .\scripts\Invoke-CortexEval.ps1 -Tool eval-corpus -PromptPassphrase -- export --version v1
 #>
-[CmdletBinding()]
+[CmdletBinding(PositionalBinding = $false)]
 param(
     [Parameter(Mandatory)]
     [ValidateSet('history-eval', 'memory-eval', 'eval-corpus')]

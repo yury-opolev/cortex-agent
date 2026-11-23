@@ -15,7 +15,7 @@
     .\scripts\Edit-CortexEvalFile.ps1 -Tool memory-eval -Name seeds.jsonl -Pull -Path .\seeds.jsonl
     .\scripts\Edit-CortexEvalFile.ps1 -Tool eval-corpus -Name dictionary.jsonl -Push -Path .\dictionary.jsonl
 #>
-[CmdletBinding(DefaultParameterSetName = 'Edit')]
+[CmdletBinding(DefaultParameterSetName = 'Edit', PositionalBinding = $false)]
 param(
     [Parameter(Mandatory)]
     [ValidateSet('history-eval', 'memory-eval', 'eval-corpus')]

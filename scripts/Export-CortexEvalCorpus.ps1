@@ -13,7 +13,7 @@
     .\scripts\Export-CortexEvalCorpus.ps1 -Version v1
     .\scripts\Export-CortexEvalCorpus.ps1 -Version v2 -OutDirectory D:\backups\cortex
 #>
-[CmdletBinding()]
+[CmdletBinding(PositionalBinding = $false)]
 param(
     [Parameter(Mandatory)]
     [ValidatePattern('^v[1-9][0-9]*$')]

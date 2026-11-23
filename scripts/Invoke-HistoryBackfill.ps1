@@ -11,7 +11,7 @@
     .\scripts\Invoke-HistoryBackfill.ps1
     .\scripts\Invoke-HistoryBackfill.ps1 -TenantId default -BridgeUrl http://localhost:5080
 #>
-[CmdletBinding()]
+[CmdletBinding(PositionalBinding = $false)]
 param(
     [string]$TenantId = 'default',
     [string]$BridgeUrl = 'http://localhost:5080',
