@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace Cortex.Contained.Agent.Host.Evaluation.Sanitising;
 
@@ -20,6 +21,11 @@ public sealed class PseudonymMap
     // 32 symbols without l, o, 0 and 1.
     private const string Alphabet = "abcdefghijkmnpqrstuvwxyz23456789";
 
+    private static readonly Regex TokenShape = new(
+        "^(?:person|place|org|user|mail|host|term|phone|cpr|iban|card|gps|p)[a-km-np-z2-9]{8}\\p{L}{0,3}$",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
+        TimeSpan.FromSeconds(1));
+
     private readonly byte[] secret;
     private readonly Dictionary<string, string> byKey = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> owners = new(StringComparer.Ordinal);
@@ -37,6 +43,13 @@ public sealed class PseudonymMap
 
     /// <summary>Every pseudonym handed out so far (the leakage check never flags them).</summary>
     public IReadOnlyCollection<string> Pseudonyms => this.owners.Keys;
+
+    /// <summary>
+    /// True when <paramref name="run"/> (a run of letters and digits) has the shape of a produced pseudonym: a kind
+    /// prefix, eight token symbols and at most three kept inflection letters. Lets the leakage check ignore a short
+    /// dictionary term that happens to sit between two digits of a token.
+    /// </summary>
+    public static bool IsPseudonymToken(ReadOnlySpan<char> run) => TokenShape.IsMatch(run);
 
     /// <summary>A fresh random corpus secret.</summary>
     public static byte[] NewSecret() => RandomNumberGenerator.GetBytes(SecretBytes);

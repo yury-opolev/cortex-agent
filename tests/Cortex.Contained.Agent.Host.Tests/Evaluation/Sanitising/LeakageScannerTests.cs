@@ -46,6 +46,78 @@ public sealed class LeakageScannerTests
         Assert.Equal(new LeakageFinding("history.dataset.text", kind, 1), finding);
     }
 
+    private static readonly SanitiserLexicon InflectionLexicon = SanitiserLexicon.Parse(
+    [
+        """{"term":"Анна","kind":"person"}""",
+        """{"term":"Маша","kind":"person"}""",
+        """{"term":"Павел","kind":"person"}""",
+        """{"term":"Дмитрий","kind":"person"}""",
+        """{"term":"Ida","kind":"person"}""",
+        """{"term":"Ole","kind":"person"}""",
+        """{"term":"Bo","kind":"person"}""",
+        """{"term":"Mette","kind":"person"}""",
+        """{"term":"Ab","kind":"other"}""",
+    ]);
+
+    [Theory]
+    [InlineData("видел Анну")]
+    [InlineData("видел Анны")]
+    [InlineData("с Машей")]
+    [InlineData("Маши нет")]
+    [InlineData("у Павла")]
+    [InlineData("с Павлом")]
+    [InlineData("Дмитрия")]
+    [InlineData("Дмитрием")]
+    [InlineData("Idas bike")]
+    [InlineData("Oles bike")]
+    [InlineData("Bos bike")]
+    [InlineData("anna_cv.pdf Mette")]
+    [InlineData("mette_notes.md")]
+    [InlineData("Mette2024")]
+    [InlineData("2024_ida.txt")]
+    public void Scan_InflectedGluedOrGenitiveTerms_Found(string text)
+    {
+        var scanner = new LeakageScanner(InflectionLexicon, []);
+
+        scanner.Scan("messages.Content", text);
+
+        Assert.False(scanner.Passed, text);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Scan_TermBetweenDigitsInsideAPseudonym_NotFlagged(bool termsOnly)
+    {
+        var scanner = new LeakageScanner(InflectionLexicon, ["Persond4ab7xqz", "maild4ab7xqz@example.invalid"], termsOnly);
+
+        scanner.Scan("messages.Content", "met Persond4ab7xqz and Persond4ab7xqzs, mail maild4ab7xqz@example.invalid");
+
+        Assert.True(scanner.Passed, string.Join("; ", scanner.Findings));
+    }
+
+    [Fact]
+    public void Scan_TermNextToADigitOutsideAPseudonym_Found()
+    {
+        var scanner = new LeakageScanner(InflectionLexicon, ["Persond4ab7xqz"]);
+
+        scanner.Scan("messages.Content", "file 4ab7xqz and ab7xqz_ab");
+
+        Assert.False(scanner.Passed);
+    }
+
+    [Fact]
+    public void Scan_SanitisedInflectedAndGluedNames_Passes()
+    {
+        var sanitiser = new TextSanitiser(InflectionLexicon, new PseudonymMap(Secret));
+        var output = sanitiser.Sanitise("видел Анну и Павла, Idas bike, anna_cv.pdf, mette_notes.md, Mette2024, Ab7 2024_ab");
+        var scanner = new LeakageScanner(InflectionLexicon, sanitiser.Pseudonyms);
+
+        scanner.Scan("messages.Content", output);
+
+        Assert.True(scanner.Passed, output + " " + string.Join("; ", scanner.Findings));
+    }
+
     [Fact]
     public void Scan_WordThatOnlyStartsLikeATerm_NotFlagged()
     {

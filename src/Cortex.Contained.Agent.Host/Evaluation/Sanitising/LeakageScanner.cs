@@ -11,7 +11,7 @@ public sealed record LeakageFinding(string Location, string Kind, int Count);
 /// The fail-closed residual-leakage check of a sanitised corpus. Every sanitised text (messages, channel and user
 /// ids, tool-call summaries, memories, tags, query datasets, plans) is normalised (NFKC, zero-width removed) and
 /// scanned for: owner dictionary terms on the folded text (no case, no diacritics, so spelling variants the
-/// sanitiser missed are caught); the personal-identifier patterns of <see cref="SensitiveDataRedactor"/>; digit
+/// sanitiser missed are caught; same word and inflection rules as the sanitiser, <c>_</c> and digits are boundaries); the personal-identifier patterns of <see cref="SensitiveDataRedactor"/>; digit
 /// runs of 9 or more; <c>@handles</c>; URL hosts that are neither public nor pseudonyms. Produced pseudonyms are
 /// exempt. A single finding fails the freeze: the version is deleted, the report lists locations and kinds only.
 /// </summary>
@@ -34,7 +34,7 @@ public sealed partial class LeakageScanner
         this.pseudonyms = pseudonyms.ToHashSet(StringComparer.Ordinal);
         this.publicHosts = lexicon.PublicHosts;
         var folded = lexicon.Entries.Where(e => e.Kind != "public-host").Select(e => SanitiserLexicon.Canonical(e.Term)).Where(t => t.Length > 0).Distinct(StringComparer.Ordinal).ToList();
-        this.terms = folded.Count == 0 ? null : FoldedTermPattern(folded);
+        this.terms = folded.Count == 0 ? null : SanitiserLexicon.BuildMatcher(folded);
     }
 
     /// <summary>Texts scanned so far.</summary>
@@ -60,7 +60,8 @@ public sealed partial class LeakageScanner
         var normalized = TextSanitiser.Normalize(text);
         if (this.terms is not null)
         {
-            this.Add(location, "dictionary-term", this.terms.Count(TextFolder.Fold(normalized)));
+            var foldedText = TextFolder.Fold(normalized);
+            this.Add(location, "dictionary-term", this.terms.Matches(foldedText).Count(m => !InsidePseudonymToken(foldedText, m)));
         }
 
         if (this.termsOnly)
@@ -103,25 +104,22 @@ public sealed partial class LeakageScanner
         }
     }
 
-    // The sanitiser's word rule on folded text: whole words, up to three inflection letters after terms of four or more letters.
-    private static Regex FoldedTermPattern(IReadOnlyList<string> folded)
+    // The sanitiser's word rule applies to the folded text; a term can also sit between digits inside a pseudonym token (person….).
+    private static bool InsidePseudonymToken(string text, Match match)
     {
-        static string Alternation(IEnumerable<string> terms) => string.Join("|", terms.OrderByDescending(t => t.Length).Select(Regex.Escape));
-
-        var inflected = folded.Where(t => t.Length >= 4).ToList();
-        var exact = folded.Where(t => t.Length < 4).ToList();
-        var alternatives = new List<string>();
-        if (inflected.Count > 0)
+        var start = match.Index;
+        while (start > 0 && char.IsLetterOrDigit(text[start - 1]))
         {
-            alternatives.Add("(?:" + Alternation(inflected) + @")\p{L}{0,3}");
+            start--;
         }
 
-        if (exact.Count > 0)
+        var end = match.Index + match.Length;
+        while (end < text.Length && char.IsLetterOrDigit(text[end]))
         {
-            alternatives.Add("(?:" + Alternation(exact) + ")");
+            end++;
         }
 
-        return new Regex(@"(?<![\p{L}\p{N}_])(?:" + string.Join("|", alternatives) + @")(?![\p{L}\p{N}_])", RegexOptions.CultureInvariant, TimeSpan.FromSeconds(10));
+        return PseudonymMap.IsPseudonymToken(text.AsSpan(start, end - start));
     }
 
     private bool IsPseudonym(string value) => this.pseudonyms.Contains(value);

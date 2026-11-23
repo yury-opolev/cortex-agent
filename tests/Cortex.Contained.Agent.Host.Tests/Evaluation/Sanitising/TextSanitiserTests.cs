@@ -83,6 +83,66 @@ public sealed class TextSanitiserTests
         Assert.NotEqual(Sanitiser().Sanitise("Alvenia"), Sanitiser(secret: other).Sanitise("Alvenia"));
     }
 
+    private static readonly string[] InflectionLexicon =
+    [
+        """{"term":"Анна","kind":"person"}""",
+        """{"term":"Маша","kind":"person"}""",
+        """{"term":"Павел","kind":"person"}""",
+        """{"term":"Дмитрий","kind":"person"}""",
+        """{"term":"Ida","kind":"person"}""",
+        """{"term":"Ole","kind":"person"}""",
+        """{"term":"Bo","kind":"person"}""",
+        """{"term":"Mette","kind":"person"}""",
+    ];
+
+    [Theory]
+    [InlineData("Анна", "Анну")]
+    [InlineData("Анна", "Анны")]
+    [InlineData("Анна", "Анной")]
+    [InlineData("Маша", "Маши")]
+    [InlineData("Маша", "Машей")]
+    [InlineData("Павел", "Павла")]
+    [InlineData("Павел", "Павлу")]
+    [InlineData("Павел", "Павлом")]
+    [InlineData("Дмитрий", "Дмитрия")]
+    [InlineData("Дмитрий", "Дмитрием")]
+    public void Sanitise_RussianInflectedForms_SamePseudonymAsTheBaseForm(string baseForm, string inflected)
+    {
+        var sanitiser = Sanitiser(Dictionary(InflectionLexicon));
+
+        var output = sanitiser.Sanitise("видел " + inflected + " вчера");
+
+        var person = sanitiser.Sanitise(baseForm);
+        Assert.StartsWith("видел " + person, output, StringComparison.Ordinal);
+        Assert.DoesNotContain(inflected[..3], output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("Ida", "Idas bike")]
+    [InlineData("Ole", "Oles bike")]
+    [InlineData("Bo", "Bos bike")]
+    [InlineData("Mette", "mette_notes.md")]
+    [InlineData("Mette", "Mette2024")]
+    [InlineData("Mette", "2024_mette.txt")]
+    [InlineData("Anna", "anna_cv.pdf")]
+    public void Sanitise_DanishGenitiveAndNamesGluedToUnderscoreOrDigits_Replaced(string name, string text)
+    {
+        var sanitiser = Sanitiser(Dictionary(InflectionLexicon.Append("""{"term":"Anna","kind":"person"}""").ToArray()));
+
+        var output = sanitiser.Sanitise(text);
+
+        Assert.Contains(sanitiser.Sanitise(name), output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Sanitise_OrdinaryWordsThatLookLikeShortNamesOrStems_Untouched()
+    {
+        var sanitiser = Sanitiser(Dictionary(InflectionLexicon));
+        const string text = "The idea of an olive boat, Bobby, Oleander, boss and bold bonus; машина, Аннотация, Павловск, Дмитриевка, Metteborg";
+
+        Assert.Equal(text, sanitiser.Sanitise(text));
+    }
+
     [Fact]
     public void Parse_BadLines_NamedInTheError()
     {

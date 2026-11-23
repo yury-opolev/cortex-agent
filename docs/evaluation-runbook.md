@@ -62,8 +62,17 @@ e-mail, phone number, CPR number, IBAN, card number, GPS position, URL path, non
    {"term":"example.org","kind":"public-host"}
    ```
    Kinds: `person`, `place`, `org`, `handle`, `other`, `public-host` (a URL host that is kept). `entity` groups
-   spellings, nicknames and scripts of one person under one pseudonym. Inflected forms (genitive *-s*, Russian case
-   endings up to three letters) and spellings without diacritics are matched automatically.
+   spellings, nicknames and scripts of one person under one pseudonym. Matching is case-insensitive, on whole words
+   (a letter on either side blocks a match; digits and `_` do not, so `anna_cv.pdf` and `Mette2024` match) and also finds
+   the term without diacritics. Inflection is matched like this, and nothing more:
+   - terms of four or more letters: up to three trailing letters (`Mette` → `Mettes`);
+   - terms of one to three letters: an optional `s` (`Ida` → `Idas`, `Bo` → `Bos`);
+   - Cyrillic terms of three or more letters ending in a vowel, `й` or `ь`: also the term without that last letter plus
+     up to two letters (`Анна` → `Анну`, `Анны`, `Анной`; `Маша` → `Машей`; `Дмитрий` → `Дмитрия`, `Дмитрием`);
+   - Cyrillic terms of four or more letters ending in `е`/`о` plus a consonant: the mobile vowel is dropped and up to
+     three letters follow (`Павел` → `Павла`, `Павлом`).
+   Other stem changes (`Лев` → `Льва`, `Любовь` → `Любви`) and irregular forms are not found: add them as their own
+   lines with the same `entity`. The leakage check uses the same rules, so a form the sanitiser missed is reported.
 
 ## 4. Freeze a version
 

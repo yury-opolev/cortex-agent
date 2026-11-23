@@ -19,9 +19,11 @@ public sealed record LexiconEntry
 }
 
 /// <summary>
-/// The owner's dictionary of personal terms. Matching is case-insensitive, on whole words, with up to three
-/// trailing letters for inflection (Danish genitive, Russian cases) for terms of four or more letters; the
-/// folded form of every term (no diacritics) is matched as well. <c>public-host</c> entries are URL hosts kept
+/// The owner's dictionary of personal terms. Matching is case-insensitive, on whole words (a letter on either side
+/// blocks a match; digits and <c>_</c> do not), with up to three trailing letters for inflection for terms of four
+/// or more letters, an optional genitive <c>s</c> for shorter terms (Ida → Idas) and the Russian stem rules of
+/// <see cref="Stems"/> (Анна → Анну, Павел → Павла); the folded form of every term (no diacritics) is matched as well.
+/// <c>public-host</c> entries are URL hosts kept
 /// as they are (public sites); every other kind is pseudonymised.
 /// </summary>
 public sealed class SanitiserLexicon
@@ -31,10 +33,13 @@ public sealed class SanitiserLexicon
 
     private const int MinTermLength = 2;
     private const int InflectedTermLength = 4;
+    private const string CyrillicSoftEndings = "аеёиоуыэюяйь";
+    private const string CyrillicConsonants = "бвгджзклмнпрстфхцчшщ";
 
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
     private readonly Dictionary<string, LexiconEntry> byCanonical;
+    private readonly Dictionary<string, LexiconEntry> byStem;
 
     private SanitiserLexicon(IReadOnlyList<LexiconEntry> entries)
     {
@@ -48,7 +53,16 @@ public sealed class SanitiserLexicon
         }
 
         var variants = names.SelectMany(e => new[] { e.Term, TextFolder.Fold(e.Term) }).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-        this.Matcher = variants.Count == 0 ? null : Build(variants);
+        this.byStem = new Dictionary<string, LexiconEntry>(StringComparer.Ordinal);
+        foreach (var entry in names)
+        {
+            foreach (var (stem, _) in Stems(entry.Term))
+            {
+                this.byStem.TryAdd(Canonical(stem), entry);
+            }
+        }
+
+        this.Matcher = variants.Count == 0 ? null : BuildMatcher(variants);
     }
 
     /// <summary>All entries.</summary>
@@ -106,27 +120,69 @@ public sealed class SanitiserLexicon
     }
 
     /// <summary>The entry a matched term belongs to, or null.</summary>
-    public LexiconEntry? Lookup(string matched) => this.byCanonical.GetValueOrDefault(Canonical(matched));
+    public LexiconEntry? Lookup(string matched)
+    {
+        var key = Canonical(matched);
+        return this.byCanonical.GetValueOrDefault(key) ?? this.byStem.GetValueOrDefault(key);
+    }
 
-    private static Regex Build(IReadOnlyList<string> variants)
+    /// <summary>
+    /// The matcher of <paramref name="variants"/>: whole words (a letter on either side blocks a match; digits,
+    /// <c>_</c> and punctuation do not, so <c>anna_cv.pdf</c> and <c>Mette2024</c> match), plus the inflection rules
+    /// of <see cref="Stems"/>. Group <c>term</c> is the matched base (a variant or a stem), group <c>suffix</c> the rest.
+    /// </summary>
+    internal static Regex BuildMatcher(IReadOnlyList<string> variants)
     {
         static string Alternation(IEnumerable<string> terms) =>
-            string.Join("|", terms.OrderByDescending(t => t.Length).ThenBy(t => t, StringComparer.Ordinal).Select(Regex.Escape));
+            string.Join("|", terms.Distinct(StringComparer.OrdinalIgnoreCase).OrderByDescending(t => t.Length).ThenBy(t => t, StringComparer.Ordinal).Select(Regex.Escape));
 
+        static string Branch(IEnumerable<string> terms, string suffix) => "(?<term>" + Alternation(terms) + ")(?<suffix>" + suffix + ")";
+
+        var branches = new List<string>();
         var inflected = variants.Where(v => v.Length >= InflectedTermLength).ToList();
-        var exact = variants.Where(v => v.Length < InflectedTermLength).ToList();
-        var pattern = new StringBuilder(@"(?<![\p{L}\p{N}_])(?:");
+        var shortTerms = variants.Where(v => v.Length < InflectedTermLength).ToList();
         if (inflected.Count > 0)
         {
-            pattern.Append("(?<term>").Append(Alternation(inflected)).Append(@")(?<suffix>\p{L}{0,3})");
+            branches.Add(Branch(inflected, @"\p{L}{0,3}"));
         }
 
-        if (exact.Count > 0)
+        if (shortTerms.Count > 0)
         {
-            pattern.Append(inflected.Count > 0 ? "|" : string.Empty).Append("(?<term>").Append(Alternation(exact)).Append(")(?<suffix>)");
+            branches.Add(Branch(shortTerms, "s?"));
         }
 
-        pattern.Append(@")(?![\p{L}\p{N}_])");
-        return new Regex(pattern.ToString(), RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromSeconds(10));
+        var stems = variants.SelectMany(Stems).Distinct().ToList();
+        foreach (var group in stems.GroupBy(s => s.Extra).OrderBy(g => g.Key))
+        {
+            branches.Add(Branch(group.Select(s => s.Stem), @"\p{L}{0," + group.Key + "}"));
+        }
+
+        var pattern = @"(?<!\p{L})(?:" + string.Join("|", branches) + @")(?!\p{L})";
+        return new Regex(pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromSeconds(10));
+    }
+
+    /// <summary>
+    /// The stems Russian case endings are matched on. A Cyrillic term of three or more letters ending in a vowel,
+    /// <c>й</c> or <c>ь</c> also matches without that last letter plus up to two letters (Анна → Анну, Анны, Анной;
+    /// Маша → Машей; Дмитрий → Дмитрия, Дмитрием); a longer term ending in <c>е</c>/<c>о</c> and a consonant loses
+    /// the mobile vowel and matches with up to three letters (Павел → Павла, Павлом). Latin terms get none of this
+    /// (it would turn Anna into Annual); they keep the plain rule of up to three trailing letters.
+    /// </summary>
+    internal static IEnumerable<(string Stem, int Extra)> Stems(string variant)
+    {
+        if (variant.Length < 3 || variant[^1] is not (>= '\u0400' and <= '\u04FF'))
+        {
+            yield break;
+        }
+
+        var last = char.ToLowerInvariant(variant[^1]);
+        if (CyrillicSoftEndings.Contains(last, StringComparison.Ordinal))
+        {
+            yield return (variant[..^1], 2);
+        }
+        else if (variant.Length >= 4 && CyrillicConsonants.Contains(last, StringComparison.Ordinal) && char.ToLowerInvariant(variant[^2]) is 'е' or 'о')
+        {
+            yield return (variant[..^2] + variant[^1], 3);
+        }
     }
 }
