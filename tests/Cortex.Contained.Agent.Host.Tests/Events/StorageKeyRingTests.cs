@@ -76,4 +76,19 @@ public sealed class StorageKeyRingTests
         Assert.NotEqual(content, ring.KeyFor("sessions-snapshot"));
         Assert.Equal(ring.PasswordFor("memory-content"), Convert.ToHexStringLower(content));
     }
+
+    [Fact]
+    public void Derive_RingOfAPurpose_HasItsOwnPasswordsAndRequiresTheKey()
+    {
+        var ring = new StorageKeyRing();
+        Assert.Throws<StorageLockedException>(() => ring.Derive("eval"));
+        ring.Provide(KeyA);
+
+        var eval = ring.Derive("eval");
+
+        Assert.True(eval.IsAvailable);
+        Assert.NotEqual(ring.PasswordFor("messages.db"), eval.PasswordFor("messages.db"));
+        Assert.Equal(StorageKeyRing.DerivePassword(ring.KeyFor("eval"), "messages.db"), eval.PasswordFor("messages.db"));
+        Assert.Equal(eval.PasswordFor("messages.db"), ring.Derive("eval").PasswordFor("messages.db"));
+    }
 }

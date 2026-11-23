@@ -1,4 +1,5 @@
 using Cortex.Contained.Agent.Host.Storage;
+using Cortex.Contained.Contracts.Security;
 using Microsoft.Data.Sqlite;
 
 namespace Cortex.Contained.Agent.Host.Tests.Events;
@@ -400,6 +401,49 @@ public sealed class EncryptedSqliteTests : IDisposable
         this.Write(null, "zqmore");
 
         Assert.Equal(EncryptedOpenOutcome.Migrated, EncryptedSqlite.Prepare(this.DbPath, KeyA));
+    }
+
+    [Fact]
+    public void CopyDatabase_EncryptedSourceToAnotherKey_CopyOpensOnlyWithTheTargetKey()
+    {
+        this.Write(KeyA, "zqcopied");
+        var copy = Path.Combine(this.dir, "copy.db");
+
+        EncryptedSqlite.CopyDatabase(this.DbPath, KeyA, copy, KeyB);
+
+        Assert.Equal(StoredFileState.Encrypted, SqliteFileHeader.Classify(copy));
+        Assert.DoesNotContain("zqcopied", File.ReadAllText(copy), StringComparison.Ordinal);
+        Assert.Equal(EncryptedOpenOutcome.Opened, EncryptedSqlite.Prepare(copy, KeyB));
+        Assert.Throws<StorageKeyMismatchException>(() => EncryptedSqlite.Prepare(copy, KeyA));
+        using var connection = new SqliteConnection(EncryptedSqlite.ConnectionString(copy, KeyB, SqliteOpenMode.ReadOnly, pooling: false));
+        connection.Open();
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT x FROM t;";
+        Assert.Equal("zqcopied", cmd.ExecuteScalar());
+    }
+
+    [Fact]
+    public void CopyDatabase_PlaintextToPlaintext_KeepsRowsAndNeverOverwrites()
+    {
+        this.Write(null, "zqplain");
+        var copy = Path.Combine(this.dir, "copy.db");
+
+        EncryptedSqlite.CopyDatabase(this.DbPath, null, copy, null);
+
+        Assert.Contains("zqplain", File.ReadAllText(copy), StringComparison.Ordinal);
+        Assert.Throws<IOException>(() => EncryptedSqlite.CopyDatabase(this.DbPath, null, copy, null));
+    }
+
+    [Fact]
+    public void CopyDatabase_EncryptedToPlaintext_CopyIsPlaintext()
+    {
+        this.Write(KeyA, "zqdecrypted");
+        var copy = Path.Combine(this.dir, "copy.db");
+
+        EncryptedSqlite.CopyDatabase(this.DbPath, KeyA, copy, null);
+
+        Assert.Equal(StoredFileState.Plaintext, SqliteFileHeader.Classify(copy));
+        Assert.Contains("zqdecrypted", File.ReadAllText(copy), StringComparison.Ordinal);
     }
 
     [Fact]

@@ -117,6 +117,26 @@ public sealed class StorageKeyRing
         return DeriveKey(key, purpose);
     }
 
+    /// <summary>
+    /// A key ring whose master key is this ring's key for <paramref name="purpose"/> (HKDF-SHA256), so every
+    /// passphrase and key it derives differs from the ones of the live stores. Evaluation copies use the ring
+    /// derived for <c>eval</c>. Throws <see cref="StorageLockedException"/> before the key arrived.
+    /// </summary>
+    public StorageKeyRing Derive(string purpose)
+    {
+        var key = this.KeyFor(purpose);
+        try
+        {
+            var ring = new StorageKeyRing();
+            ring.Provide(Convert.ToBase64String(key));
+            return ring;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(key);
+        }
+    }
+
     /// <summary>Deterministic, purpose-bound passphrase (64 hex characters).</summary>
     public static string DerivePassword(byte[] masterKey, string purpose)
     {
