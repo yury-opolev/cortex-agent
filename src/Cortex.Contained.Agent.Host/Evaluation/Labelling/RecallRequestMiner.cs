@@ -69,6 +69,33 @@ public static class RecallRequestMiner
         return seeds;
     }
 
+    /// <summary>The owner's request <paramref name="messageId"/> and up to <paramref name="turns"/> earlier user/assistant turns of its channel (oldest first); null when the message is gone.</summary>
+    public static SeedMaterial? Material(SqliteConnection connection, long messageId, int turns)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = """
+            SELECT r.Content,
+                   (SELECT json_group_array(Role || ': ' || Content) FROM (
+                       SELECT m.Role, m.Content FROM Messages m
+                        WHERE m.ChannelId = r.ChannelId AND m.Role IN ('user', 'assistant') AND m.Category IN (0, 3)
+                          AND (m.Timestamp < r.Timestamp OR (m.Timestamp = r.Timestamp AND m.Id < r.Id))
+                        ORDER BY m.Timestamp DESC, m.Id DESC LIMIT @turns))
+              FROM Messages r WHERE r.Id = @id;
+            """;
+        cmd.Parameters.AddWithValue("@id", messageId);
+        cmd.Parameters.AddWithValue("@turns", turns);
+        using var reader = cmd.ExecuteReader();
+        if (!reader.Read())
+        {
+            return null;
+        }
+
+        var context = JsonSerializer.Deserialize<List<string>>(reader.GetString(1)) ?? [];
+        context.Reverse();
+        return new SeedMaterial([], reader.GetString(0)) { Context = context };
+    }
+
     private static bool IsJsonObject(string text)
     {
         try

@@ -61,7 +61,8 @@ public sealed class HistoryLabelSource : ILabelSource
         ArgumentNullException.ThrowIfNull(seed);
         if (seed.Stratum == "real")
         {
-            return seed.RequestMessageId is { } id ? this.Request(long.Parse(id, CultureInfo.InvariantCulture)) : null;
+            using var connection = this.corpus.OpenCopy();
+            return seed.RequestMessageId is { } id ? RecallRequestMiner.Material(connection, long.Parse(id, CultureInfo.InvariantCulture), ContextTurns) : null;
         }
 
         var items = await this.ReadAsync(seed.SourceIds, cancellationToken).ConfigureAwait(false);
@@ -119,32 +120,5 @@ public sealed class HistoryLabelSource : ILabelSource
     {
         ArgumentNullException.ThrowIfNull(queries);
         this.workspace.Protection.WriteLines(this.workspace.DatasetPath, queries.Select(q => EvalDataset.ToLine(DatasetFinaliser.ToHistory(q, queryFamily, judgeFamily))));
-    }
-
-    // The owner's request and up to four earlier user/assistant turns of its channel.
-    private SeedMaterial? Request(long messageId)
-    {
-        using var connection = this.corpus.OpenCopy();
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = """
-            SELECT r.Content,
-                   (SELECT json_group_array(Role || ': ' || Content) FROM (
-                       SELECT m.Role, m.Content FROM Messages m
-                        WHERE m.ChannelId = r.ChannelId AND m.Role IN ('user', 'assistant') AND m.Category IN (0, 3)
-                          AND (m.Timestamp < r.Timestamp OR (m.Timestamp = r.Timestamp AND m.Id < r.Id))
-                        ORDER BY m.Timestamp DESC, m.Id DESC LIMIT @turns))
-              FROM Messages r WHERE r.Id = @id;
-            """;
-        cmd.Parameters.AddWithValue("@id", messageId);
-        cmd.Parameters.AddWithValue("@turns", ContextTurns);
-        using var reader = cmd.ExecuteReader();
-        if (!reader.Read())
-        {
-            return null;
-        }
-
-        var context = System.Text.Json.JsonSerializer.Deserialize<List<string>>(reader.GetString(1)) ?? [];
-        context.Reverse();
-        return new SeedMaterial([], reader.GetString(0)) { Context = context };
     }
 }
