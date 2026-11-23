@@ -23,6 +23,16 @@ public interface IEvaluationAgentClient
     Task<EvaluationPackageChunkDto> ReadPackageAsync(string name, long offset, int count, CancellationToken cancellationToken);
 
     Task<bool> AcknowledgeOffsiteDeletionAsync(string version, CancellationToken cancellationToken);
+
+    Task<EvaluationRunDto> GetRunAsync(CancellationToken cancellationToken);
+
+    Task<EvaluationRunCommandResultDto> ControlRunAsync(EvaluationRunCommandDto command, CancellationToken cancellationToken);
+
+    Task<GradingItemDto> GetGradingItemAsync(int index, CancellationToken cancellationToken);
+
+    Task<GradingProgressDto> SubmitGradeAsync(GradeRequestDto grade, CancellationToken cancellationToken);
+
+    Task<string?> ReadRunReportAsync(string key, CancellationToken cancellationToken);
 }
 
 /// <summary>Adapts a connected <see cref="HubClient"/> to <see cref="IEvaluationAgentClient"/>.</summary>
@@ -49,4 +59,14 @@ public sealed class HubEvaluationAgentClient(HubClient client) : IEvaluationAgen
         client.ReadEvaluationPackageAsync(name, offset, count, cancellationToken);
 
     public Task<bool> AcknowledgeOffsiteDeletionAsync(string version, CancellationToken cancellationToken) => client.AcknowledgeOffsiteDeletionAsync(version, cancellationToken);
+
+    public Task<EvaluationRunDto> GetRunAsync(CancellationToken cancellationToken) => client.GetEvaluationRunAsync(cancellationToken);
+
+    public Task<EvaluationRunCommandResultDto> ControlRunAsync(EvaluationRunCommandDto command, CancellationToken cancellationToken) => client.ControlEvaluationRunAsync(command, cancellationToken);
+
+    public Task<GradingItemDto> GetGradingItemAsync(int index, CancellationToken cancellationToken) => client.GetGradingItemAsync(index, cancellationToken);
+
+    public Task<GradingProgressDto> SubmitGradeAsync(GradeRequestDto grade, CancellationToken cancellationToken) => client.SubmitGradeAsync(grade, cancellationToken);
+
+    public Task<string?> ReadRunReportAsync(string key, CancellationToken cancellationToken) => client.ReadEvaluationRunReportAsync(key, cancellationToken);
 }
