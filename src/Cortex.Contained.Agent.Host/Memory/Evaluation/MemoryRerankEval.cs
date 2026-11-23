@@ -51,7 +51,7 @@ internal static class MemoryRerankEval
         AblationReport report;
         int? loadCompleted = null;
         int? loadFailed = null;
-        await using (var corpus = await MemoryEvalCorpus.CreateAsync(live.DataDirectory, runDir, live, embedderFactory(live), cancellationToken, stage, workspace.Protection).ConfigureAwait(false))
+        await using (var corpus = await MemoryEvalCorpus.OpenForAsync(workspace, live, embedderFactory(live), runDir, cancellationToken, stage).ConfigureAwait(false))
         {
             if (condition == RerankConditions.Cold)
             {
@@ -110,7 +110,7 @@ internal static class MemoryRerankEval
         var runDir = NewRunDirectory(workspace, "gate-r");
         AblationReport report;
         var busy = new List<double>();
-        await using (var corpus = await MemoryEvalCorpus.CreateAsync(live.DataDirectory, runDir, live, embedderFactory(live), cancellationToken, stage, workspace.Protection).ConfigureAwait(false))
+        await using (var corpus = await MemoryEvalCorpus.OpenForAsync(workspace, live, embedderFactory(live), runDir, cancellationToken, stage).ConfigureAwait(false))
         {
             report = await MemoryAblationRunner.RunAsync([unreranked, candidate], queries, corpus.SearchAsync, unreranked.Name, cancellationToken).ConfigureAwait(false);
             await using (StartEmbedderLoad(embedderFactory, live))

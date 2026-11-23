@@ -44,11 +44,12 @@ public sealed class MemoryEvalWorkspace
         Converters = { new JsonStringEnumConverter() },
     };
 
-    public MemoryEvalWorkspace(string directory, EvalProtection? protection = null)
+    public MemoryEvalWorkspace(string directory, EvalProtection? protection = null, string? snapshot = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(directory);
         this.Directory = directory;
         this.Protection = protection ?? EvalProtection.Plaintext;
+        this.Snapshot = snapshot;
     }
 
     /// <summary>Workspace root.</summary>
@@ -56,6 +57,9 @@ public sealed class MemoryEvalWorkspace
 
     /// <summary>How the dataset and seeds are sealed and the corpus copies are encrypted.</summary>
     public EvalProtection Protection { get; }
+
+    /// <summary>The sanitised memories of a frozen corpus this workspace evaluates, or null for the live store.</summary>
+    public string? Snapshot { get; }
 
     /// <summary>Labelled queries (<see cref="MemoryEvalQuery"/> per line; sealed on an encrypted install).</summary>
     public string DatasetPath => Path.Combine(this.Directory, "dataset.jsonl");

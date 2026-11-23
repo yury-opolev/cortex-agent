@@ -61,6 +61,26 @@ public sealed class FrozenCorpusStore
             ? Directory.EnumerateFiles(this.PackagesDirectory, "*.cxpkg").Select(Path.GetFileName).OfType<string>().Order(StringComparer.Ordinal).ToList()
             : [];
 
+    /// <summary>
+    /// The directory of the version named by a <c>--corpus frozen:&lt;version&gt;</c> option, looked up in the evaluation
+    /// directory that holds <paramref name="workspaceDirectory"/>; throws <see cref="InvalidOperationException"/> otherwise.
+    /// </summary>
+    public static string ResolveCorpusOption(string corpus, string workspaceDirectory)
+    {
+        ArgumentNullException.ThrowIfNull(corpus);
+        const string Prefix = "frozen:";
+        if (!corpus.StartsWith(Prefix, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("--corpus takes frozen:<version>, e.g. frozen:v1.");
+        }
+
+        var store = new FrozenCorpusStore(Path.GetDirectoryName(Path.GetFullPath(workspaceDirectory.TrimEnd('/', '\\')))!);
+        var version = corpus[Prefix.Length..];
+        return store.Read(version) is not null
+            ? store.DirectoryOf(version)
+            : throw new InvalidOperationException($"No frozen corpus {version}: list them with 'eval-corpus list'.");
+    }
+
     /// <summary>Reserves the next version name (never reused, even after a version was destroyed).</summary>
     public string ReserveNextVersion()
     {

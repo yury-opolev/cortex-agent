@@ -1,8 +1,10 @@
 using System.Diagnostics;
+using System.Text.Json;
 using Cortex.Contained.Agent.Host.Evaluation;
 using Cortex.Contained.Agent.Host.Reranking;
 using Cortex.Contained.Agent.Host.Storage;
 using MemoryMcp.Core.Configuration;
+using MemoryMcp.Core.Models;
 using MemoryMcp.Core.Services;
 using MemoryMcp.Core.Storage;
 using Microsoft.Data.Sqlite;
@@ -25,6 +27,8 @@ public sealed class MemoryEvalCorpus : IAsyncDisposable
     public const int ResultLimit = 10;
 
     private const string LockFileName = "corpus.lock";
+
+    private static readonly JsonSerializerOptions SnapshotJson = new(JsonSerializerDefaults.Web);
 
     private readonly string corpusDirectory;
     private readonly FileStream runLock;
@@ -119,9 +123,84 @@ public sealed class MemoryEvalCorpus : IAsyncDisposable
         DatabaseFileName = live.DatabaseFileName,
         MemoriesSubdirectory = live.MemoriesSubdirectory,
         SearchMaxContentLength = live.SearchMaxContentLength,
+        ChunkSizeWords = live.ChunkSizeWords,
+        ChunkOverlapWords = live.ChunkOverlapWords,
         Ollama = live.Ollama,
         Search = live.Search,
     };
+
+    /// <summary>
+    /// The corpus of <paramref name="workspace"/>: a copy of the live store, or — for a frozen corpus workspace
+    /// (<see cref="MemoryEvalWorkspace.Snapshot"/>) — a store built from its sanitised memories.
+    /// </summary>
+    public static Task<MemoryEvalCorpus> OpenForAsync(
+        MemoryEvalWorkspace workspace, MemoryMcpOptions live, IEmbeddingService embedding, string runDirectory, CancellationToken cancellationToken, IRerankStage? reranker = null)
+    {
+        ArgumentNullException.ThrowIfNull(workspace);
+        ArgumentNullException.ThrowIfNull(live);
+        return workspace.Snapshot is { } snapshot
+            ? CreateFromSnapshotAsync(snapshot, runDirectory, live, embedding, cancellationToken, reranker, workspace.Protection)
+            : CreateAsync(live.DataDirectory, runDirectory, live, embedding, cancellationToken, reranker, workspace.Protection);
+    }
+
+    /// <summary>
+    /// Builds a private store in <paramref name="runDirectory"/><c>/corpus</c> from sanitised memories (one
+    /// <see cref="MemorySeedSource"/> per line of <paramref name="snapshotPath"/>, sealed on an encrypted install):
+    /// chunked like the live store and embedded with <paramref name="embedding"/>, ids unchanged so labels apply.
+    /// </summary>
+    public static async Task<MemoryEvalCorpus> CreateFromSnapshotAsync(
+        string snapshotPath,
+        string runDirectory,
+        MemoryMcpOptions live,
+        IEmbeddingService embedding,
+        CancellationToken cancellationToken,
+        IRerankStage? reranker = null,
+        EvalProtection? protection = null)
+    {
+        ArgumentNullException.ThrowIfNull(live);
+        ArgumentNullException.ThrowIfNull(embedding);
+        protection ??= EvalProtection.Plaintext;
+        var memories = protection.ReadLines(snapshotPath)
+            .Select(line => JsonSerializer.Deserialize<MemorySeedSource>(line, SnapshotJson) ?? throw new InvalidDataException($"Bad line in {snapshotPath}"))
+            .ToList();
+        var corpusDirectory = Path.Combine(runDirectory, "corpus");
+        var options = CopyOptions(corpusDirectory, live);
+        Directory.CreateDirectory(runDirectory);
+        var runLock = new FileStream(Path.Combine(runDirectory, LockFileName), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.DeleteOnClose);
+        try
+        {
+            Directory.CreateDirectory(options.MemoriesDirectory);
+            using var store = new SqliteVecMemoryStore(
+                Options.Create(options), protection.CopyContent(), NullLogger<SqliteVecMemoryStore>.Instance, protection.CopyPassword(EncryptedMemoryStore.DatabasePurpose));
+            await store.InitializeAsync(cancellationToken).ConfigureAwait(false);
+            var chunker = new WordChunkingService(Options.Create(options));
+            foreach (var memory in memories)
+            {
+                var chunks = chunker.Chunk(memory.Content);
+                var vectors = await embedding.EmbedBatchAsync(chunks.Select(c => c.Text), cancellationToken).ConfigureAwait(false);
+                var records = chunks.Select(c => new ChunkRecord
+                {
+                    MemoryId = memory.MemoryId,
+                    ChunkIndex = c.ChunkIndex,
+                    StartOffset = c.StartOffset,
+                    Length = c.Length,
+                    Title = memory.Title,
+                    Tags = [.. memory.Tags],
+                    CreatedAt = DateTimeOffset.UnixEpoch,
+                    UpdatedAt = DateTimeOffset.UnixEpoch,
+                }).ToList();
+                await store.StoreMemoryAsync(memory.MemoryId, memory.Content, records, [.. vectors], cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch
+        {
+            DeleteCopy(corpusDirectory);
+            runLock.Dispose();
+            throw;
+        }
+
+        return await OpenAsync(corpusDirectory, runLock, options, embedding, reranker, protection, cancellationToken).ConfigureAwait(false);
+    }
 
     private static async Task<MemoryEvalCorpus> OpenAsync(
         string corpusDirectory, FileStream runLock, MemoryMcpOptions options, IEmbeddingService embedding, IRerankStage? reranker, EvalProtection protection, CancellationToken cancellationToken)

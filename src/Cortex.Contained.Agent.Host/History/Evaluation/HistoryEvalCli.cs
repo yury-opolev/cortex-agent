@@ -1,5 +1,6 @@
 using System.Globalization;
 using Cortex.Contained.Agent.Host.Evaluation;
+using Cortex.Contained.Agent.Host.Evaluation.Frozen;
 using Cortex.Contained.Agent.Host.Reranking;
 using Cortex.Contained.Agent.Host.Reranking.Evaluation;
 using MemoryMcp.Core.Configuration;
@@ -19,7 +20,7 @@ public static class HistoryEvalCli
 {
     private const string Usage =
         "usage: history-eval <init|validate|guard|register|ablate|holdout|kappa|rerank-curve|gate-r> [--dir /app/state/eval/hybrid] [--source /app/state/messages.db] " +
-        "[--tz <IANA zone, default: local>] [--split dev|test|all] [--embedder http://embeddings:11434] [--labels judge-agreement.csv]\n" +
+        "[--tz <IANA zone, default: local>] [--split dev|test|all]         [--embedder http://embeddings:11434] [--labels judge-agreement.csv] [--corpus frozen:v1]\n" +
         "rerank-curve [--condition normal|embedder-busy|cold] [--base CONFIG] [--reranker http://reranker:8080] [--timeout-ms 30000]; " +
         "gate-r --config CONFIG [--timeout-ms 2000]; both read the reranker key from Reranker__ApiKey.";
 
@@ -124,6 +125,19 @@ public static class HistoryEvalCli
         }
         try
         {
+            if (Option(args, "--corpus") is { } corpus)
+            {
+                // The sanitised frozen copy (§4.2): its own registered workspace and corpus, read with the evaluation key.
+                if (args[0] is "init" or "register")
+                {
+                    throw new InvalidOperationException($"'{args[0]}' does not apply to a frozen corpus: it was registered when it was frozen.");
+                }
+
+                var version = FrozenCorpusStore.ResolveCorpusOption(corpus, workspace.Directory);
+                workspace = new EvalWorkspace(Path.Combine(version, "history"), (protection ?? EvalProtection.Plaintext).ForFrozenSource());
+                source = Path.Combine(version, "messages.db");
+            }
+
             switch (args[0])
             {
                 case "init":
