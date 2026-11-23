@@ -1,5 +1,6 @@
 using Cortex.Contained.Agent.Host.Evaluation.Frozen;
 using Cortex.Contained.Agent.Host.Evaluation.Labelling;
+using Cortex.Contained.Agent.Host.Evaluation.Orchestration;
 using Cortex.Contained.Agent.Host.History;
 using Cortex.Contained.Agent.Host.History.Evaluation;
 using Cortex.Contained.Agent.Host.Llm;
@@ -16,7 +17,7 @@ namespace Cortex.Contained.Agent.Host.Evaluation;
 /// <summary>DI registration of the in-process evaluation jobs and workspace files (called from <c>Program.cs</c>).</summary>
 public static class EvaluationRegistration
 {
-    /// <summary>Registers <see cref="EvaluationJobService"/>, <see cref="EvaluationFiles"/> and the labelling options.</summary>
+    /// <summary>Registers <see cref="EvaluationJobService"/>, <see cref="EvaluationFiles"/>, the labelling options and the evaluation run.</summary>
     public static void AddEvaluation(IServiceCollection services, StorageEncryptionContext encryption, IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(services);
@@ -60,6 +61,32 @@ public static class EvaluationRegistration
         services.AddSingleton(sp => new EvaluationFiles(
             Workspaces(sp.GetRequiredService<IOptionsMonitor<HistoryOptions>>().CurrentValue, encryption.Layout),
             EvaluationJobService.ProtectionFor(encryption, sp.GetRequiredService<StorageKeyRing>())));
+        services.AddSingleton(sp => new GradingService(
+            Workspaces(sp.GetRequiredService<IOptionsMonitor<HistoryOptions>>().CurrentValue, encryption.Layout),
+            EvaluationJobService.ProtectionFor(encryption, sp.GetRequiredService<StorageKeyRing>())));
+        services.AddSingleton(sp =>
+        {
+            var labelling = sp.GetRequiredService<IOptionsMonitor<LabellingOptions>>();
+            var reranker = sp.GetRequiredService<RerankerAccess>();
+            var environment = new RunEnvironment(
+                sp.GetRequiredService<IOptionsMonitor<HistoryOptions>>().CurrentValue.EvalArtifactsDirectory,
+                MemoryEvalWorkspace.DefaultDirectory,
+                encryption.Layout.EvaluationDirectory,
+                EvaluationJobService.ProtectionFor(encryption, sp.GetRequiredService<StorageKeyRing>()),
+                () => reranker.Enabled,
+                () => labelling.CurrentValue);
+            return new EvaluationRunService(
+                sp.GetRequiredService<EvaluationJobService>(),
+                sp.GetRequiredService<GradingService>(),
+                environment,
+                sp.GetRequiredService<TimeProvider>(),
+                sp.GetRequiredService<ILogger<EvaluationRunService>>());
+        });
+        services.AddHostedService(sp => sp.GetRequiredService<EvaluationRunService>());
+        services.AddSingleton(sp => new EvaluationRunApi(
+            sp.GetRequiredService<EvaluationRunService>(),
+            sp.GetRequiredService<GradingService>(),
+            () => sp.GetRequiredService<IOptionsMonitor<LabellingOptions>>().CurrentValue));
     }
 
     /// <summary>What <c>label</c> runs with: the configured models through the agent's provider, the main model, the live stores.</summary>

@@ -33,6 +33,21 @@ public interface IEvaluationHub
 
     /// <summary>Records that the owner deleted the off-machine package of <paramref name="version"/> from SafeExchange.</summary>
     Task<bool> AcknowledgeOffsiteDeletion(string version);
+
+    /// <summary>The evaluation run ("Run evaluation" on the Recall page): phases, waits, κ, verdict report keys.</summary>
+    Task<EvaluationRunDto> GetEvaluationRun();
+
+    /// <summary>Starts, cancels or resumes the run, approves the dictionary or supplies the export passphrase.</summary>
+    Task<EvaluationRunCommandResultDto> ControlEvaluationRun(EvaluationRunCommandDto command);
+
+    /// <summary>Item <paramref name="index"/> of the owner's κ sample (decrypted query and candidate text, without the judge's grade).</summary>
+    Task<GradingItemDto> GetGradingItem(int index);
+
+    /// <summary>Stores the owner's grade of one κ sample item; κ is computed when the last one is graded.</summary>
+    Task<GradingProgressDto> SubmitGrade(GradeRequestDto grade);
+
+    /// <summary>A report the run recorded (ids and numbers only), or null.</summary>
+    Task<string?> ReadEvaluationRunReport(string key);
 }
 
 /// <summary>String values of <see cref="EvaluationJobDto.State"/>.</summary>
