@@ -47,11 +47,45 @@ public sealed class LabellingLlmTests
         this.fake.Respond = (_, _, _) => "{\"text\":\"from another family\"}";
         this.fake.AnsweringProvider = "other-provider";
 
+        await Assert.ThrowsAsync<LabellingTransportException>(() => this.Create(new LabellingOptions { MinCallIntervalMs = 0, MaxAttempts = 3 })
+            .CompleteJsonAsync<Answer>("m", "s", "u", 100, _ => true, CancellationToken.None));
+
+        Assert.Equal([TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(4), TimeSpan.FromSeconds(8)], this.waits);
+    }
+
+    [Fact]
+    public async Task CompleteJsonAsync_EveryCall_IsPinnedToTheProviderThatListsTheModel()
+    {
+        this.fake.Respond = (_, _, _) => "{\"text\":\"x\"}";
+
+        await this.Create().CompleteJsonAsync<Answer>("m", "s", "u", 100, _ => true, CancellationToken.None);
+
+        Assert.True(Assert.Single(this.fake.Sent).PinnedProvider);
+    }
+
+    [Fact]
+    public async Task CompleteJsonAsync_EveryAttemptFailsInTransport_ThrowsInsteadOfReturningNoAnswer()
+    {
+        this.fake.Respond = (_, _, _) => null;
+        var llm = this.Create(new LabellingOptions { MinCallIntervalMs = 0, MaxAttempts = 3 });
+
+        var error = await Assert.ThrowsAsync<LabellingTransportException>(() =>
+            llm.CompleteJsonAsync<Answer>("m", "s", "u", 100, _ => true, CancellationToken.None));
+
+        Assert.Equal(3, llm.Calls);
+        Assert.Contains("HTTP 503", error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("unavailable", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CompleteJsonAsync_OnlyInvalidAnswers_ReturnsNull()
+    {
+        this.fake.Respond = (_, _, _) => "{\"text\":null}";
+
         var answer = await this.Create(new LabellingOptions { MinCallIntervalMs = 0, MaxAttempts = 3 })
-            .CompleteJsonAsync<Answer>("m", "s", "u", 100, _ => true, CancellationToken.None);
+            .CompleteJsonAsync<Answer>("m", "s", "u", 100, a => a.Text is not null, CancellationToken.None);
 
         Assert.Null(answer);
-        Assert.Equal([TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(4), TimeSpan.FromSeconds(8)], this.waits);
     }
 
     [Fact]

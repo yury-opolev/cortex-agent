@@ -34,8 +34,11 @@ stay), changing the manual path (it stays as "advanced").
 `JudgeModel` = `claude-opus-5.5` grades. Both are configurable and must be listed by a configured provider (the Bridge's
 `llmProviders`, e.g. the `github-copilot-api` provider). `ModelFamily.Of` maps ids to families (`gpt`, `claude`, …) and a
 run with equal families is refused. Calls are *pinned*: `DirectLlmClient` fails over to another provider's default model
-on provider errors, which would silently change the family, so a result whose `ProviderId` is not the provider that
-lists the model (`DirectLlmClient.ProviderFor`, new) counts as a failed attempt.
+on provider errors, which would silently change the family, so labelling requests carry `LlmCompletionRequest.PinnedProvider`
+(served only by the provider that lists the model: no failover and no hidden same-provider retries, so every attempt is
+counted against `MaxCalls`); a result whose `ProviderId` is not the provider that lists the model
+(`DirectLlmClient.ProviderFor`, new) still counts as a failed attempt. A provider that keeps failing (all `MaxAttempts`
+attempts fail in transport) is not "no answer": the job stops resumably (exit 4) and marks nothing failed.
 
 **L2 — Labelling is a job.** `history-eval label` and `memory-eval label [--queries N] [--kappa N] [--estimate]` run
 inside the agent like every evaluation command (E-series: storage key, `EvalProtection`, refused path options). The job
@@ -73,8 +76,9 @@ configuration the holdout can test therefore has judged@10 ≈ 1; reranked confi
 so the gold source is not always first) with short aliases (`c1`…; ids never reach the
 model), a fixed 0–2 rubric, strict JSON `{"grades":{"c1":2,…}}` that must name every alias exactly once with grades in
 0–2; invalid answers are asked again (`MaxAttempts` = 4, exponential backoff on failures, ×4 on HTTP 429, at most 2 min);
-a batch that never validates is split in halves down to single items; a query whose judging still fails is retried by
-the next run of the job.
+a batch that never validates is split in halves down to single items; a query whose judging still fails (the judge gave
+no valid answer) is retried by the next run of the job, and the job writes nothing (exit 5) until those retries are used
+up (a query is given up after 3 runs and reported as `judgingFailed`).
 
 **L8 — Finalisation rules (pre-declared).** A synthetic query is dropped when the judge found its source irrelevant (every source graded 0; an
 enumeration/multi query needs at least one source graded ≥ 1, and then two relevant items to stay one); a real
@@ -86,7 +90,8 @@ system comparison and written into the analysis plan.
 **L9 — Checkpoints and caps.** The job state (`label-state.json`: seeds by id, drafts, pools, grades, cumulative call
 count) is sealed and saved every 5 drafts and after every judged query. `MaxCalls` (5,000 per job) is a hard cap across
 resumed runs; the job prints its estimate first and refuses when the estimate exceeds the cap; at the cap it stops with
-exit code 3 and the next run continues. `MinCallIntervalMs` paces calls.
+exit code 3 and the next run continues. A provider that keeps failing stops it with exit code 4 (nothing is marked
+failed, the next run continues). `MinCallIntervalMs` paces calls.
 
 **L10 — κ sample.** 75 items (`KappaSample`) split by query count (50 history, 25 memory), stratified by the judge's
 grade (a third each of 0, 1, 2, topped up when one is scarce), one item per query while possible, deterministic and

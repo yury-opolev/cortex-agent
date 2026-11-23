@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Cortex.Contained.Agent.Host.Memory;
 using Cortex.Contained.Contracts.Llm;
 
@@ -24,13 +25,37 @@ public sealed class LabellingBudgetExceededException : Exception
 }
 
 /// <summary>
+/// Thrown when no answer could be obtained from a model because the provider kept failing (HTTP errors, rate limits,
+/// a failover rejection): not the model's fault, so nothing is marked failed and the job stops, resumable. The
+/// message holds the status only, never text.
+/// </summary>
+public sealed class LabellingTransportException : Exception
+{
+    public LabellingTransportException()
+    {
+    }
+
+    public LabellingTransportException(string message)
+        : base(message)
+    {
+    }
+
+    public LabellingTransportException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
+}
+
+/// <summary>
 /// The labelling job's only way to an LLM: one pinned model per call through the configured provider, strict JSON
 /// answers (asked again when unparsable or invalid), exponential backoff on failures, a minimum interval between
-/// calls and a hard cap on the number of calls. A call answered by another provider than the one that lists the
-/// model (a failover) does not count as an answer: the model family would no longer be the configured one (§4.2).
+/// calls and a hard cap on the number of calls. Calls are pinned (<c>LlmCompletionRequest.PinnedProvider</c>: no
+/// failover, no hidden retries, so every attempt is counted); an answer from another provider than the one that lists
+/// the model still does not count as an answer: the model family would no longer be the configured one (§4.2).
+/// A provider that keeps failing is a <see cref="LabellingTransportException"/>, not "no answer".
 /// Prompts and answers are never logged.
 /// </summary>
-public sealed class LabellingLlm
+public sealed partial class LabellingLlm
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
@@ -92,19 +117,23 @@ public sealed class LabellingLlm
     }
 
     /// <summary>
-    /// Asks <paramref name="model"/> and parses its answer as <typeparamref name="T"/>; null when no valid answer came
-    /// within <see cref="LabellingOptions.MaxAttempts"/> attempts. Throws <see cref="LabellingBudgetExceededException"/> at the cap.
+    /// Asks <paramref name="model"/> and parses its answer as <typeparamref name="T"/>; null when the model gave no
+    /// valid answer within <see cref="LabellingOptions.MaxAttempts"/> attempts. Throws
+    /// <see cref="LabellingTransportException"/> when no valid answer came and an attempt failed in transport (the
+    /// provider, not the model, is the problem) and <see cref="LabellingBudgetExceededException"/> at the cap.
     /// </summary>
     public async Task<T?> CompleteJsonAsync<T>(string model, string system, string user, int maxTokens, Func<T, bool> valid, CancellationToken cancellationToken)
         where T : class
     {
         ArgumentNullException.ThrowIfNull(valid);
         var expectedProvider = this.providerFor(model);
+        string? transportError = null;
         for (var attempt = 0; attempt < this.options.MaxAttempts; attempt++)
         {
             var result = await this.CallAsync(model, system, user, maxTokens, cancellationToken).ConfigureAwait(false);
             if (!result.Success || (result.ProviderId is { } provider && !string.Equals(provider, expectedProvider, StringComparison.Ordinal)))
             {
+                transportError = result.Success ? "answered by another provider" : Status(result.ErrorMessage);
                 await this.delay(Backoff(attempt, result.ErrorMessage), cancellationToken).ConfigureAwait(false);
                 continue;
             }
@@ -115,8 +144,17 @@ public sealed class LabellingLlm
             }
         }
 
-        return null;
+        return transportError is null
+            ? null
+            : throw new LabellingTransportException($"The LLM provider kept failing for model '{model}' ({transportError}).");
     }
+
+    // "HTTP 429" for an HTTP error, otherwise a generic label: provider messages may carry body text.
+    private static string Status(string? error) =>
+        error is not null && HttpStatus().Match(error) is { Success: true } status ? "HTTP " + status.Groups[1].Value : "transport error";
+
+    [GeneratedRegex(@"^HTTP (\d{3})\b")]
+    private static partial Regex HttpStatus();
 
     /// <summary>Waits between failed attempts: 2 s, 4 s, 8 s … (×4 for rate limiting), at most 2 minutes.</summary>
     public static TimeSpan Backoff(int attempt, string? error)
@@ -176,6 +214,7 @@ public sealed class LabellingLlm
                 MaxTokens = maxTokens,
                 RequestId = "eval-label-" + Guid.NewGuid().ToString("N"),
                 ConversationId = "eval-labelling",
+                PinnedProvider = true,
             },
             cancellationToken).ConfigureAwait(false);
     }

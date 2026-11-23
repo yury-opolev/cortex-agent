@@ -423,10 +423,19 @@ public sealed partial class EvaluationRunService : BackgroundService
             return;
         }
 
-        this.Stop(run, run.Phase is EvaluationRunPlan.LabelHistory or EvaluationRunPlan.LabelMemory && job.ExitCode == 3
-            ? "The label job reached Evaluation:Labelling:MaxCalls. Raise the cap in the agent configuration and press Resume: it continues where it stopped."
-            : string.Create(CultureInfo.InvariantCulture, $"{step.Label} failed (exit {job.ExitCode}): {tail}"));
+        this.Stop(run, LabelStop(run.Phase, job.ExitCode, tail)
+            ?? string.Create(CultureInfo.InvariantCulture, $"{step.Label} failed (exit {job.ExitCode}): {tail}"));
     }
+
+    // Exit codes of the label job that keep its progress and continue with Resume (see Labeller.RunAsync).
+    private static string? LabelStop(string phase, int? exitCode, string tail) =>
+        phase is not (EvaluationRunPlan.LabelHistory or EvaluationRunPlan.LabelMemory) ? null : exitCode switch
+        {
+            3 => "The label job reached Evaluation:Labelling:MaxCalls. Raise the cap in the agent configuration and press Resume: it continues where it stopped.",
+            4 => "The LLM provider kept failing (rate limit, outage or an unlisted model), so the label job stopped; nothing was marked failed. Check the provider in the Bridge, then press Resume: it continues where it stopped. " + tail,
+            5 => "Some queries could not be judged yet. Press Resume to retry them (a query is given up after 3 runs); nothing is written before that. " + tail,
+            _ => null,
+        };
 
     private void Internal(EvaluationRunState run)
     {

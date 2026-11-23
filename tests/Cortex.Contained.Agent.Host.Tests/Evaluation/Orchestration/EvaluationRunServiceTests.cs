@@ -23,6 +23,7 @@ public sealed class EvaluationRunServiceTests : IDisposable
     private EvaluationJobService jobs;
     private EvaluationRunService service;
     private int freezes;
+    private readonly Queue<int> labelExits = new();
     private TaskCompletionSource<int>? initGate;
 
     public EvaluationRunServiceTests()
@@ -82,6 +83,9 @@ public sealed class EvaluationRunServiceTests : IDisposable
             case "init":
                 new EvalWorkspace(directory).WritePlan(new AblationPlan { Configs = [new() { Name = AblationGrid.Baseline, Mode = HistorySearchMode.Keyword }, new() { Name = "hybrid-rrf20", RrfK = 20 }, new() { Name = "hybrid-model-queries", UseModelQuery = true }] });
                 return 0;
+            case "label" when this.labelExits.TryDequeue(out var exit):
+                await run.Output.WriteLineAsync("label stopped: exit " + exit);
+                return exit;
             case "label":
                 var prefix = memory ? "m" : "h";
                 run.Protection.WriteLines(Path.Combine(directory, "dataset.jsonl"), Enumerable.Range(1, 4).Select(i => memory
@@ -215,6 +219,28 @@ public sealed class EvaluationRunServiceTests : IDisposable
         Assert.Contains("below 0.6", state.Message, StringComparison.Ordinal);
         Assert.Equal(EvaluationRunPlan.Grading, state.Phase);
         Assert.DoesNotContain(this.calls, c => c.Contains("ablate", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Run_LabelJobStopsResumable_StaysInTheLabelPhaseWithTheReasonAndResumeRetriesIt()
+    {
+        this.labelExits.Enqueue(4);
+        this.labelExits.Enqueue(5);
+        this.service.Start(fresh: false);
+
+        var state = await this.UntilAsync(s => s.Status == RunStatus.Stopped);
+        Assert.Equal(EvaluationRunPlan.LabelHistory, state.Phase);
+        Assert.Contains("provider", state.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Resume", state.Message, StringComparison.Ordinal);
+
+        Assert.Null(this.service.Resume());
+        state = await this.UntilAsync(s => s.Status == RunStatus.Stopped);
+        Assert.Equal(EvaluationRunPlan.LabelHistory, state.Phase);
+        Assert.Contains("judged", state.Message, StringComparison.OrdinalIgnoreCase);
+
+        Assert.Null(this.service.Resume());
+        state = await this.UntilAsync(s => s.Waiting == RunWait.Grading);
+        Assert.Equal(3, this.calls.Count(c => c.StartsWith("history-eval label", StringComparison.Ordinal)));
     }
 
     [Fact]

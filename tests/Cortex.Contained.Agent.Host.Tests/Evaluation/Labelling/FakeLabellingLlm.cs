@@ -18,6 +18,9 @@ internal sealed class FakeLabellingLlm : ILlmClient
 
     public List<(string Model, string System, string User)> Requests { get; } = [];
 
+    /// <summary>The requests as sent (flags included).</summary>
+    public List<LlmCompletionRequest> Sent { get; } = [];
+
     /// <summary>The provider id put on answers (another value simulates a failover).</summary>
     public string AnsweringProvider { get; set; } = Provider;
 
@@ -32,6 +35,7 @@ internal sealed class FakeLabellingLlm : ILlmClient
         lock (this.sync)
         {
             this.Requests.Add((request.Model, system, user));
+            this.Sent.Add(request);
             content = this.Respond(request.Model, system, user);
         }
 

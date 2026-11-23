@@ -68,6 +68,11 @@ and takes about 13–14 hours of LLM time plus the embedding runs: start it in t
 - *κ below 0.6*: the judge disagrees with you too often; look at a few items, then start fresh with another
   `JudgeModel` (or correct your grades and Resume).
 - *MaxCalls reached*: raise the cap and Resume; the label job continues where it stopped (its checkpoint is sealed).
+- *The LLM provider kept failing* (rate limit, outage, a model the provider no longer lists; label exit 4): nothing is
+  marked failed. Labelling calls never fail over to another provider or model (that would change the model family) and
+  every attempt counts against `MaxCalls`. Check the provider in the Bridge, then Resume.
+- *Some queries could not be judged yet* (label exit 5): the judge gave no valid answer; nothing is written until Resume
+  has retried them (a query is given up after 3 runs and reported as `judgingFailed`).
 - *A command failed*: the last lines of its output (ids and numbers) are shown; fix the cause and Resume.
 - After an agent restart the run continues by itself once the storage key has arrived; an interrupted command runs again.
   Only the passphrase must be entered again.

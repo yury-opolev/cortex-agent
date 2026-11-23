@@ -88,8 +88,11 @@ public sealed class LabellingState
     /// <summary>Judge grades by query id, then candidate id.</summary>
     public Dictionary<string, Dictionary<string, int>> Grades { get; set; } = new(StringComparer.Ordinal);
 
-    /// <summary>Queries the judge could not grade completely.</summary>
+    /// <summary>Queries the judge could not grade completely (retried by the next runs).</summary>
     public List<string> FailedJudging { get; set; } = [];
+
+    /// <summary>Runs in which the judge gave no valid answer for a query, by query id.</summary>
+    public Dictionary<string, int> JudgeFailures { get; set; } = new(StringComparer.Ordinal);
 
     /// <summary>LLM calls made so far by every run of this job.</summary>
     public int Calls { get; set; }

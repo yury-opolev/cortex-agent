@@ -57,6 +57,7 @@ public sealed class Labeller
     private const double JudgeSeconds = 15;
     private const int AssumedPoolSize = 30;
     private const int CheckpointEvery = 5;
+    private const int MaxJudgingRuns = 3;
 
     // Candidates reach the judge in a seeded hash order, so the gold source is not always the first of the first batch.
     private const int JudgeOrderSeed = 20261122;
@@ -106,7 +107,7 @@ public sealed class Labeller
         return new LabelEstimate(writer, main, judge, Math.Round(seconds / 3600, 1));
     }
 
-    /// <summary>Runs (or resumes) the job: 0 done, 2 refused, 3 stopped at the call cap (run again to continue).</summary>
+    /// <summary>\r\n    /// Runs (or resumes) the job: 0 done, 2 refused, 3 stopped at the call cap, 4 stopped because the LLM provider kept\r\n    /// failing, 5 stopped because some queries could not be judged yet (3, 4 and 5: progress is saved, run again to continue).\r\n    /// </summary>
     public async Task<int> RunAsync(int queries, int kappaItems, CancellationToken cancellationToken)
     {
         var estimate = Estimate(queries, this.options);
@@ -121,8 +122,8 @@ public sealed class Labeller
         this.llm.EnsureServed(this.options.QueryModel, this.options.JudgeModel, this.mainModel);
         var state = this.store.Load() is { } saved && saved.Tool == this.source.Tool ? saved : new LabellingState { Tool = this.source.Tool };
 
-        // A judge failure may have been transient (provider outage): a new run grades those queries again.
-        state.FailedJudging.Clear();
+        // A query the judge gave no valid answer for is graded again by the next run, until it has failed MaxJudgingRuns runs.
+        state.FailedJudging.RemoveAll(id => state.JudgeFailures.GetValueOrDefault(id) < MaxJudgingRuns);
         try
         {
             if (state.Seeds.Count == 0)
@@ -136,8 +137,12 @@ public sealed class Labeller
             await this.DraftAsync(state, cancellationToken).ConfigureAwait(false);
             await this.PoolAsync(state, cancellationToken).ConfigureAwait(false);
             await this.JudgeAsync(state, cancellationToken).ConfigureAwait(false);
-            await this.FinishAsync(state, kappaItems, cancellationToken).ConfigureAwait(false);
-            return 0;
+            return await this.FinishAsync(state, kappaItems, cancellationToken).ConfigureAwait(false);
+        }
+        catch (LabellingTransportException ex)
+        {
+            await this.output.WriteLineAsync(ex.Message + " Progress is saved: run the job again (Resume) when the provider answers.").ConfigureAwait(false);
+            return 4;
         }
         catch (LabellingBudgetExceededException ex)
         {
@@ -243,6 +248,7 @@ public sealed class Labeller
             if (grades is null)
             {
                 state.FailedJudging.Add(draft.Id);
+                state.JudgeFailures[draft.Id] = state.JudgeFailures.GetValueOrDefault(draft.Id) + 1;
             }
             else
             {
@@ -259,8 +265,16 @@ public sealed class Labeller
         }
     }
 
-    private async Task FinishAsync(LabellingState state, int kappaItems, CancellationToken cancellationToken)
+    private async Task<int> FinishAsync(LabellingState state, int kappaItems, CancellationToken cancellationToken)
     {
+        var retryable = state.FailedJudging.Count(id => state.JudgeFailures.GetValueOrDefault(id) < MaxJudgingRuns);
+        if (retryable > 0)
+        {
+            await this.output.WriteLineAsync(string.Create(CultureInfo.InvariantCulture,
+                $"{retryable} queries could not be judged yet (the judge gave no valid answer). Nothing is written: run the job again to retry them (a query is given up after {MaxJudgingRuns} runs).")).ConfigureAwait(false);
+            return 5;
+        }
+
         var judged = state.Seeds
             .Where(s => state.Drafts.ContainsKey(s.SeedId) && state.Grades.ContainsKey(state.Drafts[s.SeedId].Id))
             .Select(s => state.Drafts[s.SeedId])
@@ -319,5 +333,6 @@ public sealed class Labeller
         await File.WriteAllTextAsync(Path.Combine(this.workspace, ReportFileName), JsonSerializer.Serialize(summary, ReportJson), cancellationToken).ConfigureAwait(false);
         await this.output.WriteLineAsync(string.Create(CultureInfo.InvariantCulture,
             $"Labelled {queries.Count} {this.source.Tool} queries ({summary.strata.GetValueOrDefault("real")} real; {report.Dropped} dropped, {report.Recategorised.Values.Sum()} recategorised) with {summary.candidatesJudged} judgments; {sample.Count} items to grade by hand; {this.llm.Calls} LLM calls. Report: {Path.Combine(this.workspace, ReportFileName)}")).ConfigureAwait(false);
+        return 0;
     }
 }

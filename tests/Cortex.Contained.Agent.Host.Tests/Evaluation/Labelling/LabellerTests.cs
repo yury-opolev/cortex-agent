@@ -123,6 +123,74 @@ public sealed partial class LabellerTests : IDisposable
     }
 
     [Fact]
+    public async Task RunAsync_WriterProviderDown_StopsResumableWithoutMarkingSeedsFailed()
+    {
+        this.fake.Respond = (model, system, user) => model == "gpt-6.1-sol" ? null : Respond(model, system, user);
+
+        var code = await this.Create(Options()).RunAsync(5, kappaItems: 4, CancellationToken.None);
+
+        Assert.Equal(4, code);
+        Assert.Null(this.source.Written);
+        var state = new LabellingStateStore(this.root, this.protection).Load()!;
+        Assert.Empty(state.FailedSeeds);
+        Assert.Empty(state.Drafts);
+        Assert.Contains("provider", this.output.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("zq", this.output.ToString(), StringComparison.Ordinal);
+
+        this.fake.Respond = Respond;
+        Assert.Equal(0, await this.Create(Options()).RunAsync(5, 4, CancellationToken.None));
+        Assert.Equal(5, this.source.Written!.Count);
+    }
+
+    [Fact]
+    public async Task RunAsync_JudgeProviderDown_StopsResumableAndTheNextRunJudgesThoseQueries()
+    {
+        this.fake.Respond = (model, system, user) => model == "claude-opus-5.5" ? null : Respond(model, system, user);
+
+        Assert.Equal(4, await this.Create(Options()).RunAsync(5, kappaItems: 4, CancellationToken.None));
+
+        Assert.Null(this.source.Written);
+        var state = new LabellingStateStore(this.root, this.protection).Load()!;
+        Assert.Equal(5, state.Drafts.Count);
+        Assert.Empty(state.FailedJudging);
+
+        this.fake.Respond = Respond;
+        Assert.Equal(0, await this.Create(Options()).RunAsync(5, 4, CancellationToken.None));
+        Assert.Equal(5, this.source.Written!.Count);
+    }
+
+    [Fact]
+    public async Task RunAsync_JudgeGivesNoValidAnswerForAQuery_RefusesToFinishUntilTheRunsThatRetryItAreUsedUp()
+    {
+        this.fake.Respond = (model, system, user) =>
+            model == "claude-opus-5.5" && user.Contains("Query: zqquery about item 3", StringComparison.Ordinal) ? "{}" : Respond(model, system, user);
+
+        Assert.Equal(5, await this.Create(Options()).RunAsync(5, kappaItems: 4, CancellationToken.None));
+        Assert.Null(this.source.Written);
+        Assert.False(File.Exists(Path.Combine(this.root, Labeller.ReportFileName)));
+        Assert.Contains("run the job again", this.output.ToString(), StringComparison.Ordinal);
+
+        Assert.Equal(5, await this.Create(Options()).RunAsync(5, 4, CancellationToken.None));
+        Assert.Equal(0, await this.Create(Options()).RunAsync(5, 4, CancellationToken.None));
+
+        Assert.Equal(4, this.source.Written!.Count);
+        Assert.Contains("\"judgingFailed\": 1", await File.ReadAllTextAsync(Path.Combine(this.root, Labeller.ReportFileName)), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RunAsync_JudgeRecoversOnTheNextRun_FinishesWithEveryQuery()
+    {
+        this.fake.Respond = (model, system, user) =>
+            model == "claude-opus-5.5" && user.Contains("Query: zqquery about item 3", StringComparison.Ordinal) ? "{}" : Respond(model, system, user);
+        Assert.Equal(5, await this.Create(Options()).RunAsync(5, kappaItems: 4, CancellationToken.None));
+
+        this.fake.Respond = Respond;
+        Assert.Equal(0, await this.Create(Options()).RunAsync(5, 4, CancellationToken.None));
+
+        Assert.Equal(5, this.source.Written!.Count);
+    }
+
+    [Fact]
     public async Task RunAsync_EstimateAboveTheCap_RefusedWithoutCalls()
     {
         Assert.Equal(2, await this.Create(Options(maxCalls: 5)).RunAsync(5, 4, CancellationToken.None));
