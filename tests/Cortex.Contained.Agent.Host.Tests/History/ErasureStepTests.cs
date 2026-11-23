@@ -126,6 +126,8 @@ public sealed class ErasureStepTests : IDisposable
         var pending = Assert.Single(store.PendingDeletions());
         Assert.Equal(("v1", "cortex-recovery-kit", "cortex-eval-corpus-v1.cxpkg"), (pending.Version, pending.Secret, pending.PackageFileName));
         Assert.Equal("v5", store.ReserveNextVersion());
+        var purge = Assert.Single(store.CompletedPurges());
+        Assert.Equal((T0, T0.AddDays(1)), (purge.From, purge.To));
     }
 
     [Fact]

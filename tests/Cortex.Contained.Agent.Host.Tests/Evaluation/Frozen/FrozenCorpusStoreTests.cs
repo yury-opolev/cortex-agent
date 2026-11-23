@@ -46,6 +46,47 @@ public sealed class FrozenCorpusStoreTests : IDisposable
     }
 
     [Fact]
+    public void Ledger_PurgeLog_SurvivesTheEvaluationErasureAndMatchesOverlappingRanges()
+    {
+        var store = new FrozenCorpusStore(this.Eval);
+        store.RecordPurge(new DateTimeOffset(2026, 2, 1, 0, 0, 0, TimeSpan.Zero), new DateTimeOffset(2026, 2, 28, 0, 0, 0, TimeSpan.Zero), Now);
+        store.RecordPurge(new DateTimeOffset(2026, 2, 1, 0, 0, 0, TimeSpan.Zero), new DateTimeOffset(2026, 2, 28, 0, 0, 0, TimeSpan.Zero), Now);
+        Directory.CreateDirectory(this.Eval);
+
+        var restarted = new FrozenCorpusStore(this.Eval);
+
+        Assert.Single(restarted.CompletedPurges());
+        Assert.NotNull(restarted.PurgedRangeOverlapping(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero), new DateTimeOffset(2026, 2, 1, 0, 0, 0, TimeSpan.Zero)));
+        Assert.Null(restarted.PurgedRangeOverlapping(new DateTimeOffset(2026, 3, 1, 0, 0, 0, TimeSpan.Zero), new DateTimeOffset(2026, 4, 1, 0, 0, 0, TimeSpan.Zero)));
+        Assert.Null(restarted.PurgedRangeOverlapping(new DateTimeOffset(2025, 1, 1, 0, 0, 0, TimeSpan.Zero), new DateTimeOffset(2026, 1, 31, 0, 0, 0, TimeSpan.Zero)));
+    }
+
+    [Fact]
+    public void RecordPurge_OpenStart_OverlapsEverythingBeforeTheEnd()
+    {
+        var store = new FrozenCorpusStore(this.Eval);
+        store.RecordPurge(null, Now, Now);
+
+        Assert.NotNull(store.PurgedRangeOverlapping(Now.AddYears(-5), Now.AddYears(-4)));
+        Assert.Null(store.PurgedRangeOverlapping(Now.AddDays(1), Now.AddDays(2)));
+    }
+
+    [Fact]
+    public void Destroy_ImportedVersionWithoutExportRecord_QueuedForOffsiteDeletion()
+    {
+        var store = new FrozenCorpusStore(this.Eval);
+        WriteVersion(store, "v5", m => m.Imported = true);
+        WriteVersion(store, "v6");
+
+        Assert.True(store.Destroy("v5", Now));
+        Assert.True(store.Destroy("v6", Now));
+
+        Assert.Equal("v5", Assert.Single(store.PendingDeletions()).Version);
+        Assert.True(store.IsOffsiteDeletionPending("v5"));
+        Assert.False(store.IsOffsiteDeletionPending("v6"));
+    }
+
+    [Fact]
     public void Construct_LegacyLedgerAndCounterUnderTheEvaluationDirectory_MovedOutOnStartup()
     {
         var frozen = Path.Combine(this.Eval, "frozen");

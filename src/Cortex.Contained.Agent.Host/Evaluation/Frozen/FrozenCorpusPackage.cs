@@ -95,7 +95,8 @@ public static class FrozenCorpusPackage
     /// <summary>
     /// Imports a package as a local version (same name), verifying every file against the manifest hashes.
     /// Throws <see cref="InvalidDataException"/> for a wrong passphrase or a damaged package and
-    /// <see cref="InvalidOperationException"/> when the version already exists.
+    /// <see cref="InvalidOperationException"/> when the version already exists, its off-machine copy is queued for deletion
+    /// or its corpus overlaps a completed history deletion (D3: a purged corpus never comes back).
     /// </summary>
     public static FrozenCorpusManifest Import(FrozenCorpusStore store, string packagePath, EvalProtection protection, string passphrase)
     {
@@ -140,6 +141,16 @@ public static class FrozenCorpusPackage
             if (Directory.Exists(target))
             {
                 throw new InvalidOperationException($"{manifest.Version} already exists on this install.");
+            }
+
+            if (store.IsOffsiteDeletionPending(manifest.Version))
+            {
+                throw new InvalidOperationException($"{manifest.Version} was destroyed by a history deletion and its off-machine copy is still waiting to be deleted; delete it from {OffsiteCopy.SecretName} instead of importing it.");
+            }
+
+            if (store.PurgedRangeOverlapping(manifest.CorpusFrom, manifest.CorpusTo) is not null)
+            {
+                throw new InvalidOperationException($"The corpus of {manifest.Version} overlaps a history deletion that already happened; importing it would bring deleted messages back. Delete the package.");
             }
 
             var databasePath = Path.Combine(staging, "messages.db");

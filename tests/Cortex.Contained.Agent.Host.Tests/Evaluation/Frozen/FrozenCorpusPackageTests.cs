@@ -65,4 +65,65 @@ public sealed class FrozenCorpusPackageTests : IAsyncDisposable
         Assert.Empty(Directory.EnumerateDirectories(elsewhere.Root));
         Assert.Throws<InvalidOperationException>(() => FrozenCorpusPackage.Import(store, package.Path, this.protection, Passphrase));
     }
+
+    [Fact]
+    public async Task Import_VersionStillWaitingForOffsiteDeletion_Refused()
+    {
+        var (store, manifest) = await this.FreezeAsync();
+        var package = FrozenCorpusPackage.Export(store, manifest.Version, this.protection, Passphrase, TimeProvider.System);
+        var kept = Path.Combine(this.root, "kept.cxpkg");
+        File.Copy(package.Path, kept);
+        Assert.True(store.Destroy("v1", DateTimeOffset.UtcNow));
+
+        var error = Assert.Throws<InvalidOperationException>(() => FrozenCorpusPackage.Import(store, kept, this.protection, Passphrase));
+
+        Assert.Contains("off-machine", error.Message, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(store.DirectoryOf("v1")));
+        Assert.Empty(Directory.EnumerateDirectories(store.Root));
+    }
+
+    [Fact]
+    public async Task Import_CorpusRangeOverlapsACompletedPurge_RefusedEvenAfterTheDeletionWasAcknowledged()
+    {
+        var (store, manifest) = await this.FreezeAsync();
+        var package = FrozenCorpusPackage.Export(store, manifest.Version, this.protection, Passphrase, TimeProvider.System);
+        var kept = Path.Combine(this.root, "kept.cxpkg");
+        File.Copy(package.Path, kept);
+        store.RecordPurge(null, manifest.CorpusTo, DateTimeOffset.UtcNow);
+        Assert.True(store.Destroy("v1", DateTimeOffset.UtcNow));
+        Assert.True(store.AcknowledgeDeletion("v1"));
+
+        var error = Assert.Throws<InvalidOperationException>(() => FrozenCorpusPackage.Import(store, kept, this.protection, Passphrase));
+
+        Assert.Contains("deletion", error.Message, StringComparison.Ordinal);
+        Assert.Empty(Directory.EnumerateDirectories(store.Root));
+    }
+
+    [Fact]
+    public async Task Import_PurgeBeforeTheCorpusRange_Allowed()
+    {
+        var (store, manifest) = await this.FreezeAsync();
+        var package = FrozenCorpusPackage.Export(store, manifest.Version, this.protection, Passphrase, TimeProvider.System);
+        var kept = Path.Combine(this.root, "kept.cxpkg");
+        File.Copy(package.Path, kept);
+        store.RecordPurge(manifest.CorpusFrom.AddYears(-2), manifest.CorpusFrom.AddYears(-1), DateTimeOffset.UtcNow);
+        Assert.True(store.Destroy("v1", DateTimeOffset.UtcNow));
+        Assert.True(store.AcknowledgeDeletion("v1"));
+
+        Assert.True(FrozenCorpusPackage.Import(store, kept, this.protection, Passphrase).Imported);
+    }
+
+    [Fact]
+    public async Task Destroy_ImportedVersion_QueuedForOffsiteDeletionLikeAnExportedOne()
+    {
+        var (store, manifest) = await this.FreezeAsync();
+        var package = FrozenCorpusPackage.Export(store, manifest.Version, this.protection, Passphrase, TimeProvider.System);
+        var elsewhere = new FrozenCorpusStore(Path.Combine(this.root, "elsewhere", "eval"));
+        FrozenCorpusPackage.Import(elsewhere, package.Path, EvalProtection.Plaintext, Passphrase);
+
+        Assert.True(elsewhere.Destroy("v1", DateTimeOffset.UtcNow));
+
+        var pending = Assert.Single(elsewhere.PendingDeletions());
+        Assert.Equal(("v1", "cortex-eval-corpus-v1.cxpkg"), (pending.Version, pending.PackageFileName));
+    }
 }

@@ -203,6 +203,11 @@ public sealed class SmokeArtifactErasureStep(
             {
                 allGone &= frozen.Destroy(version, (time ?? TimeProvider.System).GetUtcNow());
             }
+
+            if (allGone)
+            {
+                frozen.RecordPurge(task.RangeFrom, to, (time ?? TimeProvider.System).GetUtcNow());
+            }
         }
 
         return Task.FromResult(allGone);

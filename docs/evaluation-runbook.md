@@ -129,8 +129,9 @@ The deletion confirmation says so and names the attachment, and the Recall page 
 3. Freeze a new version (§4); labels that pointed to deleted messages must be removed and the workspace registered
    again first (the freeze tells you how many). Versions are never renumbered.
 
-To drop a version yourself: `… -Tool eval-corpus -- delete --version vN` (an exported one is queued for off-machine
-deletion the same way).
+To drop a version yourself: `… -Tool eval-corpus -- delete --version vN` (an exported or imported one is queued for
+off-machine deletion the same way). The pending list, the version counter and a log of completed deletions are kept in
+`/app/state/eval-ledger`, outside `eval/`, so erasing the evaluation artifacts never loses them.
 
 ## 8. Evaluating elsewhere (import)
 
@@ -139,7 +140,9 @@ On another Cortex install (it may be unencrypted): copy the package into the age
 `.\scripts\Invoke-CortexEval.ps1 -Tool eval-corpus -PromptPassphrase -- import --package cortex-eval-corpus-vN.cxpkg`.
 The import checks every file against the package's hashes and registers the sanitised datasets. Run
 `holdout --corpus frozen:vN` there. The pseudonym secret never leaves the original machine, so the copy cannot be
-mapped back to real names.
+mapped back to real names. An import is refused while the version is still on the "delete it off-machine" list, and
+when the package's corpus range overlaps a history deletion that already happened (the purged messages must not come
+back from an old copy); delete such a package instead.
 
 ## 9. Without encryption at rest
 

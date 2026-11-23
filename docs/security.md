@@ -156,7 +156,11 @@ fail-closed leakage check deletes the version if any listed term or pattern rema
 are kept (accepted risk). The export is one passphrase-encrypted file (PBKDF2-HMAC-SHA256, 600,000 iterations;
 AES-256-GCM in authenticated 1 MiB chunks) that the owner attaches to the single SafeExchange secret
 `cortex-recovery-kit`. A history deletion overlapping a version destroys it locally and lists the attachment for the
-owner to delete. See [evaluation-runbook.md](evaluation-runbook.md).
+owner to delete. The list of off-machine copies still to delete, the version counter and the log of completed purge
+ranges are kept in `/app/state/eval-ledger`, outside `eval/`, so erasing the evaluation artifacts (when enabling
+encryption) cannot lose them. Importing a package is refused while its version is on that list and when its corpus
+range overlaps a completed purge, so a purged corpus cannot come back from an old off-machine copy. See
+[evaluation-runbook.md](evaluation-runbook.md).
 
 ## Content security
 

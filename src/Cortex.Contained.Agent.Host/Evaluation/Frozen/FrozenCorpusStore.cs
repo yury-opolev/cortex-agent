@@ -4,6 +4,9 @@ using Cortex.Contained.Contracts.Hub;
 
 namespace Cortex.Contained.Agent.Host.Evaluation.Frozen;
 
+/// <summary>A history deletion that completed: messages from <see cref="From"/> (open when null) to <see cref="To"/> are gone.</summary>
+public sealed record PurgedRange(DateTimeOffset? From, DateTimeOffset To, DateTimeOffset At);
+
 /// <summary>
 /// The frozen corpus versions under <c>/app/state/eval/frozen</c> (one directory per version), their export
 /// packages under <c>/app/state/eval/packages</c> and the ledger of off-machine copies the owner still has to
@@ -16,6 +19,7 @@ public sealed class FrozenCorpusStore
 {
     private const string LedgerFileName = "offsite-deletions.json";
     private const string CounterFileName = "last-version";
+    private const string PurgeLogFileName = "purges.json";
 
     /// <summary>Largest package chunk the Bridge may read at once (well below the hub's message limit).</summary>
     public const int MaxChunkBytes = 4 * 1024 * 1024;
@@ -196,7 +200,7 @@ public sealed class FrozenCorpusStore
     public bool Destroy(string version, DateTimeOffset at)
     {
         var manifest = this.Read(version);
-        if (manifest is not null && (manifest.ExportedAt is not null || manifest.Offsite is not null))
+        if (manifest is not null && (manifest.ExportedAt is not null || manifest.Offsite is not null || manifest.Imported))
         {
             this.AddPendingDeletion(new OffsiteDeletionDto
             {
@@ -246,6 +250,53 @@ public sealed class FrozenCorpusStore
             }
         }
     }
+
+    /// <summary>True when the off-machine copy of <paramref name="version"/> is still waiting to be deleted.</summary>
+    public bool IsOffsiteDeletionPending(string version) =>
+        this.PendingDeletions().Any(p => string.Equals(p.Version, version, StringComparison.Ordinal));
+
+    /// <summary>
+    /// Records a completed history deletion. The log is permanent (it outlives the versions it destroyed and the
+    /// evaluation directory), so a package whose corpus overlaps it can be refused on import.
+    /// </summary>
+    public void RecordPurge(DateTimeOffset? from, DateTimeOffset to, DateTimeOffset at)
+    {
+        lock (this.sync)
+        {
+            var purges = this.CompletedPurges().ToList();
+            if (purges.Any(p => p.From == from && p.To == to))
+            {
+                return;
+            }
+
+            purges.Add(new PurgedRange(from, to, at));
+            Directory.CreateDirectory(this.LedgerDirectory);
+            var path = Path.Combine(this.LedgerDirectory, PurgeLogFileName);
+            File.WriteAllText(path + ".tmp", JsonSerializer.Serialize(purges, Json));
+            File.Move(path + ".tmp", path, overwrite: true);
+        }
+    }
+
+    /// <summary>Every completed history deletion recorded so far.</summary>
+    public IReadOnlyList<PurgedRange> CompletedPurges()
+    {
+        lock (this.sync)
+        {
+            var path = Path.Combine(this.LedgerDirectory, PurgeLogFileName);
+            try
+            {
+                return File.Exists(path) ? JsonSerializer.Deserialize<List<PurgedRange>>(File.ReadAllText(path), Json) ?? [] : [];
+            }
+            catch (JsonException)
+            {
+                return [];
+            }
+        }
+    }
+
+    /// <summary>The first completed purge whose range overlaps <paramref name="corpusFrom"/>..<paramref name="corpusTo"/>, or null.</summary>
+    public PurgedRange? PurgedRangeOverlapping(DateTimeOffset corpusFrom, DateTimeOffset corpusTo) =>
+        this.CompletedPurges().FirstOrDefault(p => corpusFrom <= p.To && (p.From is null || corpusTo >= p.From));
 
     /// <summary>Records that the owner deleted the off-machine copy of <paramref name="version"/>; false when none was pending.</summary>
     public bool AcknowledgeDeletion(string version)
