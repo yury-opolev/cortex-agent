@@ -3,6 +3,9 @@ using System.Text.RegularExpressions;
 
 namespace Cortex.Contained.Contracts.Security;
 
+/// <summary>A personal identifier found by <see cref="SensitiveDataRedactor.FindPersonalIdentifiers"/>: its kind and its span in the input.</summary>
+public readonly record struct IdentifierMatch(string Kind, int Index, int Length);
+
 /// <summary>
 /// Redaction for text that is PERSISTED (event payloads), stricter than log redaction: the input
 /// is unescaped and normalised first so encoded secrets cannot slip past the patterns, known
@@ -41,6 +44,55 @@ public static partial class SensitiveDataRedactor
         result = GpsPattern().Replace(result, "[REDACTED:gps]");
         result = DanishPhonePattern().Replace(result, "[REDACTED:phone]");
         return Redact(result);
+    }
+
+    /// <summary>Kinds reported by <see cref="FindPersonalIdentifiers"/>.</summary>
+    public static class IdentifierKinds
+    {
+        public const string Iban = "iban";
+
+        public const string Card = "card";
+
+        public const string Cpr = "cpr";
+
+        public const string Email = "email";
+
+        public const string Gps = "gps";
+
+        public const string Phone = "phone";
+    }
+
+    /// <summary>
+    /// The personal identifiers in <paramref name="input"/> as spans of the input itself (no normalisation), with the
+    /// patterns and validations of <see cref="RedactForPersistence"/> (IBAN checksum, Luhn) plus the generic phone
+    /// pattern of <see cref="Redact"/>. Overlaps are resolved in that priority order; the result is sorted by index.
+    /// The evaluation corpus sanitiser and its leakage check share these detectors with the persistence redactor.
+    /// </summary>
+    public static IReadOnlyList<IdentifierMatch> FindPersonalIdentifiers(string input)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        var accepted = new List<IdentifierMatch>();
+        void Take(Regex pattern, string kind, Func<string, bool>? valid = null)
+        {
+            foreach (Match match in pattern.Matches(input))
+            {
+                if ((valid is null || valid(match.Value))
+                    && !accepted.Exists(a => a.Index < match.Index + match.Length && match.Index < a.Index + a.Length))
+                {
+                    accepted.Add(new IdentifierMatch(kind, match.Index, match.Length));
+                }
+            }
+        }
+
+        Take(IbanPattern(), IdentifierKinds.Iban, IsValidIban);
+        Take(CardPattern(), IdentifierKinds.Card, IsLuhnValid);
+        Take(CprPattern(), IdentifierKinds.Cpr);
+        Take(EmailPattern(), IdentifierKinds.Email);
+        Take(GpsPattern(), IdentifierKinds.Gps);
+        Take(DanishPhonePattern(), IdentifierKinds.Phone);
+        Take(PhoneNumberPattern(), IdentifierKinds.Phone);
+        accepted.Sort((a, b) => a.Index.CompareTo(b.Index));
+        return accepted;
     }
 
     /// <summary>JSON/regex-style unescape, NFKC, and removal of zero-width characters.</summary>

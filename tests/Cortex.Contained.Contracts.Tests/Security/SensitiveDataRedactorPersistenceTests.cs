@@ -52,4 +52,22 @@ public sealed class SensitiveDataRedactorPersistenceTests
     {
         Assert.Contains("[REDACTED]", Redact("api_key=abcdefghijklmnop"), StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void FindPersonalIdentifiers_SpansOfTheInputInPriorityOrder()
+    {
+        const string input = "card 4111 1111 1111 1111, cpr 010203-1234, mail a.person@example.com, call +45 12 34 56 78, ref 41234567890";
+
+        var matches = SensitiveDataRedactor.FindPersonalIdentifiers(input);
+
+        Assert.Equal(
+            ["card:4111 1111 1111 1111", "cpr:010203-1234", "email:a.person@example.com", "phone:+45 12 34 56 78", "phone:41234567890"],
+            matches.Select(m => $"{m.Kind}:{input.AsSpan(m.Index, m.Length)}"));
+    }
+
+    [Fact]
+    public void FindPersonalIdentifiers_OrdinaryText_None()
+    {
+        Assert.Empty(SensitiveDataRedactor.FindPersonalIdentifiers("order 42 shipped on monday at 14:30 for 129.95"));
+    }
 }
