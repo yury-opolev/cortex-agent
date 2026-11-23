@@ -14,7 +14,10 @@ public interface ILabelSource
     /// <summary><c>history-eval</c> or <c>memory-eval</c>.</summary>
     string Tool { get; }
 
-    /// <summary>Stratified seeds, real requests included (<see cref="LabelSeeds"/>).</summary>
+    /// <summary>Fewest queries the registered dataset needs (0 when registration sets no minimum).</summary>
+    int MinimumQueries { get; }
+
+    /// <summary>Stratified seeds, real requests included (<see cref="LabelSeeds"/>); a larger <paramref name="count"/> extends the sample (top-up).</summary>
     Task<IReadOnlyList<LabelSeed>> SampleAsync(int count, double realShare, CancellationToken cancellationToken);
 
     /// <summary>The snippet or request of <paramref name="seed"/>; null when its sources no longer exist.</summary>
@@ -58,6 +61,8 @@ public sealed class Labeller
     private const int AssumedPoolSize = 30;
     private const int CheckpointEvery = 5;
     private const int MaxJudgingRuns = 3;
+    private const int MaxTopUpRounds = 3;
+    private const double TopUpOversample = 1.5;
 
     // Candidates reach the judge in a seeded hash order, so the gold source is not always the first of the first batch.
     private const int JudgeOrderSeed = 20261122;
@@ -107,7 +112,11 @@ public sealed class Labeller
         return new LabelEstimate(writer, main, judge, Math.Round(seconds / 3600, 1));
     }
 
-    /// <summary>\r\n    /// Runs (or resumes) the job: 0 done, 2 refused, 3 stopped at the call cap, 4 stopped because the LLM provider kept\r\n    /// failing, 5 stopped because some queries could not be judged yet (3, 4 and 5: progress is saved, run again to continue).\r\n    /// </summary>
+    /// <summary>
+    /// Runs (or resumes) the job: 0 done, 2 refused, 3 stopped at the call cap, 4 stopped because the LLM provider kept
+    /// failing, 5 stopped because some queries could not be judged yet, 6 stopped below the dataset minimum (3 to 6:
+    /// progress is saved, run again to continue).
+    /// </summary>
     public async Task<int> RunAsync(int queries, int kappaItems, CancellationToken cancellationToken)
     {
         var estimate = Estimate(queries, this.options);
@@ -292,16 +301,22 @@ public sealed class Labeller
         }
     }
 
-    private async Task<int> FinishAsync(LabellingState state, int kappaItems, CancellationToken cancellationToken)
+    // True (after saying so) while queries the judge could not grade are still retryable by a next run.
+    private async Task<bool> UnjudgedAsync(LabellingState state)
     {
         var retryable = state.FailedJudging.Count(id => state.JudgeFailures.GetValueOrDefault(id) < MaxJudgingRuns);
-        if (retryable > 0)
+        if (retryable == 0)
         {
-            await this.output.WriteLineAsync(string.Create(CultureInfo.InvariantCulture,
-                $"{retryable} queries could not be judged yet (the judge gave no valid answer). Nothing is written: run the job again to retry them (a query is given up after {MaxJudgingRuns} runs).")).ConfigureAwait(false);
-            return 5;
+            return false;
         }
 
+        await this.output.WriteLineAsync(string.Create(CultureInfo.InvariantCulture,
+            $"{retryable} queries could not be judged yet (the judge gave no valid answer). Nothing is written: run the job again to retry them (a query is given up after {MaxJudgingRuns} runs).")).ConfigureAwait(false);
+        return true;
+    }
+
+    private async Task<(IReadOnlyList<LabelledQuery> Queries, FinaliseReport Report)> FinaliseAsync(LabellingState state, CancellationToken cancellationToken)
+    {
         var judged = state.Seeds
             .Where(s => state.Drafts.ContainsKey(s.SeedId) && state.Grades.ContainsKey(state.Drafts[s.SeedId].Id))
             .Select(s => state.Drafts[s.SeedId])
@@ -314,7 +329,65 @@ public sealed class Labeller
             goldTexts[draft.Id] = (await this.source.ReadAsync(relevant, cancellationToken).ConfigureAwait(false)).Values.Select(i => i.GuardText).ToList();
         }
 
-        var (queries, report) = DatasetFinaliser.Finalise(judged, (draft, _) => this.source.ParaphraseOk(draft.Text, goldTexts[draft.Id]));
+        return DatasetFinaliser.Finalise(judged, (draft, _) => this.source.ParaphraseOk(draft.Text, goldTexts[draft.Id]));
+    }
+
+    // Samples seeds beyond the ones already used (the sampler is deterministic, so a larger sample is asked for and the known sources skipped).
+    private async Task<int> TopUpAsync(LabellingState state, int deficit, CancellationToken cancellationToken)
+    {
+        var extra = (int)Math.Ceiling(deficit * TopUpOversample) + 2;
+        var known = state.Seeds.Select(Signature).ToHashSet(StringComparer.Ordinal);
+        var sampled = await this.source.SampleAsync(state.Seeds.Count + extra, this.options.RealShare, cancellationToken).ConfigureAwait(false);
+        var width = Math.Max(4, (state.Seeds.Count + extra).ToString(CultureInfo.InvariantCulture).Length);
+        var fresh = sampled.Where(s => known.Add(Signature(s))).Take(extra).ToList();
+        foreach (var seed in fresh)
+        {
+            state.Seeds.Add(seed with { SeedId = "s" + (state.Seeds.Count + 1).ToString(CultureInfo.InvariantCulture).PadLeft(width, '0') });
+        }
+
+        this.store.Save(state);
+        await this.output.WriteLineAsync(string.Create(CultureInfo.InvariantCulture,
+            $"Fewer than the {this.source.MinimumQueries} queries registration needs survived judging: {fresh.Count} extra seeds sampled ({state.Seeds.Count} in all).")).ConfigureAwait(false);
+        return fresh.Count;
+    }
+
+    private static string Signature(LabelSeed seed) =>
+        string.Join('|', seed.Stratum, seed.RequestMessageId, string.Join(',', seed.SourceIds.Order(StringComparer.Ordinal)));
+
+    private async Task<int> FinishAsync(LabellingState state, int kappaItems, CancellationToken cancellationToken)
+    {
+        if (await this.UnjudgedAsync(state).ConfigureAwait(false))
+        {
+            return 5;
+        }
+
+        var (queries, report) = await this.FinaliseAsync(state, cancellationToken).ConfigureAwait(false);
+        for (var round = 0; queries.Count < this.source.MinimumQueries && round < MaxTopUpRounds; round++)
+        {
+            var added = await this.TopUpAsync(state, this.source.MinimumQueries - queries.Count, cancellationToken).ConfigureAwait(false);
+            if (added == 0)
+            {
+                break;
+            }
+
+            await this.DraftAsync(state, cancellationToken).ConfigureAwait(false);
+            await this.PoolAsync(state, cancellationToken).ConfigureAwait(false);
+            await this.JudgeAsync(state, cancellationToken).ConfigureAwait(false);
+            if (await this.UnjudgedAsync(state).ConfigureAwait(false))
+            {
+                return 5;
+            }
+
+            (queries, report) = await this.FinaliseAsync(state, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (queries.Count < this.source.MinimumQueries)
+        {
+            await this.output.WriteLineAsync(string.Create(CultureInfo.InvariantCulture,
+                $"Only {queries.Count} {this.source.Tool} queries survived judging; registration needs at least {this.source.MinimumQueries}. Nothing is written: raise the query count (Evaluation:Labelling) or add data, then run the job again.")).ConfigureAwait(false);
+            return 6;
+        }
+
         var queryFamily = ModelFamily.Of(this.options.QueryModel);
         var judgeFamily = ModelFamily.Of(this.options.JudgeModel);
         this.source.WriteDataset(queries, queryFamily, judgeFamily);

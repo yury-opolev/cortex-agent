@@ -434,6 +434,7 @@ public sealed partial class EvaluationRunService : BackgroundService
             3 => "The label job reached Evaluation:Labelling:MaxCalls. Raise the cap in the agent configuration and press Resume: it continues where it stopped.",
             4 => "The LLM provider kept failing (rate limit, outage or an unlisted model), so the label job stopped; nothing was marked failed. Check the provider in the Bridge, then press Resume: it continues where it stopped. " + tail,
             5 => "Some queries could not be judged yet. Press Resume to retry them (a query is given up after 3 runs); nothing is written before that. " + tail,
+            6 => "Too few queries survived judging for registration. Raise Evaluation:Labelling query counts (or add data) and press Resume: the label job samples more seeds. " + tail,
             _ => null,
         };
 

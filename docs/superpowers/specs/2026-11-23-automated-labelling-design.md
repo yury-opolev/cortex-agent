@@ -92,7 +92,10 @@ count) is sealed and saved every 5 drafts and after every judged query; it also 
 a resume with other models is refused (exit 2) until the configuration is restored or a fresh run is started. `MaxCalls` (5,000 per job) is a hard cap across
 resumed runs; the job prints its estimate first and refuses when the estimate exceeds the cap; at the cap it stops with
 exit code 3 and the next run continues. A provider that keeps failing stops it with exit code 4 (nothing is marked
-failed, the next run continues). `MinCallIntervalMs` paces calls.
+failed, the next run continues). Before writing the dataset the job checks the registration minimum (memory: at least
+250 queries; history sets none): when fewer queries survive judging it samples extra seeds (up to 3 top-up rounds per
+run, each over-sampling the deficit by 1.5×), drafts, pools and judges them, and otherwise stops with exit code 6
+without writing anything (the next run tries again). `MinCallIntervalMs` paces calls.
 
 **L10 — κ sample.** 75 items (`KappaSample`) split by query count (50 history, 25 memory), stratified by the judge's
 grade (a third each of 0, 1, 2, topped up when one is scarce), one item per query while possible, deterministic and

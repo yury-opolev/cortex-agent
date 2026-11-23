@@ -225,6 +225,37 @@ public sealed partial class LabellerTests : IDisposable
     }
 
     [Fact]
+    public async Task RunAsync_FewerQueriesSurviveThanTheMinimum_SamplesExtraSeedsUntilItIsMet()
+    {
+        this.source.MinimumQueries = 6;
+        this.fake.Respond = (model, system, user) =>
+            model == "claude-opus-5.5" && user.Contains("Query: zqquery about item 3", StringComparison.Ordinal)
+                ? "{\"grades\":{" + string.Join(',', user.Split('\n').Where(l => l.StartsWith("[c", StringComparison.Ordinal)).Select(l => $"\"{l[1..l.IndexOf(']', StringComparison.Ordinal)]}\":0")) + "}}"
+                : Respond(model, system, user);
+
+        var code = await this.Create(Options()).RunAsync(5, kappaItems: 4, CancellationToken.None);
+
+        Assert.Equal(0, code);
+        Assert.True(this.source.Written!.Count >= 6, $"{this.source.Written.Count} queries");
+        Assert.DoesNotContain(this.source.Written, q => q.Draft.Text.Contains("item 3", StringComparison.Ordinal));
+        Assert.Equal(this.source.Written.Count, this.source.Written.Select(q => q.Draft.Id).Distinct().Count());
+        Assert.Contains("extra seeds", this.output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RunAsync_MinimumCannotBeMetWithinTheTopUpRounds_StopsResumableWithoutWriting()
+    {
+        this.source.MinimumQueries = 40;
+
+        var code = await this.Create(Options()).RunAsync(5, kappaItems: 4, CancellationToken.None);
+
+        Assert.Equal(6, code);
+        Assert.Null(this.source.Written);
+        Assert.False(File.Exists(Path.Combine(this.root, Labeller.ReportFileName)));
+        Assert.Contains("at least 40", this.output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task RunAsync_EstimateAboveTheCap_RefusedWithoutCalls()
     {
         Assert.Equal(2, await this.Create(Options(maxCalls: 5)).RunAsync(5, 4, CancellationToken.None));
@@ -243,12 +274,14 @@ public sealed partial class LabellerTests : IDisposable
 
         public string Tool => "history-eval";
 
+        public int MinimumQueries { get; set; }
+
         public IReadOnlyList<LabelledQuery>? Written { get; private set; }
 
         public Task<IReadOnlyList<LabelSeed>> SampleAsync(int count, double realShare, CancellationToken cancellationToken)
         {
             var real = new LabelSeed { SeedId = "s0001", Category = "real", Stratum = "real", RequestMessageId = "99", RequestTime = T0, ModelArgs = """{"query":"zqrecorded"}""" };
-            var synthetic = Enumerable.Range(2, count - 1)
+            var synthetic = Enumerable.Range(2, Math.Min(count, 11) - 1)
                 .Select(i => new LabelSeed { SeedId = $"s{i:0000}", Category = "lookup", SourceIds = [(i - 1).ToString(CultureInfo.InvariantCulture)] });
             return Task.FromResult<IReadOnlyList<LabelSeed>>([real, .. synthetic]);
         }

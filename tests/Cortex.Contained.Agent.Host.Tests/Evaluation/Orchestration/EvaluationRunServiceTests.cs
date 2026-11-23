@@ -226,6 +226,7 @@ public sealed class EvaluationRunServiceTests : IDisposable
     {
         this.labelExits.Enqueue(4);
         this.labelExits.Enqueue(5);
+        this.labelExits.Enqueue(6);
         this.service.Start(fresh: false);
 
         var state = await this.UntilAsync(s => s.Status == RunStatus.Stopped);
@@ -239,8 +240,12 @@ public sealed class EvaluationRunServiceTests : IDisposable
         Assert.Contains("judged", state.Message, StringComparison.OrdinalIgnoreCase);
 
         Assert.Null(this.service.Resume());
+        state = await this.UntilAsync(s => s.Status == RunStatus.Stopped);
+        Assert.Contains("Too few queries", state.Message, StringComparison.Ordinal);
+
+        Assert.Null(this.service.Resume());
         state = await this.UntilAsync(s => s.Waiting == RunWait.Grading);
-        Assert.Equal(3, this.calls.Count(c => c.StartsWith("history-eval label", StringComparison.Ordinal)));
+        Assert.Equal(4, this.calls.Count(c => c.StartsWith("history-eval label", StringComparison.Ordinal)));
     }
 
     [Fact]

@@ -33,6 +33,8 @@ public sealed class HistoryLabelSource : ILabelSource
 
     public string Tool => "history-eval";
 
+    public int MinimumQueries => 0;
+
     public Task<IReadOnlyList<LabelSeed>> SampleAsync(int count, double realShare, CancellationToken cancellationToken)
     {
         using var connection = this.corpus.OpenCopy();

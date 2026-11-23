@@ -34,6 +34,8 @@ public sealed class MemoryLabelSource : ILabelSource
 
     public string Tool => "memory-eval";
 
+    public int MinimumQueries => MemoryEvalDataset.MinimumQueries;
+
     public async Task<IReadOnlyList<LabelSeed>> SampleAsync(int count, double realShare, CancellationToken cancellationToken)
     {
         var all = await this.MemoriesAsync(cancellationToken).ConfigureAwait(false);
