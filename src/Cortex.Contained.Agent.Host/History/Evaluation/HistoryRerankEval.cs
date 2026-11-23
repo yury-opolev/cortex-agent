@@ -46,7 +46,7 @@ internal static class HistoryRerankEval
         var (reranker, stage) = CreateStage(rerankerFactory, Option(args, "--reranker"), RerankEvalSetup.IntOption(Option(args, "--timeout-ms"), RerankEvalSetup.CurveTimeoutMs));
 
         var runDir = NewRunDirectory(workspace, $"rerank-curve-{condition}-{split}");
-        await using var corpus = await EvalCorpus.CreateAsync(source, runDir, baseline, [baseConfig], embedderFactory, cancellationToken, stage).ConfigureAwait(false);
+        await using var corpus = await EvalCorpus.CreateAsync(source, runDir, baseline, [baseConfig], embedderFactory, cancellationToken, stage, workspace.Protection).ConfigureAwait(false);
         string? coldNote = null;
         double? readyMs = null;
         if (condition == RerankConditions.Cold)
@@ -106,7 +106,7 @@ internal static class HistoryRerankEval
         var (_, stage) = CreateStage(rerankerFactory, Option(args, "--reranker"), RerankEvalSetup.IntOption(Option(args, "--timeout-ms"), new RerankerOptions().TimeoutMs));
 
         var runDir = NewRunDirectory(workspace, "gate-r");
-        await using var corpus = await EvalCorpus.CreateAsync(source, runDir, baseline, [candidate], embedderFactory, cancellationToken, stage).ConfigureAwait(false);
+        await using var corpus = await EvalCorpus.CreateAsync(source, runDir, baseline, [candidate], embedderFactory, cancellationToken, stage, workspace.Protection).ConfigureAwait(false);
         var report = await AblationRunner.RunAsync([unreranked, candidate], queries, corpus.SearchAsync, unreranked.Name, cancellationToken).ConfigureAwait(false);
         var busy = new List<double>();
         await using (StartEmbedderLoad(embedderFactory, baseline))
@@ -130,7 +130,7 @@ internal static class HistoryRerankEval
 
     private static List<EvalQuery> ReadQueries(EvalWorkspace workspace, string split)
     {
-        var all = EvalDataset.Read(workspace.DatasetPath);
+        var all = workspace.ReadDataset();
         if (EvalDataset.Validate(all) is { Count: > 0 } errors)
         {
             throw new InvalidOperationException($"dataset.jsonl has {errors.Count} problems; run 'validate'.");

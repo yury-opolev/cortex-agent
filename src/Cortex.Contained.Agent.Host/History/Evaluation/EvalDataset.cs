@@ -83,10 +83,13 @@ public static class EvalDataset
         ["lookup", "paraphrase", "cross_language", "temporal", "identifier", "enumeration", "abstention"];
 
     /// <summary>Reads one query per line; blank lines are skipped.</summary>
-    public static IReadOnlyList<EvalQuery> Read(string path) =>
-        File.ReadLines(path)
+    public static IReadOnlyList<EvalQuery> Read(string path) => Parse(File.ReadLines(path), path);
+
+    /// <summary>Parses one query per line of <paramref name="source"/>; blank lines are skipped.</summary>
+    public static IReadOnlyList<EvalQuery> Parse(IEnumerable<string> lines, string source) =>
+        lines
             .Where(line => !string.IsNullOrWhiteSpace(line))
-            .Select(line => JsonSerializer.Deserialize<EvalQuery>(line, Json) ?? throw new InvalidDataException($"Bad line in {path}"))
+            .Select(line => JsonSerializer.Deserialize<EvalQuery>(line, Json) ?? throw new InvalidDataException($"Bad line in {source}"))
             .ToList();
 
     /// <summary>Serialises one query as a JSONL line.</summary>

@@ -1,4 +1,5 @@
 using System.Globalization;
+using Cortex.Contained.Agent.Host.Evaluation;
 using Cortex.Contained.Agent.Host.Reranking;
 using Cortex.Contained.Agent.Host.Reranking.Evaluation;
 using MemoryMcp.Core.Configuration;
@@ -69,7 +70,8 @@ public static class HistoryEvalCli
         Func<IOptionsMonitor<HistoryOptions>, IHistoryEmbedder> embedderFactory,
         CancellationToken cancellationToken,
         HistoryOptions? configured = null,
-        Func<RerankerOptions, IReranker>? rerankerFactory = null)
+        Func<RerankerOptions, IReranker>? rerankerFactory = null,
+        EvalProtection? protection = null)
     {
         ArgumentNullException.ThrowIfNull(args);
         ArgumentNullException.ThrowIfNull(output);
@@ -81,7 +83,7 @@ public static class HistoryEvalCli
 
         configured ??= HistoryCliConfiguration.Load();
         rerankerFactory ??= RerankEvalSetup.LiveReranker;
-        var workspace = new EvalWorkspace(Option(args, "--dir") ?? configured.EvalArtifactsDirectory);
+        var workspace = new EvalWorkspace(Option(args, "--dir") ?? configured.EvalArtifactsDirectory, protection);
         var source = Option(args, "--source") ?? "/app/state/messages.db";
         var baseline = new HistoryOptions { Enabled = true, TimeZone = Option(args, "--tz") ?? string.Empty };
         Directory.CreateDirectory(workspace.Directory);
@@ -151,7 +153,7 @@ public static class HistoryEvalCli
 
     private static async Task<int> ValidateAsync(EvalWorkspace workspace, TextWriter output)
     {
-        var queries = EvalDataset.Read(workspace.DatasetPath);
+        var queries = workspace.ReadDataset();
         var errors = EvalDataset.Validate(queries);
         foreach (var error in errors)
         {
@@ -167,10 +169,10 @@ public static class HistoryEvalCli
     private static async Task<int> GuardAsync(
         EvalWorkspace workspace, string source, HistoryOptions baseline, Func<IOptionsMonitor<HistoryOptions>, IHistoryEmbedder> embedderFactory, TextWriter output, CancellationToken cancellationToken)
     {
-        var queries = EvalDataset.Read(workspace.DatasetPath).Where(q => q.Category == "paraphrase").ToList();
+        var queries = workspace.ReadDataset().Where(q => q.Category == "paraphrase").ToList();
         var runDir = NewRunDirectory(workspace, "guard");
         AblationConfig[] keywordOnly = [new AblationConfig { Name = AblationGrid.Baseline, Mode = HistorySearchMode.Keyword }];
-        await using var corpus = await EvalCorpus.CreateAsync(source, runDir, baseline, keywordOnly, embedderFactory, cancellationToken).ConfigureAwait(false);
+        await using var corpus = await EvalCorpus.CreateAsync(source, runDir, baseline, keywordOnly, embedderFactory, cancellationToken, protection: workspace.Protection).ConfigureAwait(false);
         var segments = corpus.SegmentCount();
         var checks = new List<ParaphraseCheck>();
         foreach (var query in queries)
@@ -219,7 +221,7 @@ public static class HistoryEvalCli
         Func<IOptionsMonitor<HistoryOptions>, IHistoryEmbedder> embedderFactory,
         CancellationToken cancellationToken)
     {
-        var all = EvalDataset.Read(workspace.DatasetPath);
+        var all = workspace.ReadDataset();
         var errors = EvalDataset.Validate(all);
         if (errors.Count > 0)
         {
@@ -228,7 +230,7 @@ public static class HistoryEvalCli
 
         var queries = split == "all" ? all : all.Where(q => EvalSplits.Assign(q.Id) == split).ToList();
         var runDir = NewRunDirectory(workspace, kind + "-" + split);
-        await using var corpus = await EvalCorpus.CreateAsync(source, runDir, baseline, configs, embedderFactory, cancellationToken).ConfigureAwait(false);
+        await using var corpus = await EvalCorpus.CreateAsync(source, runDir, baseline, configs, embedderFactory, cancellationToken, protection: workspace.Protection).ConfigureAwait(false);
         var report = await AblationRunner.RunAsync(configs, queries, corpus.SearchAsync, baselineConfig, cancellationToken).ConfigureAwait(false);
         EvalWorkspace.WriteJson(Path.Combine(runDir, "results.json"), report);
         await File.WriteAllTextAsync(

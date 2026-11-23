@@ -202,6 +202,52 @@ public sealed class HistoryEvalCliTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task Ablate_EncryptedInstall_DatasetSealedCopiesEncryptedReportsNumbersOnly()
+    {
+        var keys = Cortex.Contained.Agent.Host.Tests.Evaluation.EvalTestKeys.Ring();
+        var protection = Cortex.Contained.Agent.Host.Evaluation.EvalProtection.Encrypted(keys);
+        Directory.CreateDirectory(this.root);
+        long railway, invoice;
+        await using (var store = new MessageStore(this.source, NullLogger<MessageStore>.Instance, new MessageStoreEncryption(keys, TimeSpan.FromSeconds(5))))
+        {
+            railway = await store.SaveMessageAsync("u", "ch", "user", "we booked the railway journey to TownB zqrawtext", T0);
+            invoice = await store.SaveMessageAsync("u", "ch", "user", "invoice INV2041 is paid", T0.AddHours(5));
+        }
+
+        Task<int> Run(params string[] args) => HistoryEvalCli.RunAsync(
+            [.. args, "--dir", this.workspace, "--source", this.source, "--tz", "UTC"],
+            this.output,
+            _ => new FakeHistoryEmbedder(new Dictionary<string, string> { ["train"] = "railway", ["trip"] = "journey" }),
+            CancellationToken.None,
+            protection: protection);
+
+        Assert.Equal(0, await Run("init"));
+        this.WriteDataset(railway, invoice);
+        Assert.Equal(2, await Run("validate"));
+        Assert.Contains("plaintext on an encrypted install", this.output.ToString(), StringComparison.Ordinal);
+
+        var dataset = Path.Combine(this.workspace, "dataset.jsonl");
+        protection.WriteLines(dataset, File.ReadAllLines(dataset));
+        new EvalWorkspace(this.workspace).WritePlan(new AblationPlan
+        {
+            Configs = [new AblationConfig { Name = AblationGrid.Baseline, Mode = HistorySearchMode.Keyword }, new AblationConfig { Name = "hybrid-rrf60" }],
+        });
+        Assert.Equal(0, await Run("validate"));
+        Assert.Equal(0, await Run("ablate", "--split", "all"));
+
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        var runDir = Directory.GetDirectories(Path.Combine(this.workspace, "runs")).Single();
+        Assert.Equal(
+            Cortex.Contained.Contracts.Security.StoredFileState.Encrypted,
+            Cortex.Contained.Contracts.Security.SqliteFileHeader.Classify(Path.Combine(runDir, "messages.db")));
+        Assert.All(
+            Directory.EnumerateFiles(this.workspace, "*", SearchOption.AllDirectories),
+            f => Assert.DoesNotContain("zqrawtext", System.Text.Encoding.UTF8.GetString(File.ReadAllBytes(f)), StringComparison.Ordinal));
+        Assert.DoesNotContain("train trip", await File.ReadAllTextAsync(dataset), StringComparison.Ordinal);
+        Assert.True(File.Exists(Path.Combine(runDir, "report.md")));
+    }
+
+    [Fact]
     public async Task Guard_ParaphraseWithLowOverlap_PassesAndReportsNumbersOnly()
     {
         var (railway, invoice) = await this.SeedAsync();
