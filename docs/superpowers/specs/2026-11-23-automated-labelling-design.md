@@ -73,7 +73,8 @@ model), a fixed 0–2 rubric, strict JSON `{"grades":{"c1":2,…}}` that must na
 a batch that never validates is split in halves down to single items; a query whose judging still fails is retried by
 the next run of the job.
 
-**L8 — Finalisation rules (pre-declared).** A synthetic query whose source the judge found irrelevant is dropped; a real
+**L8 — Finalisation rules (pre-declared).** A synthetic query is dropped when the judge found its source irrelevant (every source graded 0; an
+enumeration/multi query needs at least one source graded ≥ 1, and then two relevant items to stay one); a real
 request with no relevant item becomes an abstention query (`expectAbstain`); an abstention query with a relevant item,
 an enumeration/multi query with fewer than two relevant items, a paraphrase failing the guard against its judged gold
 and tag_filtered without tags become `lookup`. Grade-0 judgments are kept (judged@10). Rules are applied before any

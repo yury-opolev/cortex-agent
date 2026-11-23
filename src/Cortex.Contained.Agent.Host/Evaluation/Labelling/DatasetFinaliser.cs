@@ -18,8 +18,9 @@ public sealed record FinaliseReport(int Judged, int Kept, int Dropped, IReadOnly
 
 /// <summary>
 /// Turns judged drafts into dataset queries with rules fixed before any system is compared (they are written into
-/// the analysis plan): a synthetic query whose source the judge found irrelevant is dropped; a real request with no
-/// relevant item becomes an abstention query; an abstention query with a relevant item becomes <c>lookup</c>;
+/// the analysis plan): a synthetic query is dropped when the judge found its source irrelevant (every gold source
+/// graded 0, so for enumeration/multi none of its sources graded ≥ 1); a real request with no relevant item becomes an
+/// abstention query; an abstention query with a relevant item becomes <c>lookup</c>;
 /// enumeration/multi with fewer than two relevant items, paraphrase failing the guard against its judged gold and
 /// tag_filtered without tags become <c>lookup</c>. Every judged candidate (grade 0 included) stays a judgment, so
 /// judged@10 can be reported.
@@ -40,13 +41,13 @@ public static class DatasetFinaliser
             total++;
             var relevant = grades.Where(g => g.Value > 0).Select(g => g.Key).Order(StringComparer.Ordinal).ToList();
             var category = draft.Category;
+            if (category != "abstention" && draft.Stratum != "real" && !SourceRelevant(draft, grades, relevant))
+            {
+                continue;
+            }
+
             if (category == "abstention" || relevant.Count == 0)
             {
-                if (category != "abstention" && draft.Stratum != "real")
-                {
-                    continue;
-                }
-
                 category = relevant.Count == 0 ? "abstention" : "lookup";
             }
             else if ((category is "enumeration" or "multi" && relevant.Count < 2)
@@ -67,6 +68,10 @@ public static class DatasetFinaliser
 
         return (kept, new FinaliseReport(total, kept.Count, total - kept.Count, moved));
     }
+
+    // L8: a synthetic query lives only while the judge found (some of) its source relevant; without a source, any relevant item will do.
+    private static bool SourceRelevant(DraftedQuery draft, IReadOnlyDictionary<string, int> grades, List<string> relevant) =>
+        draft.GoldSourceIds.Count > 0 ? draft.GoldSourceIds.Any(id => grades.GetValueOrDefault(id) > 0) : relevant.Count > 0;
 
     /// <summary>The history dataset line of <paramref name="query"/>.</summary>
     public static EvalQuery ToHistory(LabelledQuery query, string queryFamily, string judgeFamily)

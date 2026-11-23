@@ -24,7 +24,7 @@ public sealed class DatasetFinaliserTests
             (Draft("h5", "abstention"), Grades(("7", 0))),
             (Draft("h6", "enumeration"), Grades(("1", 2), ("2", 0))),
             (Draft("h7", "paraphrase"), Grades(("1", 2))),
-            (Draft("h8", "paraphrase"), Grades(("3", 2))),
+            (Draft("h8", "paraphrase"), Grades(("1", 2), ("3", 2))),
         ];
 
         var (queries, report) = DatasetFinaliser.Finalise(judged, (draft, relevant) => draft.Id != "h7");
@@ -42,10 +42,29 @@ public sealed class DatasetFinaliserTests
     }
 
     [Fact]
+    public void Finalise_SyntheticQueryWhoseSourceIsIrrelevant_DroppedEvenWhenOtherCandidatesAreRelevant()
+    {
+        (DraftedQuery, IReadOnlyDictionary<string, int>)[] judged =
+        [
+            (Draft("h1", "lookup"), Grades(("1", 0), ("2", 2))),
+            (Draft("h2", "lookup") with { GoldSourceIds = ["1", "2"] }, Grades(("1", 0), ("2", 0), ("3", 2))),
+            (Draft("h3", "enumeration") with { GoldSourceIds = ["1", "2"] }, Grades(("1", 0), ("2", 1), ("3", 2))),
+            (Draft("h4", "lookup", "real"), Grades(("5", 2))),
+        ];
+
+        var (queries, report) = DatasetFinaliser.Finalise(judged, (_, _) => true);
+
+        Assert.Equal(["h3", "h4"], queries.Select(q => q.Draft.Id));
+        Assert.Equal("enumeration", queries[0].Category);
+        Assert.Equal(2, report.Dropped);
+    }
+
+    [Fact]
     public void ToHistory_ValidDatasetLineWithAllJudgments()
     {
         var draft = Draft("h1", "temporal") with
         {
+            GoldSourceIds = ["12"],
             GoldFilters = new EvalFilters { Since = DateTimeOffset.UnixEpoch },
             ModelText = "ferry",
             ModelFilters = new EvalFilters { Channel = "ch" },
@@ -64,7 +83,7 @@ public sealed class DatasetFinaliserTests
     public void ToMemory_TagsOnlyForTagFiltered()
     {
         var (queries, _) = DatasetFinaliser.Finalise(
-            [(Draft("m1", "tag_filtered", tags: ["finance"]), Grades(("mem-a", 2))), (Draft("m2", "lookup", tags: ["finance"]), Grades(("mem-a", 1)))],
+            [(Draft("m1", "tag_filtered", tags: ["finance"]) with { GoldSourceIds = ["mem-a"] }, Grades(("mem-a", 2))), (Draft("m2", "lookup", tags: ["finance"]) with { GoldSourceIds = ["mem-a"] }, Grades(("mem-a", 1)))],
             (_, _) => true);
 
         var lines = queries.Select(q => DatasetFinaliser.ToMemory(q, "gpt", "claude")).ToList();
@@ -72,7 +91,7 @@ public sealed class DatasetFinaliserTests
         Assert.Empty(MemoryEvalDataset.Validate(lines));
         Assert.Equal(["finance"], lines[0].Tags);
         Assert.Null(lines[1].Tags);
-        Assert.Equal("1", lines[0].SourceMemoryId);
+        Assert.Equal("mem-a", lines[0].SourceMemoryId);
     }
 
     [Fact]
