@@ -1,7 +1,8 @@
 using System.Diagnostics;
+using Cortex.Contained.Agent.Host.Evaluation;
 using Cortex.Contained.Agent.Host.Reranking;
+using Cortex.Contained.Agent.Host.Storage;
 using MemoryMcp.Core.Configuration;
-using MemoryMcp.Core.Security;
 using MemoryMcp.Core.Services;
 using MemoryMcp.Core.Storage;
 using Microsoft.Data.Sqlite;
@@ -15,7 +16,8 @@ namespace Cortex.Contained.Agent.Host.Memory.Evaluation;
 /// command. The live store is never touched: the copy is opened with its own <see cref="SqliteVecMemoryStore"/>
 /// (which backfills the keyword index in the copy) and searched with <see cref="HybridMemorySearch"/> per
 /// configuration. The copy holds raw memory text (D6), so <see cref="DisposeAsync"/> deletes it: no raw
-/// copy outlives the command, and outputs beside it are ids and numbers only.
+/// copy outlives the command, and outputs beside it are ids and numbers only. On an encrypted install the
+/// copy is encrypted with the evaluation ring (<see cref="EvalProtection"/>) for its short life as well.
 /// </summary>
 public sealed class MemoryEvalCorpus : IAsyncDisposable
 {
@@ -30,26 +32,37 @@ public sealed class MemoryEvalCorpus : IAsyncDisposable
     private readonly SqliteVecMemoryStore store;
     private readonly HybridMemorySearch search;
     private readonly IRerankStage? reranker;
+    private readonly string? password;
 
-    private MemoryEvalCorpus(string corpusDirectory, FileStream runLock, MemoryMcpOptions options, SqliteVecMemoryStore store, IEmbeddingService embedding, IRerankStage? reranker)
+    private MemoryEvalCorpus(string corpusDirectory, FileStream runLock, MemoryMcpOptions options, SqliteVecMemoryStore store, IEmbeddingService embedding, IRerankStage? reranker, string? password)
     {
         this.reranker = reranker;
         this.corpusDirectory = corpusDirectory;
         this.runLock = runLock;
         this.options = options;
         this.store = store;
+        this.password = password;
         this.search = new HybridMemorySearch(embedding, store, new StaticOptionsMonitor(options));
     }
 
     /// <summary>
     /// Copies the store under <paramref name="sourceDirectory"/> (named like <paramref name="live"/>) into
     /// <paramref name="runDirectory"/><c>/corpus</c> and opens it. Fails when the keyword index cannot be built.
+    /// <paramref name="protection"/> (default plaintext) decides how the source is read and how the copy
+    /// (database and content files) is encrypted.
     /// </summary>
     public static async Task<MemoryEvalCorpus> CreateAsync(
-        string sourceDirectory, string runDirectory, MemoryMcpOptions live, IEmbeddingService embedding, CancellationToken cancellationToken, IRerankStage? reranker = null)
+        string sourceDirectory,
+        string runDirectory,
+        MemoryMcpOptions live,
+        IEmbeddingService embedding,
+        CancellationToken cancellationToken,
+        IRerankStage? reranker = null,
+        EvalProtection? protection = null)
     {
         ArgumentNullException.ThrowIfNull(live);
         ArgumentNullException.ThrowIfNull(embedding);
+        protection ??= EvalProtection.Plaintext;
         var sourceDb = Path.Combine(sourceDirectory, live.DatabaseFileName);
         if (!File.Exists(sourceDb))
         {
@@ -57,36 +70,36 @@ public sealed class MemoryEvalCorpus : IAsyncDisposable
         }
 
         var corpusDirectory = Path.Combine(runDirectory, "corpus");
-        var options = new MemoryMcpOptions
-        {
-            DataDirectory = corpusDirectory,
-            DatabaseFileName = live.DatabaseFileName,
-            MemoriesSubdirectory = live.MemoriesSubdirectory,
-            SearchMaxContentLength = live.SearchMaxContentLength,
-            Ollama = live.Ollama,
-            Search = live.Search,
-        };
+        var options = CopyOptions(corpusDirectory, live);
 
         // Held for the life of the copy: a later command sweeps a copy only when nobody holds this lock.
         Directory.CreateDirectory(runDirectory);
         var runLock = new FileStream(Path.Combine(runDirectory, LockFileName), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.DeleteOnClose);
+        var copyContent = protection.CopyContent();
         try
         {
             Directory.CreateDirectory(options.MemoriesDirectory);
-            using (var source = new SqliteConnection($"Data Source={sourceDb};Mode=ReadOnly;Pooling=False"))
-            using (var target = new SqliteConnection($"Data Source={options.DatabasePath};Pooling=False"))
-            {
-                source.Open();
-                target.Open();
-                source.BackupDatabase(target);
-            }
+            EncryptedSqlite.CopyDatabase(
+                sourceDb,
+                protection.SourcePassword(EncryptedMemoryStore.DatabasePurpose),
+                options.DatabasePath,
+                protection.CopyPassword(EncryptedMemoryStore.DatabasePurpose));
 
             var sourceMemories = Path.Combine(sourceDirectory, live.MemoriesSubdirectory);
             if (Directory.Exists(sourceMemories))
             {
+                var sourceContent = protection.SourceContent();
                 foreach (var file in Directory.EnumerateFiles(sourceMemories, "*.memory.data"))
                 {
-                    File.Copy(file, Path.Combine(options.MemoriesDirectory, Path.GetFileName(file)));
+                    var target = Path.Combine(options.MemoriesDirectory, Path.GetFileName(file));
+                    if (protection.IsEncrypted)
+                    {
+                        File.WriteAllBytes(target, copyContent.Encrypt(sourceContent.Decrypt(File.ReadAllBytes(file))));
+                    }
+                    else
+                    {
+                        File.Copy(file, target);
+                    }
                 }
             }
         }
@@ -97,8 +110,25 @@ public sealed class MemoryEvalCorpus : IAsyncDisposable
             throw;
         }
 
-        var store = new SqliteVecMemoryStore(Options.Create(options), new NullContentEncryptor(), NullLogger<SqliteVecMemoryStore>.Instance);
-        var corpus = new MemoryEvalCorpus(corpusDirectory, runLock, options, store, embedding, reranker);
+        return await OpenAsync(corpusDirectory, runLock, options, embedding, reranker, protection, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static MemoryMcpOptions CopyOptions(string corpusDirectory, MemoryMcpOptions live) => new()
+    {
+        DataDirectory = corpusDirectory,
+        DatabaseFileName = live.DatabaseFileName,
+        MemoriesSubdirectory = live.MemoriesSubdirectory,
+        SearchMaxContentLength = live.SearchMaxContentLength,
+        Ollama = live.Ollama,
+        Search = live.Search,
+    };
+
+    private static async Task<MemoryEvalCorpus> OpenAsync(
+        string corpusDirectory, FileStream runLock, MemoryMcpOptions options, IEmbeddingService embedding, IRerankStage? reranker, EvalProtection protection, CancellationToken cancellationToken)
+    {
+        var password = protection.CopyPassword(EncryptedMemoryStore.DatabasePurpose);
+        var store = new SqliteVecMemoryStore(Options.Create(options), protection.CopyContent(), NullLogger<SqliteVecMemoryStore>.Instance, password);
+        var corpus = new MemoryEvalCorpus(corpusDirectory, runLock, options, store, embedding, reranker, password);
         try
         {
             await store.InitializeAsync(cancellationToken).ConfigureAwait(false);
@@ -162,7 +192,7 @@ public sealed class MemoryEvalCorpus : IAsyncDisposable
     public async Task<IReadOnlyList<MemorySeedSource>> ListMemoriesAsync(CancellationToken cancellationToken)
     {
         var ids = new List<string>();
-        using (var connection = new SqliteConnection($"Data Source={this.options.DatabasePath};Mode=ReadOnly;Pooling=False"))
+        using (var connection = new SqliteConnection(EncryptedSqlite.ConnectionString(this.options.DatabasePath, this.password, SqliteOpenMode.ReadOnly, pooling: false)))
         {
             await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
             using var cmd = connection.CreateCommand();
