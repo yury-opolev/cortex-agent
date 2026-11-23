@@ -32,7 +32,12 @@ internal sealed class MemorySearchTool : IAgentTool
 
     public string Name => "memory_search";
 
-    public string Description =>
+    public string Description => ToolDescription;
+
+    public string ParametersSchema => ToolSchema;
+
+    /// <summary>The description the model sees (shared with the evaluation's model-written queries).</summary>
+    internal static string ToolDescription =>
         "Search curated memories (stored notes and facts). Returns the most relevant memories, best first. " +
         "Use this to find previously stored information, notes, or context. " +
         "Search when the user asks about the past, or when missing history would materially change the answer. " +
@@ -44,7 +49,8 @@ internal sealed class MemorySearchTool : IAgentTool
         "mode: auto (default) uses the configured search; hybrid combines exact keywords with meaning; " +
         "use mode=keyword or a quoted phrase for exact names, numbers or identifiers, and mode=dense for meaning only.";
 
-    public string ParametersSchema => """
+    /// <summary>The parameters schema the model sees.</summary>
+    internal static string ToolSchema => """
         {
           "type": "object",
           "properties": {
