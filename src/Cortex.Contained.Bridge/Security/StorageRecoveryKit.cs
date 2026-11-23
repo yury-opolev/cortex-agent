@@ -31,7 +31,7 @@ public sealed class StorageRecoveryKitException : Exception
 
 /// <summary>
 /// The owner's offline backup of a tenant storage key: the key encrypted with AES-256-GCM under a key
-/// derived from a passphrase with PBKDF2-HMAC-SHA256 (600,000 iterations, 128-bit salt). Format, tenant and
+/// derived from a passphrase with <see cref="PassphraseKdf"/> (PBKDF2-HMAC-SHA256, 600,000 iterations, 128-bit salt). Format, tenant and
 /// key fingerprint are authenticated as associated data, so a kit cannot be relabelled for another tenant
 /// or key. Without the passphrase the file is useless; the key is never logged.
 /// </summary>
@@ -41,15 +41,15 @@ public static class StorageRecoveryKit
     public const string Format = "cortex-storage-recovery-kit/1";
 
     /// <summary>PBKDF2 iterations of a new kit (OWASP 2023 guidance for PBKDF2-HMAC-SHA256).</summary>
-    public const int DefaultIterations = 600_000;
+    public const int DefaultIterations = PassphraseKdf.DefaultIterations;
 
     /// <summary>Fewest PBKDF2 iterations a kit may declare.</summary>
-    public const int MinimumIterations = 100_000;
+    public const int MinimumIterations = PassphraseKdf.MinimumIterations;
 
     /// <summary>Shortest accepted passphrase.</summary>
-    public const int MinimumPassphraseLength = 12;
+    public const int MinimumPassphraseLength = PassphraseKdf.MinimumPassphraseLength;
 
-    private const int SaltBytes = 16;
+    private const int SaltBytes = PassphraseKdf.SaltBytes;
     private const int NonceBytes = 12;
     private const int TagBytes = 16;
 
@@ -73,7 +73,7 @@ public static class StorageRecoveryKit
             var nonce = RandomNumberGenerator.GetBytes(NonceBytes);
             var ciphertext = new byte[key.Length];
             var tag = new byte[TagBytes];
-            var wrappingKey = Rfc2898DeriveBytes.Pbkdf2(passphrase, salt, iterations, HashAlgorithmName.SHA256, 32);
+            var wrappingKey = PassphraseKdf.DeriveKey(passphrase, salt, iterations);
             try
             {
                 using var aes = new AesGcm(wrappingKey, TagBytes);
@@ -123,7 +123,7 @@ public static class StorageRecoveryKit
 
         if (kit is not { Format: Format, TenantId.Length: > 0, KeyFingerprint.Length: > 0, Kdf: { } kdf, Cipher: { } cipher }
             || kdf.Iterations < minimumIterations
-            || kdf.Iterations > 10_000_000)
+            || kdf.Iterations > PassphraseKdf.MaximumIterations)
         {
             throw new StorageRecoveryKitException("The file is not a supported recovery kit.");
         }
@@ -147,7 +147,7 @@ public static class StorageRecoveryKit
         }
 
         var key = new byte[ciphertext.Length];
-        var wrappingKey = Rfc2898DeriveBytes.Pbkdf2(passphrase, salt, kdf.Iterations, HashAlgorithmName.SHA256, 32);
+        var wrappingKey = PassphraseKdf.DeriveKey(passphrase, salt, kdf.Iterations);
         try
         {
             using var aes = new AesGcm(wrappingKey, TagBytes);
