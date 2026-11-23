@@ -1736,14 +1736,14 @@
                             </template>
                             <template x-if="grading.item">
                                 <div>
-                                    <div class="small text-secondary mb-1" x-text="'Item ' + (grading.item.index + 1) + ' of ' + grading.item.total + ' · ' + (grading.item.tool === 'memory-eval' ? 'memory' : 'history')"></div>
-                                    <div class="mb-2"><span class="text-secondary small">Query</span><div class="fw-semibold" x-text="grading.item.query"></div></div>
-                                    <div class="mb-2"><span class="text-secondary small">Found</span><div class="border rounded p-2 small" style="white-space: pre-wrap; max-height: 260px; overflow: auto;" x-text="grading.item.candidate"></div></div>
+                                    <div class="small text-secondary mb-1" x-text="'Item ' + ((grading.item?.index ?? 0) + 1) + ' of ' + grading.item?.total + ' · ' + (grading.item?.tool === 'memory-eval' ? 'memory' : 'history')"></div>
+                                    <div class="mb-2"><span class="text-secondary small">Query</span><div class="fw-semibold" x-text="grading.item?.query"></div></div>
+                                    <div class="mb-2"><span class="text-secondary small">Found</span><div class="border rounded p-2 small" style="white-space: pre-wrap; max-height: 260px; overflow: auto;" x-text="grading.item?.candidate"></div></div>
                                     <div class="d-flex gap-2 align-items-center">
                                         <template x-for="g in [0, 1, 2]" :key="g">
-                                            <button class="btn btn-sm" :class="grading.item.humanGrade === g ? 'btn-primary' : 'btn-outline-primary'" :disabled="grading.busy" @click="grade(g)" x-text="g"></button>
+                                            <button class="btn btn-sm" :class="grading.item?.humanGrade === g ? 'btn-primary' : 'btn-outline-primary'" :disabled="grading.busy" @click="grade(g)" x-text="g"></button>
                                         </template>
-                                        <button class="btn btn-sm btn-outline-secondary" :disabled="grading.busy || grading.item.index === 0" @click="showItem(grading.item.index - 1)">Back</button>
+                                        <button class="btn btn-sm btn-outline-secondary" :disabled="grading.busy || grading.item?.index === 0" @click="showItem(grading.item.index - 1)">Back</button>
                                         <button class="btn btn-sm btn-outline-secondary" :disabled="grading.busy" @click="showItem((grading.item.index + 1) % grading.item.total)">Skip</button>
                                         <button class="btn btn-sm btn-link ms-auto" @click="closeGrading()">Close</button>
                                     </div>
@@ -1802,7 +1802,7 @@
                                 <input type="password" class="form-control form-control-sm" style="max-width: 200px;" placeholder="Bridge password" x-model="exp.password">
                                 <input type="password" class="form-control form-control-sm" style="max-width: 200px;" placeholder="Package passphrase" autocomplete="new-password" x-model="exp.passphrase">
                                 <input type="password" class="form-control form-control-sm" style="max-width: 200px;" placeholder="Repeat passphrase" autocomplete="new-password" x-model="exp.confirm">
-                                <button class="btn btn-sm btn-primary" :disabled="busy || !exp.password || passphraseProblem" @click="exportPackage()">Export</button>
+                                <button class="btn btn-sm btn-primary" :disabled="busy || !exp.password || !!passphraseProblem" @click="exportPackage()">Export</button>
                             </div>
                             <div class="small text-secondary mt-1" x-show="exp.passphrase && passphraseProblem" x-text="passphraseProblem"></div>
                         </div>
