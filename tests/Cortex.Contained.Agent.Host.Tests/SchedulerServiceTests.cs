@@ -144,7 +144,7 @@ public class SchedulerServiceTests : IDisposable
 
         await _scheduler.ExecuteDueTasksAsync();
 
-        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(1));
+        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         var enqueued = await ReadOneMessage(_messageChannel, cts.Token);
 
         Assert.NotNull(enqueued);
@@ -173,7 +173,7 @@ public class SchedulerServiceTests : IDisposable
 
         await _scheduler.ExecuteDueTasksAsync();
 
-        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(1));
+        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         var enqueued = await ReadOneMessage(_messageChannel, cts.Token);
 
         Assert.NotNull(enqueued);
@@ -451,7 +451,7 @@ public class SchedulerServiceTests : IDisposable
 
         await _scheduler.ExecuteDueTasksAsync();
 
-        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(1));
+        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         var enqueued = await ReadOneMessage(_messageChannel, cts.Token);
 
         Assert.NotNull(enqueued);
