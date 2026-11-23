@@ -81,6 +81,38 @@ public sealed class FrozenCorpusStore
             : throw new InvalidOperationException($"No frozen corpus {version}: list them with 'eval-corpus list'.");
     }
 
+    /// <summary>
+    /// Versions a purge of <paramref name="from"/>..<paramref name="to"/> must destroy (D3): every version whose corpus
+    /// range overlaps, plus every version directory without a readable manifest (an interrupted freeze or import:
+    /// its range is unknown). Channel-scoped purges are treated like all-channel ones (a version spans every channel).
+    /// </summary>
+    public IReadOnlyList<string> Overlapping(DateTimeOffset? from, DateTimeOffset to)
+    {
+        if (!Directory.Exists(this.Root))
+        {
+            return [];
+        }
+
+        var result = new List<string>();
+        foreach (var directory in Directory.EnumerateDirectories(this.Root))
+        {
+            var name = Path.GetFileName(directory);
+            var version = name.EndsWith(".partial", StringComparison.Ordinal) ? name[..^".partial".Length] : name;
+            if (FrozenCorpusManifest.NumberOf(version) is null)
+            {
+                continue;
+            }
+
+            var manifest = name == version ? FrozenCorpusManifest.Read(Path.Combine(directory, FrozenCorpusManifest.FileName)) : null;
+            if (manifest is null || (manifest.CorpusFrom <= to && (from is null || manifest.CorpusTo >= from)))
+            {
+                result.Add(version);
+            }
+        }
+
+        return result.Distinct(StringComparer.Ordinal).ToList();
+    }
+
     /// <summary>Reserves the next version name (never reused, even after a version was destroyed).</summary>
     public string ReserveNextVersion()
     {

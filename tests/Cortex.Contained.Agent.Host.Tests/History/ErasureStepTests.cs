@@ -99,6 +99,36 @@ public sealed class ErasureStepTests : IDisposable
     }
 
     [Fact]
+    public async Task FrozenCorpora_OverlappingVersionsDestroyedExportedOnesQueuedForOffsiteDeletion()
+    {
+        var store = new Cortex.Contained.Agent.Host.Evaluation.Frozen.FrozenCorpusStore(Path.Combine(this.dir, "state-eval"));
+        void Version(string name, DateTimeOffset from, DateTimeOffset to, bool exported)
+        {
+            Directory.CreateDirectory(store.DirectoryOf(name));
+            new Cortex.Contained.Agent.Host.Evaluation.Frozen.FrozenCorpusManifest { Version = name, CorpusFrom = from, CorpusTo = to, ExportedAt = exported ? T0 : null }
+                .Write(Path.Combine(store.DirectoryOf(name), "manifest.json"));
+        }
+
+        Version("v1", T0.AddDays(-10), T0.AddHours(2), exported: true);
+        Version("v2", T0.AddDays(-10), T0.AddHours(2), exported: false);
+        Version("v3", T0.AddDays(5), T0.AddDays(9), exported: true);
+        Directory.CreateDirectory(store.DirectoryOf(store.ReserveNextVersion()) + ".partial");
+        Directory.CreateDirectory(store.PackagesDirectory);
+        await File.WriteAllTextAsync(store.PackageOf("v1"), "package");
+        var monitor = Substitute.For<IOptionsMonitor<HistoryOptions>>();
+        monitor.CurrentValue.Returns(new HistoryOptions { SmokeArtifactsDirectory = Path.Combine(this.dir, "none"), EvalArtifactsDirectory = Path.Combine(this.dir, "none") });
+
+        Assert.True(await new SmokeArtifactErasureStep(monitor, store).RunAsync(Task(T0, T0.AddDays(1)), CancellationToken.None));
+
+        Assert.Equal(["v3"], store.List().Select(m => m.Version));
+        Assert.False(Directory.Exists(store.DirectoryOf("v4") + ".partial"));
+        Assert.False(File.Exists(store.PackageOf("v1")));
+        var pending = Assert.Single(store.PendingDeletions());
+        Assert.Equal(("v1", "cortex-recovery-kit", "cortex-eval-corpus-v1.cxpkg"), (pending.Version, pending.Secret, pending.PackageFileName));
+        Assert.Equal("v5", store.ReserveNextVersion());
+    }
+
+    [Fact]
     public async Task SmokeArtifacts_RootWithoutRunsDirectory_DeletesNothing()
     {
         var root = Path.Combine(this.dir, "smoke");

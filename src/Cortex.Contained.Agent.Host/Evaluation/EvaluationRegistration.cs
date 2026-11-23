@@ -19,6 +19,7 @@ public static class EvaluationRegistration
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(encryption);
+        services.AddSingleton(new FrozenCorpusStore(encryption.Layout.EvaluationDirectory));
         services.AddSingleton(sp =>
         {
             var history = sp.GetRequiredService<IOptionsMonitor<HistoryOptions>>();

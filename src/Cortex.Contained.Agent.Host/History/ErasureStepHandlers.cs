@@ -142,9 +142,14 @@ public sealed class SubagentErasureStep(SubagentSessionStore store) : IErasureSt
 /// <c>messages.db</c> and index copies. A run directory without a readable <c>manifest.json</c> is
 /// destroyed too (the overlap cannot be determined). Only the children of <c>runs</c> are ever
 /// enumerated, so owner-authored files and directories in the workspace root (queries, dataset,
-/// analysis plan, pool) are kept.
+/// analysis plan, pool) are kept. With a <see cref="Cortex.Contained.Agent.Host.Evaluation.Frozen.FrozenCorpusStore"/>, frozen corpus
+/// versions whose range overlaps are destroyed as well (their runs and export package with them); an exported
+/// one is recorded for deletion of its off-machine copy, which the owner removes from SafeExchange.
 /// </summary>
-public sealed class SmokeArtifactErasureStep(IOptionsMonitor<HistoryOptions> options) : IErasureStep
+public sealed class SmokeArtifactErasureStep(
+    IOptionsMonitor<HistoryOptions> options,
+    Cortex.Contained.Agent.Host.Evaluation.Frozen.FrozenCorpusStore? frozen = null,
+    TimeProvider? time = null) : IErasureStep
 {
     private static readonly JsonSerializerOptions manifestJson = new(JsonSerializerDefaults.Web);
 
@@ -189,6 +194,14 @@ public sealed class SmokeArtifactErasureStep(IOptionsMonitor<HistoryOptions> opt
                 {
                     allGone = false;
                 }
+            }
+        }
+
+        if (frozen is not null)
+        {
+            foreach (var version in frozen.Overlapping(task.RangeFrom, to))
+            {
+                allGone &= frozen.Destroy(version, (time ?? TimeProvider.System).GetUtcNow());
             }
         }
 
