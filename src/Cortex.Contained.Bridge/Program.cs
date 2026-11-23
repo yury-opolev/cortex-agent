@@ -1219,6 +1219,9 @@ app.MapRecallEndpoints();
 // --- Storage page API (encryption at rest: status, preview, enable, recovery kit export/restore) ---
 Cortex.Contained.Bridge.Storage.StorageEndpoints.MapStorageEndpoints(app, cortexDataDir);
 
+// --- Evaluation API (jobs run inside the agent process; workspace files; re-authentication for content) ---
+Cortex.Contained.Bridge.Evaluation.EvaluationEndpoints.MapEvaluationEndpoints(app);
+
 // --- Connector Plugin System endpoint (loopback-only, no WebUI dependency) ---
 app.MapConnectorEndpoint();
 
