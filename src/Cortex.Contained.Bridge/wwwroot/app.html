@@ -1673,6 +1673,186 @@
                 </div>
             </div>
 
+            <!-- ═══ Evaluation (Gate H, κ, sanitised copy): one button, three owner inputs ═══ -->
+            <div class="card mb-3" x-data="evalRunPanel()" @keydown.window="onKey($event)">
+                <div class="card-body">
+                    <h6 class="text-uppercase text-secondary border-bottom pb-2 mb-3">Evaluation</h6>
+                    <div x-show="error" class="alert alert-warning py-2 small" x-text="error"></div>
+
+                    <!-- Start -->
+                    <template x-if="run && !active">
+                    <div class="mb-3">
+                        <p class="small text-secondary mb-2">
+                            Runs the whole quality evaluation of history and memory search: writes and judges the test queries
+                            (<span x-text="run.queryModel"></span> writes, <span x-text="run.judgeModel"></span> judges), asks you to grade a
+                            small sample, pre-registers, runs the held-out comparison on raw data and on the sanitised copy, and exports the
+                            encrypted package. It runs for several hours; you can close this page.
+                        </p>
+                        <div class="d-flex flex-wrap gap-2 align-items-center">
+                            <input type="password" class="form-control form-control-sm" style="max-width: 220px;" placeholder="Bridge password" autocomplete="current-password" x-model="start.password">
+                            <div class="form-check mb-0">
+                                <input class="form-check-input" type="checkbox" id="eval-fresh" x-model="start.fresh">
+                                <label class="form-check-label small" for="eval-fresh">Start fresh (deletes the previous evaluation's datasets)</label>
+                            </div>
+                            <button class="btn btn-primary btn-sm" :disabled="busy || !start.password" @click="startRun()">
+                                <i class="bi bi-play-fill me-1"></i>Run evaluation
+                            </button>
+                        </div>
+                    </div>
+                    </template>
+
+                    <!-- Status and phases -->
+                    <template x-if="run && run.exists">
+                    <div>
+                        <div class="d-flex align-items-center gap-2 mb-2">
+                            <span class="badge" :class="{ 'bg-primary': run.status === 'running', 'bg-warning text-dark': run.status === 'waiting', 'bg-danger': run.status === 'stopped', 'bg-secondary': run.status === 'cancelled', 'bg-success': run.status === 'completed' }" x-text="run.status"></span>
+                            <span class="small" x-text="phaseLabel(run.phase)"></span>
+                            <span class="small text-secondary" x-show="run.currentJob" x-text="'· ' + run.currentJob"></span>
+                            <button class="btn btn-outline-danger btn-sm ms-auto" x-show="active || run.status === 'stopped'" :disabled="busy" @click="cancelRun()">Cancel</button>
+                        </div>
+                        <div x-show="run.status === 'stopped' || run.status === 'cancelled'" class="alert alert-danger py-2 small">
+                            <div x-text="run.message || 'The run was cancelled.'"></div>
+                            <div class="d-flex gap-2 mt-2">
+                                <input type="password" class="form-control form-control-sm" style="max-width: 220px;" placeholder="Bridge password" x-model="resume.password">
+                                <button class="btn btn-sm btn-light" :disabled="busy || !resume.password" @click="resumeRun()">Resume</button>
+                            </div>
+                        </div>
+                        <ol class="list-unstyled small mb-3 row row-cols-2 g-0">
+                            <template x-for="p in run.phases" :key="p.name">
+                                <li class="col"><i class="bi me-1" :class="phaseIcon(p.state)"></i><span x-text="phaseLabel(p.name)"></span></li>
+                            </template>
+                        </ol>
+
+                        <!-- Wait: κ grading -->
+                        <div x-show="run.waiting === 'grading'" class="border rounded p-2 mb-3">
+                            <div class="fw-semibold mb-1">Grade the evaluation sample
+                                <span class="text-secondary fw-normal" x-text="'(' + (run.grading?.graded ?? 0) + ' of ' + (run.grading?.total ?? 0) + ' graded)'"></span></div>
+                            <p class="small text-secondary mb-2">For each query and found message or memory: <b>2</b> answers it, <b>1</b> partly or as needed context, <b>0</b> not relevant. The judge's grade is hidden. Keys: 0 1 2, → skip, ← back, Esc close.</p>
+                            <template x-if="!grading.item">
+                                <div class="d-flex gap-2">
+                                    <input type="password" class="form-control form-control-sm" style="max-width: 220px;" placeholder="Bridge password" x-model="grading.password">
+                                    <button class="btn btn-sm btn-primary" :disabled="grading.busy || !grading.password" @click="openGrading()">Start grading</button>
+                                </div>
+                            </template>
+                            <template x-if="grading.item">
+                                <div>
+                                    <div class="small text-secondary mb-1" x-text="'Item ' + (grading.item.index + 1) + ' of ' + grading.item.total + ' · ' + (grading.item.tool === 'memory-eval' ? 'memory' : 'history')"></div>
+                                    <div class="mb-2"><span class="text-secondary small">Query</span><div class="fw-semibold" x-text="grading.item.query"></div></div>
+                                    <div class="mb-2"><span class="text-secondary small">Found</span><div class="border rounded p-2 small" style="white-space: pre-wrap; max-height: 260px; overflow: auto;" x-text="grading.item.candidate"></div></div>
+                                    <div class="d-flex gap-2 align-items-center">
+                                        <template x-for="g in [0, 1, 2]" :key="g">
+                                            <button class="btn btn-sm" :class="grading.item.humanGrade === g ? 'btn-primary' : 'btn-outline-primary'" :disabled="grading.busy" @click="grade(g)" x-text="g"></button>
+                                        </template>
+                                        <button class="btn btn-sm btn-outline-secondary" :disabled="grading.busy || grading.item.index === 0" @click="showItem(grading.item.index - 1)">Back</button>
+                                        <button class="btn btn-sm btn-outline-secondary" :disabled="grading.busy" @click="showItem((grading.item.index + 1) % grading.item.total)">Skip</button>
+                                        <button class="btn btn-sm btn-link ms-auto" @click="closeGrading()">Close</button>
+                                    </div>
+                                </div>
+                            </template>
+                            <div x-show="grading.error" class="text-danger small mt-1" x-text="grading.error"></div>
+                        </div>
+
+                        <!-- Wait: dictionary -->
+                        <div x-show="run.waiting === 'dictionary'" class="border rounded p-2 mb-3">
+                            <div class="fw-semibold mb-1">Approve dictionary terms</div>
+                            <p class="small text-secondary mb-2">Accept the names, places, organisations and handles the sanitised copy must replace; add spellings that are missing.</p>
+                            <div x-show="run.leaks.length > 0" class="alert alert-warning py-1 small">
+                                The last freeze was refused (<span x-text="run.freezeRounds"></span>): personal values remained.
+                                <template x-for="leak in run.leaks" :key="leak"><div x-text="leak"></div></template>
+                            </div>
+                            <div class="d-flex gap-2 mb-2">
+                                <input type="password" class="form-control form-control-sm" style="max-width: 220px;" placeholder="Bridge password" x-model="dict.password">
+                                <button class="btn btn-sm btn-outline-primary" x-show="!dict.loaded" :disabled="dict.busy || !dict.password" @click="loadSuggestions()">Show suggestions</button>
+                            </div>
+                            <template x-if="dict.loaded">
+                                <div>
+                                    <div style="max-height: 300px; overflow: auto;">
+                                        <table class="table table-sm small mb-2">
+                                            <thead><tr><th></th><th>Term</th><th>Kind</th><th>Same person as</th><th>Seen</th></tr></thead>
+                                            <tbody>
+                                                <template x-for="s in dict.suggestions" :key="s.term + s.source">
+                                                    <tr>
+                                                        <td><input type="checkbox" class="form-check-input" x-model="s.accept"></td>
+                                                        <td x-text="s.term"></td>
+                                                        <td><select class="form-select form-select-sm" x-model="s.kind"><template x-for="k in kinds" :key="k"><option :value="k" x-text="k"></option></template></select></td>
+                                                        <td><input class="form-control form-control-sm" x-model="s.entity" placeholder="optional"></td>
+                                                        <td x-text="s.count"></td>
+                                                    </tr>
+                                                </template>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    <div class="d-flex gap-2 mb-2">
+                                        <input class="form-control form-control-sm" placeholder="Add a term" x-model="dict.draft.term" @keydown.enter.prevent="addTerm()">
+                                        <select class="form-select form-select-sm" style="max-width: 140px;" x-model="dict.draft.kind"><template x-for="k in kinds" :key="k"><option :value="k" x-text="k"></option></template></select>
+                                        <input class="form-control form-control-sm" placeholder="same person as (optional)" x-model="dict.draft.entity">
+                                        <button class="btn btn-sm btn-outline-secondary" @click="addTerm()">Add</button>
+                                    </div>
+                                    <div class="small text-secondary mb-2" x-show="dict.extra.length > 0" x-text="'Added: ' + dict.extra.map(e => e.term).join(', ')"></div>
+                                    <button class="btn btn-sm btn-primary" :disabled="busy || !dict.password" @click="approveDictionary()" x-text="'Approve ' + acceptedTerms.length + ' terms and freeze'"></button>
+                                </div>
+                            </template>
+                        </div>
+
+                        <!-- Wait: passphrase -->
+                        <div x-show="run.waiting === 'passphrase'" class="border rounded p-2 mb-3">
+                            <div class="fw-semibold mb-1">Package passphrase</div>
+                            <p class="small text-secondary mb-2">The frozen copy <span x-text="run.version"></span> is exported encrypted with this passphrase (at least 12 characters, not the recovery kit's). Keep it with your offline secrets; it is not stored.</p>
+                            <div class="d-flex flex-wrap gap-2">
+                                <input type="password" class="form-control form-control-sm" style="max-width: 200px;" placeholder="Bridge password" x-model="exp.password">
+                                <input type="password" class="form-control form-control-sm" style="max-width: 200px;" placeholder="Package passphrase" autocomplete="new-password" x-model="exp.passphrase">
+                                <input type="password" class="form-control form-control-sm" style="max-width: 200px;" placeholder="Repeat passphrase" autocomplete="new-password" x-model="exp.confirm">
+                                <button class="btn btn-sm btn-primary" :disabled="busy || !exp.password || passphraseProblem" @click="exportPackage()">Export</button>
+                            </div>
+                            <div class="small text-secondary mt-1" x-show="exp.passphrase && passphraseProblem" x-text="passphraseProblem"></div>
+                        </div>
+
+                        <!-- Results -->
+                        <template x-if="summary">
+                        <div class="border rounded p-2 mb-3">
+                            <div class="fw-semibold mb-2">Results <span class="text-secondary fw-normal small" x-text="'(frozen ' + (summary.version || '—') + ', κ ' + number(summary.kappa?.all) + ' on ' + summary.kappa?.items + ' items)'"></span></div>
+                            <table class="table table-sm small mb-2">
+                                <thead><tr><th></th><th>Chosen</th><th>Δ nDCG@10 raw [95% CI]</th><th>Gate H (non-inferior)</th><th>Δ sanitised</th><th>raw − sanitised</th><th>Gate R</th></tr></thead>
+                                <tbody>
+                                    <template x-for="tool in ['history', 'memory']" :key="tool">
+                                        <tr>
+                                            <td x-text="tool"></td>
+                                            <td x-text="summary[tool]?.raw?.config || '—'"></td>
+                                            <td x-text="delta(summary[tool]?.raw)"></td>
+                                            <td><span class="badge" :class="summary[tool]?.raw?.nonInferior ? 'bg-success' : 'bg-danger'" x-text="summary[tool]?.raw ? (summary[tool].raw.nonInferior ? 'pass' : 'fail') : '—'"></span></td>
+                                            <td x-text="delta(summary[tool]?.sanitised)"></td>
+                                            <td x-text="difference(summary[tool]?.raw, summary[tool]?.sanitised)"></td>
+                                            <td x-text="summary[tool]?.gateR ? (summary[tool].gateR.passed ? 'pass' : 'fail') : 'not run'"></td>
+                                        </tr>
+                                    </template>
+                                </tbody>
+                            </table>
+                            <p class="small text-secondary mb-1">Gate H is your decision; a run on a mostly pre-event-log history is provisional.</p>
+                        </div>
+                        </template>
+                        <div class="small" x-show="run.reports.length > 0">
+                            <span class="text-secondary">Reports:</span>
+                            <template x-for="key in run.reports" :key="key">
+                                <a href="#" class="me-2" @click.prevent="openReport(key)" x-text="key"></a>
+                            </template>
+                        </div>
+                        <template x-if="report.key">
+                            <div class="mt-2">
+                                <div class="d-flex"><span class="small fw-semibold" x-text="report.key"></span><button class="btn-close ms-auto" @click="report = { key: '', text: '' }"></button></div>
+                                <pre class="small border rounded p-2 mb-0" style="max-height: 360px; overflow: auto;" x-text="report.text"></pre>
+                            </div>
+                        </template>
+                        <details class="small mt-2" x-show="run.log.length > 0">
+                            <summary class="text-secondary">Steps</summary>
+                            <template x-for="(entry, i) in run.log" :key="i">
+                                <div><span class="text-secondary" x-text="formatDateTime(entry.at)"></span> <span x-text="entry.step"></span> <span class="text-secondary" x-text="entry.exitCode === null ? '' : '(exit ' + entry.exitCode + ')'"></span> <span x-text="entry.note"></span></div>
+                            </template>
+                        </details>
+                    </div>
+                    </template>
+                </div>
+            </div>
+
             <!-- ═══ Evaluation corpora (sanitised frozen copies, D6) ═══ -->
             <div class="card mb-3" x-show="frozen && (frozen.versions.length > 0 || frozen.pendingOffsiteDeletions.length > 0)">
                 <div class="card-body">
@@ -3146,6 +3326,7 @@
 <script src="/js/components/layout.js"></script>
 <script src="/js/components/channel-helpers.js"></script>
 <script src="/js/components/recall-purge.js"></script>
+<script src="/js/components/eval-run.js"></script>
 <script src="/js/components/restart-modal.js"></script>
 
 <!-- Page scripts (Alpine x-data functions) -->
