@@ -37,6 +37,8 @@ Invoke-RestMethod -Method Post -Uri "$BridgeUrl/api/auth/login" -WebSession $ses
     -ContentType 'application/json' -Body (@{ password = $plain } | ConvertTo-Json) | Out-Null
 
 $name = "cortex-eval-corpus-$Version.cxpkg"
+# A relative folder is relative to the PowerShell location (not the process working directory); print the absolute path.
+$OutDirectory = $PSCmdlet.GetUnresolvedProviderPathFromPSPath($OutDirectory)
 New-Item -ItemType Directory -Force -Path $OutDirectory | Out-Null
 $target = Join-Path $OutDirectory $name
 $tenant = [uri]::EscapeDataString($TenantId)

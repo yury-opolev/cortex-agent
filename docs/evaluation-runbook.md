@@ -11,7 +11,7 @@ copies are encrypted with a dedicated evaluation key, datasets are sealed, and r
 | Script | What it does |
 |---|---|
 | `Invoke-CortexEval.ps1 -Tool <history-eval\|memory-eval\|eval-corpus> -- <command> [options]` | Runs a command as a job and prints its output. `-PromptPassphrase` for package export and import. |
-| `Edit-CortexEvalFile.ps1 -Tool <tool> -Name <file>` | Opens a workspace file (dataset, plan, dictionary) in your editor and saves it back (sealed). `-Pull -Path` / `-Push -Path` move it to and from an explicit file instead. |
+| `Edit-CortexEvalFile.ps1 -Tool <tool> -Name <file>` | Opens a workspace file (dataset, plan, dictionary) in your editor and saves it back (sealed) if it changed. Use an editor that waits (`$env:EDITOR` or `-Editor "code --wait"`); if the editor returns at once the script asks you to press Enter once the file is saved and closed. The local copy is overwritten and deleted afterwards (kept only when the upload failed, so the edits are not lost). `-Pull -Path` / `-Push -Path` move it to and from an explicit file instead (a relative path is relative to the current PowerShell location). |
 | `Export-CortexEvalCorpus.ps1 -Version vN` | Downloads the passphrase-encrypted package of a frozen version to a folder on this PC. |
 
 Jobs refuse `--dir`, `--source`, `--labels`, `--embedder` and `--reranker`: they always use the configured workspaces
@@ -30,7 +30,7 @@ files in the container; read them with `docker exec cortex-agent cat <path print
    `-Push -Path .\work\history-dataset.jsonl`. Delete the local copy afterwards.
 3. `… -Tool history-eval -- validate` until it reports 0 problems; `… -- guard` (paraphrase guard).
 4. **κ:** double-label a sample by hand; push `judge-agreement.csv` (`messageId,llmGrade,humanGrade` per line) with
-   `Edit-CortexEvalFile.ps1 -Name judge-agreement.csv -Push`; `… -- kappa` must report ≥ 0.6.
+   `Edit-CortexEvalFile.ps1 -Name judge-agreement.csv -Push -Path .\judge-agreement.csv`; `… -- kappa` must report ≥ 0.6.
 5. **Dev ablations:** `… -- ablate --split dev`; read the report; pick the configuration; write it into
    `ablation.json` (`holdout.config`, `holdout.margin`) and fill in `analysis-plan.md` (both via `Edit-CortexEvalFile.ps1`).
 6. **Register:** `… -- register`. From now on the dataset, the plan and the grid are fixed.
