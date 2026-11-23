@@ -59,7 +59,7 @@ public sealed class PackageCipherTests
         byte[] damaged = tamper switch
         {
             "truncate-chunk" => package[..^5],
-            "drop-last-chunk" => package[..^16],
+            "drop-last-chunk" => package[..^sealedChunk],
             "append" => [.. package, 0],
             "flip-header" => Flip(package, 20),
             _ => Flip(package, package.Length - sealedChunk - 3),
