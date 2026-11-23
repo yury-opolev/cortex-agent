@@ -7,7 +7,10 @@ namespace Cortex.Contained.Agent.Host.Evaluation.Frozen;
 /// <summary>
 /// The frozen corpus versions under <c>/app/state/eval/frozen</c> (one directory per version), their export
 /// packages under <c>/app/state/eval/packages</c> and the ledger of off-machine copies the owner still has to
-/// delete (<c>offsite-deletions.json</c>, D3). Version numbers are never reused.
+/// delete (<c>offsite-deletions.json</c>, D3). Version numbers are never reused. The ledger, the version counter
+/// (<c>last-version</c>) and the log of completed purge ranges live in <c>/app/state/eval-ledger</c>, beside the evaluation
+/// directory and not inside it: erasing the evaluation artifacts (when enabling encryption) must not lose what the owner
+/// still has to delete off the machine, nor let a version number or a purged corpus come back.
 /// </summary>
 public sealed class FrozenCorpusStore
 {
@@ -27,7 +30,12 @@ public sealed class FrozenCorpusStore
         ArgumentException.ThrowIfNullOrWhiteSpace(evaluationDirectory);
         this.Root = Path.Combine(evaluationDirectory, "frozen");
         this.PackagesDirectory = Path.Combine(evaluationDirectory, "packages");
+        this.LedgerDirectory = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(evaluationDirectory.TrimEnd('/', '\\')))!, "eval-ledger");
+        this.MigrateLegacyLedger();
     }
+
+    /// <summary>Directory of the ledger, the version counter and the purge log (outside the evaluation directory, never erased with it).</summary>
+    public string LedgerDirectory { get; }
 
     /// <summary>Directory of the versions.</summary>
     public string Root { get; }
@@ -171,8 +179,9 @@ public sealed class FrozenCorpusStore
         lock (this.sync)
         {
             Directory.CreateDirectory(this.Root);
-            var counter = Path.Combine(this.Root, CounterFileName);
-            var last = File.Exists(counter) && int.TryParse(File.ReadAllText(counter).Trim(), CultureInfo.InvariantCulture, out var n) ? n : 0;
+            Directory.CreateDirectory(this.LedgerDirectory);
+            var counter = Path.Combine(this.LedgerDirectory, CounterFileName);
+            var last = ReadCounter(counter);
             var existing = Directory.EnumerateDirectories(this.Root).Select(d => FrozenCorpusManifest.NumberOf(Path.GetFileName(d).Split('.')[0]) ?? 0).DefaultIfEmpty(0).Max();
             var next = Math.Max(last, existing) + 1;
             File.WriteAllText(counter, next.ToString(CultureInfo.InvariantCulture));
@@ -210,6 +219,10 @@ public sealed class FrozenCorpusStore
         {
             File.Delete(package);
         }
+        catch (DirectoryNotFoundException)
+        {
+            // No packages directory: nothing was ever exported.
+        }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             gone = false;
@@ -223,10 +236,9 @@ public sealed class FrozenCorpusStore
     {
         lock (this.sync)
         {
-            var path = Path.Combine(this.Root, LedgerFileName);
             try
             {
-                return File.Exists(path) ? JsonSerializer.Deserialize<List<OffsiteDeletionDto>>(File.ReadAllText(path), Json) ?? [] : [];
+                return ReadLedger(Path.Combine(this.LedgerDirectory, LedgerFileName));
             }
             catch (JsonException)
             {
@@ -258,10 +270,53 @@ public sealed class FrozenCorpusStore
 
     private void WriteLedger(IReadOnlyList<OffsiteDeletionDto> pending)
     {
-        Directory.CreateDirectory(this.Root);
-        var path = Path.Combine(this.Root, LedgerFileName);
+        Directory.CreateDirectory(this.LedgerDirectory);
+        var path = Path.Combine(this.LedgerDirectory, LedgerFileName);
         File.WriteAllText(path + ".tmp", JsonSerializer.Serialize(pending, Json));
         File.Move(path + ".tmp", path, overwrite: true);
+    }
+
+    private static List<OffsiteDeletionDto> ReadLedger(string path) =>
+        File.Exists(path) ? JsonSerializer.Deserialize<List<OffsiteDeletionDto>>(File.ReadAllText(path), Json) ?? [] : [];
+
+    private static int ReadCounter(string path) =>
+        File.Exists(path) && int.TryParse(File.ReadAllText(path).Trim(), CultureInfo.InvariantCulture, out var n) ? n : 0;
+
+    // Older installs kept both files under eval/frozen, where the evaluation erase on enabling encryption deleted them.
+    private void MigrateLegacyLedger()
+    {
+        var legacyLedger = Path.Combine(this.Root, LedgerFileName);
+        var legacyCounter = Path.Combine(this.Root, CounterFileName);
+        if (!File.Exists(legacyLedger) && !File.Exists(legacyCounter))
+        {
+            return;
+        }
+
+        lock (this.sync)
+        {
+            try
+            {
+                if (File.Exists(legacyLedger))
+                {
+                    var current = this.PendingDeletions();
+                    var merged = current.Concat(ReadLedger(legacyLedger).Where(l => !current.Any(c => string.Equals(c.Version, l.Version, StringComparison.Ordinal)))).ToList();
+                    this.WriteLedger(merged);
+                    File.Delete(legacyLedger);
+                }
+
+                if (File.Exists(legacyCounter))
+                {
+                    Directory.CreateDirectory(this.LedgerDirectory);
+                    var counter = Path.Combine(this.LedgerDirectory, CounterFileName);
+                    File.WriteAllText(counter, Math.Max(ReadCounter(counter), ReadCounter(legacyCounter)).ToString(CultureInfo.InvariantCulture));
+                    File.Delete(legacyCounter);
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+            {
+                // The legacy files stay where they are and are migrated on the next start.
+            }
+        }
     }
 
     private static string Version(string version) => FrozenCorpusManifest.NumberOf(version) is not null ? version : throw new InvalidOperationException($"'{version}' is not a corpus version (v1, v2, …).");

@@ -88,6 +88,25 @@ public sealed class StorageEncryptionServiceTests : IDisposable
     }
 
     [Fact]
+    public void Enable_ErasingEvaluationArtifacts_KeepsTheOffsiteLedgerAndVersionCounter()
+    {
+        var ledger = Path.Combine(this.layout.StateRoot, "eval-ledger");
+        Directory.CreateDirectory(ledger);
+        File.WriteAllText(Path.Combine(ledger, "offsite-deletions.json"), "[]");
+        File.WriteAllText(Path.Combine(ledger, "last-version"), "3");
+        Directory.CreateDirectory(Path.Combine(this.layout.EvaluationDirectory, "frozen", "v3"));
+        File.WriteAllText(Path.Combine(this.layout.EvaluationDirectory, "frozen", "v3", "messages.db"), "x");
+        var inventory = new StorageInventory(this.layout);
+
+        Assert.DoesNotContain(inventory.NotCovered(), i => i.Id.StartsWith("other:eval-ledger", StringComparison.Ordinal));
+        Assert.True(this.Service(Ring(KeyA)).Enable(Request(KeyA)).Accepted);
+
+        Assert.False(Directory.Exists(this.layout.EvaluationDirectory));
+        Assert.True(File.Exists(Path.Combine(ledger, "offsite-deletions.json")));
+        Assert.Equal("3", File.ReadAllText(Path.Combine(ledger, "last-version")));
+    }
+
+    [Fact]
     public void Enable_WithoutKeyOrWithAnotherKey_RefusedAndNothingWritten()
     {
         Assert.False(this.Service(Ring()).Enable(Request(KeyA)).Accepted);

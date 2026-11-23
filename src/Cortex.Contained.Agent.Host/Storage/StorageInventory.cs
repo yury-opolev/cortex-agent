@@ -52,7 +52,7 @@ public sealed class StorageInventory
 
     private static readonly HashSet<string> KnownStateEntries = new(StringComparer.Ordinal)
     {
-        "messages.db", "messages.db-wal", "messages.db-shm", "messages.db-journal", "history", "memory", "eval",
+        "messages.db", "messages.db-wal", "messages.db-shm", "messages.db-journal", "history", "memory", "eval", "eval-ledger",
         "recall-settings.json", "recall-settings.json.tmp", StorageEncryptionMarker.FileName, StorageEncryptionMarker.FileName + ".tmp",
         Agent.SessionSnapshotSerializer.SnapshotFileName, Agent.SessionSnapshotSerializer.SnapshotFileName + ".tmp",
         "subagents", "todos", "scheduler", "external-agent", "voiceprints", "maintenance", "self-notes.md", "context-bootstrap.md",
