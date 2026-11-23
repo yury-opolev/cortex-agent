@@ -25,10 +25,14 @@ public sealed class EvalCorpus : IAsyncDisposable
     private readonly MessageStore store;
     private readonly MutableOptionsMonitor monitor;
     private readonly IRerankStage? reranker;
+    private readonly string copyPath;
+    private readonly string? copyPassword;
     private readonly Dictionary<HistoryKeywordVariant, (HistoryProjector Projector, HistoryRecallService Recall)> variants = [];
 
-    private EvalCorpus(MessageStore store, MutableOptionsMonitor monitor, IRerankStage? reranker)
+    private EvalCorpus(MessageStore store, MutableOptionsMonitor monitor, IRerankStage? reranker, string copyPath, string? copyPassword)
     {
+        this.copyPath = copyPath;
+        this.copyPassword = copyPassword;
         this.store = store;
         this.monitor = monitor;
         this.reranker = reranker;
@@ -65,7 +69,7 @@ public sealed class EvalCorpus : IAsyncDisposable
 
         var monitor = new MutableOptionsMonitor(baseline);
         var embedder = embedderFactory(monitor);
-        var corpus = new EvalCorpus(new MessageStore(copyPath, NullLogger<MessageStore>.Instance, protection.CopyMessageEncryption), monitor, reranker);
+        var corpus = new EvalCorpus(new MessageStore(copyPath, NullLogger<MessageStore>.Instance, protection.CopyMessageEncryption), monitor, reranker, copyPath, copyPassword);
         foreach (var variant in configs.Select(c => c.KeywordVariant).Distinct())
         {
             monitor.CurrentValue = new AblationConfig { Name = "build", KeywordVariant = variant }.Apply(baseline);
@@ -155,6 +159,14 @@ public sealed class EvalCorpus : IAsyncDisposable
         while (cursor is not null && words < MaxWords);
 
         return new RetrievalRun(hits, confidence, latency) { Rerank = rerankOutcome };
+    }
+
+    /// <summary>A read-only connection to the private copy (automated labelling reads rows and events; the caller disposes it).</summary>
+    public SqliteConnection OpenCopy()
+    {
+        var connection = new SqliteConnection(EncryptedSqlite.ConnectionString(this.copyPath, this.copyPassword, SqliteOpenMode.ReadOnly, pooling: false));
+        connection.Open();
+        return connection;
     }
 
     /// <summary>Texts of the given rows (paraphrase guard only; never written out).</summary>

@@ -24,6 +24,13 @@ public static class RecallRequestMiner
 
         using var connection = new SqliteConnection(EncryptedSqlite.ConnectionString(db, password, SqliteOpenMode.ReadOnly, pooling: false));
         connection.Open();
+        return Read(connection, tool);
+    }
+
+    /// <summary>Seeds for the searches of <paramref name="tool"/> through an open connection to a <c>messages.db</c> (or a copy).</summary>
+    public static IReadOnlyList<LabelSeed> Read(SqliteConnection connection, string tool)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
         using var cmd = connection.CreateCommand();
         cmd.CommandText = """
             SELECT e.Ts, json_extract(e.Payload, '$.args'),
