@@ -39,18 +39,29 @@ public static class EvaluationRegistration
                 ["memory-eval"] = (run, ct) => IsLabel(run)
                     ? LabelCli.RunAsync("memory-eval", run, Labelling(sp, encryption), ct)
                     : MemoryEvalCli.RunInAgentAsync(run.Args, run.Output, run.Protection, memory.CurrentValue, reranker, ct),
-                ["eval-corpus"] = (run, ct) => EvalCorpusCli.RunAsync(
-                    run,
-                    new EvalCorpusContext(
-                        encryption.Layout.EvaluationDirectory,
-                        encryption.Layout.MessagesDatabase,
-                        memory.CurrentValue,
-                        history.CurrentValue.EvalArtifactsDirectory,
-                        MemoryEvalWorkspace.DefaultDirectory,
-                        sp.GetRequiredService<TimeProvider>(),
-                        sp.GetService<ILlmClient>(),
-                        sp.GetService<Cortex.Contained.Agent.Host.Agent.IModelProvider>()?.MemoryModel),
-                    ct),
+                ["eval-corpus"] = async (run, ct) =>
+                {
+                    // suggest --llm needs the provider: after an agent restart the credentials arrive a little later.
+                    if (IsSuggestLlm(run))
+                    {
+                        var direct = sp.GetRequiredService<DirectLlmClient>();
+                        var models = sp.GetService<Cortex.Contained.Agent.Host.Agent.IModelProvider>();
+                        await CredentialsGate.WaitAsync(() => direct.HasCredentials && !string.IsNullOrEmpty(models?.MemoryModel), null, null, sp.GetRequiredService<TimeProvider>(), ct).ConfigureAwait(false);
+                    }
+
+                    return await EvalCorpusCli.RunAsync(
+                        run,
+                        new EvalCorpusContext(
+                            encryption.Layout.EvaluationDirectory,
+                            encryption.Layout.MessagesDatabase,
+                            memory.CurrentValue,
+                            history.CurrentValue.EvalArtifactsDirectory,
+                            MemoryEvalWorkspace.DefaultDirectory,
+                            sp.GetRequiredService<TimeProvider>(),
+                            sp.GetService<ILlmClient>(),
+                            sp.GetService<Cortex.Contained.Agent.Host.Agent.IModelProvider>()?.MemoryModel),
+                        ct).ConfigureAwait(false);
+                },
             };
             return new EvaluationJobService(
                 commands,
@@ -107,7 +118,8 @@ public static class EvaluationRegistration
             memory,
             HistoryEvalCli.AgentEmbedder(memory),
             MemoryEvalCli.AgentEmbedder,
-            services.GetRequiredService<TimeProvider>());
+            services.GetRequiredService<TimeProvider>(),
+            () => direct.HasCredentials);
     }
 
     /// <summary>Workspace directory per tool.</summary>
@@ -122,6 +134,9 @@ public static class EvaluationRegistration
             ["eval-corpus"] = Path.Combine(layout.EvaluationDirectory, "corpus"),
         };
     }
+
+    private static bool IsSuggestLlm(EvaluationRun run) =>
+        run.Args.Count > 0 && string.Equals(run.Args[0], "suggest", StringComparison.Ordinal) && run.Args.Contains("--llm", StringComparer.Ordinal);
 
     private static bool IsLabel(EvaluationRun run) => run.Args.Count > 0 && string.Equals(run.Args[0], "label", StringComparison.Ordinal);
 }

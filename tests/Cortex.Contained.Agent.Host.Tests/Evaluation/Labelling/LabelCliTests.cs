@@ -53,8 +53,7 @@ public sealed class LabelCliTests : IAsyncDisposable
             .Select(l => l[1..l.IndexOf(']', StringComparison.Ordinal)]).Select(a => $"\"{a}\":{(a == "c1" ? 2 : 0)}")) + "}}",
     };
 
-    [Fact]
-    public async Task RunAsync_Label_WritesAValidSealedDatasetAndLeavesNoCopy()
+    private async Task<EvalWorkspace> PrepareAsync()
     {
         Directory.CreateDirectory(this.root);
         await using (var store = new MessageStore(Path.Combine(this.root, "messages.db"), NullLogger<MessageStore>.Instance, new MessageStoreEncryption(this.keys, TimeSpan.FromSeconds(5))))
@@ -69,6 +68,13 @@ public sealed class LabelCliTests : IAsyncDisposable
         Directory.CreateDirectory(workspace.Directory);
         workspace.WritePlan(new AblationPlan { Configs = [new AblationConfig { Name = AblationGrid.Baseline, Mode = HistorySearchMode.Keyword }, new AblationConfig { Name = "hybrid-rrf60" }] });
         this.fake.Respond = Respond;
+        return workspace;
+    }
+
+    [Fact]
+    public async Task RunAsync_Label_WritesAValidSealedDatasetAndLeavesNoCopy()
+    {
+        var workspace = await this.PrepareAsync();
         var run = new EvaluationRun(["label", "--queries", "6", "--kappa", "3"], this.output, this.protection, null);
 
         var code = await LabelCli.RunAsync("history-eval", run, this.Context(new LabellingOptions { MinCallIntervalMs = 0 }), CancellationToken.None);
@@ -84,6 +90,53 @@ public sealed class LabelCliTests : IAsyncDisposable
         Assert.DoesNotContain("garden", this.output.ToString(), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task RunAsync_Label_WaitsForCredentialsAndReadsTheMainModelAfterTheCorpusIsBuilt()
+    {
+        var workspace = await this.PrepareAsync();
+        var polls = 0;
+        var mainModelReads = 0;
+        string? mainModel = null;
+        var context = this.Context(new LabellingOptions { MinCallIntervalMs = 0 }) with
+        {
+            CredentialsReady = () => ++polls > 2,
+            CredentialsPoll = TimeSpan.FromMilliseconds(5),
+            MainModel = () =>
+            {
+                mainModelReads++;
+                return mainModel;
+            },
+        };
+        var run = new EvaluationRun(["label", "--queries", "6", "--kappa", "3"], this.output, this.protection, null);
+
+        // The corpus build takes a while: the main model arrives in the meantime.
+        var job = LabelCli.RunAsync("history-eval", run, context, CancellationToken.None);
+        mainModel = "main-model";
+        var code = await job;
+
+        Assert.Equal(0, code);
+        Assert.True(polls > 2);
+        Assert.NotEmpty(workspace.ReadDataset());
+        Assert.Equal(1, mainModelReads);
+    }
+
+    [Fact]
+    public async Task RunAsync_Label_CredentialsNeverArrive_FailsWithGuidanceWithoutCalls()
+    {
+        await this.PrepareAsync();
+        var context = this.Context(new LabellingOptions { MinCallIntervalMs = 0 }) with
+        {
+            CredentialsReady = () => false,
+            CredentialsTimeout = TimeSpan.FromMilliseconds(50),
+            CredentialsPoll = TimeSpan.FromMilliseconds(5),
+        };
+        var run = new EvaluationRun(["label", "--queries", "6", "--kappa", "3"], this.output, this.protection, null);
+
+        Assert.Equal(2, await LabelCli.RunAsync("history-eval", run, context, CancellationToken.None));
+
+        Assert.Contains("credentials", this.output.ToString(), StringComparison.Ordinal);
+        Assert.Empty(this.fake.Requests);
+    }
     [Fact]
     public async Task RunAsync_Estimate_PrintsWithoutCalls()
     {

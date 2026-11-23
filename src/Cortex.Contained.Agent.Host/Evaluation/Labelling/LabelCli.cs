@@ -23,7 +23,10 @@ public sealed record LabelContext(
     MemoryMcpOptions Memory,
     Func<IOptionsMonitor<HistoryOptions>, IHistoryEmbedder> HistoryEmbedder,
     Func<MemoryMcpOptions, IEmbeddingService> MemoryEmbedder,
-    TimeProvider Time);
+    TimeProvider Time,
+    Func<bool>? CredentialsReady = null,
+    TimeSpan? CredentialsTimeout = null,
+    TimeSpan? CredentialsPoll = null);
 
 /// <summary>
 /// <c>history-eval label</c> and <c>memory-eval label</c> (evaluation jobs): <c>[--queries N] [--kappa N] [--estimate]</c>.
@@ -63,9 +66,9 @@ public static class LabelCli
             return 0;
         }
 
-        if (context.MainModel() is not { Length: > 0 } mainModel)
+        if (!await CredentialsGate.WaitAsync(context.CredentialsReady, context.CredentialsTimeout, context.CredentialsPoll, context.Time, cancellationToken).ConfigureAwait(false))
         {
-            await output.WriteLineAsync("error: the agent has no main model yet (credentials have not arrived from the Bridge).").ConfigureAwait(false);
+            await output.WriteLineAsync("error: the agent has no LLM credentials yet (they arrive from the Bridge after a restart); try again in a minute.").ConfigureAwait(false);
             return 2;
         }
 
@@ -76,8 +79,8 @@ public static class LabelCli
         try
         {
             return memory
-                ? await RunMemoryAsync(run, context, llm, mainModel, runDirectory, queries, kappa, cancellationToken).ConfigureAwait(false)
-                : await RunHistoryAsync(run, context, llm, mainModel, runDirectory, queries, kappa, cancellationToken).ConfigureAwait(false);
+                ? await RunMemoryAsync(run, context, llm, runDirectory, queries, kappa, cancellationToken).ConfigureAwait(false)
+                : await RunHistoryAsync(run, context, llm, runDirectory, queries, kappa, cancellationToken).ConfigureAwait(false);
         }
         catch (InvalidOperationException ex)
         {
@@ -96,19 +99,36 @@ public static class LabelCli
     }
 
     private static async Task<int> RunHistoryAsync(
-        EvaluationRun run, LabelContext context, LabellingLlm llm, string mainModel, string runDirectory, int queries, int kappa, CancellationToken cancellationToken)
+        EvaluationRun run, LabelContext context, LabellingLlm llm, string runDirectory, int queries, int kappa, CancellationToken cancellationToken)
     {
         var workspace = new EvalWorkspace(context.HistoryWorkspace, run.Protection);
         var configs = workspace.ReadPlan().Configs.Where(c => c.RerankBudget() is null).ToList();
         await using var corpus = await EvalCorpus.CreateAsync(
             context.MessagesDb, runDirectory, new HistoryOptions { Enabled = true }, configs, context.HistoryEmbedder, cancellationToken, protection: run.Protection).ConfigureAwait(false);
         var source = new HistoryLabelSource(corpus, workspace, configs);
+        if (await MainModelAsync(run, context).ConfigureAwait(false) is not { } mainModel)
+        {
+            return 2;
+        }
+
         return await new Labeller(source, llm, context.Options, mainModel, workspace.Directory, run.Protection, run.Output, context.Time)
             .RunAsync(queries, kappa, cancellationToken).ConfigureAwait(false);
     }
 
+    // Read after the corpus is built (a long step): the credentials may only just have arrived.
+    private static async Task<string?> MainModelAsync(EvaluationRun run, LabelContext context)
+    {
+        if (context.MainModel() is { Length: > 0 } model)
+        {
+            return model;
+        }
+
+        await run.Output.WriteLineAsync("error: the agent has no main model yet (credentials have not arrived from the Bridge); try again in a minute.").ConfigureAwait(false);
+        return null;
+    }
+
     private static async Task<int> RunMemoryAsync(
-        EvaluationRun run, LabelContext context, LabellingLlm llm, string mainModel, string runDirectory, int queries, int kappa, CancellationToken cancellationToken)
+        EvaluationRun run, LabelContext context, LabellingLlm llm, string runDirectory, int queries, int kappa, CancellationToken cancellationToken)
     {
         var workspace = new MemoryEvalWorkspace(context.MemoryWorkspace, run.Protection);
         var configs = workspace.ReadPlan().Configs;
@@ -126,6 +146,11 @@ public static class LabelCli
             connection.Open();
             return connection;
         });
+        if (await MainModelAsync(run, context).ConfigureAwait(false) is not { } mainModel)
+        {
+            return 2;
+        }
+
         return await new Labeller(source, llm, context.Options, mainModel, workspace.Directory, run.Protection, run.Output, context.Time)
             .RunAsync(queries, kappa, cancellationToken).ConfigureAwait(false);
     }

@@ -78,7 +78,8 @@ and takes about 13–14 hours of LLM time plus the embedding runs: start it in t
 - *A command failed*: the last lines of its output (ids and numbers) are shown; fix the cause and Resume. A label job
   that finds its saved progress was made with other models (query, judge or main model) refuses: restore the
   configuration and Resume, or start a fresh run.
-- After an agent restart the run continues by itself once the storage key has arrived; an interrupted command runs again.
+- After an agent restart the run continues by itself once the storage key has arrived; an interrupted command runs again
+  (a job that needs the LLM waits up to 2 minutes for the Bridge's credentials first).
   Only the passphrase must be entered again.
 
 Privacy: snippets, queries and candidates go only to the configured provider (D5), as in normal chat. Everything with

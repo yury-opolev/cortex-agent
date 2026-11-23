@@ -42,7 +42,9 @@ attempts fail in transport) is not "no answer": the job stops resumably (exit 4)
 
 **L2 — Labelling is a job.** `history-eval label` and `memory-eval label [--queries N] [--kappa N] [--estimate]` run
 inside the agent like every evaluation command (E-series: storage key, `EvalProtection`, refused path options). The job
-copies the store into `runs/label-*` (encrypted with the evaluation key), labels it and deletes the copy.
+copies the store into `runs/label-*` (encrypted with the evaluation key), labels it and deletes the copy. A job that
+needs the LLM (`label`, `eval-corpus suggest --llm`) first waits up to 2 minutes for the Bridge's credentials (they
+arrive after an agent restart) and reads the agent's main model only after the corpus copy is built.
 
 **L3 — Sampling.** History seeds: user and assistant messages of ≥ 40 characters, without recall echoes (rows whose
 tool-call summary names a recall tool) and internal rows; strata channel × month × length bucket, round-robin in a
