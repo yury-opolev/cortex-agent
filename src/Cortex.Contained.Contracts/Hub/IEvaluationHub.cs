@@ -43,7 +43,7 @@ public interface IEvaluationHub
     /// <summary>Item <paramref name="index"/> of the owner's κ sample (decrypted query and candidate text, without the judge's grade).</summary>
     Task<GradingItemDto> GetGradingItem(int index);
 
-    /// <summary>Stores the owner's grade of one κ sample item; κ is computed when the last one is graded.</summary>
+    /// <summary>Stores the owner's grade of one κ sample item; grades can change until the owner submits them (<see cref="EvaluationRunActions.SubmitGrading"/>); no κ is returned before that.</summary>
     Task<GradingProgressDto> SubmitGrade(GradeRequestDto grade);
 
     /// <summary>A report the run recorded (ids and numbers only), or null.</summary>

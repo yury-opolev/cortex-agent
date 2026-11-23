@@ -16,6 +16,9 @@ public static class EvaluationRunActions
 
     /// <summary>Exports the frozen version with <see cref="EvaluationRunCommandDto.Passphrase"/>.</summary>
     public const string Export = "export";
+
+    /// <summary>The owner is done grading: κ is computed and the grades are locked.</summary>
+    public const string SubmitGrading = "submit-grading";
 }
 
 /// <summary>Body of <see cref="IEvaluationHub.ControlEvaluationRun"/>.</summary>
@@ -123,6 +126,9 @@ public sealed record GradingProgressDto
     public int Graded { get; init; }
 
     public bool Complete { get; init; }
+
+    /// <summary>True once the owner submitted the grades: they are locked and κ is shown.</summary>
+    public bool Submitted { get; init; }
 
     public double? Kappa { get; init; }
 

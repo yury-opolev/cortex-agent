@@ -1727,11 +1727,11 @@
                         <div x-show="run.waiting === 'grading'" class="border rounded p-2 mb-3">
                             <div class="fw-semibold mb-1">Grade the evaluation sample
                                 <span class="text-secondary fw-normal" x-text="'(' + (run.grading?.graded ?? 0) + ' of ' + (run.grading?.total ?? 0) + ' graded)'"></span></div>
-                            <p class="small text-secondary mb-2">For each query and found message or memory: <b>2</b> answers it, <b>1</b> partly or as needed context, <b>0</b> not relevant. The judge's grade is hidden. Keys: 0 1 2, → skip, ← back, Esc close.</p>
+                            <p class="small text-secondary mb-2">For each query and found message or memory: <b>2</b> answers it, <b>1</b> partly or as needed context, <b>0</b> not relevant. The judge's grade is hidden. Keys: 0 1 2, → skip, ← back, Esc close. You can change grades until you press <b>Done</b>; then κ is computed and the grades are locked.</p>
                             <template x-if="!grading.item">
                                 <div class="d-flex gap-2">
                                     <input type="password" class="form-control form-control-sm" style="max-width: 220px;" placeholder="Bridge password" x-model="grading.password">
-                                    <button class="btn btn-sm btn-primary" :disabled="grading.busy || !grading.password" @click="openGrading()">Start grading</button>
+                                    <button class="btn btn-sm btn-primary" :disabled="grading.busy || !grading.password" @click="openGrading()" x-text="gradingLocked ? 'Review grades' : 'Start grading'"></button>
                                 </div>
                             </template>
                             <template x-if="grading.item">
@@ -1741,7 +1741,7 @@
                                     <div class="mb-2"><span class="text-secondary small">Found</span><div class="border rounded p-2 small" style="white-space: pre-wrap; max-height: 260px; overflow: auto;" x-text="grading.item?.candidate"></div></div>
                                     <div class="d-flex gap-2 align-items-center">
                                         <template x-for="g in [0, 1, 2]" :key="g">
-                                            <button class="btn btn-sm" :class="grading.item?.humanGrade === g ? 'btn-primary' : 'btn-outline-primary'" :disabled="grading.busy" @click="grade(g)" x-text="g"></button>
+                                            <button class="btn btn-sm" :class="grading.item?.humanGrade === g ? 'btn-primary' : 'btn-outline-primary'" :disabled="grading.busy || gradingLocked" @click="grade(g)" x-text="g"></button>
                                         </template>
                                         <button class="btn btn-sm btn-outline-secondary" :disabled="grading.busy || grading.item?.index === 0" @click="showItem(grading.item.index - 1)">Back</button>
                                         <button class="btn btn-sm btn-outline-secondary" :disabled="grading.busy" @click="showItem((grading.item.index + 1) % grading.item.total)">Skip</button>
@@ -1749,6 +1749,15 @@
                                     </div>
                                 </div>
                             </template>
+                            <div x-show="run.grading?.complete && !gradingLocked" class="d-flex gap-2 align-items-center mt-2">
+                                <button class="btn btn-sm btn-success" :disabled="grading.busy || !grading.grant" @click="submitGrading()">Done: submit grades</button>
+                                <span class="small text-secondary" x-text="grading.grant ? 'Every item is graded. Submitting locks the grades and computes κ.' : 'Every item is graded: enter the password above, then submit.'"></span>
+                            </div>
+                            <div x-show="gradingLocked" class="alert alert-warning py-1 small mt-2 mb-0">
+                                <div>Grades submitted and locked. κ = <b x-text="number(run.grading?.kappa)"></b>
+                                    (history <span x-text="number(run.grading?.historyKappa)"></span>, memory <span x-text="number(run.grading?.memoryKappa)"></span>).</div>
+                                <div x-show="run.message" x-text="run.message"></div>
+                            </div>
                             <div x-show="grading.error" class="text-danger small mt-1" x-text="grading.error"></div>
                         </div>
 

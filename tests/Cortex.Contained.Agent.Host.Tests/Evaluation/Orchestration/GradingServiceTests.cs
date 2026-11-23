@@ -46,27 +46,56 @@ public sealed class GradingServiceTests : IDisposable
     }
 
     [Fact]
-    public void Grade_AllItems_StoresSealedWritesAgreementFilesAndComputesKappa()
+    public void Grade_AllItems_StoresSealedAndReportsNoKappaWhileRegradingIsPossible()
     {
         this.service.Grade(0, 2);
         var partial = this.service.Grade(1, 1);
         Assert.Equal((3, 2, false), (partial.Total, partial.Graded, partial.Complete));
-        Assert.Null(partial.Kappa);
-        Assert.False(File.Exists(Path.Combine(this.workspaces["history-eval"], "judge-agreement.csv")));
 
         var done = this.service.Grade(2, 1);
 
         Assert.True(done.Complete);
-        Assert.NotNull(done.Kappa);
-        Assert.NotNull(done.HistoryKappa);
-        Assert.Null(done.MemoryKappa);
-        Assert.Equal(["101,2,2", "102,0,1"], File.ReadAllLines(Path.Combine(this.workspaces["history-eval"], "judge-agreement.csv")));
-        Assert.Equal(["mem-a,1,1"], File.ReadAllLines(Path.Combine(this.workspaces["memory-eval"], "judge-agreement.csv")));
+        Assert.False(done.Submitted);
+        Assert.Null(done.Kappa);
+        Assert.Null(done.HistoryKappa);
+        Assert.False(File.Exists(Path.Combine(this.workspaces["history-eval"], "judge-agreement.csv")));
         Assert.True(EvalProtection.IsSealed(Path.Combine(this.workspaces["history-eval"], KappaSampleFile.FileName)));
         Assert.Equal(2, new GradingService(this.workspaces, () => this.protection).Item(0)!.HumanGrade);
-        Assert.Equal(done, this.service.Progress());
+        Assert.Null(this.service.Grade(2, 0).Kappa);
+        Assert.Null(this.service.Progress().Kappa);
     }
 
+    [Fact]
+    public void Submit_AllGraded_WritesAgreementFilesComputesKappaAndLocksTheGrades()
+    {
+        this.service.Grade(0, 2);
+        this.service.Grade(1, 1);
+        this.service.Grade(2, 1);
+
+        var submitted = this.service.Submit();
+
+        Assert.True(submitted.Submitted);
+        Assert.NotNull(submitted.Kappa);
+        Assert.NotNull(submitted.HistoryKappa);
+        Assert.Null(submitted.MemoryKappa);
+        Assert.Equal(["101,2,2", "102,0,1"], File.ReadAllLines(Path.Combine(this.workspaces["history-eval"], "judge-agreement.csv")));
+        Assert.Equal(["mem-a,1,1"], File.ReadAllLines(Path.Combine(this.workspaces["memory-eval"], "judge-agreement.csv")));
+        Assert.Equal(submitted, this.service.Progress());
+        Assert.Equal(submitted, new GradingService(this.workspaces, () => this.protection).Progress());
+        Assert.Throws<InvalidOperationException>(() => this.service.Grade(0, 0));
+        Assert.Equal(2, this.service.Item(0)!.HumanGrade);
+        Assert.Equal(submitted, this.service.Submit());
+    }
+
+    [Fact]
+    public void Submit_ItemsStillUngraded_Refused()
+    {
+        this.service.Grade(0, 2);
+
+        Assert.Throws<InvalidOperationException>(() => this.service.Submit());
+        Assert.False(this.service.Progress().Submitted);
+        Assert.False(File.Exists(Path.Combine(this.workspaces["history-eval"], "judge-agreement.csv")));
+    }
     [Fact]
     public void Grade_ClearAndOutOfRange()
     {

@@ -44,7 +44,7 @@ What runs automatically, in order: workspaces → `label` (history, then memory:
 memories plus your real past recall requests as the co-primary stratum; `Evaluation:Labelling:QueryModel` writes each
 query and its oracle filters without copying the wording — paraphrase guard and copy check enforced, rewritten on
 failure; the agent's main model writes its own version of the search; the union of the top 10 of every configuration
-plus the source is pooled and `JudgeModel` grades it 0–2 in batches) → `validate` → `guard` → *your grading* → κ gate
+plus the source is pooled and `JudgeModel` grades it 0–2 in batches) → `validate` → `guard` → *your grading* (press *Done*: κ is computed and your grades are locked) → κ gate
 (≥ 0.6 over the whole sample) → the analysis plan with the selection rule is written → `ablate --split dev` → the
 configuration is chosen by that rule on dev only (`holdout` in `ablation.json`; with the reranker on, the rerank curve
 and a Gate R configuration too) → `register` → `holdout` (raw) → `gate-r` → `eval-corpus suggest --llm` → *your
@@ -65,8 +65,9 @@ calls (≈ 1,030 query-writer, ≈ 550 main-model and ≈ 2,600 judge calls; mor
 and takes about 13–14 hours of LLM time plus the embedding runs: start it in the evening.
 
 **When it stops** the page says why and what to do; *Resume* (password) continues from the same step:
-- *κ below 0.6*: the judge disagrees with you too often; look at a few items, then start fresh with another
-  `JudgeModel` (or correct your grades and Resume).
+- *κ below 0.6*: the judge disagrees with you too often. You can change grades until you press **Done**, which
+  computes κ and locks them (no κ is shown before, so it cannot be tuned); below the gate the grading panel stays open
+  read-only with κ and the guidance. Look at a few items, then cancel the run and start fresh with another `JudgeModel`.
 - *MaxCalls reached*: raise the cap and Resume; the label job continues where it stopped (its checkpoint is sealed).
 - *The LLM provider kept failing* (rate limit, outage, a model the provider no longer lists; label exit 4): nothing is
   marked failed. Labelling calls never fail over to another provider or model (that would change the model family) and

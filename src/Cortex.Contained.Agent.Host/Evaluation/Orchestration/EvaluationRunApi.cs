@@ -71,6 +71,7 @@ public sealed class EvaluationRunApi(EvaluationRunService runs, GradingService g
             EvaluationRunActions.Start => runs.Start(command.Fresh),
             EvaluationRunActions.Cancel => runs.Cancel(),
             EvaluationRunActions.Resume => runs.Resume(),
+            EvaluationRunActions.SubmitGrading => runs.SubmitGrading(),
             EvaluationRunActions.ApproveDictionary => runs.ApproveDictionary((command.Terms ?? []).Select(t => new DictionaryTerm(t.Term, t.Kind, t.Entity)).ToList()),
             EvaluationRunActions.Export => runs.Export(command.Passphrase ?? string.Empty),
             _ => $"Unknown action '{command.Action}'.",
@@ -103,7 +104,7 @@ public sealed class EvaluationRunApi(EvaluationRunService runs, GradingService g
             };
     }
 
-    /// <summary>Stores a grade; the run continues on its next tick once every item is graded.</summary>
+    /// <summary>Stores a grade (no κ is returned until the owner submits the grades).</summary>
     public GradingProgressDto Grade(GradeRequestDto grade)
     {
         ArgumentNullException.ThrowIfNull(grade);
@@ -118,6 +119,7 @@ public sealed class EvaluationRunApi(EvaluationRunService runs, GradingService g
         Total = progress.Total,
         Graded = progress.Graded,
         Complete = progress.Complete,
+        Submitted = progress.Submitted,
         Kappa = progress.Kappa,
         HistoryKappa = progress.HistoryKappa,
         MemoryKappa = progress.MemoryKappa,

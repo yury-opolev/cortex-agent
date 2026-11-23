@@ -188,6 +188,39 @@ public sealed partial class EvaluationRunService : BackgroundService
         }
     }
 
+    /// <summary>
+    /// The owner's "done" with the κ grading: computes κ, locks the grades and moves on to the κ gate. Until then the
+    /// grades can change and no κ is shown.
+    /// </summary>
+    public string? SubmitGrading()
+    {
+        lock (this.sync)
+        {
+            if (this.state is not { Waiting: RunWait.Grading } run)
+            {
+                return "The run is not waiting for the grading.";
+            }
+
+            if (run.KappaRejected)
+            {
+                return "The grades are locked and κ is below the gate: cancel the run and start a fresh run.";
+            }
+
+            try
+            {
+                this.grading.Submit();
+            }
+            catch (InvalidOperationException ex)
+            {
+                return ex.Message;
+            }
+
+            MoveTo(run, EvaluationRunPlan.Kappa);
+            this.Save(run);
+            return null;
+        }
+    }
+
     /// <summary>Adds the owner's accepted terms to <c>dictionary.jsonl</c> (sealed) and continues with the freeze.</summary>
     public string? ApproveDictionary(IReadOnlyList<DictionaryTerm> terms)
     {
@@ -334,7 +367,7 @@ public sealed partial class EvaluationRunService : BackgroundService
 
         if (EvaluationRunPlan.WaitOf(run.Phase) is { } wait)
         {
-            if (wait == RunWait.Grading && this.grading.Progress().Complete)
+            if (wait == RunWait.Grading && !run.KappaRejected && this.grading.Progress().Submitted)
             {
                 MoveTo(run, EvaluationRunPlan.Next(run));
                 return;
@@ -342,6 +375,11 @@ public sealed partial class EvaluationRunService : BackgroundService
 
             run.Status = RunStatus.Waiting;
             run.Waiting = wait;
+            if (wait == RunWait.Grading && run.KappaRejected)
+            {
+                run.Message = KappaGuidance(run.Kappa);
+            }
+
             return;
         }
 
@@ -445,11 +483,22 @@ public sealed partial class EvaluationRunService : BackgroundService
             case EvaluationRunPlan.Kappa:
                 var progress = this.grading.Progress();
                 (run.Kappa, run.HistoryKappa, run.MemoryKappa) = (progress.Kappa, progress.HistoryKappa, progress.MemoryKappa);
+                if (!progress.Submitted)
+                {
+                    MoveTo(run, EvaluationRunPlan.Grading);
+                    return;
+                }
+
                 if (progress.Kappa is not { } kappa || kappa < MinKappa)
                 {
-                    this.Stop(run, string.Create(CultureInfo.InvariantCulture,
-                        $"LLM-vs-human κ = {progress.Kappa ?? 0:F3} is below {MinKappa}: the judge's grades may not be used. Check a few disagreements, then start a fresh run with another Evaluation:Labelling:JudgeModel (or regrade the sample and Resume)."));
+                    // The gate failed on locked grades: reopen the grading panel (read-only) with the guidance; only a fresh run helps.
+                    run.KappaRejected = true;
                     run.Phase = EvaluationRunPlan.Grading;
+                    run.Step = 0;
+                    run.Status = RunStatus.Waiting;
+                    run.Waiting = RunWait.Grading;
+                    run.Message = KappaGuidance(progress.Kappa);
+                    this.LogStopped(run.RunId, run.Phase);
                     return;
                 }
 
@@ -643,6 +692,9 @@ public sealed partial class EvaluationRunService : BackgroundService
             File.Delete(Path.Combine(this.environment.CorpusDirectory, "dictionary.suggested.jsonl"));
         }
     }
+
+    private static string KappaGuidance(double? kappa) => string.Create(CultureInfo.InvariantCulture,
+        $"LLM-vs-human κ = {kappa ?? 0:F3} is below {MinKappa}: the judge's grades may not be used. Your grades are locked (a gate decision on grades that can still change would be worthless). Look at a few disagreements, then cancel this run and start a fresh run with another Evaluation:Labelling:JudgeModel.");
 
     private static void MoveTo(EvaluationRunState run, string phase)
     {

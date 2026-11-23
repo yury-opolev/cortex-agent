@@ -56,6 +56,10 @@ internal static class EvaluationRunEndpoints
         app.MapPost("/api/tenants/{tenantId}/eval/grading/items/{index:int}/grade", (string tenantId, int index, GradeRequest body, HttpContext http, [FromServices] TenantRouter router, [FromServices] GradingGrants grants, CancellationToken ct) =>
             GradeAsync(HubEvaluationAgentClient.For(router.GetClient(tenantId)), Granted(grants, http), index, body, ct))
             .RequireAuthorization().RequireRateLimiting(GradingRateLimit.PolicyName);
+
+        app.MapPost("/api/tenants/{tenantId}/eval/grading/submit", (string tenantId, HttpContext http, [FromServices] TenantRouter router, [FromServices] GradingGrants grants, CancellationToken ct) =>
+            SubmitGradingAsync(HubEvaluationAgentClient.For(router.GetClient(tenantId)), Granted(grants, http), ct))
+            .RequireAuthorization().RequireRateLimiting(GradingRateLimit.PolicyName);
     }
 
     internal static Task<IResult> RunAsync(IEvaluationAgentClient? agent, CancellationToken ct) =>
@@ -100,6 +104,12 @@ internal static class EvaluationRunEndpoints
 
         return agent is null ? NotConnected() : await RecallEndpoints.RelayAsync(() => agent.GetGradingItemAsync(index, ct), Results.Ok).ConfigureAwait(false);
     }
+
+    /// <summary>The owner is done grading: κ is computed and the grades are locked (needs the grading grant, not the password again).</summary>
+    internal static Task<IResult> SubmitGradingAsync(IEvaluationAgentClient? agent, bool granted, CancellationToken ct) =>
+        granted
+            ? ControlAsync(agent, _ => true, EvaluationRunActions.SubmitGrading, new RunCommandRequest(null), ct)
+            : Task.FromResult(GrantExpired());
 
     internal static async Task<IResult> GradeAsync(IEvaluationAgentClient? agent, bool granted, int index, GradeRequest? body, CancellationToken ct)
     {

@@ -36,7 +36,7 @@ public sealed class EvaluationRunEndpointsTests
         app.MapEvaluationRunEndpoints();
         var endpoints = ((IEndpointRouteBuilder)app).DataSources.SelectMany(s => s.Endpoints).OfType<RouteEndpoint>().ToList();
 
-        Assert.Equal(10, endpoints.Count);
+        Assert.Equal(11, endpoints.Count);
         Assert.All(endpoints, e => Assert.NotNull(e.Metadata.GetMetadata<IAuthorizeData>()));
         string? Policy(string route) => endpoints.Single(e => e.RoutePattern.RawText == route).Metadata.GetMetadata<EnableRateLimitingAttribute>()?.PolicyName;
         Assert.Equal("reauth", Policy("/api/tenants/{tenantId}/eval/run/start"));
@@ -44,6 +44,7 @@ public sealed class EvaluationRunEndpointsTests
         Assert.Equal("reauth", Policy("/api/tenants/{tenantId}/eval/grading/session"));
         Assert.Equal("eval-grading", Policy("/api/tenants/{tenantId}/eval/grading/items/{index:int}"));
         Assert.Equal("eval-grading", Policy("/api/tenants/{tenantId}/eval/grading/items/{index:int}/grade"));
+        Assert.Equal("eval-grading", Policy("/api/tenants/{tenantId}/eval/grading/submit"));
     }
 
     [Fact]
@@ -101,6 +102,16 @@ public sealed class EvaluationRunEndpointsTests
         await this.agent.DidNotReceive().GetGradingItemAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
 
         Assert.Equal(200, StatusOf(await EvaluationRunEndpoints.ItemAsync(this.agent, granted: true, 0, CancellationToken.None)));
+    }
+
+    [Fact]
+    public async Task SubmitGrading_NeedsTheGrantAndRelaysTheDoneAction()
+    {
+        Assert.Equal(403, StatusOf(await EvaluationRunEndpoints.SubmitGradingAsync(this.agent, granted: false, CancellationToken.None)));
+        await this.agent.DidNotReceive().ControlRunAsync(Arg.Any<EvaluationRunCommandDto>(), Arg.Any<CancellationToken>());
+
+        Assert.Equal(200, StatusOf(await EvaluationRunEndpoints.SubmitGradingAsync(this.agent, granted: true, CancellationToken.None)));
+        await this.agent.Received(1).ControlRunAsync(Arg.Is<EvaluationRunCommandDto>(c => c.Action == "submit-grading"), Arg.Any<CancellationToken>());
     }
 
     [Fact]

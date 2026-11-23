@@ -162,24 +162,36 @@ function evalRunPanel() {
 
         async grade(value) {
             const item = this.grading.item;
-            if (!item || this.grading.busy) return;
+            if (!item || this.grading.busy || this.gradingLocked) return;
             this.grading.busy = true;
             try {
                 const progress = await this.gradingCall(`items/${item.index}/grade`, { grade: value });
                 if (this.run) this.run.grading = progress;
                 this.grading.busy = false;
-                if (progress.complete) {
-                    this.closeGrading();
-                    Alpine.store("toast").success("Grading complete: the run continues with κ");
-                    await this.load();
-                } else {
-                    await this.showItem(item.index + 1 < item.total ? item.index + 1 : 0);
-                }
+                await this.showItem(item.index + 1 < item.total ? item.index + 1 : 0);
             } catch (e) {
                 this.grading.error = e.message;
                 this.grading.busy = false;
             }
         },
+
+        // "Done": κ is computed and the grades are locked, so nothing can be tuned towards the gate afterwards.
+        async submitGrading() {
+            if (this.grading.busy || !this.run?.grading?.complete) return;
+            if (!confirm("Submit your grades? κ is computed now and your grades are locked: they cannot be changed afterwards.")) return;
+            this.grading.busy = true;
+            try {
+                await this.gradingCall("submit");
+                this.closeGrading();
+                Alpine.store("toast").success("Grades submitted: the run continues with κ");
+                await this.load();
+            } catch (e) {
+                this.grading.error = e.message;
+            }
+            this.grading.busy = false;
+        },
+
+        get gradingLocked() { return !!this.run?.grading?.submitted; },
 
         closeGrading() {
             this.grading.item = null;

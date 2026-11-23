@@ -173,6 +173,7 @@ public sealed class EvaluationRunServiceTests : IDisposable
         Assert.Contains("memory-eval guard", this.calls);
 
         this.GradeAll(i => i % 3);
+        Assert.Null(this.service.SubmitGrading());
         state = await this.UntilAsync(s => s.Waiting == RunWait.Dictionary);
         Assert.Equal(1.0, state.Kappa);
         Assert.Contains("pre-registered", await File.ReadAllTextAsync(Path.Combine(this.environment.HistoryWorkspace, "analysis-plan.md")), StringComparison.Ordinal);
@@ -208,19 +209,59 @@ public sealed class EvaluationRunServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task Run_KappaBelowTheGate_StopsWithGuidanceBeforeAnyComparison()
+    public async Task Run_AllItemsGraded_WaitsForTheOwnersDoneAndShowsNoKappaMeanwhile()
+    {
+        this.service.Start(fresh: false);
+        await this.UntilAsync(s => s.Waiting == RunWait.Grading);
+        Assert.Contains("Grade every item", this.service.SubmitGrading(), StringComparison.Ordinal);
+
+        this.GradeAll(i => i % 3);
+        for (var i = 0; i < 5; i++)
+        {
+            this.service.Tick();
+        }
+
+        var state = this.service.Snapshot()!;
+        Assert.Equal((RunStatus.Waiting, EvaluationRunPlan.Grading, RunWait.Grading), (state.Status, state.Phase, state.Waiting));
+        Assert.Null(state.Kappa);
+        Assert.Null(this.Grading().Progress().Kappa);
+        this.Grading().Grade(0, 1);
+
+        Assert.Null(this.service.SubmitGrading());
+        Assert.Equal(EvaluationRunPlan.Dictionary, (await this.UntilAsync(s => s.Waiting == RunWait.Dictionary)).Phase);
+        Assert.Contains("not waiting for the grading", this.service.SubmitGrading(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Run_KappaBelowTheGate_LocksTheGradesAndKeepsTheGradingPanelOpenWithGuidance()
     {
         this.service.Start(fresh: false);
         await this.UntilAsync(s => s.Waiting == RunWait.Grading);
 
         this.GradeAll(i => (i + 1) % 3);
-        var state = await this.UntilAsync(s => s.Status == RunStatus.Stopped);
+        Assert.Null(this.service.SubmitGrading());
+        var state = await this.UntilAsync(s => s.Kappa is not null);
 
+        Assert.Equal((RunStatus.Waiting, EvaluationRunPlan.Grading, RunWait.Grading), (state.Status, state.Phase, state.Waiting));
         Assert.Contains("below 0.6", state.Message, StringComparison.Ordinal);
-        Assert.Equal(EvaluationRunPlan.Grading, state.Phase);
+        Assert.Contains("fresh run", state.Message, StringComparison.Ordinal);
+        Assert.True(this.Grading().Progress().Submitted);
+        Assert.Throws<InvalidOperationException>(() => this.Grading().Grade(0, 2));
         Assert.DoesNotContain(this.calls, c => c.Contains("ablate", StringComparison.Ordinal));
-    }
 
+        // The same locked grades never pass the gate: after cancel + resume the run waits again with the same guidance.
+        for (var i = 0; i < 5; i++)
+        {
+            this.service.Tick();
+        }
+
+        Assert.Equal(RunStatus.Waiting, this.service.Snapshot()!.Status);
+        Assert.Null(this.service.Cancel());
+        Assert.Null(this.service.Resume());
+        state = await this.UntilAsync(s => s.Status == RunStatus.Waiting);
+        Assert.Equal(RunWait.Grading, state.Waiting);
+        Assert.Contains("below 0.6", state.Message, StringComparison.Ordinal);
+    }
     [Fact]
     public async Task Run_LabelJobStopsResumable_StaysInTheLabelPhaseWithTheReasonAndResumeRetriesIt()
     {

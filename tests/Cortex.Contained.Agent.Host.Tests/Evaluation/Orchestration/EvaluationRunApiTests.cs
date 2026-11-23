@@ -72,6 +72,7 @@ public sealed class EvaluationRunApiTests : IDisposable
         Assert.False(export.Ok);
         Assert.Contains("not waiting", export.Error, StringComparison.Ordinal);
         Assert.Contains("Unknown action", unknown.Error, StringComparison.Ordinal);
+        Assert.Contains("not waiting for the grading", this.api.Control(new EvaluationRunCommandDto { Action = EvaluationRunActions.SubmitGrading }).Error, StringComparison.Ordinal);
         Assert.False(unknown.Run.Exists);
     }
 
@@ -86,6 +87,7 @@ public sealed class EvaluationRunApiTests : IDisposable
         Assert.Equal((true, "zqquery", "zqcandidate", 2), (item.Exists, item.Query, item.Candidate, item.Progress.Total));
         Assert.False(missing.Exists);
         Assert.True(progress.Complete);
-        Assert.Equal(1.0, progress.Kappa);
+        Assert.False(progress.Submitted);
+        Assert.Null(progress.Kappa);
     }
 }

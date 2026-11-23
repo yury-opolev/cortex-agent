@@ -81,6 +81,9 @@ public sealed class EvaluationRunState
 
     public double? MemoryKappa { get; set; }
 
+    /// <summary>True once κ failed the gate on the owner's locked grades: the grading panel stays open, read-only, until the run is cancelled.</summary>
+    public bool KappaRejected { get; set; }
+
     /// <summary>True when the reranker was on at the planning step (Gate R is part of the run).</summary>
     public bool Reranker { get; set; }
 

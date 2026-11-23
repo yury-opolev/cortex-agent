@@ -102,10 +102,14 @@ without writing anything (the next run tries again). `MinCallIntervalMs` paces c
 **L10 — κ sample.** 75 items (`KappaSample`) split by query count (50 history, 25 memory), stratified by the judge's
 grade (a third each of 0, 1, 2, topped up when one is scarce), one item per query while possible, deterministic and
 shuffled by a seeded hash of (query, candidate) so the order carries no information about the judge's grade.
-items (query text and rendered candidate) are stored in the sealed `kappa-sample.json`; the owner grades blind. When the
-last item is graded, `judge-agreement.csv` (ids and grades) is written for the existing `kappa` command and κ is computed
+items (query text and rendered candidate) are stored in the sealed `kappa-sample.json`; the owner grades blind. Grades can be changed freely, and no κ is shown, until the owner
+submits them with *Done* (`submit-grading`); then `judge-agreement.csv` (ids and grades) is written for the existing `kappa`
+command, the grades are **locked** (a gate decision on grades that could still be tuned towards the threshold would be
+worthless) and κ is computed
 over all 75 items — **the gate is κ ≥ 0.6 over the whole sample** (one judge, one rubric, one grader; 25 memory items
-alone give too wide an interval to gate on); per-tool κ is reported.
+alone give too wide an interval to gate on); per-tool κ is reported. When κ is below the gate the run does not stop: it
+keeps *waiting* in the grading phase with the grading panel open read-only (locked grades, κ and guidance shown); only a
+fresh run (another `JudgeModel`) helps, so the owner cancels it.
 
 **L11 — Grading access.** The owner enters the Bridge password once (`POST …/eval/grading/session`, `reauth` rate limit)
 and gets a grading grant bound to the session cookie (15 minutes idle, 2 hours at most, in memory only). Items are

@@ -9,19 +9,22 @@ public sealed record GradingItem(int Index, int Total, string Tool, string Query
 /// <summary>Progress of the hand grading and, once complete, the LLM-vs-human agreement.</summary>
 /// <param name="Total">Items in the sample.</param>
 /// <param name="Graded">Items the owner graded.</param>
-/// <param name="Kappa">Cohen's κ over every item (the gate), or null until complete.</param>
+/// <param name="Kappa">Cohen's κ over every item (the gate), or null until the owner has submitted the grades.</param>
 /// <param name="HistoryKappa">κ over the history items (reported), or null.</param>
 /// <param name="MemoryKappa">κ over the memory items (reported), or null.</param>
-public sealed record GradingProgress(int Total, int Graded, double? Kappa, double? HistoryKappa, double? MemoryKappa)
+/// <param name="Submitted">True once the owner submitted the grades: κ is computed and the grades are locked.</param>
+public sealed record GradingProgress(int Total, int Graded, double? Kappa, double? HistoryKappa, double? MemoryKappa, bool Submitted = false)
 {
     public bool Complete => this.Total > 0 && this.Graded == this.Total;
 }
 
 /// <summary>
 /// The owner's blind hand grading of the κ sample (§4.2: LLM-vs-human κ ≥ 0.6): items of the history workspace
-/// first, then memory, one at a time, without the judge's grade. Grades are stored in the sealed sample files; when
-/// every item is graded, each workspace gets its <c>judge-agreement.csv</c> (ids and grades only, the input of the
-/// <c>kappa</c> command) and κ is computed over all items (the gate) and per tool (reported).
+/// first, then memory, one at a time, without the judge's grade. Grades are stored in the sealed sample files and can
+/// be changed freely, with no κ shown, until the owner submits them (<see cref="Submit"/>): that writes each
+/// workspace's <c>judge-agreement.csv</c> (ids and grades only, the input of the <c>kappa</c> command), computes κ over
+/// all items (the gate) and per tool (reported) and locks the grades — a gate decision made on grades that could still
+/// be tuned towards the threshold would be worthless.
 /// </summary>
 public sealed class GradingService
 {
@@ -72,6 +75,11 @@ public sealed class GradingService
                 throw new ArgumentOutOfRangeException(nameof(index), "No such item.");
             }
 
+            if (this.IsSubmitted(items.Select(i => i.Item).ToList()))
+            {
+                throw new InvalidOperationException("The grades were submitted and are locked.");
+            }
+
             var tool = items[index].Item.Tool;
             var protection = this.protection();
             var updated = items
@@ -79,18 +87,51 @@ public sealed class GradingService
                 .Select(i => i.Index == index ? i.Item with { HumanGrade = grade } : i.Item)
                 .ToList();
             KappaSampleFile.Write(this.workspaces[tool], protection, updated);
-            return this.Summarise(items.Select(i => i.Index == index ? i.Item with { HumanGrade = grade } : i.Item).ToList(), writeAgreement: true);
+            return Summarise(items.Select(i => i.Index == index ? i.Item with { HumanGrade = grade } : i.Item).ToList(), submitted: false);
         }
     }
 
-    /// <summary>Current progress (κ once complete).</summary>
+    /// <summary>
+    /// The owner's "done": writes the agreement files, computes κ and locks the grades. Idempotent once submitted;
+    /// throws <see cref="InvalidOperationException"/> while items are still ungraded.
+    /// </summary>
+    public GradingProgress Submit()
+    {
+        lock (this.sync)
+        {
+            var items = this.Load().Select(i => i.Item).ToList();
+            if (items.Count == 0 || items.Any(i => i.HumanGrade is null))
+            {
+                throw new InvalidOperationException("Grade every item before submitting.");
+            }
+
+            foreach (var group in items.GroupBy(i => i.Tool, StringComparer.Ordinal))
+            {
+                File.WriteAllLines(
+                    this.AgreementPath(group.Key),
+                    group.Select(i => string.Create(CultureInfo.InvariantCulture, $"{i.CandidateId},{i.LlmGrade},{i.HumanGrade}")));
+            }
+
+            return Summarise(items, submitted: true);
+        }
+    }
+
+    /// <summary>Current progress (κ once the grades are submitted).</summary>
     public GradingProgress Progress()
     {
         lock (this.sync)
         {
-            return this.Summarise(this.Load().Select(i => i.Item).ToList(), writeAgreement: false);
+            var items = this.Load().Select(i => i.Item).ToList();
+            return Summarise(items, this.IsSubmitted(items));
         }
     }
+
+    private string AgreementPath(string tool) => Path.Combine(this.workspaces[tool], "judge-agreement.csv");
+
+    // Submitted = a complete sample whose agreement files exist (a stale or pushed file never locks an unfinished sample).
+    private bool IsSubmitted(List<KappaItem> items) =>
+        items.Count > 0 && items.All(i => i.HumanGrade is not null)
+        && items.Select(i => i.Tool).Distinct(StringComparer.Ordinal).All(tool => File.Exists(this.AgreementPath(tool)));
 
     private List<(int Index, KappaItem Item)> Load()
     {
@@ -102,25 +143,12 @@ public sealed class GradingService
             .ToList();
     }
 
-    private GradingProgress Summarise(List<KappaItem> items, bool writeAgreement)
+    private static GradingProgress Summarise(List<KappaItem> items, bool submitted)
     {
         var graded = items.Count(i => i.HumanGrade is not null);
-        if (items.Count == 0 || graded < items.Count)
-        {
-            return new GradingProgress(items.Count, graded, null, null, null);
-        }
-
-        if (writeAgreement)
-        {
-            foreach (var group in items.GroupBy(i => i.Tool, StringComparer.Ordinal))
-            {
-                File.WriteAllLines(
-                    Path.Combine(this.workspaces[group.Key], "judge-agreement.csv"),
-                    group.Select(i => string.Create(CultureInfo.InvariantCulture, $"{i.CandidateId},{i.LlmGrade},{i.HumanGrade}")));
-            }
-        }
-
-        return new GradingProgress(items.Count, graded, Kappa(items), Kappa(items.Where(i => i.Tool == Tools[0]).ToList()), Kappa(items.Where(i => i.Tool == Tools[1]).ToList()));
+        return submitted && items.Count > 0 && graded == items.Count
+            ? new GradingProgress(items.Count, graded, Kappa(items), Kappa(items.Where(i => i.Tool == Tools[0]).ToList()), Kappa(items.Where(i => i.Tool == Tools[1]).ToList()), Submitted: true)
+            : new GradingProgress(items.Count, graded, null, null, null);
     }
 
     private static double? Kappa(List<KappaItem> items) =>
