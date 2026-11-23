@@ -73,7 +73,9 @@ and takes about 13–14 hours of LLM time plus the embedding runs: start it in t
   every attempt counts against `MaxCalls`. Check the provider in the Bridge, then Resume.
 - *Some queries could not be judged yet* (label exit 5): the judge gave no valid answer; nothing is written until Resume
   has retried them (a query is given up after 3 runs and reported as `judgingFailed`).
-- *A command failed*: the last lines of its output (ids and numbers) are shown; fix the cause and Resume.
+- *A command failed*: the last lines of its output (ids and numbers) are shown; fix the cause and Resume. A label job
+  that finds its saved progress was made with other models (query, judge or main model) refuses: restore the
+  configuration and Resume, or start a fresh run.
 - After an agent restart the run continues by itself once the storage key has arrived; an interrupted command runs again.
   Only the passphrase must be entered again.
 

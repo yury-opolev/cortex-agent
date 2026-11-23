@@ -190,6 +190,40 @@ public sealed partial class LabellerTests : IDisposable
         Assert.Equal(5, this.source.Written!.Count);
     }
 
+    [Theory]
+    [InlineData("query")]
+    [InlineData("judge")]
+    [InlineData("main")]
+    public async Task RunAsync_SavedProgressMadeWithOtherModels_RefusesWithoutCalls(string changed)
+    {
+        this.fake.Respond = (model, system, user) => model == "claude-opus-5.5" ? "{}" : Respond(model, system, user);
+        Assert.Equal(3, await this.Create(Options(maxCalls: 30)).RunAsync(5, 4, CancellationToken.None));
+        this.fake.Requests.Clear();
+        this.fake.Respond = Respond;
+        var options = Options();
+        var main = "main-model";
+        switch (changed)
+        {
+            case "query":
+                options.QueryModel = "gpt-7.0-sol";
+                break;
+            case "judge":
+                options.JudgeModel = "gemini-4-pro";
+                break;
+            default:
+                main = "other-main-model";
+                break;
+        }
+
+        var llm = new LabellingLlm(this.fake, FakeLabellingLlm.ServesAll, options, 0, (_, _) => Task.CompletedTask);
+        var code = await new Labeller(this.source, llm, options, main, this.root, this.protection, this.output).RunAsync(5, 4, CancellationToken.None);
+
+        Assert.Equal(2, code);
+        Assert.Empty(this.fake.Requests);
+        Assert.Contains("fresh run", this.output.ToString(), StringComparison.Ordinal);
+        Assert.Contains(changed switch { "query" => "gpt-7.0-sol", "judge" => "gemini-4-pro", _ => "other-main-model" }, this.output.ToString(), StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task RunAsync_EstimateAboveTheCap_RefusedWithoutCalls()
     {

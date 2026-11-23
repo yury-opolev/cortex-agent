@@ -74,6 +74,12 @@ public sealed class LabellingState
 {
     public string Tool { get; set; } = string.Empty;
 
+    /// <summary>Models the progress was made with (a resume with other models would mix two labellers in one dataset).</summary>
+    public string QueryModel { get; set; } = string.Empty;
+
+    public string JudgeModel { get; set; } = string.Empty;
+
+    public string MainModel { get; set; } = string.Empty;
     public List<LabelSeed> Seeds { get; set; } = [];
 
     /// <summary>Drafts by seed id.</summary>

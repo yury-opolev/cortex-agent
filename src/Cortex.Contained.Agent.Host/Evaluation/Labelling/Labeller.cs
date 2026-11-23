@@ -121,6 +121,13 @@ public sealed class Labeller
 
         this.llm.EnsureServed(this.options.QueryModel, this.options.JudgeModel, this.mainModel);
         var state = this.store.Load() is { } saved && saved.Tool == this.source.Tool ? saved : new LabellingState { Tool = this.source.Tool };
+        if (Mismatch(state, this.options, this.mainModel) is { } mismatch)
+        {
+            await this.output.WriteLineAsync(mismatch).ConfigureAwait(false);
+            return 2;
+        }
+
+        (state.QueryModel, state.JudgeModel, state.MainModel) = (this.options.QueryModel, this.options.JudgeModel, this.mainModel);
 
         // A query the judge gave no valid answer for is graded again by the next run, until it has failed MaxJudgingRuns runs.
         state.FailedJudging.RemoveAll(id => state.JudgeFailures.GetValueOrDefault(id) < MaxJudgingRuns);
@@ -164,6 +171,26 @@ public sealed class Labeller
         return item.Time is { } time
             ? string.Create(CultureInfo.InvariantCulture, $"{time:yyyy-MM-dd HH:mm} UTC · {item.Channel} · {item.Role}: {text}")
             : $"title: {item.Title ?? "-"} · tags: {(item.Tags.Count == 0 ? "-" : string.Join(", ", item.Tags))}\n{text}";
+    }
+
+    // A resume with other models would mix two writers, judges or main models in one dataset.
+    private static string? Mismatch(LabellingState state, LabellingOptions options, string mainModel)
+    {
+        var differs = new List<string>();
+        void Check(string role, string saved, string current)
+        {
+            if (saved.Length > 0 && !string.Equals(saved, current, StringComparison.Ordinal))
+            {
+                differs.Add($"{role} {saved} → {current}");
+            }
+        }
+
+        Check("query model", state.QueryModel, options.QueryModel);
+        Check("judge model", state.JudgeModel, options.JudgeModel);
+        Check("main model", state.MainModel, mainModel);
+        return differs.Count == 0
+            ? null
+            : $"error: the saved labelling progress was made with other models ({string.Join(", ", differs)}). Restore the configuration (Evaluation:Labelling, the agent's main model) to continue, or start a fresh run.";
     }
 
     // A real request's oracle filters never reach past the moment it was asked.

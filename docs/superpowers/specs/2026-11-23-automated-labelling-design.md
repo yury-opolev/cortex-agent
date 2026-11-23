@@ -88,7 +88,8 @@ and tag_filtered without tags become `lookup`. Grade-0 judgments are kept (judge
 system comparison and written into the analysis plan.
 
 **L9 — Checkpoints and caps.** The job state (`label-state.json`: seeds by id, drafts, pools, grades, cumulative call
-count) is sealed and saved every 5 drafts and after every judged query. `MaxCalls` (5,000 per job) is a hard cap across
+count) is sealed and saved every 5 drafts and after every judged query; it also records the query, judge and main model:
+a resume with other models is refused (exit 2) until the configuration is restored or a fresh run is started. `MaxCalls` (5,000 per job) is a hard cap across
 resumed runs; the job prints its estimate first and refuses when the estimate exceeds the cap; at the cap it stops with
 exit code 3 and the next run continues. A provider that keeps failing stops it with exit code 4 (nothing is marked
 failed, the next run continues). `MinCallIntervalMs` paces calls.
