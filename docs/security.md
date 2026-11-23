@@ -98,8 +98,8 @@ reports `unavailable`. To stop history text leaving the agent process for the em
 search then stays keyword-only. Inputs are sent with an explicit `num_ctx` and `truncate=false`. Vectors can leak
 content (embedding inversion), so they are treated like text: they live only in the history index
 generation (encrypted with it, erased with it under `secure_delete`, byte-level tested) and are served
-only while the source segment is unchanged. `history-eval` run directories hold raw copies of
-`messages.db`; purges destroy the ones overlapping the purged range. See
+only while the source segment is unchanged. `history-eval` run directories hold copies of
+`messages.db` (encrypted with the evaluation key on encrypted installs); purges destroy the ones overlapping the purged range. See
 [history-hybrid-search.md](history-hybrid-search.md).
 
 ## Reranker sidecar exposure
@@ -122,8 +122,9 @@ files. With encryption at rest the whole memory store — the index, the vectors
 transaction and rewrites the index with FTS5 `optimize` under `PRAGMA secure_delete=ON`, so no
 token of the deleted text stays in the database file (byte-level integrity tests). Quarantined
 memories (D10) are excluded before scoring in keyword and semantic search. `memory-eval` searches a
-private copy of the memory store that is deleted when the command ends; its `seeds.jsonl` holds raw
-memory text and is deleted by the owner after the dataset is written. See
+private copy of the memory store (encrypted with the evaluation key on encrypted installs) that is deleted when the
+command ends; its `seeds.jsonl` holds memory text (sealed on encrypted installs) and is deleted by the owner after the
+dataset is written. See
 [memory-hybrid-search.md](memory-hybrid-search.md).
 
 ## Agent storage encryption and event payloads
@@ -137,6 +138,25 @@ that introduced tenant storage keys (`TenantStorageKeys` in `secrets.json`). An 
 knows the key nor, before this change, preserved unknown fields when it saved the file, so the
 encrypted `messages.db` could become unreadable. Current Bridges keep unknown `secrets.json` fields
 across load/save for future downgrades. Agent images older than the Storage page cannot open encrypted stores and stop at startup rather than write plaintext; the Bridge never mints a tenant key while the agent reports encrypted data, and the agent rejects any key whose fingerprint differs from the one recorded when encryption was enabled.
+
+## Evaluation copies and the sanitised corpus
+
+The quality-gate evaluations (`history-eval`, `memory-eval`, `eval-corpus`) run as jobs inside the agent process,
+the only process that holds the storage key; the Bridge starts them after checking the owner's password again and
+refuses options that would point them at other files or endpoints. Their corpus and index copies are encrypted with
+an evaluation key derived from the tenant key (HKDF, purpose `eval`), never with a live store's key; datasets, seeds
+and the sanitiser dictionary are sealed with AES-256-GCM bound to the file name. Reports, verdicts and manifests hold
+ids and numbers only. In-container processes (including the agent's own `run_command`) never receive the key: run
+through `docker exec`, the copying commands refuse.
+
+The off-machine backup (D6) is a **sanitised** frozen corpus: names, places, organisations and handles from the owner's
+dictionary, e-mail addresses, phone, CPR, IBAN and card numbers, GPS positions, URL paths, non-public hosts and numbers
+of nine or more digits are replaced by HMAC pseudonyms under a per-version secret that never leaves the machine; a
+fail-closed leakage check deletes the version if any listed term or pattern remains. Dates, prices and short numbers
+are kept (accepted risk). The export is one passphrase-encrypted file (PBKDF2-HMAC-SHA256, 600,000 iterations;
+AES-256-GCM in authenticated 1 MiB chunks) that the owner attaches to the single SafeExchange secret
+`cortex-recovery-kit`. A history deletion overlapping a version destroys it locally and lists the attachment for the
+owner to delete. See [evaluation-runbook.md](evaluation-runbook.md).
 
 ## Content security
 
