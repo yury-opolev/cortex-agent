@@ -55,7 +55,8 @@ it was asked and later messages are not pooled.
 
 **L4 — Writer checks.** A draft is rejected and written again with the reason (up to `MaxDraftAttempts` = 3) when it
 repeats four consecutive folded words of the snippet (identifier queries excepted), when a paraphrase fails the
-paraphrase guard (Jaccard ≤ 0.2, no shared rare token, document frequencies of the corpus copy), when a temporal query's
+paraphrase guard (Jaccard ≤ 0.2, no shared rare token, document frequencies of the corpus copy; a memory's text is its
+title and content, as in `memory-eval guard`), when a temporal query's
 filters do not contain the message time, when an identifier query has no identifier, or when tag_filtered tags are not
 the memory's. The writer sees the current time so "last spring" can be resolved.
 

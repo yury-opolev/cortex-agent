@@ -8,6 +8,9 @@ namespace Cortex.Contained.Agent.Host.Evaluation.Labelling;
 public sealed record MaterialItem(string Id, string Text, string? Channel = null, DateTimeOffset? Time = null, string? Role = null, string? Title = null)
 {
     public IReadOnlyList<string> Tags { get; init; } = [];
+
+    /// <summary>The text the paraphrase guard and copy checks compare: memories include their title (the writer sees it, and <c>memory-eval guard</c> checks it).</summary>
+    public string GuardText => this.Title is null ? this.Text : this.Title + "\n" + this.Text;
 }
 
 /// <summary>What the writer sees for one seed: the snippet items, or a real request with its preceding turns.</summary>
@@ -194,7 +197,7 @@ public static class DraftChecks
             return "the query is empty or longer than 300 characters.";
         }
 
-        var sources = material.Items.Select(i => i.Text).ToList();
+        var sources = material.Items.Select(i => i.GuardText).ToList();
         if (seed.Stratum != "real" && answer.Category != "identifier" && sources.Any(s => SharesRun(text, s, MaxSharedRun + 1)))
         {
             return "it repeats four or more consecutive words of the snippet.";

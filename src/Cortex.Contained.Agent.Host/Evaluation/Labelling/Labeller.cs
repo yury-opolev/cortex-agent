@@ -269,7 +269,7 @@ public sealed class Labeller
         foreach (var (draft, grades) in judged.Where(j => j.Draft.Category == "paraphrase"))
         {
             var relevant = grades.Where(g => g.Value > 0).Select(g => g.Key).ToList();
-            goldTexts[draft.Id] = (await this.source.ReadAsync(relevant, cancellationToken).ConfigureAwait(false)).Values.Select(i => i.Text).ToList();
+            goldTexts[draft.Id] = (await this.source.ReadAsync(relevant, cancellationToken).ConfigureAwait(false)).Values.Select(i => i.GuardText).ToList();
         }
 
         var (queries, report) = DatasetFinaliser.Finalise(judged, (draft, _) => this.source.ParaphraseOk(draft.Text, goldTexts[draft.Id]));

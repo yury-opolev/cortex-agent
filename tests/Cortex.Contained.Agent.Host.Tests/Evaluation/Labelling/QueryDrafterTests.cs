@@ -42,6 +42,20 @@ public sealed class QueryDrafterTests
     }
 
     [Fact]
+    public async Task DraftAsync_MemoryQueryCopyingTheTitle_RejectedAtDraftTime()
+    {
+        var memory = new SeedMaterial([new MaterialItem("mem-a", "the cabin key is under the mat", Title: "zqrhubarb cabin")]);
+        var replies = new Queue<string>(["""{"text":"where is the zqrhubarb thing","category":"paraphrase"}""", """{"text":"where do I leave the spare entry opener","category":"paraphrase"}"""]);
+        this.fake.Respond = (_, _, _) => replies.Dequeue();
+
+        var answer = await this.Drafter("memory-eval").DraftAsync(
+            Seed("paraphrase"), memory, (text, golds) => !(text.Contains("zqrhubarb", StringComparison.Ordinal) && golds.Any(g => g.Contains("zqrhubarb", StringComparison.Ordinal))), CancellationToken.None);
+
+        Assert.Equal("where do I leave the spare entry opener", answer!.Text);
+        Assert.Equal(2, this.fake.Requests.Count);
+    }
+
+    [Fact]
     public async Task DraftAsync_TemporalFilterMissesTheMessageTime_Rejected()
     {
         this.fake.Respond = (_, _, _) => """{"text":"what did we plan in February","category":"temporal","goldFilters":{"since":"2026-02-01T00:00:00Z","until":"2026-03-01T00:00:00Z"}}""";
