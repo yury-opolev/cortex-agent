@@ -244,10 +244,11 @@ SQLite-backed (`/app/state/scheduler/tasks.db`). Tick interval: 15 seconds. Recu
 | Messages | `/app/state/messages.db` | SQLite (WAL, `secure_delete`; SQLite3MC-encrypted with `Storage:EncryptAtRest`), incl. `Events`, `HistoryJournal`, `Meta`, memory-quarantine tables |
 | History index | `/app/state/history/history-index.<gen>.db` + `history-index.current` | Contentless FTS5 plus chunk vectors (derived, no message text; vectors erased and encrypted with the generation) |
 | Smoke-eval workspace | `/app/state/eval/smoke` | Local only, never committed; `runs` destroyed by overlapping purges |
-| History-eval workspace | `/app/state/eval/hybrid` | Local only, never committed; `runs` (corpus copies, encrypted with the evaluation key on encrypted installs) destroyed by overlapping purges; `dataset.jsonl` sealed |
+| History-eval workspace | `/app/state/eval/hybrid` | Local only, never committed; `runs` (corpus copies, encrypted with the evaluation key on encrypted installs) destroyed by overlapping purges; `dataset.jsonl`, `label-state.json` and `kappa-sample.json` sealed (memory-eval likewise) |
 | Memory-eval workspace | `/app/state/eval/memory` | Local only; the store copy of each command is deleted when it ends; `dataset.jsonl` and `seeds.jsonl` sealed on encrypted installs |
 | Frozen evaluation corpora | `/app/state/eval/frozen/vN` | Sanitised history and memories, datasets, plans, registrations (`manifest.json` with hashes); evaluation key; destroyed by overlapping purges (`offsite-deletions.json` lists exported ones) |
 | Evaluation packages | `/app/state/eval/packages/*.cxpkg` | Passphrase-encrypted exports of frozen corpora (off-machine backup in SafeExchange) |
+| Evaluation run | `/app/state/eval/run/run.json`, `summary.json` | The one-button evaluation's state machine and result summary (phases, ids, numbers, report paths; no text, no passphrase) |
 | Memories | `/app/state/memory/memory.db` | SQLite + sqlite-vec + FTS5; SQLite3MC-encrypted with encryption at rest |
 | Memory content | `/app/state/memory/memories/*.memory.data` | Text files; AES-256-GCM with encryption at rest |
 | Session snapshot | `/app/state/sessions-snapshot.json` | Live sessions saved at shutdown; AES-256-GCM with encryption at rest |

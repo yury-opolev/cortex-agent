@@ -1,6 +1,6 @@
 # Evaluation runbook (Gate H, Gate R, sanitised corpus)
 
-This is the owner's step-by-step guide for the quality gates of episodic history and curated memory on an install
+This is the owner's guide for the quality gates of episodic history and curated memory on an install
 with **encryption at rest** (it works the same without encryption). Design:
 [encrypted evaluation and sanitised corpus](superpowers/specs/2026-11-23-encrypted-eval-sanitised-corpus-design.md).
 
@@ -21,10 +21,70 @@ files in the container; read them with `docker exec cortex-agent cat <path print
 > Never paste dataset text, pools or seeds into chats, issues or commits. Files you `-Pull` to disk are plaintext:
 > keep them under your user profile and delete them when you are done.
 
-## 1. History search — Gate H
+## Run the evaluation (one button)
+
+Design: [automated labelling and one-click evaluation](superpowers/specs/2026-11-23-automated-labelling-design.md).
+Your part is five steps; everything else runs inside the agent, resumable across restarts:
+
+1. **Recall page → Evaluation → Bridge password → Run evaluation.** Tick *Start fresh* if an earlier evaluation
+   exists (its datasets, registrations and runs are deleted; frozen versions and the dictionary stay).
+2. **Grade the evaluation sample** when the page asks: enter the password once, then grade each item blind — **2**
+   answers the query, **1** partly or as needed context, **0** not relevant (keys `0` `1` `2`, `→` skip, `←` back).
+   75 items by default.
+3. **Approve dictionary terms** when asked: tick the names, places, organisations and handles to replace, add missing
+   spellings (*same person as* groups nicknames), *Approve and freeze*. If the leakage check still finds personal
+   values, the page lists where (location, kind, count) and asks again.
+4. **Package passphrase** when asked: at least 12 characters, twice (not the recovery kit's), *Export*. Then download the
+   package and attach it to SafeExchange as in A6, steps 2–5.
+5. **Read the results**: per tool the chosen configuration, Δ nDCG@10 with its 95 % CI, the Gate H verdict
+   (non-inferior or not), the sanitised-copy result and the raw − sanitised difference, κ, Gate R when it ran, and the
+   reports. Gate H is your decision.
+
+What runs automatically, in order: workspaces → `label` (history, then memory: stratified samples of your messages and
+memories plus your real past recall requests as the co-primary stratum; `Evaluation:Labelling:QueryModel` writes each
+query and its oracle filters without copying the wording — paraphrase guard and copy check enforced, rewritten on
+failure; the agent's main model writes its own version of the search; the union of the top 10 of every configuration
+plus the source is pooled and `JudgeModel` grades it 0–2 in batches) → `validate` → `guard` → *your grading* → κ gate
+(≥ 0.6 over the whole sample) → the analysis plan with the selection rule is written → `ablate --split dev` → the
+configuration is chosen by that rule on dev only (`holdout` in `ablation.json`; with the reranker on, the rerank curve
+and a Gate R configuration too) → `register` → `holdout` (raw) → `gate-r` → `eval-corpus suggest --llm` → *your
+dictionary approval* → `freeze` → `holdout --corpus frozen:vN` → `compare` → *your passphrase* → `export` → summary.
+
+| Setting (`Evaluation:Labelling:…`) | Default | |
+|---|---|---|
+| `QueryModel` / `JudgeModel` | `gpt-6.1-sol` / `claude-opus-5.5` | Different model families are required; both must be listed by a configured provider (the Bridge's `llmProviders`) |
+| `HistoryQueries` / `MemoryQueries` | 520 / 270 | Drafted; a few are dropped after judging (Gate H for memory needs ≥ 250) |
+| `RealShare` | 0.3 | Largest share of real recall requests |
+| `KappaSample` | 75 | Items you grade, split by query count (50 history, 25 memory) |
+| `PoolDepth`, `JudgeBatchSize`, `MaxCandidatesPerQuery` | 10, 10, 60 | judged@10 coverage and judge batching |
+| `MaxCalls`, `MinCallIntervalMs`, `MaxAttempts` | 5000, 500, 4 | Hard cap per label job, pacing, retries with backoff |
+
+Set them like any agent option (environment `Evaluation__Labelling__MaxCalls=8000`, or the agent's configuration file).
+`… -Tool history-eval -- label --estimate` prints the expected calls and hours. With the defaults a full run makes about 4,200 LLM
+calls (≈ 1,030 query-writer, ≈ 550 main-model and ≈ 2,600 judge calls; more judge calls when the pools are larger, up to the cap)
+and takes about 13–14 hours of LLM time plus the embedding runs: start it in the evening.
+
+**When it stops** the page says why and what to do; *Resume* (password) continues from the same step:
+- *κ below 0.6*: the judge disagrees with you too often; look at a few items, then start fresh with another
+  `JudgeModel` (or correct your grades and Resume).
+- *MaxCalls reached*: raise the cap and Resume; the label job continues where it stopped (its checkpoint is sealed).
+- *A command failed*: the last lines of its output (ids and numbers) are shown; fix the cause and Resume.
+- After an agent restart the run continues by itself once the storage key has arrived; an interrupted command runs again.
+  Only the passphrase must be entered again.
+
+Privacy: snippets, queries and candidates go only to the configured provider (D5), as in normal chat. Everything with
+text on disk is sealed (`label-state.json`, `dataset.jsonl`, `kappa-sample.json`, the dictionary); the run state,
+reports and logs hold ids and numbers only. Grading items are decrypted one at a time for a grading grant bound to your
+session (15 minutes idle).
+
+## Advanced: commands one by one
+
+The run above chains these commands. Run them yourself to repeat one step or to label by hand.
+
+### A1. History search — Gate H
 
 1. **Workspace:** `.\scripts\Invoke-CortexEval.ps1 -Tool history-eval -- init`
-2. **Queries and labels** (§4.2 protocol): write `dataset.jsonl` with your assistant —
+2. **Queries and labels** (§4.2 protocol): `… -Tool history-eval -- label` writes and judges it automatically (see above); or write `dataset.jsonl` with your assistant —
    `.\scripts\Edit-CortexEvalFile.ps1 -Tool history-eval -Name dataset.jsonl -Pull -Path .\work\history-dataset.jsonl`,
    label (graded 0–2 per message, query and judge model families differ), then
    `-Push -Path .\work\history-dataset.jsonl`. Delete the local copy afterwards.
@@ -38,13 +98,13 @@ files in the container; read them with `docker exec cortex-agent cat <path print
 8. **Reranker (Gate R, optional):** `… -- rerank-curve --condition normal` (also `embedder-busy`, `cold`), then
    `… -- gate-r --config <name>`. The Bridge must have the reranker switched on (Recall page).
 
-## 2. Curated memory — Gate H for memory
+### A2. Curated memory — Gate H for memory
 
 Same steps with `-Tool memory-eval`: `init`, `sample --count 300` (writes sealed `seeds.jsonl`; pull it to write
 queries, delete the pulled copy), write `dataset.jsonl` (≥ 250 queries), `pool` (ids only, for the judge), labels,
 `validate`, `guard`, `kappa`, `ablate --split dev`, `register`, `holdout`, optionally `rerank-curve` / `gate-r`.
 
-## 3. The sanitiser dictionary
+### A3. The sanitiser dictionary
 
 The sanitised copy replaces names, places, organisations and handles that are listed in the dictionary, plus every
 e-mail, phone number, CPR number, IBAN, card number, GPS position, URL path, non-public URL host and number with
@@ -75,7 +135,7 @@ e-mail, phone number, CPR number, IBAN, card number, GPS position, URL path, non
    Other stem changes (`Лев` → `Льва`, `Любовь` → `Любви`) and irregular forms are not found: add them as their own
    lines with the same `entity`. The leakage check uses the same rules, so a form the sanitiser missed is reported.
 
-## 4. Freeze a version
+### A4. Freeze a version
 
 `.\scripts\Invoke-CortexEval.ps1 -Tool eval-corpus -- freeze`
 
@@ -86,7 +146,7 @@ like `leak: messages.Content dictionary-term ×3`, nothing was kept: add the mis
 
 When the dictionary grows later, re-check older versions: `… -- check --version vN`.
 
-## 5. Raw vs sanitised comparison (§4.2)
+### A5. Raw vs sanitised comparison (§4.2)
 
 1. `… -Tool history-eval -- holdout --corpus frozen:vN` (and `-Tool memory-eval -- holdout --corpus frozen:vN`).
 2. `… -Tool eval-corpus -- compare --version vN` (add `--tool memory-eval` for memory). The report
@@ -95,7 +155,7 @@ When the dictionary grows later, re-check older versions: `… -- check --versio
    with the gate result. **The gate decision uses the raw run.** Results on a mostly pre-event-log snapshot are
    provisional (re-run after ≥ 4 weeks of live capture).
 
-## 6. Off-machine backup in SafeExchange
+### A6. Off-machine backup in SafeExchange
 
 Packages are attached to the **existing secret `cortex-recovery-kit`** (it also holds the storage recovery kit). Never
 create, list or read any other secret for this.
@@ -118,7 +178,7 @@ create, list or read any other secret for this.
 5. **Record it:** `… -Tool eval-corpus -- uploaded --version vN --content-id <contentId> --sha256 <sha256>`.
 6. Delete the host copy of the package once it is uploaded (it is encrypted, but there is no reason to keep it).
 
-## 7. When history is deleted (D3)
+### A7. When history is deleted (D3)
 
 A deletion whose period overlaps a frozen version destroys that version on this machine (its runs and package too).
 The deletion confirmation says so and names the attachment, and the Recall page then shows
@@ -127,14 +187,14 @@ The deletion confirmation says so and names the attachment, and the Recall page 
 1. With your assistant: `secret_get cortex-recovery-kit`, find the file `cortex-eval-corpus-vN.cxpkg` (or the
    recorded contentId), `file_delete` it (`confirm: true`). Check with `secret_get` and `audit_read`.
 2. On the Recall page, enter the Bridge password and press **I deleted it**.
-3. Freeze a new version (§4); labels that pointed to deleted messages must be removed and the workspace registered
+3. Freeze a new version (A4); labels that pointed to deleted messages must be removed and the workspace registered
    again first (the freeze tells you how many). Versions are never renumbered.
 
 To drop a version yourself: `… -Tool eval-corpus -- delete --version vN` (an exported or imported one is queued for
 off-machine deletion the same way). The pending list, the version counter and a log of completed deletions are kept in
 `/app/state/eval-ledger`, outside `eval/`, so erasing the evaluation artifacts never loses them.
 
-## 8. Evaluating elsewhere (import)
+### A8. Evaluating elsewhere (import)
 
 On another Cortex install (it may be unencrypted): copy the package into the agent's packages folder,
 `docker cp cortex-eval-corpus-vN.cxpkg cortex-agent:/app/state/eval/packages/`, then
@@ -145,7 +205,7 @@ mapped back to real names. An import is refused while the version is still on th
 when the package's corpus range overlaps a history deletion that already happened (the purged messages must not come
 back from an old copy); delete such a package instead.
 
-## 9. Without encryption at rest
+### A9. Without encryption at rest
 
 The in-container commands keep working (`docker exec cortex-agent dotnet Cortex.Contained.Agent.Host.dll history-eval …`),
 and so do the scripts. On an encrypted install, `docker exec` runs only `kappa` and the synthetic `history-smoke`
