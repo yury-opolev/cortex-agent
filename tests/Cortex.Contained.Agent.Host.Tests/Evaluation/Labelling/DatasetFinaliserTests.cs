@@ -91,6 +91,35 @@ public sealed class DatasetFinaliserTests
     }
 
     [Fact]
+    public void Select_OrderIsShuffledSoTheOwnerSeesNoGradeBlocks()
+    {
+        var queries = Enumerable.Range(0, 40)
+            .Select(i => new LabelledQuery(Draft($"h{i}", "lookup"), "lookup", false, Grades(($"{i}0", 0), ($"{i}1", 1), ($"{i}2", 2))))
+            .ToList();
+
+        var picks = KappaSampler.Select(queries, 75);
+
+        var longestRun = 0;
+        for (int i = 0, run = 0; i < picks.Count; i++)
+        {
+            run = i > 0 && picks[i].LlmGrade == picks[i - 1].LlmGrade ? run + 1 : 1;
+            longestRun = Math.Max(longestRun, run);
+        }
+
+        Assert.True(longestRun <= 10, $"longest run of one judge grade is {longestRun}");
+        Assert.True(Math.Abs(Correlation(picks.Select((_, i) => (double)i).ToList(), picks.Select(p => (double)p.LlmGrade).ToList())) < 0.3);
+        Assert.Equal(picks, KappaSampler.Select(queries, 75));
+    }
+
+    private static double Correlation(List<double> x, List<double> y)
+    {
+        var mx = x.Average();
+        var my = y.Average();
+        var covariance = x.Zip(y, (a, b) => (a - mx) * (b - my)).Sum();
+        return covariance / Math.Sqrt(x.Sum(a => (a - mx) * (a - mx)) * y.Sum(b => (b - my) * (b - my)));
+    }
+
+    [Fact]
     public void Select_ScarceGrade_ToppedUpFromTheOthers()
     {
         var queries = Enumerable.Range(0, 10)

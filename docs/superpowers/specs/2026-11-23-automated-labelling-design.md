@@ -85,7 +85,8 @@ resumed runs; the job prints its estimate first and refuses when the estimate ex
 exit code 3 and the next run continues. `MinCallIntervalMs` paces calls.
 
 **L10 — κ sample.** 75 items (`KappaSample`) split by query count (50 history, 25 memory), stratified by the judge's
-grade (a third each of 0, 1, 2, topped up when one is scarce), one item per query while possible, deterministic. The
+grade (a third each of 0, 1, 2, topped up when one is scarce), one item per query while possible, deterministic and
+shuffled by a seeded hash of (query, candidate) so the order carries no information about the judge's grade.
 items (query text and rendered candidate) are stored in the sealed `kappa-sample.json`; the owner grades blind. When the
 last item is graded, `judge-agreement.csv` (ids and grades) is written for the existing `kappa` command and κ is computed
 over all 75 items — **the gate is κ ≥ 0.6 over the whole sample** (one judge, one rubric, one grader; 25 memory items

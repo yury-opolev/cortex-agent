@@ -118,7 +118,8 @@ public sealed record KappaPick(string QueryId, string CandidateId, int LlmGrade)
 
 /// <summary>
 /// The κ sample: <c>count</c> judged pairs stratified by the judge's grade (equal thirds for 0, 1 and 2, topped up
-/// from the other grades when one is scarce), at most one pair per query while possible, in a deterministic hash order.
+/// from the other grades when one is scarce), at most one pair per query while possible, returned in a deterministic hash order that is independent of the grade
+/// (the owner grades blind: no grade blocks).
 /// </summary>
 public static class KappaSampler
 {
@@ -138,7 +139,9 @@ public static class KappaSampler
         }
 
         chosen.AddRange(Take(pairs, count - chosen.Count, chosen, usedQueries));
-        return chosen;
+
+        // The picks were collected grade by grade: shuffle them, or the owner would grade in blocks of the judge's grade.
+        return chosen.OrderBy(p => Rank(seed + 1, p.QueryId + "|" + p.CandidateId), StringComparer.Ordinal).ToList();
     }
 
     private static List<KappaPick> Take(IEnumerable<KappaPick> pool, int wanted, List<KappaPick> chosen, HashSet<string> usedQueries)
