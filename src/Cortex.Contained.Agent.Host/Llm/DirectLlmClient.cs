@@ -124,6 +124,13 @@ public sealed partial class DirectLlmClient : ILlmClient, IDisposable
     /// <summary>Whether credentials have been received from the Bridge.</summary>
     public bool HasCredentials => this.modelProviders.Count > 0;
 
+    /// <summary>
+    /// Name of the provider that serves <paramref name="model"/> directly, or null when no provider lists it (a
+    /// request for it would go to the fallback chain's default model instead).
+    /// </summary>
+    public string? ProviderFor(string model) =>
+        this.routing.Map.TryGetValue(model, out var provider) ? provider.Credential.Name : null;
+
     /// <summary>Result of <see cref="ConfigureCredentials"/>.</summary>
     public sealed record CredentialConfigResult(
         string? DefaultModel,
