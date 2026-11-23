@@ -5,6 +5,13 @@ using Cortex.Contained.Agent.Host.Memory.Evaluation;
 
 namespace Cortex.Contained.Agent.Host.Evaluation.Labelling;
 
+/// <summary>A deterministic, seeded pseudo-random order key (hex SHA-256).</summary>
+internal static class SeededHash
+{
+    public static string Rank(int seed, string id) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(seed.ToString(CultureInfo.InvariantCulture) + ":" + id)));
+}
+
 /// <summary>A stored message offered to the history seed sampler (raw text; never written out).</summary>
 public sealed record SourceMessage(long Id, string ChannelId, string Role, DateTimeOffset Timestamp, string Content);
 

@@ -67,7 +67,8 @@ the memory's. The writer sees the current time so "last spring" can be resolved.
 workspace's `ablation.json` (reranked ones excluded), interleaved by rank, plus the gold source, capped at 60. Every
 configuration the holdout can test therefore has judged@10 ≈ 1; reranked configurations are reported with their judged@10.
 
-**L7 — Judge.** Batches of `JudgeBatchSize` = 10 candidates per call with short aliases (`c1`…; ids never reach the
+**L7 — Judge.** Batches of `JudgeBatchSize` = 10 candidates per call (in a seeded hash order of query and candidate,
+so the gold source is not always first) with short aliases (`c1`…; ids never reach the
 model), a fixed 0–2 rubric, strict JSON `{"grades":{"c1":2,…}}` that must name every alias exactly once with grades in
 0–2; invalid answers are asked again (`MaxAttempts` = 4, exponential backoff on failures, ×4 on HTTP 429, at most 2 min);
 a batch that never validates is split in halves down to single items; a query whose judging still fails is retried by

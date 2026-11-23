@@ -95,6 +95,23 @@ public sealed partial class LabellerTests : IDisposable
     }
 
     [Fact]
+    public async Task RunAsync_Judging_GoldSourcePositionVariesAcrossQueries()
+    {
+        Assert.Equal(0, await this.Create(Options()).RunAsync(9, kappaItems: 4, CancellationToken.None));
+
+        var positions = this.fake.Requests
+            .Where(r => r.Model == "claude-opus-5.5")
+            .Select(r => (Query: QueryItem().Match(r.User).Groups[1].Value, Items: r.User.Split('\n').Where(l => l.StartsWith("[c", StringComparison.Ordinal)).ToList()))
+            .GroupBy(r => r.Query)
+            .Where(g => g.Key != "4")
+            .Select(g => g.SelectMany(r => r.Items).ToList().FindIndex(l => l.Contains($"zqitem {g.Key} text", StringComparison.Ordinal)))
+            .ToList();
+
+        Assert.All(positions, p => Assert.True(p >= 0));
+        Assert.True(positions.Distinct().Count() > 1, "the gold source is always at the same position");
+    }
+
+    [Fact]
     public async Task RunAsync_EstimateAboveTheCap_RefusedWithoutCalls()
     {
         Assert.Equal(2, await this.Create(Options(maxCalls: 5)).RunAsync(5, 4, CancellationToken.None));

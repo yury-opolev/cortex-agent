@@ -58,6 +58,9 @@ public sealed class Labeller
     private const int AssumedPoolSize = 30;
     private const int CheckpointEvery = 5;
 
+    // Candidates reach the judge in a seeded hash order, so the gold source is not always the first of the first batch.
+    private const int JudgeOrderSeed = 20261122;
+
     private static readonly JsonSerializerOptions ReportJson = new(JsonSerializerDefaults.Web) { WriteIndented = true };
 
     private readonly ILabelSource source;
@@ -232,7 +235,9 @@ public sealed class Labeller
         {
             var pool = state.Pools[draft.Id];
             var items = await this.source.ReadAsync(pool, cancellationToken).ConfigureAwait(false);
-            var candidates = pool.Where(items.ContainsKey).Select(id => new JudgeCandidate(id, Render(items[id], this.options.MaxSnippetChars))).ToList();
+            var candidates = pool.Where(items.ContainsKey)
+                .OrderBy(id => SeededHash.Rank(JudgeOrderSeed, draft.Id + "|" + id), StringComparer.Ordinal)
+                .Select(id => new JudgeCandidate(id, Render(items[id], this.options.MaxSnippetChars))).ToList();
             var grades = await judge.GradeAsync(draft.Text, candidates, cancellationToken).ConfigureAwait(false);
             if (grades is null)
             {
