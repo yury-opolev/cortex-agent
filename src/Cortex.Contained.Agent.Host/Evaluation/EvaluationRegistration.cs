@@ -1,9 +1,11 @@
+using Cortex.Contained.Agent.Host.Evaluation.Frozen;
 using Cortex.Contained.Agent.Host.History;
 using Cortex.Contained.Agent.Host.History.Evaluation;
 using Cortex.Contained.Agent.Host.Memory.Evaluation;
 using Cortex.Contained.Agent.Host.Reranking;
 using Cortex.Contained.Agent.Host.Reranking.Evaluation;
 using Cortex.Contained.Agent.Host.Storage;
+using Cortex.Contained.Contracts.Llm;
 using MemoryMcp.Core.Configuration;
 using Microsoft.Extensions.Options;
 
@@ -28,6 +30,18 @@ public static class EvaluationRegistration
                 ["history-eval"] = (run, ct) => HistoryEvalCli.RunInAgentAsync(
                     run.Args, run.Output, run.Protection, history.CurrentValue, memory.CurrentValue, encryption.Layout.MessagesDatabase, reranker, ct),
                 ["memory-eval"] = (run, ct) => MemoryEvalCli.RunInAgentAsync(run.Args, run.Output, run.Protection, memory.CurrentValue, reranker, ct),
+                ["eval-corpus"] = (run, ct) => EvalCorpusCli.RunAsync(
+                    run,
+                    new EvalCorpusContext(
+                        encryption.Layout.EvaluationDirectory,
+                        encryption.Layout.MessagesDatabase,
+                        memory.CurrentValue,
+                        history.CurrentValue.EvalArtifactsDirectory,
+                        MemoryEvalWorkspace.DefaultDirectory,
+                        sp.GetRequiredService<TimeProvider>(),
+                        sp.GetService<ILlmClient>(),
+                        sp.GetService<Cortex.Contained.Agent.Host.Agent.IModelProvider>()?.MemoryModel),
+                    ct),
             };
             return new EvaluationJobService(
                 commands,
