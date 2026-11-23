@@ -18,6 +18,7 @@ public sealed class RecallControlServiceTests : IAsyncDisposable
     private readonly ServiceProvider provider;
     private readonly IMemoryCreationTimes times = Substitute.For<IMemoryCreationTimes>();
     private readonly RecallControlService recall;
+    private readonly Cortex.Contained.Agent.Host.Evaluation.Frozen.FrozenCorpusStore frozen;
 
     public RecallControlServiceTests()
     {
@@ -50,7 +51,8 @@ public sealed class RecallControlServiceTests : IAsyncDisposable
             () => new RerankHealth(false, "off", 0, null, null, null, null),
             quarantine,
             new QuarantineReviewService(quarantine, memories),
-            purge);
+            purge,
+            frozen: this.frozen = new Cortex.Contained.Agent.Host.Evaluation.Frozen.FrozenCorpusStore(Path.Combine(this.h.Root, "state", "eval")));
     }
 
     public async ValueTask DisposeAsync()
@@ -95,6 +97,26 @@ public sealed class RecallControlServiceTests : IAsyncDisposable
         Assert.False(status.History.Enabled);
         Assert.Equal("off", status.Reranker.State);
         Assert.False(status.EventBackfill.Running);
+    }
+
+    [Fact]
+    public async Task PreviewPurgeAsync_OverlappingFrozenCorpus_ListedAndDestroyedOneIsPendingOffsite()
+    {
+        await this.h.SayAsync("a", 0, channel: "x");
+        foreach (var (version, from) in new[] { ("v1", HistoryHarness.T0.AddDays(-1)), ("v2", HistoryHarness.T0.AddDays(30)) })
+        {
+            Assert.Equal(version, this.frozen.ReserveNextVersion());
+            Directory.CreateDirectory(this.frozen.DirectoryOf(version));
+            new Cortex.Contained.Agent.Host.Evaluation.Frozen.FrozenCorpusManifest { Version = version, CorpusFrom = from, CorpusTo = from.AddDays(2), ExportedAt = HistoryHarness.T0 }
+                .Write(Path.Combine(this.frozen.DirectoryOf(version), "manifest.json"));
+        }
+
+        var preview = await this.recall.PreviewPurgeAsync(new HistoryPurgeRequestDto { ChannelId = "x" }, CancellationToken.None);
+        this.frozen.Destroy("v1", HistoryHarness.T0);
+        var status = await this.recall.GetStatusAsync(CancellationToken.None);
+
+        Assert.Equal(["cortex-eval-corpus-v1.cxpkg"], preview.FrozenCorpusVersions.Select(v => v.PackageFileName));
+        Assert.Equal("v1", Assert.Single(status.PendingOffsiteDeletions).Version);
     }
 
     [Fact]

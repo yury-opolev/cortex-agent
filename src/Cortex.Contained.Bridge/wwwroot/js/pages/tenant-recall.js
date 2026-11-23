@@ -31,6 +31,9 @@ function tenantRecallPage() {
         statusTimer: null,
         backfillRunning: false,
 
+        // ── Off-machine evaluation copies to delete (D3) ─────────
+        offsite: { password: "", busy: "" },
+
         // ── Delete history ───────────────────────────────────────
         channels: [],
         purge: { channelId: "", time: "all", from: "", olderThan: "", dependentMemories: "review" },
@@ -181,6 +184,22 @@ function tenantRecallPage() {
 
         percent(part, total) {
             return total > 0 ? Math.round((100 * part) / total) : 0;
+        },
+
+        get pendingOffsite() { return this.status?.pendingOffsiteDeletions || []; },
+
+        /** The owner deleted the package from SafeExchange: record it (Bridge password again). */
+        async acknowledgeOffsite(version) {
+            this.offsite.busy = version;
+            try {
+                await api.post(`/api/tenants/${encodeURIComponent(this.tenantId)}/eval/frozen/${encodeURIComponent(version)}/offsite-deleted`, { password: this.offsite.password });
+                Alpine.store("toast").success(`Recorded: the off-machine copy of ${version} is deleted`);
+                this.offsite.password = "";
+                await this.loadStatus();
+            } catch (e) {
+                Alpine.store("toast").error("Not recorded: " + e.message);
+            }
+            this.offsite.busy = "";
         },
 
         formatDateTime(ts) {

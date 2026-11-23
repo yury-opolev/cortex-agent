@@ -49,6 +49,7 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
     private readonly Storage.StorageEncryptionService? storageEncryption;
     private readonly Cortex.Contained.Agent.Host.Evaluation.EvaluationJobService? evaluationJobs;
     private readonly Cortex.Contained.Agent.Host.Evaluation.EvaluationFiles? evaluationFiles;
+    private readonly Cortex.Contained.Agent.Host.Evaluation.Frozen.FrozenCorpusStore? frozenCorpora;
     private readonly Cortex.Contained.Agent.Host.Mcp.McpToolStore mcpToolStore;
     private readonly IHttpClientFactory httpClientFactory;
     private readonly AgentMetrics metrics;
@@ -89,7 +90,8 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
         Cortex.Contained.Agent.Host.Recall.RecallControlService? recall = null,
         Storage.StorageEncryptionService? storageEncryption = null,
         Cortex.Contained.Agent.Host.Evaluation.EvaluationJobService? evaluationJobs = null,
-        Cortex.Contained.Agent.Host.Evaluation.EvaluationFiles? evaluationFiles = null)
+        Cortex.Contained.Agent.Host.Evaluation.EvaluationFiles? evaluationFiles = null,
+        Cortex.Contained.Agent.Host.Evaluation.Frozen.FrozenCorpusStore? frozenCorpora = null)
     {
         this.runtime = runtime;
         this.llmClient = llmClient;
@@ -118,6 +120,7 @@ public sealed partial class AgentHub : Hub<IAgentHubClient>, IAgentHub
         this.storageEncryption = storageEncryption;
         this.evaluationJobs = evaluationJobs;
         this.evaluationFiles = evaluationFiles;
+        this.frozenCorpora = frozenCorpora;
         this.mcpToolStore = mcpToolStore;
         this.httpClientFactory = httpClientFactory;
         this.metrics = metrics;

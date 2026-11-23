@@ -648,7 +648,8 @@ builder.Services.AddSingleton(sp => new Cortex.Contained.Agent.Host.Recall.Recal
     sp.GetRequiredService<Cortex.Contained.Agent.Host.Memory.MemoryQuarantine>(),
     sp.GetRequiredService<Cortex.Contained.Agent.Host.Memory.QuarantineReviewService>(),
     sp.GetRequiredService<HistoryPurgeService>(),
-    sp.GetRequiredService<Cortex.Contained.Agent.Host.Events.EventBackfillService>()));
+    sp.GetRequiredService<Cortex.Contained.Agent.Host.Events.EventBackfillService>(),
+    sp.GetRequiredService<Cortex.Contained.Agent.Host.Evaluation.Frozen.FrozenCorpusStore>()));
 
 // --- Automatic Memory Extraction (hosted background service with Channel<T> queue) ---
 builder.Services.AddSingleton(sp =>

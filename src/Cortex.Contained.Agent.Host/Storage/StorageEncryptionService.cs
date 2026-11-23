@@ -58,7 +58,7 @@ public sealed partial class StorageEncryptionService
         var covered = this.inventory.Covered();
         var health = this.GetHealth();
         List<StorageItemDto> items = [.. covered];
-        if (this.inventory.Evaluation() is { } evaluation)
+        if (this.inventory.Evaluation(encryptedCopies: this.context.Enabled) is { } evaluation)
         {
             items.Add(evaluation);
         }

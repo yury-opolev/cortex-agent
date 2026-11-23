@@ -1222,6 +1222,22 @@
                 <i class="bi bi-plug me-1"></i>The agent is not connected; settings and status are unavailable.
             </div>
 
+            <!-- Off-machine evaluation copies a deletion destroyed locally (D3): only the owner can delete them in SafeExchange. -->
+            <div x-show="pendingOffsite.length > 0" class="alert alert-danger py-2">
+                <div class="fw-semibold mb-1"><i class="bi bi-cloud-slash me-1"></i>Delete these off-machine evaluation copies</div>
+                <p class="small mb-2">A history deletion destroyed the frozen evaluation corpus on this machine. Its exported package still exists in
+                    the SafeExchange secret <code>cortex-recovery-kit</code>: delete the file named below from that secret (your assistant: <code>secret_get</code>
+                    on <code>cortex-recovery-kit</code> to read the file's contentId, then <code>file_delete</code> by that contentId), then confirm here.</p>
+                <template x-for="item in pendingOffsite" :key="item.version">
+                    <div class="d-flex align-items-center gap-2 small mb-1">
+                        <span><b x-text="item.version"></b>: file <code x-text="item.packageFileName"></code> of secret <code x-text="item.secret"></code>
+                            <span x-show="item.contentId" x-text="'(contentId ' + item.contentId + ')'"></span></span>
+                        <button class="btn btn-sm btn-outline-light ms-auto" :disabled="!offsite.password || offsite.busy === item.version" @click="acknowledgeOffsite(item.version)">I deleted it</button>
+                    </div>
+                </template>
+                <input type="password" class="form-control form-control-sm mt-1" style="max-width: 260px;" placeholder="Bridge password to confirm" x-model="offsite.password" autocomplete="current-password">
+            </div>
+
             <!-- ═══ Settings ═══ -->
             <div class="card mb-3" x-show="form">
                 <div class="card-body">
@@ -1654,6 +1670,42 @@
                             <span x-show="restoring" class="spinner-border spinner-border-sm me-1"></span>Restore key
                         </button>
                     </details>
+                </div>
+            </div>
+
+            <!-- ═══ Evaluation corpora (sanitised frozen copies, D6) ═══ -->
+            <div class="card mb-3" x-show="frozen && (frozen.versions.length > 0 || frozen.pendingOffsiteDeletions.length > 0)">
+                <div class="card-body">
+                    <h6 class="text-uppercase text-secondary border-bottom pb-2 mb-3">Evaluation corpora</h6>
+                    <p class="small text-body-secondary">
+                        Sanitised, frozen copies of history and memories for the quality gates (pseudonymised; the local copy is encrypted with the storage key).
+                        The package is encrypted with its own passphrase and is the only form that leaves this machine: attach it to the SafeExchange
+                        secret <code>cortex-recovery-kit</code> under its file name (see docs/evaluation-runbook.md).
+                    </p>
+                    <table class="table table-sm small mb-2">
+                        <thead><tr><th>Version</th><th>Range</th><th>Messages</th><th>Queries</th><th>Exported</th><th>Uploaded</th><th></th></tr></thead>
+                        <tbody>
+                            <template x-for="v in frozen?.versions || []" :key="v.version">
+                                <tr>
+                                    <td x-text="v.version + (v.imported ? ' (imported)' : '')"></td>
+                                    <td x-text="new Date(v.corpusFrom).toLocaleDateString() + ' – ' + new Date(v.corpusTo).toLocaleDateString()"></td>
+                                    <td x-text="v.messages + ' · ' + v.memories + ' memories'"></td>
+                                    <td x-text="v.historyQueries + ' / ' + v.memoryQueries"></td>
+                                    <td x-text="formatDateTime(v.exportedAt)"></td>
+                                    <td x-text="v.uploaded ? 'yes' : 'no'"></td>
+                                    <td class="text-end">
+                                        <button class="btn btn-sm btn-outline-primary" x-show="hasPackage(v)" :disabled="!frozenPassword || downloading === v.packageFileName" @click="downloadPackage(v.packageFileName)">
+                                            <span x-show="downloading === v.packageFileName" class="spinner-border spinner-border-sm me-1"></span><i class="bi bi-download"></i>
+                                        </button>
+                                    </td>
+                                </tr>
+                            </template>
+                        </tbody>
+                    </table>
+                    <input type="password" class="form-control form-control-sm mb-2" style="max-width: 260px;" placeholder="Bridge password to download" x-model="frozenPassword" autocomplete="current-password">
+                    <div class="small text-danger" x-show="(frozen?.pendingOffsiteDeletions || []).length > 0">
+                        <i class="bi bi-cloud-slash me-1"></i>Off-machine copies to delete are listed on the Recall page.
+                    </div>
                 </div>
             </div>
 

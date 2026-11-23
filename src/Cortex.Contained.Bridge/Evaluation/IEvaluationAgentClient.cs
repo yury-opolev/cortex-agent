@@ -17,6 +17,12 @@ public interface IEvaluationAgentClient
     Task<EvaluationFileDto> ReadFileAsync(EvaluationFileRequestDto request, CancellationToken cancellationToken);
 
     Task<EvaluationFileWriteResultDto> WriteFileAsync(EvaluationFileWriteDto request, CancellationToken cancellationToken);
+
+    Task<FrozenCorpusStatusDto> GetFrozenStatusAsync(CancellationToken cancellationToken);
+
+    Task<EvaluationPackageChunkDto> ReadPackageAsync(string name, long offset, int count, CancellationToken cancellationToken);
+
+    Task<bool> AcknowledgeOffsiteDeletionAsync(string version, CancellationToken cancellationToken);
 }
 
 /// <summary>Adapts a connected <see cref="HubClient"/> to <see cref="IEvaluationAgentClient"/>.</summary>
@@ -36,4 +42,11 @@ public sealed class HubEvaluationAgentClient(HubClient client) : IEvaluationAgen
     public Task<EvaluationFileDto> ReadFileAsync(EvaluationFileRequestDto request, CancellationToken cancellationToken) => client.ReadEvaluationFileAsync(request, cancellationToken);
 
     public Task<EvaluationFileWriteResultDto> WriteFileAsync(EvaluationFileWriteDto request, CancellationToken cancellationToken) => client.WriteEvaluationFileAsync(request, cancellationToken);
+
+    public Task<FrozenCorpusStatusDto> GetFrozenStatusAsync(CancellationToken cancellationToken) => client.GetFrozenCorpusStatusAsync(cancellationToken);
+
+    public Task<EvaluationPackageChunkDto> ReadPackageAsync(string name, long offset, int count, CancellationToken cancellationToken) =>
+        client.ReadEvaluationPackageAsync(name, offset, count, cancellationToken);
+
+    public Task<bool> AcknowledgeOffsiteDeletionAsync(string version, CancellationToken cancellationToken) => client.AcknowledgeOffsiteDeletionAsync(version, cancellationToken);
 }

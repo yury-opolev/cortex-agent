@@ -47,4 +47,25 @@ public sealed partial class HubClient
         EnsureConnected();
         return await this.connection!.InvokeAsync<EvaluationFileWriteResultDto>(nameof(IAgentHub.WriteEvaluationFile), request, cancellationToken).ConfigureAwait(false);
     }
+
+    /// <summary>Frozen corpora, packages and pending off-machine deletions.</summary>
+    public async Task<FrozenCorpusStatusDto> GetFrozenCorpusStatusAsync(CancellationToken cancellationToken)
+    {
+        EnsureConnected();
+        return await this.connection!.InvokeAsync<FrozenCorpusStatusDto>(nameof(IAgentHub.GetFrozenCorpusStatus), cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>One chunk of an export package.</summary>
+    public async Task<EvaluationPackageChunkDto> ReadEvaluationPackageAsync(string name, long offset, int count, CancellationToken cancellationToken)
+    {
+        EnsureConnected();
+        return await this.connection!.InvokeAsync<EvaluationPackageChunkDto>(nameof(IAgentHub.ReadEvaluationPackage), name, offset, count, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Records the owner's deletion of an off-machine package.</summary>
+    public async Task<bool> AcknowledgeOffsiteDeletionAsync(string version, CancellationToken cancellationToken)
+    {
+        EnsureConnected();
+        return await this.connection!.InvokeAsync<bool>(nameof(IAgentHub.AcknowledgeOffsiteDeletion), version, cancellationToken).ConfigureAwait(false);
+    }
 }

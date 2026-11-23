@@ -4,7 +4,7 @@ using Microsoft.AspNetCore.SignalR;
 
 namespace Cortex.Contained.Agent.Host.Hubs;
 
-/// <summary><see cref="IEvaluationHub"/>: evaluation jobs and workspace files for the Bridge evaluation endpoints.</summary>
+/// <summary><see cref="IEvaluationHub"/>: evaluation jobs, workspace files and frozen corpora for the Bridge evaluation endpoints.</summary>
 public sealed partial class AgentHub
 {
     /// <inheritdoc />
@@ -51,8 +51,21 @@ public sealed partial class AgentHub
         }
     }
 
+    /// <inheritdoc />
+    public Task<FrozenCorpusStatusDto> GetFrozenCorpusStatus() => Task.FromResult(this.FrozenCorpora.Status());
+
+    /// <inheritdoc />
+    public Task<EvaluationPackageChunkDto> ReadEvaluationPackage(string name, long offset, int count) =>
+        Task.FromResult(this.FrozenCorpora.ReadPackage(name, offset, count));
+
+    /// <inheritdoc />
+    public Task<bool> AcknowledgeOffsiteDeletion(string version) => Task.FromResult(this.FrozenCorpora.AcknowledgeDeletion(version));
+
     private Evaluation.EvaluationJobService EvaluationJobs =>
         this.evaluationJobs ?? throw new HubException("Evaluation jobs are not available on this agent.");
+
+    private Evaluation.Frozen.FrozenCorpusStore FrozenCorpora =>
+        this.frozenCorpora ?? throw new HubException("Frozen evaluation corpora are not available on this agent.");
 
     private Evaluation.EvaluationFiles EvaluationFiles =>
         this.evaluationFiles ?? throw new HubException("Evaluation files are not available on this agent.");

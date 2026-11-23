@@ -79,6 +79,7 @@ public sealed class StorageInventoryTests : IDisposable
         Assert.DoesNotContain("other:memory", notCovered.Keys);
         Assert.Equal(1, evaluation!.Files);
         Assert.Equal(StorageItemStates.Plaintext, evaluation.State);
+        Assert.Equal(StorageItemStates.Encrypted, inventory.Evaluation(encryptedCopies: true)!.State);
     }
 
     [Fact]

@@ -2,8 +2,8 @@ namespace Cortex.Contained.Contracts.Hub;
 
 /// <summary>
 /// Evaluation commands (<c>history-eval</c>, <c>memory-eval</c>, <c>eval-corpus</c>) run inside the agent process,
-/// where the storage key lives, and the owner-authored workspace files. Part of the composed
-/// <see cref="IAgentHub"/> surface; the Bridge evaluation endpoints use it.
+/// where the storage key lives, the owner-authored workspace files and the frozen evaluation corpora (D3, D6).
+/// Part of the composed <see cref="IAgentHub"/> surface; the Bridge evaluation endpoints use it.
 /// </summary>
 public interface IEvaluationHub
 {
@@ -24,6 +24,15 @@ public interface IEvaluationHub
 
     /// <summary>Writes an owner-authored workspace file (sealed when it carries text on an encrypted install).</summary>
     Task<EvaluationFileWriteResultDto> WriteEvaluationFile(EvaluationFileWriteDto request);
+
+    /// <summary>Frozen corpus versions, export packages and off-machine copies awaiting deletion.</summary>
+    Task<FrozenCorpusStatusDto> GetFrozenCorpusStatus();
+
+    /// <summary>Up to <paramref name="count"/> bytes of an export package from <paramref name="offset"/> (passphrase-encrypted bytes).</summary>
+    Task<EvaluationPackageChunkDto> ReadEvaluationPackage(string name, long offset, int count);
+
+    /// <summary>Records that the owner deleted the off-machine package of <paramref name="version"/> from SafeExchange.</summary>
+    Task<bool> AcknowledgeOffsiteDeletion(string version);
 }
 
 /// <summary>String values of <see cref="EvaluationJobDto.State"/>.</summary>

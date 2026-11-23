@@ -100,6 +100,7 @@ internal static class RecallEndpoints
                     preview.DependentMemories,
                     preview.RangeFrom,
                     preview.RangeTo,
+                    preview.FrozenCorpusVersions,
                     Confirmations = new
                     {
                         Review = HistoryPurgeConfirmation.Describe(preview, DependentMemoryActions.Review),

@@ -115,6 +115,9 @@ public sealed record RecallStatusDto
 
     /// <summary>Curated memories currently hidden for review (D10).</summary>
     public int QuarantinedMemories { get; init; }
+
+    /// <summary>Off-machine evaluation packages a purge destroyed locally and the owner still has to delete from SafeExchange (D3).</summary>
+    public IReadOnlyList<OffsiteDeletionDto> PendingOffsiteDeletions { get; init; } = [];
 }
 
 /// <summary>History index build progress (the <c>/health</c> history block).</summary>
@@ -215,6 +218,9 @@ public sealed record HistoryPurgePreviewDto
 
     /// <summary>Newest affected message, or null.</summary>
     public DateTimeOffset? RangeTo { get; init; }
+
+    /// <summary>Frozen evaluation corpus versions the deletion destroys (D3); exported ones leave an off-machine copy to delete.</summary>
+    public IReadOnlyList<FrozenCorpusVersionDto> FrozenCorpusVersions { get; init; } = [];
 }
 
 /// <summary>One quarantined memory with the purge that quarantined it.</summary>

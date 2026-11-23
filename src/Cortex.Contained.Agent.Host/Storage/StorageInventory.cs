@@ -78,8 +78,12 @@ public sealed class StorageInventory
         this.Snapshot(),
     ];
 
-    /// <summary>Plaintext copies of history and memory made by the evaluation commands (null when there are none).</summary>
-    public StorageItemDto? Evaluation()
+    /// <summary>
+    /// The evaluation directory (null when it is empty): plaintext copies of history and memory made before encryption was
+    /// enabled, or — with <paramref name="encryptedCopies"/> — evaluation copies encrypted with the evaluation key plus
+    /// plaintext reports (ids and numbers only).
+    /// </summary>
+    public StorageItemDto? Evaluation(bool encryptedCopies = false)
     {
         var (bytes, files) = this.Measure(this.layout.EvaluationDirectory);
         return files == 0
@@ -89,10 +93,12 @@ public sealed class StorageInventory
                 Id = EvaluationId,
                 Label = "Evaluation runs (history-eval, history-smoke, memory-eval)",
                 Path = "eval/",
-                State = StorageItemStates.Plaintext,
+                State = encryptedCopies ? StorageItemStates.Encrypted : StorageItemStates.Plaintext,
                 Bytes = bytes,
                 Files = files,
-                Detail = "Raw copies of messages.db and the memory store with their datasets. Erase them when enabling; the commands refuse to run while encryption is on.",
+                Detail = encryptedCopies
+                    ? "Corpus copies and frozen corpora are encrypted with the evaluation key and datasets are sealed; reports, verdicts and manifests hold ids and numbers only."
+                    : "Raw copies of messages.db and the memory store with their datasets. Erase them when enabling; afterwards the evaluations run encrypted inside the agent.",
             };
     }
 

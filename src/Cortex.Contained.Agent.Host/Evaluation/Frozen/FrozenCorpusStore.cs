@@ -14,6 +14,9 @@ public sealed class FrozenCorpusStore
     private const string LedgerFileName = "offsite-deletions.json";
     private const string CounterFileName = "last-version";
 
+    /// <summary>Largest package chunk the Bridge may read at once (well below the hub's message limit).</summary>
+    public const int MaxChunkBytes = 4 * 1024 * 1024;
+
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { WriteIndented = true };
 
     private readonly Lock sync = new();
@@ -111,6 +114,55 @@ public sealed class FrozenCorpusStore
         }
 
         return result.Distinct(StringComparer.Ordinal).ToList();
+    }
+
+    /// <summary>Versions, packages and pending off-machine deletions for the Bridge.</summary>
+    public FrozenCorpusStatusDto Status() => new()
+    {
+        Versions = this.List().Select(ToDto).ToList(),
+        Packages = this.Packages(),
+        PendingOffsiteDeletions = this.PendingDeletions(),
+    };
+
+    /// <summary>The Bridge view of a manifest.</summary>
+    public static FrozenCorpusVersionDto ToDto(FrozenCorpusManifest manifest)
+    {
+        ArgumentNullException.ThrowIfNull(manifest);
+        return new FrozenCorpusVersionDto
+        {
+            Version = manifest.Version,
+            CreatedAt = manifest.CreatedAt,
+            CorpusFrom = manifest.CorpusFrom,
+            CorpusTo = manifest.CorpusTo,
+            Messages = manifest.Messages,
+            Memories = manifest.Memories,
+            HistoryQueries = manifest.HistoryQueries,
+            MemoryQueries = manifest.MemoryQueries,
+            PackageFileName = manifest.PackageFileName,
+            ExportedAt = manifest.ExportedAt,
+            Uploaded = manifest.Offsite is not null,
+            Imported = manifest.Imported,
+        };
+    }
+
+    /// <summary>Up to <paramref name="count"/> bytes (at most 4 MiB) of the package <paramref name="name"/> from <paramref name="offset"/>.</summary>
+    public EvaluationPackageChunkDto ReadPackage(string name, long offset, int count)
+    {
+        if (!this.Packages().Contains(name, StringComparer.Ordinal) || offset < 0 || count is <= 0 or > MaxChunkBytes)
+        {
+            return new EvaluationPackageChunkDto { Error = "No such package, or an invalid range." };
+        }
+
+        using var stream = new FileStream(Path.Combine(this.PackagesDirectory, name), FileMode.Open, FileAccess.Read, FileShare.Read);
+        if (offset > stream.Length)
+        {
+            return new EvaluationPackageChunkDto { Length = stream.Length, Error = "The offset is past the end of the package." };
+        }
+
+        stream.Position = offset;
+        var buffer = new byte[(int)Math.Min(count, stream.Length - offset)];
+        stream.ReadExactly(buffer);
+        return new EvaluationPackageChunkDto { Length = stream.Length, Data = buffer };
     }
 
     /// <summary>Reserves the next version name (never reused, even after a version was destroyed).</summary>

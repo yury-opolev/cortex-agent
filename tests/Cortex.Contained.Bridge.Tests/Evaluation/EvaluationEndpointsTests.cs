@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Cortex.Contained.Bridge.Tests.Evaluation;
 
@@ -93,5 +94,55 @@ public sealed class EvaluationEndpointsTests
 
         Assert.Equal(503, StatusOf(result));
         Assert.Contains("not connected", JsonSerializer.Serialize(result.GetType().GetProperty("Value")!.GetValue(result)), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task DownloadPackage_StreamsEveryChunkOfTheEncryptedPackage()
+    {
+        var package = Enumerable.Range(0, 10).Select(i => (byte)i).ToArray();
+        this.agent.ReadPackageAsync("cortex-eval-corpus-v1.cxpkg", Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                var offset = (int)call.ArgAt<long>(1);
+                return new EvaluationPackageChunkDto { Length = package.Length, Data = package[offset..Math.Min(package.Length, offset + 4)] };
+            });
+
+        var result = await EvaluationEndpoints.DownloadPackageAsync(this.agent, Verify, "cortex-eval-corpus-v1.cxpkg", new PasswordBody(Password), CancellationToken.None);
+        var http = new DefaultHttpContext { RequestServices = new ServiceCollection().AddLogging().BuildServiceProvider() };
+        using var body = new MemoryStream();
+        http.Response.Body = body;
+        await result.ExecuteAsync(http);
+
+        Assert.Equal(package, body.ToArray());
+    }
+
+    [Theory]
+    [InlineData("wrong", "cortex-eval-corpus-v1.cxpkg", 403)]
+    [InlineData(Password, "../messages.db", 400)]
+    [InlineData(Password, "notes.txt", 400)]
+    public async Task DownloadPackage_WrongPasswordOrNotAPackage_Refused(string password, string name, int status)
+    {
+        Assert.Equal(status, StatusOf(await EvaluationEndpoints.DownloadPackageAsync(this.agent, Verify, name, new PasswordBody(password), CancellationToken.None)));
+        await this.agent.DidNotReceive().ReadPackageAsync(Arg.Any<string>(), Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task AcknowledgeOffsiteDeletion_NeedsThePassword()
+    {
+        this.agent.AcknowledgeOffsiteDeletionAsync("v1", Arg.Any<CancellationToken>()).Returns(true);
+
+        Assert.Equal(403, StatusOf(await EvaluationEndpoints.AcknowledgeOffsiteDeletionAsync(this.agent, Verify, "v1", new PasswordBody("wrong"), CancellationToken.None)));
+        Assert.Equal(200, StatusOf(await EvaluationEndpoints.AcknowledgeOffsiteDeletionAsync(this.agent, Verify, "v1", new PasswordBody(Password), CancellationToken.None)));
+        await this.agent.Received(1).AcknowledgeOffsiteDeletionAsync("v1", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public void PackageDownloadAndAcknowledgement_AreRateLimitedLikeOtherReauthRoutes()
+    {
+        var limited = Endpoints().Where(e => e.RoutePattern.RawText is
+            "/api/tenants/{tenantId}/eval/frozen/packages/{name}" or "/api/tenants/{tenantId}/eval/frozen/{version}/offsite-deleted").ToList();
+
+        Assert.Equal(2, limited.Count);
+        Assert.All(limited, e => Assert.Equal("reauth", e.Metadata.GetMetadata<EnableRateLimitingAttribute>()?.PolicyName));
     }
 }
