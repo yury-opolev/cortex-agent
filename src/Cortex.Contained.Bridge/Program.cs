@@ -151,6 +151,7 @@ builder.Services.AddSingleton<Cortex.Contained.Bridge.RemoteServices.RemoteServi
 
 // --- Authentication ---
 builder.Services.AddSingleton<SessionManager>();
+builder.Services.AddSingleton(new Cortex.Contained.Bridge.Evaluation.GradingGrants(TimeProvider.System));
 builder.Services.AddAuthentication(CortexSessionAuthHandler.SchemeName)
     .AddScheme<AuthenticationSchemeOptions, CortexSessionAuthHandler>(
         CortexSessionAuthHandler.SchemeName, _ => { });
@@ -168,6 +169,7 @@ builder.Services.AddRateLimiter(options =>
                 Window = TimeSpan.FromMinutes(1),
             }));
     options.AddPolicy(ReauthRateLimit.PolicyName, ReauthRateLimit.Partition);
+    options.AddPolicy(Cortex.Contained.Bridge.Evaluation.GradingRateLimit.PolicyName, Cortex.Contained.Bridge.Evaluation.GradingRateLimit.Partition);
     options.OnRejected = async (ctx, ct) =>
     {
         ctx.HttpContext.Response.StatusCode = 429;
@@ -1221,6 +1223,7 @@ Cortex.Contained.Bridge.Storage.StorageEndpoints.MapStorageEndpoints(app, cortex
 
 // --- Evaluation API (jobs run inside the agent process; workspace files; re-authentication for content) ---
 Cortex.Contained.Bridge.Evaluation.EvaluationEndpoints.MapEvaluationEndpoints(app);
+Cortex.Contained.Bridge.Evaluation.EvaluationRunEndpoints.MapEvaluationRunEndpoints(app);
 
 // --- Connector Plugin System endpoint (loopback-only, no WebUI dependency) ---
 app.MapConnectorEndpoint();

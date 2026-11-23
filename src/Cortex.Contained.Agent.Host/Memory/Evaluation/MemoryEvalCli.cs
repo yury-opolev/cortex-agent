@@ -236,10 +236,14 @@ public static class MemoryEvalCli
             args,
             output,
             live,
-            options => new OllamaEmbeddingService(new StaticOptionsMonitor(options), NullLogger<OllamaEmbeddingService>.Instance),
+            AgentEmbedder,
             cancellationToken,
             rerankerFactory,
             protection);
+
+    /// <summary>The agent's configured embedder for memory evaluation runs (jobs and automated labelling).</summary>
+    public static IEmbeddingService AgentEmbedder(MemoryMcpOptions options) =>
+        new OllamaEmbeddingService(new StaticOptionsMonitor(options), NullLogger<OllamaEmbeddingService>.Instance);
 
     /// <summary>
     /// The agent's <c>MemoryMcp</c> configuration, loaded like <c>Program.cs</c> (appsettings, environment,

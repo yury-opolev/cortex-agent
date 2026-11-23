@@ -124,6 +124,13 @@ public sealed partial class DirectLlmClient : ILlmClient, IDisposable
     /// <summary>Whether credentials have been received from the Bridge.</summary>
     public bool HasCredentials => this.modelProviders.Count > 0;
 
+    /// <summary>
+    /// Name of the provider that serves <paramref name="model"/> directly, or null when no provider lists it (a
+    /// request for it would go to the fallback chain's default model instead).
+    /// </summary>
+    public string? ProviderFor(string model) =>
+        this.routing.Map.TryGetValue(model, out var provider) ? provider.Credential.Name : null;
+
     /// <summary>Result of <see cref="ConfigureCredentials"/>.</summary>
     public sealed record CredentialConfigResult(
         string? DefaultModel,
@@ -232,7 +239,7 @@ public sealed partial class DirectLlmClient : ILlmClient, IDisposable
     public async Task<LlmCompletionResult> CompleteAsync(
         LlmCompletionRequest request, CancellationToken cancellationToken)
     {
-        var attempts = BuildAttemptOrder(request.Model);
+        var attempts = BuildAttemptOrder(request.Model, request.PinnedProvider);
         if (attempts.Count == 0)
         {
             return new LlmCompletionResult
@@ -345,7 +352,7 @@ public sealed partial class DirectLlmClient : ILlmClient, IDisposable
                 };
             }
 
-            if (result.Success || attempt >= MaxTransientRetries || !IsErrorTransientRetryable(result.ErrorMessage))
+            if (result.Success || attempt >= MaxTransientRetries || request.PinnedProvider || !IsErrorTransientRetryable(result.ErrorMessage))
             {
                 return result;
             }
@@ -388,7 +395,7 @@ public sealed partial class DirectLlmClient : ILlmClient, IDisposable
                 yield break; // committed to this provider, or a clean (no-error) end
             }
 
-            if (attempt < MaxTransientRetries && IsErrorTransientRetryable(preContentError.ErrorMessage))
+            if (attempt < MaxTransientRetries && !request.PinnedProvider && IsErrorTransientRetryable(preContentError.ErrorMessage))
             {
                 this.LogTransientRetry(
                     provider.Credential.Name, attempt + 1, MaxTransientRetries,
@@ -407,9 +414,9 @@ public sealed partial class DirectLlmClient : ILlmClient, IDisposable
     /// first (with the requested model), then each OTHER provider in the
     /// fallback chain with its default model. If the model resolves to no
     /// provider, the whole chain is the attempt order. Each provider appears
-    /// at most once.
+    /// at most once. A <paramref name="pinned"/> request gets only the requested model's provider (or none).
     /// </summary>
-    private List<(ProviderState Provider, string Model)> BuildAttemptOrder(string requestedModel)
+    private List<(ProviderState Provider, string Model)> BuildAttemptOrder(string requestedModel, bool pinned = false)
     {
         var snapshot = this.routing; // one consistent (map, chain) pair
         var order = new List<(ProviderState, string)>();
@@ -419,6 +426,11 @@ public sealed partial class DirectLlmClient : ILlmClient, IDisposable
         {
             order.Add((primary, requestedModel));
             seen.Add(primary.Credential.Name);
+        }
+
+        if (pinned)
+        {
+            return order;
         }
 
         foreach (var (prov, model) in snapshot.Chain)
@@ -548,7 +560,7 @@ public sealed partial class DirectLlmClient : ILlmClient, IDisposable
         LlmCompletionRequest request,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        var attempts = BuildAttemptOrder(request.Model);
+        var attempts = BuildAttemptOrder(request.Model, request.PinnedProvider);
         if (attempts.Count == 0)
         {
             yield return new LlmStreamChunk

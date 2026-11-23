@@ -81,19 +81,16 @@ public static class HistoryEvalCli
     {
         ArgumentNullException.ThrowIfNull(args);
         ArgumentNullException.ThrowIfNull(memory);
-        return RunAsync(
-            [.. args, "--source", messagesDb],
-            output,
-            history =>
-            {
-                var memoryMonitor = new StaticOptionsMonitor<MemoryMcpOptions>(memory);
-                return new OllamaHistoryEmbedder(new OllamaEmbeddingService(memoryMonitor, NullLogger<OllamaEmbeddingService>.Instance), memoryMonitor, history);
-            },
-            cancellationToken,
-            configured,
-            rerankerFactory,
-            protection);
+        return RunAsync([.. args, "--source", messagesDb], output, AgentEmbedder(memory), cancellationToken, configured, rerankerFactory, protection);
     }
+
+    /// <summary>The agent's configured embedder for history evaluation runs (jobs and automated labelling).</summary>
+    public static Func<IOptionsMonitor<HistoryOptions>, IHistoryEmbedder> AgentEmbedder(MemoryMcpOptions memory) =>
+        history =>
+        {
+            var memoryMonitor = new StaticOptionsMonitor<MemoryMcpOptions>(memory);
+            return new OllamaHistoryEmbedder(new OllamaEmbeddingService(memoryMonitor, NullLogger<OllamaEmbeddingService>.Instance), memoryMonitor, history);
+        };
 
     /// <summary>Entry point with an injected embedder (tests use a deterministic fake).</summary>
     internal static async Task<int> RunAsync(

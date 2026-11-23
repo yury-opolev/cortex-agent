@@ -55,6 +55,13 @@ public sealed record LlmCompletionRequest
     /// model before it reaches the wire — not every model accepts the parameter or every level.
     /// </summary>
     public string? ReasoningEffort { get; init; }
+
+    /// <summary>
+    /// Serve the request only from the provider that lists <see cref="Model"/>: no failover to another provider's
+    /// default model and no hidden same-provider retries (the caller retries and counts every attempt). Used where a
+    /// different model would silently change the result (evaluation labelling).
+    /// </summary>
+    public bool PinnedProvider { get; init; }
 }
 
 /// <summary>
