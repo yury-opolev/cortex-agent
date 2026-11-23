@@ -1,3 +1,4 @@
+using Cortex.Contained.Agent.Host.Evaluation.Frozen;
 using Cortex.Contained.Contracts.Hub;
 using Cortex.Contained.Contracts.Security;
 
@@ -80,28 +81,35 @@ public sealed class StorageInventory
 
     /// <summary>
     /// The evaluation directory (null when it is empty): plaintext copies of history and memory made before encryption was
-    /// enabled, or — with <paramref name="encryptedCopies"/> — evaluation copies encrypted with the evaluation key plus
-    /// plaintext reports (ids and numbers only).
+    /// enabled, or — with <paramref name="encryptedCopies"/> (an encrypted install) — evaluation copies encrypted with the
+    /// evaluation key plus plaintext reports (ids and numbers only). On an encrypted install the state follows the files:
+    /// every database, sealed text file and frozen manifest is checked, so plaintext left over from before encryption (or
+    /// written by an older version) shows as plaintext or mixed, never as encrypted.
     /// </summary>
     public StorageItemDto? Evaluation(bool encryptedCopies = false)
     {
         var (bytes, files) = this.Measure(this.layout.EvaluationDirectory);
-        return files == 0
-            ? null
-            : new StorageItemDto
-            {
-                Id = EvaluationId,
-                Label = "Evaluation runs (history-eval, history-smoke, memory-eval)",
-                Path = "eval/",
-                State = encryptedCopies ? StorageItemStates.Encrypted : StorageItemStates.Plaintext,
-                Bytes = bytes,
-                Files = files,
-                Detail = encryptedCopies
-                    ? "Corpus copies and frozen corpora are encrypted with the evaluation key and datasets are sealed; reports, verdicts and manifests hold ids and numbers only."
-                    : "Raw copies of messages.db and the memory store with their datasets. Erase them when enabling; afterwards the evaluations run encrypted inside the agent.",
-            };
-    }
+        if (files == 0)
+        {
+            return null;
+        }
 
+        var state = encryptedCopies ? this.EvaluationCopiesState() : StorageItemStates.Plaintext;
+        return new StorageItemDto
+        {
+            Id = EvaluationId,
+            Label = "Evaluation runs (history-eval, history-smoke, memory-eval)",
+            Path = "eval/",
+            State = state,
+            Bytes = bytes,
+            Files = files,
+            Detail = !encryptedCopies
+                ? "Raw copies of messages.db and the memory store with their datasets. Erase them when enabling; afterwards the evaluations run encrypted inside the agent."
+                : state is StorageItemStates.Plaintext or StorageItemStates.Mixed
+                    ? "Plaintext copies of history, memory or datasets remain in eval/ (made before encryption was enabled). Encryption does not cover them: erase them (delete the files or the eval/ directory on the state volume); the evaluation commands recreate encrypted ones."
+                    : "Corpus copies and frozen corpora are encrypted with the evaluation key and datasets are sealed; reports, verdicts and manifests hold ids and numbers only.",
+        };
+    }
     /// <summary>Items that stay in plaintext, with the reason (including unrecognized entries of the state volume).</summary>
     public IReadOnlyList<StorageItemDto> NotCovered()
     {
@@ -208,6 +216,47 @@ public sealed class StorageInventory
         }
     }
 
+    // Files of the evaluation directory that carry personal text or data (reports, verdicts and the *.example.jsonl samples do not).
+    private static bool CarriesPersonalData(string name) =>
+        name.EndsWith(".db", StringComparison.Ordinal)
+        || name.EndsWith(".memory.data", StringComparison.Ordinal)
+        || (name.EndsWith(".jsonl", StringComparison.Ordinal) && !name.EndsWith(".example.jsonl", StringComparison.Ordinal))
+        || string.Equals(name, FrozenCorpusBuilder.SecretFileName, StringComparison.Ordinal);
+
+    private string EvaluationCopiesState()
+    {
+        var states = new List<StoredFileState?>();
+        var evaluation = this.layout.EvaluationDirectory;
+        if (!this.TryRead(evaluation, () => Directory.EnumerateFiles(evaluation, "*", SearchOption.AllDirectories).ToList(), out var files))
+        {
+            return StorageItemStates.Unknown;
+        }
+
+        foreach (var file in files)
+        {
+            var name = Path.GetFileName(file);
+            if (!CarriesPersonalData(name))
+            {
+                continue;
+            }
+
+            states.Add(this.TryRead(file, () => new FileInfo(file).Length == 0
+                ? StoredFileState.Empty
+                : name.EndsWith(".db", StringComparison.Ordinal) ? SqliteFileHeader.Classify(file)
+                : StorageFileCipher.IsEncryptedFile(file) ? StoredFileState.Encrypted : StoredFileState.Plaintext, out var state) ? state : null);
+        }
+
+        foreach (var manifest in files.Where(f => Path.GetFileName(f) == FrozenCorpusManifest.FileName))
+        {
+            if (this.TryRead(manifest, () => FrozenCorpusManifest.Read(manifest), out var read) && read is { Encrypted: false })
+            {
+                states.Add(StoredFileState.Plaintext);
+            }
+        }
+
+        var combined = Combine(states);
+        return combined == StorageItemStates.Absent ? StorageItemStates.Encrypted : combined;
+    }
     private StoredFileState? Classify(string path) =>
         this.TryRead(path, () => SqliteFileHeader.Classify(path), out var state) ? state : null;
 

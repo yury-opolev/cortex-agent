@@ -61,7 +61,8 @@ rekeys came in 2.7.0).
 | Volume snapshots, host backups, provider-side copies, filesystem free space | outside what the application can reach |
 
 Evaluation runs (`eval/`) made before encryption was enabled hold raw plaintext copies of your history and memories;
-enabling erases them by default. With encryption on, `history-eval`, `memory-eval` and `eval-corpus` run inside the
+enabling erases them by default. The Storage page classifies `eval/` file by file (SQLite headers, sealed files, frozen manifests): plaintext copies
+left over from before encryption show as plaintext or mixed with an erase hint, never as encrypted. With encryption on, `history-eval`, `memory-eval` and `eval-corpus` run inside the
 agent as evaluation jobs (`scripts/Invoke-CortexEval.ps1`): their corpus copies are encrypted with a dedicated
 evaluation key, datasets and seeds are sealed, and reports hold ids and numbers only. Run through `docker exec`, the
 commands that copy stores refuse and point to the script; `history-smoke` keeps only its synthetic checks. See the
