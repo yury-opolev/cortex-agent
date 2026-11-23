@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using Cortex.Contained.Agent.Host.Evaluation;
 using Cortex.Contained.Agent.Host.Reranking;
 using Cortex.Contained.Agent.Host.Reranking.Evaluation;
 using Cortex.Contained.Contracts.Config.Yaml;
@@ -125,7 +126,8 @@ public static class MemoryEvalCli
         MemoryMcpOptions live,
         Func<MemoryMcpOptions, IEmbeddingService> embedderFactory,
         CancellationToken cancellationToken,
-        Func<RerankerOptions, IReranker>? rerankerFactory = null)
+        Func<RerankerOptions, IReranker>? rerankerFactory = null,
+        EvalProtection? protection = null)
     {
         ArgumentNullException.ThrowIfNull(args);
         rerankerFactory ??= RerankEvalSetup.LiveReranker;
@@ -138,7 +140,7 @@ public static class MemoryEvalCli
             return 2;
         }
 
-        var workspace = new MemoryEvalWorkspace(Option(args, "--dir") ?? MemoryEvalWorkspace.DefaultDirectory);
+        var workspace = new MemoryEvalWorkspace(Option(args, "--dir") ?? MemoryEvalWorkspace.DefaultDirectory, protection);
         Directory.CreateDirectory(workspace.Directory);
         if (MemoryEvalCorpus.SweepAbandoned(workspace.RunsDirectory) is var swept and > 0)
         {
@@ -250,7 +252,7 @@ public static class MemoryEvalCli
         await using var corpus = await context.OpenCorpusAsync("sample", cancellationToken).ConfigureAwait(false);
         var memories = await corpus.ListMemoriesAsync(cancellationToken).ConfigureAwait(false);
         var seeds = MemoryQuerySeeds.Select(memories, count);
-        await File.WriteAllLinesAsync(context.Workspace.SeedsPath, seeds.Select(s => JsonSerializer.Serialize(s, Json)), cancellationToken).ConfigureAwait(false);
+        context.Workspace.Protection.WriteLines(context.Workspace.SeedsPath, seeds.Select(s => JsonSerializer.Serialize(s, Json)));
         await context.Output.WriteLineAsync(string.Create(CultureInfo.InvariantCulture,
             $"{seeds.Count} seeds from {memories.Count} memories: {context.Workspace.SeedsPath}. It holds raw memory text: delete it once dataset.jsonl is written.")).ConfigureAwait(false);
         return 0;
@@ -258,7 +260,7 @@ public static class MemoryEvalCli
 
     private static async Task<int> ValidateAsync(MemoryEvalWorkspace workspace, TextWriter output)
     {
-        var queries = MemoryEvalDataset.Read(workspace.DatasetPath);
+        var queries = workspace.ReadDataset();
         var errors = MemoryEvalDataset.ValidateForRegistration(queries);
         foreach (var error in errors)
         {
@@ -274,7 +276,7 @@ public static class MemoryEvalCli
 
     private static async Task<int> GuardAsync(CommandContext context, CancellationToken cancellationToken)
     {
-        var queries = MemoryEvalDataset.Read(context.Workspace.DatasetPath).Where(q => q.Category == "paraphrase").ToList();
+        var queries = context.Workspace.ReadDataset().Where(q => q.Category == "paraphrase").ToList();
         var runDir = NewRunDirectory(context.Workspace, "guard");
         List<ParaphraseCheck> checks;
         await using (var corpus = await context.OpenCorpusAsync(runDir, cancellationToken).ConfigureAwait(false))
@@ -303,7 +305,7 @@ public static class MemoryEvalCli
 
     private static async Task<int> PoolAsync(CommandContext context, int depth, CancellationToken cancellationToken)
     {
-        var queries = MemoryEvalDataset.Read(context.Workspace.DatasetPath);
+        var queries = context.Workspace.ReadDataset();
         var plan = context.Workspace.ReadPlan();
         var lines = new List<string>();
         await using (var corpus = await context.OpenCorpusAsync("pool", cancellationToken).ConfigureAwait(false))
@@ -352,7 +354,7 @@ public static class MemoryEvalCli
     private static async Task<(string RunDirectory, AblationReport Report)> RunAsync(
         CommandContext context, IReadOnlyList<MemoryAblationConfig> configs, string baseline, string split, string kind, CancellationToken cancellationToken)
     {
-        var all = MemoryEvalDataset.Read(context.Workspace.DatasetPath);
+        var all = context.Workspace.ReadDataset();
         var errors = MemoryEvalDataset.Validate(all);
         if (errors.Count > 0)
         {
@@ -417,7 +419,7 @@ public static class MemoryEvalCli
         public Task<MemoryEvalCorpus> OpenCorpusAsync(string runDirectory, CancellationToken cancellationToken)
         {
             var directory = Path.IsPathRooted(runDirectory) ? runDirectory : NewRunDirectory(this.Workspace, runDirectory);
-            return MemoryEvalCorpus.CreateAsync(this.Live.DataDirectory, directory, this.Live, this.EmbedderFactory(this.Live), cancellationToken);
+            return MemoryEvalCorpus.CreateAsync(this.Live.DataDirectory, directory, this.Live, this.EmbedderFactory(this.Live), cancellationToken, protection: this.Workspace.Protection);
         }
     }
 

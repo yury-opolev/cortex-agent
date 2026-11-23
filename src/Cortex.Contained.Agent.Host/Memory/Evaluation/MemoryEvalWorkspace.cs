@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Cortex.Contained.Agent.Host.Evaluation;
 
 namespace Cortex.Contained.Agent.Host.Memory.Evaluation;
 
@@ -43,19 +44,23 @@ public sealed class MemoryEvalWorkspace
         Converters = { new JsonStringEnumConverter() },
     };
 
-    public MemoryEvalWorkspace(string directory)
+    public MemoryEvalWorkspace(string directory, EvalProtection? protection = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(directory);
         this.Directory = directory;
+        this.Protection = protection ?? EvalProtection.Plaintext;
     }
 
     /// <summary>Workspace root.</summary>
     public string Directory { get; }
 
-    /// <summary>Labelled queries (<see cref="MemoryEvalQuery"/> per line).</summary>
+    /// <summary>How the dataset and seeds are sealed and the corpus copies are encrypted.</summary>
+    public EvalProtection Protection { get; }
+
+    /// <summary>Labelled queries (<see cref="MemoryEvalQuery"/> per line; sealed on an encrypted install).</summary>
     public string DatasetPath => Path.Combine(this.Directory, "dataset.jsonl");
 
-    /// <summary>Query-authoring seeds (raw memory text; delete after authoring).</summary>
+    /// <summary>Query-authoring seeds (raw memory text, sealed on an encrypted install; delete after authoring).</summary>
     public string SeedsPath => Path.Combine(this.Directory, "seeds.jsonl");
 
     /// <summary>Unjudged memory ids per query, for the judge (ids only).</summary>
@@ -78,6 +83,12 @@ public sealed class MemoryEvalWorkspace
 
     /// <summary>Writes indented JSON.</summary>
     public static void WriteJson(string path, object value) => File.WriteAllText(path, JsonSerializer.Serialize(value, Json));
+
+    /// <summary>Reads <c>dataset.jsonl</c> through <see cref="Protection"/>.</summary>
+    public IReadOnlyList<MemoryEvalQuery> ReadDataset() =>
+        File.Exists(this.DatasetPath)
+            ? MemoryEvalDataset.Parse(this.Protection.ReadLines(this.DatasetPath), this.DatasetPath)
+            : throw new InvalidOperationException("dataset.jsonl is missing.");
 
     /// <summary>Reads <c>ablation.json</c>.</summary>
     public MemoryAblationPlan ReadPlan() =>
@@ -102,7 +113,7 @@ public sealed class MemoryEvalWorkspace
                 throw new InvalidOperationException("ablation.json has no holdout section: choose the configuration on the dev split before registering.");
             }
 
-            var errors = MemoryEvalDataset.ValidateForRegistration(MemoryEvalDataset.Read(this.DatasetPath));
+            var errors = MemoryEvalDataset.ValidateForRegistration(this.ReadDataset());
             if (errors.Count > 0)
             {
                 throw new InvalidOperationException($"dataset.jsonl is not ready for registration ({errors.Count} problems); run 'validate'.");
