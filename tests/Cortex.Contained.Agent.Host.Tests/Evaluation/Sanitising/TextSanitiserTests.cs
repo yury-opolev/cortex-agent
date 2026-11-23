@@ -144,6 +144,35 @@ public sealed class TextSanitiserTests
     }
 
     [Fact]
+    public void Sanitise_SamePhoneNumberInDifferentNotations_OnePseudonym()
+    {
+        var sanitiser = Sanitiser();
+
+        var spaced = sanitiser.Sanitise("+45 12 34 56 78");
+        var plain = sanitiser.Sanitise("12345678");
+
+        Assert.StartsWith("phone", plain, StringComparison.Ordinal);
+        Assert.Equal(plain, spaced);
+        Assert.Equal(plain, sanitiser.Sanitise("0045 1234 5678"));
+        Assert.Equal(plain, sanitiser.Sanitise("+4512345678"));
+        Assert.NotEqual(plain, sanitiser.Sanitise("12345679"));
+    }
+
+    [Fact]
+    public void Sanitise_EntityNotWrittenLikeTheCanonicalTerm_StillGroupsVariants()
+    {
+        var sanitiser = Sanitiser(Dictionary(
+            """{"term":"PersonA","kind":"person","entity":"PersonA"}""",
+            """{"term":"Alias","kind":"person","entity":"PERSONA"}""",
+            """{"term":"Alvenia","kind":"person"}""",
+            """{"term":"Vena","kind":"person","entity":"ALVENIA"}"""));
+
+        Assert.Equal(sanitiser.Sanitise("PersonA"), sanitiser.Sanitise("Alias"));
+        Assert.Equal(sanitiser.Sanitise("Alvenia"), sanitiser.Sanitise("Vena"));
+        Assert.NotEqual(sanitiser.Sanitise("Alvenia"), sanitiser.Sanitise("PersonA"));
+    }
+
+    [Fact]
     public void Parse_BadLines_NamedInTheError()
     {
         var error = Assert.Throws<InvalidOperationException>(() => Dictionary(

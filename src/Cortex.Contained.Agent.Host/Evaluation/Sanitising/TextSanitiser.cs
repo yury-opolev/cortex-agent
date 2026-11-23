@@ -83,7 +83,7 @@ public sealed partial class TextSanitiser
             {
                 if (Free(term.Index, term.Length) && this.dictionary.Lookup(term.Groups["term"].Value) is { } entry)
                 {
-                    var pseudonym = this.map.For(entry.Kind, entry.Entity ?? SanitiserLexicon.Canonical(entry.Term));
+                    var pseudonym = this.map.For(entry.Kind, SanitiserLexicon.Canonical(entry.Entity ?? entry.Term));
                     spans.Add((term.Index, term.Length, pseudonym + term.Groups["suffix"].Value));
                 }
             }
@@ -121,8 +121,21 @@ public sealed partial class TextSanitiser
     {
         SensitiveDataRedactor.IdentifierKinds.Email => value.ToLowerInvariant(),
         SensitiveDataRedactor.IdentifierKinds.Gps => value,
+        SensitiveDataRedactor.IdentifierKinds.Phone => PhoneKey(value),
         _ => new string(value.Where(char.IsAsciiLetterOrDigit).ToArray()).ToUpperInvariant(),
     };
+
+    // One number, one pseudonym: +45 12 34 56 78, 0045 1234 5678 and 12345678 share a key (a Danish country code is dropped).
+    private static string PhoneKey(string value)
+    {
+        var digits = new string(value.Where(char.IsAsciiDigit).ToArray());
+        if (digits.StartsWith("00", StringComparison.Ordinal))
+        {
+            digits = digits[2..];
+        }
+
+        return digits.Length == 10 && digits.StartsWith("45", StringComparison.Ordinal) ? digits[2..] : digits;
+    }
 
     private string Url(Match url)
     {

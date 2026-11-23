@@ -62,7 +62,8 @@ e-mail, phone number, CPR number, IBAN, card number, GPS position, URL path, non
    {"term":"example.org","kind":"public-host"}
    ```
    Kinds: `person`, `place`, `org`, `handle`, `other`, `public-host` (a URL host that is kept). `entity` groups
-   spellings, nicknames and scripts of one person under one pseudonym. Matching is case-insensitive, on whole words
+   spellings, nicknames and scripts of one person under one pseudonym (compared case- and diacritics-insensitively; a
+   phone number gets one pseudonym in every notation, `+45 12 34 56 78` = `12345678`). Matching is case-insensitive, on whole words
    (a letter on either side blocks a match; digits and `_` do not, so `anna_cv.pdf` and `Mette2024` match) and also finds
    the term without diacritics. Inflection is matched like this, and nothing more:
    - terms of four or more letters: up to three trailing letters (`Mette` → `Mettes`);
