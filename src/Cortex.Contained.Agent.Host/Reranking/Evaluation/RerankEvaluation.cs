@@ -269,6 +269,10 @@ public static class RerankEvalSetup
     public static LlamaServerReranker LiveReranker(RerankerOptions options, HttpClient client) =>
         new(new SingleClientFactory(client), new FixedOptions(options), () => Environment.GetEnvironmentVariable("Reranker__ApiKey"));
 
+    /// <summary>The live llama-server client with the key the Bridge granted (evaluation jobs inside the agent process).</summary>
+    public static LlamaServerReranker LiveReranker(RerankerOptions options, Func<string?> apiKey) =>
+        new(new SingleClientFactory(SharedClient), new FixedOptions(options), apiKey);
+
     /// <summary>A rerank stage over <paramref name="reranker"/> for evaluation runs.</summary>
     public static RerankStage Stage(IReranker reranker, RerankerOptions options)
     {

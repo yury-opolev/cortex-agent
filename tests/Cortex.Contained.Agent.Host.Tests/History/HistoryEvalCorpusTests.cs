@@ -72,6 +72,35 @@ public sealed class HistoryEvalCorpusTests : IAsyncDisposable
         Assert.NotEmpty(run.Hits);
     }
 
+    [Fact]
+    public async Task CreateAsync_EncryptedSource_CopyAndIndexesEncryptedWithTheEvaluationRing()
+    {
+        var live = Cortex.Contained.Agent.Host.Tests.Evaluation.EvalTestKeys.Ring();
+        Directory.CreateDirectory(this.root);
+        var source = Path.Combine(this.root, "messages.db");
+        await using (var store = new MessageStore(source, NullLogger<MessageStore>.Instance, new MessageStoreEncryption(live, TimeSpan.FromSeconds(5))))
+        {
+            await store.SaveMessageAsync("u", "ch", "user", "we booked the railway journey to TownB zqrawtext", T0);
+        }
+
+        var run = Path.Combine(this.root, "run");
+        var hybrid = new AblationConfig { Name = "hybrid-rrf60" };
+        await using (var corpus = await EvalCorpus.CreateAsync(
+            source, run, new HistoryOptions { Enabled = true, TimeZone = "UTC" }, [hybrid], _ => new FakeHistoryEmbedder(), CancellationToken.None,
+            protection: Cortex.Contained.Agent.Host.Evaluation.EvalProtection.Encrypted(live)))
+        {
+            Assert.NotEmpty((await corpus.SearchAsync(hybrid, Query with { Text = "railway" }, CancellationToken.None)).Hits);
+        }
+
+        SqliteConnection.ClearAllPools();
+        var copy = Path.Combine(run, "messages.db");
+        Assert.Equal(Cortex.Contained.Contracts.Security.StoredFileState.Encrypted, Cortex.Contained.Contracts.Security.SqliteFileHeader.Classify(copy));
+        Assert.Throws<StorageKeyMismatchException>(() => EncryptedSqlite.Prepare(copy, live.PasswordFor(MessageStore.PasswordPurpose)));
+        Assert.All(
+            Directory.EnumerateFiles(run, "*", SearchOption.AllDirectories),
+            f => Assert.DoesNotContain("zqrawtext", System.Text.Encoding.UTF8.GetString(File.ReadAllBytes(f)), StringComparison.Ordinal));
+    }
+
     private sealed class SlowQueryEmbedder(FakeHistoryEmbedder inner) : IHistoryEmbedder
     {
         public TimeSpan QueryDelay { get; set; }

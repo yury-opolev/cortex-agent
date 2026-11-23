@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Cortex.Contained.Agent.Host.Evaluation;
 using Cortex.Contained.Agent.Host.Reranking;
 using Cortex.Contained.Agent.Host.Storage;
 using Microsoft.Data.Sqlite;
@@ -10,7 +11,8 @@ namespace Cortex.Contained.Agent.Host.History.Evaluation;
 /// <summary>
 /// A private copy of <c>messages.db</c> with one fully embedded index generation per keyword variant
 /// (§4.2 ablations). The live database and index are never touched; everything stays in the run
-/// directory, which holds raw message text (D6): outputs beside it are numbers only. A
+/// directory, which holds raw message text (D6): outputs beside it are numbers only. On an encrypted
+/// install the copy and its index generations are encrypted with the evaluation ring (<see cref="EvalProtection"/>). A
 /// <c>manifest.json</c> with the copied corpus's time range is written first, so a purge overlapping
 /// that range destroys the run directory (purge erasure covers the <c>runs</c> of the configured
 /// <c>History:EvalArtifactsDirectory</c>); the owner otherwise deletes the run directory after use.
@@ -36,7 +38,8 @@ public sealed class EvalCorpus : IAsyncDisposable
     /// Copies <paramref name="sourceDb"/> and builds an embedded generation for every keyword variant in
     /// <paramref name="configs"/>. <paramref name="embedderFactory"/> receives the options monitor the
     /// corpus switches per configuration (so the query-instruction ablation reaches the embedder).
-    /// <paramref name="reranker"/> serves configurations with a rerank budget (§4.3).
+    /// <paramref name="reranker"/> serves configurations with a rerank budget (§4.3). <paramref name="protection"/>
+    /// (default plaintext) decides how the source is read and how the copy is encrypted.
     /// </summary>
     public static async Task<EvalCorpus> CreateAsync(
         string sourceDb,
@@ -45,27 +48,24 @@ public sealed class EvalCorpus : IAsyncDisposable
         IReadOnlyList<AblationConfig> configs,
         Func<IOptionsMonitor<HistoryOptions>, IHistoryEmbedder> embedderFactory,
         CancellationToken cancellationToken,
-        IRerankStage? reranker = null)
+        IRerankStage? reranker = null,
+        EvalProtection? protection = null)
     {
         ArgumentNullException.ThrowIfNull(baseline);
         ArgumentNullException.ThrowIfNull(configs);
         ArgumentNullException.ThrowIfNull(embedderFactory);
+        protection ??= EvalProtection.Plaintext;
         Directory.CreateDirectory(runDirectory);
         var copyPath = Path.Combine(runDirectory, "messages.db");
-        using (var source = new SqliteConnection($"Data Source={sourceDb};Mode=ReadOnly;Pooling=False"))
-        using (var target = new SqliteConnection($"Data Source={copyPath};Pooling=False"))
-        {
-            source.Open();
-            target.Open();
-            source.BackupDatabase(target);
-        }
+        var copyPassword = protection.CopyPassword(MessageStore.PasswordPurpose);
+        EncryptedSqlite.CopyDatabase(sourceDb, protection.SourcePassword(MessageStore.PasswordPurpose), copyPath, copyPassword);
 
-        var manifest = ReadCorpusRange(copyPath);
+        var manifest = ReadCorpusRange(copyPath, copyPassword);
         EvalWorkspace.WriteJson(Path.Combine(runDirectory, "manifest.json"), manifest);
 
         var monitor = new MutableOptionsMonitor(baseline);
         var embedder = embedderFactory(monitor);
-        var corpus = new EvalCorpus(new MessageStore(copyPath, NullLogger<MessageStore>.Instance), monitor, reranker);
+        var corpus = new EvalCorpus(new MessageStore(copyPath, NullLogger<MessageStore>.Instance, protection.CopyMessageEncryption), monitor, reranker);
         foreach (var variant in configs.Select(c => c.KeywordVariant).Distinct())
         {
             monitor.CurrentValue = new AblationConfig { Name = "build", KeywordVariant = variant }.Apply(baseline);
@@ -73,7 +73,7 @@ public sealed class EvalCorpus : IAsyncDisposable
             var gate = new HistoryAccessGate();
             var status = new HistoryStatus();
             var projector = new HistoryProjector(
-                corpus.store, corpus.store, new HistoryIndexGenerations(Path.Combine(runDirectory, "index-" + variant.ToString().ToLowerInvariant())),
+                corpus.store, corpus.store, new HistoryIndexGenerations(Path.Combine(runDirectory, "index-" + variant.ToString().ToLowerInvariant()), protection.Ring),
                 gate, monitor, status, NullLogger<HistoryProjector>.Instance, embedder, clock);
             await projector.InitializeAsync(cancellationToken).ConfigureAwait(false);
             await projector.RebuildAsync(cancellationToken).ConfigureAwait(false);
@@ -189,9 +189,9 @@ public sealed class EvalCorpus : IAsyncDisposable
         await this.store.DisposeAsync().ConfigureAwait(false);
     }
 
-    private static SmokeRunManifest ReadCorpusRange(string copyPath)
+    private static SmokeRunManifest ReadCorpusRange(string copyPath, string? password)
     {
-        using var connection = new SqliteConnection($"Data Source={copyPath};Mode=ReadOnly;Pooling=False");
+        using var connection = new SqliteConnection(EncryptedSqlite.ConnectionString(copyPath, password, SqliteOpenMode.ReadOnly, pooling: false));
         connection.Open();
         using var cmd = connection.CreateCommand();
         cmd.CommandText = "SELECT MIN(Timestamp), MAX(Timestamp) FROM Messages;";

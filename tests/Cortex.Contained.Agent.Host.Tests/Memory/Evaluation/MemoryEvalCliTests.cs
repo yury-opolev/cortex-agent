@@ -172,4 +172,31 @@ public sealed class MemoryEvalCliTests : IDisposable
         Assert.Equal(0, result.Code);
         Assert.Contains("usable", result.Output, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public async Task SampleAndAblate_EncryptedInstall_SeedsAndDatasetSealedNoRawTextOnDisk()
+    {
+        var keys = Cortex.Contained.Agent.Host.Tests.Evaluation.EvalTestKeys.Ring();
+        var protection = Cortex.Contained.Agent.Host.Evaluation.EvalProtection.Encrypted(keys);
+        await MemoryEvalCorpusTests.SeedEncryptedAsync(
+            this.live, keys, ("mem-invoice", null, "Invoice INV-2041 zqmemtext was paid in March", ["finance"]), ("mem-train", "Trip", "Train trip to TownB", ["travel"]));
+        async Task<int> Run(params string[] args)
+        {
+            using var output = new StringWriter();
+            return await MemoryEvalCli.RunAsync([.. args, "--dir", this.workspace.Directory], output, this.live, _ => new FakeMemoryEmbedder(), CancellationToken.None, protection: protection);
+        }
+
+        Assert.Equal(0, await Run("init"));
+        Assert.Equal(0, await Run("sample", "--count", "5"));
+        Assert.True(Cortex.Contained.Agent.Host.Evaluation.EvalProtection.IsSealed(this.workspace.SeedsPath));
+        protection.WriteLines(this.workspace.DatasetPath, [MemoryEvalDataset.ToLine(new MemoryEvalQuery { Id = "m001", Text = "invoice paid", Category = "lookup", Judgments = [new MemoryJudgment("mem-invoice", 2)] })]);
+        this.workspace.WritePlan(new MemoryAblationPlan { Configs = MemoryAblationGrid.Default().Where(c => c.Name is "dense" or "hybrid-rrf60").ToList() });
+
+        Assert.Equal(0, await Run("ablate", "--split", "all"));
+
+        Assert.All(
+            Directory.EnumerateFiles(this.workspace.Directory, "*", SearchOption.AllDirectories),
+            f => Assert.DoesNotContain("zqmemtext", System.Text.Encoding.UTF8.GetString(File.ReadAllBytes(f)), StringComparison.Ordinal));
+        Assert.Single(Directory.EnumerateFiles(this.workspace.RunsDirectory, "report.md", SearchOption.AllDirectories));
+    }
 }

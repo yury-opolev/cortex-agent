@@ -1,6 +1,8 @@
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using Cortex.Contained.Agent.Host.Evaluation;
+using Cortex.Contained.Agent.Host.Evaluation.Frozen;
 using Cortex.Contained.Agent.Host.Reranking;
 using Cortex.Contained.Agent.Host.Reranking.Evaluation;
 using Cortex.Contained.Contracts.Config.Yaml;
@@ -23,7 +25,7 @@ public static class MemoryEvalCli
 {
     private const string Usage =
         "usage: memory-eval <init|sample|validate|guard|pool|register|ablate|holdout|kappa|rerank-curve|gate-r> [--dir /app/state/eval/memory] " +
-        "[--source /app/state/memory] [--count 300] [--depth 10] [--split dev|test|all] [--embedder http://embeddings:11434] [--labels judge-agreement.csv]\n" +
+        "[--source /app/state/memory] [--count 300] [--depth 10] [--split dev|test|all] [--embedder http://embeddings:11434] [--labels judge-agreement.csv] [--corpus frozen:v1]\n" +
         "rerank-curve [--condition normal|embedder-busy|cold] [--base CONFIG] [--reranker http://reranker:8080] [--timeout-ms 30000]; " +
         "gate-r --config CONFIG [--timeout-ms 2000]; both read the reranker key from Reranker__ApiKey.";
 
@@ -125,7 +127,8 @@ public static class MemoryEvalCli
         MemoryMcpOptions live,
         Func<MemoryMcpOptions, IEmbeddingService> embedderFactory,
         CancellationToken cancellationToken,
-        Func<RerankerOptions, IReranker>? rerankerFactory = null)
+        Func<RerankerOptions, IReranker>? rerankerFactory = null,
+        EvalProtection? protection = null)
     {
         ArgumentNullException.ThrowIfNull(args);
         rerankerFactory ??= RerankEvalSetup.LiveReranker;
@@ -138,8 +141,29 @@ public static class MemoryEvalCli
             return 2;
         }
 
-        var workspace = new MemoryEvalWorkspace(Option(args, "--dir") ?? MemoryEvalWorkspace.DefaultDirectory);
+        var workspace = new MemoryEvalWorkspace(Option(args, "--dir") ?? MemoryEvalWorkspace.DefaultDirectory, protection);
         Directory.CreateDirectory(workspace.Directory);
+        if (Option(args, "--corpus") is { } corpus)
+        {
+            // The sanitised frozen copy (§4.2): its own registered workspace, a store rebuilt from its sanitised memories.
+            try
+            {
+                if (args[0] is "init" or "register" or "sample" or "pool")
+                {
+                    throw new InvalidOperationException($"'{args[0]}' does not apply to a frozen corpus: its dataset was labelled and registered before it was frozen.");
+                }
+
+                var version = FrozenCorpusStore.ResolveCorpusOption(corpus, workspace.Directory);
+                workspace = new MemoryEvalWorkspace(
+                    Path.Combine(version, "memory"), (protection ?? EvalProtection.Plaintext).ForFrozenSource(), Path.Combine(version, FrozenCorpusBuilder.MemoriesFileName));
+            }
+            catch (InvalidOperationException ex)
+            {
+                await output.WriteLineAsync("error: " + ex.Message).ConfigureAwait(false);
+                return 2;
+            }
+        }
+
         if (MemoryEvalCorpus.SweepAbandoned(workspace.RunsDirectory) is var swept and > 0)
         {
             await output.WriteLineAsync(string.Create(CultureInfo.InvariantCulture,
@@ -198,6 +222,26 @@ public static class MemoryEvalCli
     }
 
     /// <summary>
+    /// Entry point inside the agent process (an evaluation job): the agent's memory options, the Bridge-granted
+    /// reranker and <paramref name="protection"/> (encrypted copies, sealed dataset and seeds on an encrypted install).
+    /// </summary>
+    public static Task<int> RunInAgentAsync(
+        IReadOnlyList<string> args,
+        TextWriter output,
+        EvalProtection protection,
+        MemoryMcpOptions live,
+        Func<RerankerOptions, IReranker> rerankerFactory,
+        CancellationToken cancellationToken) =>
+        RunAsync(
+            args,
+            output,
+            live,
+            options => new OllamaEmbeddingService(new StaticOptionsMonitor(options), NullLogger<OllamaEmbeddingService>.Instance),
+            cancellationToken,
+            rerankerFactory,
+            protection);
+
+    /// <summary>
     /// The agent's <c>MemoryMcp</c> configuration, loaded like <c>Program.cs</c> (appsettings, environment,
     /// then <c>cortex.yml</c>), with the CLI overrides.
     /// </summary>
@@ -250,7 +294,7 @@ public static class MemoryEvalCli
         await using var corpus = await context.OpenCorpusAsync("sample", cancellationToken).ConfigureAwait(false);
         var memories = await corpus.ListMemoriesAsync(cancellationToken).ConfigureAwait(false);
         var seeds = MemoryQuerySeeds.Select(memories, count);
-        await File.WriteAllLinesAsync(context.Workspace.SeedsPath, seeds.Select(s => JsonSerializer.Serialize(s, Json)), cancellationToken).ConfigureAwait(false);
+        context.Workspace.Protection.WriteLines(context.Workspace.SeedsPath, seeds.Select(s => JsonSerializer.Serialize(s, Json)));
         await context.Output.WriteLineAsync(string.Create(CultureInfo.InvariantCulture,
             $"{seeds.Count} seeds from {memories.Count} memories: {context.Workspace.SeedsPath}. It holds raw memory text: delete it once dataset.jsonl is written.")).ConfigureAwait(false);
         return 0;
@@ -258,7 +302,7 @@ public static class MemoryEvalCli
 
     private static async Task<int> ValidateAsync(MemoryEvalWorkspace workspace, TextWriter output)
     {
-        var queries = MemoryEvalDataset.Read(workspace.DatasetPath);
+        var queries = workspace.ReadDataset();
         var errors = MemoryEvalDataset.ValidateForRegistration(queries);
         foreach (var error in errors)
         {
@@ -274,7 +318,7 @@ public static class MemoryEvalCli
 
     private static async Task<int> GuardAsync(CommandContext context, CancellationToken cancellationToken)
     {
-        var queries = MemoryEvalDataset.Read(context.Workspace.DatasetPath).Where(q => q.Category == "paraphrase").ToList();
+        var queries = context.Workspace.ReadDataset().Where(q => q.Category == "paraphrase").ToList();
         var runDir = NewRunDirectory(context.Workspace, "guard");
         List<ParaphraseCheck> checks;
         await using (var corpus = await context.OpenCorpusAsync(runDir, cancellationToken).ConfigureAwait(false))
@@ -303,7 +347,7 @@ public static class MemoryEvalCli
 
     private static async Task<int> PoolAsync(CommandContext context, int depth, CancellationToken cancellationToken)
     {
-        var queries = MemoryEvalDataset.Read(context.Workspace.DatasetPath);
+        var queries = context.Workspace.ReadDataset();
         var plan = context.Workspace.ReadPlan();
         var lines = new List<string>();
         await using (var corpus = await context.OpenCorpusAsync("pool", cancellationToken).ConfigureAwait(false))
@@ -352,7 +396,7 @@ public static class MemoryEvalCli
     private static async Task<(string RunDirectory, AblationReport Report)> RunAsync(
         CommandContext context, IReadOnlyList<MemoryAblationConfig> configs, string baseline, string split, string kind, CancellationToken cancellationToken)
     {
-        var all = MemoryEvalDataset.Read(context.Workspace.DatasetPath);
+        var all = context.Workspace.ReadDataset();
         var errors = MemoryEvalDataset.Validate(all);
         if (errors.Count > 0)
         {
@@ -413,11 +457,11 @@ public static class MemoryEvalCli
     private sealed record CommandContext(
         MemoryEvalWorkspace Workspace, MemoryMcpOptions Live, Func<MemoryMcpOptions, IEmbeddingService> EmbedderFactory, TextWriter Output)
     {
-        /// <summary>Opens a copy of the live store under <paramref name="runDirectory"/> (a name is placed under <c>runs/</c>).</summary>
+        /// <summary>Opens the corpus (live copy or frozen snapshot) under <paramref name="runDirectory"/> (a name is placed under <c>runs/</c>).</summary>
         public Task<MemoryEvalCorpus> OpenCorpusAsync(string runDirectory, CancellationToken cancellationToken)
         {
             var directory = Path.IsPathRooted(runDirectory) ? runDirectory : NewRunDirectory(this.Workspace, runDirectory);
-            return MemoryEvalCorpus.CreateAsync(this.Live.DataDirectory, directory, this.Live, this.EmbedderFactory(this.Live), cancellationToken);
+            return MemoryEvalCorpus.OpenForAsync(this.Workspace, this.Live, this.EmbedderFactory(this.Live), directory, cancellationToken);
         }
     }
 

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Cortex.Contained.Agent.Host.Evaluation;
 
 namespace Cortex.Contained.Agent.Host.History.Evaluation;
 
@@ -39,16 +40,20 @@ public sealed class EvalWorkspace
         Converters = { new JsonStringEnumConverter() },
     };
 
-    public EvalWorkspace(string directory)
+    public EvalWorkspace(string directory, EvalProtection? protection = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(directory);
         this.Directory = directory;
+        this.Protection = protection ?? EvalProtection.Plaintext;
     }
 
     /// <summary>Workspace root.</summary>
     public string Directory { get; }
 
-    /// <summary>Labelled queries (<see cref="EvalQuery"/> per line).</summary>
+    /// <summary>How the dataset is sealed and the corpus copies are encrypted.</summary>
+    public EvalProtection Protection { get; }
+
+    /// <summary>Labelled queries (<see cref="EvalQuery"/> per line; sealed on an encrypted install).</summary>
     public string DatasetPath => Path.Combine(this.Directory, "dataset.jsonl");
 
     /// <summary>Pre-registered analysis plan.</summary>
@@ -65,6 +70,12 @@ public sealed class EvalWorkspace
 
     /// <summary>Writes indented JSON.</summary>
     public static void WriteJson(string path, object value) => File.WriteAllText(path, JsonSerializer.Serialize(value, Json));
+
+    /// <summary>Reads <c>dataset.jsonl</c> through <see cref="Protection"/>.</summary>
+    public IReadOnlyList<EvalQuery> ReadDataset() =>
+        File.Exists(this.DatasetPath)
+            ? EvalDataset.Parse(this.Protection.ReadLines(this.DatasetPath), this.DatasetPath)
+            : throw new InvalidOperationException("dataset.jsonl is missing.");
 
     /// <summary>Reads <c>ablation.json</c>.</summary>
     public AblationPlan ReadPlan() =>

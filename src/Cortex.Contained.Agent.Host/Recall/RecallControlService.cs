@@ -25,6 +25,7 @@ public sealed class RecallControlService
     private readonly QuarantineReviewService review;
     private readonly HistoryPurgeService purge;
     private readonly EventBackfillService? backfill;
+    private readonly Evaluation.Frozen.FrozenCorpusStore? frozen;
 
     public RecallControlService(
         RecallSettingsStore store,
@@ -36,7 +37,8 @@ public sealed class RecallControlService
         MemoryQuarantine quarantine,
         QuarantineReviewService review,
         HistoryPurgeService purge,
-        EventBackfillService? backfill = null)
+        EventBackfillService? backfill = null,
+        Evaluation.Frozen.FrozenCorpusStore? frozen = null)
     {
         this.store = store;
         this.history = history;
@@ -48,6 +50,7 @@ public sealed class RecallControlService
         this.review = review;
         this.purge = purge;
         this.backfill = backfill;
+        this.frozen = frozen;
     }
 
     /// <summary>The effective settings.</summary>
@@ -75,7 +78,8 @@ public sealed class RecallControlService
     {
         var historyHealth = await this.health.SnapshotAsync(cancellationToken).ConfigureAwait(false);
         var quarantined = (await this.quarantine.GetQuarantinedIdsAsync(cancellationToken).ConfigureAwait(false)).Count;
-        return RecallStatusMapper.Status(this.GetSettings(), historyHealth, this.rerankHealth(), this.backfill?.Status, quarantined);
+        return RecallStatusMapper.Status(this.GetSettings(), historyHealth, this.rerankHealth(), this.backfill?.Status, quarantined)
+            with { PendingOffsiteDeletions = this.frozen?.PendingDeletions() ?? [] };
     }
 
     /// <summary>What a purge of <paramref name="request"/> would delete.</summary>
@@ -96,6 +100,9 @@ public sealed class RecallControlService
             DependentMemories = preview.DependentMemories,
             RangeFrom = preview.RangeFrom,
             RangeTo = preview.RangeTo,
+            FrozenCorpusVersions = this.frozen is { } frozen && preview.Messages > 0 && preview.RangeTo is { } to
+                ? frozen.Overlapping(preview.RangeFrom, to).Select(frozen.Read).OfType<Evaluation.Frozen.FrozenCorpusManifest>().Select(Evaluation.Frozen.FrozenCorpusStore.ToDto).ToList()
+                : [],
         };
     }
 

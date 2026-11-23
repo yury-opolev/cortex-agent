@@ -60,8 +60,13 @@ rekeys came in 2.7.0).
 | Bridge recording sessions | opt-in debugging recorder |
 | Volume snapshots, host backups, provider-side copies, filesystem free space | outside what the application can reach |
 
-Evaluation runs (`eval/`) hold raw plaintext copies of your history and memories. Enabling erases them by default,
-and `history-eval`, `history-smoke` and `memory-eval` refuse to run while encryption is on.
+Evaluation runs (`eval/`) made before encryption was enabled hold raw plaintext copies of your history and memories;
+enabling erases them by default. The Storage page classifies `eval/` file by file (SQLite headers, sealed files, frozen manifests): plaintext copies
+left over from before encryption show as plaintext or mixed with an erase hint, never as encrypted. With encryption on, `history-eval`, `memory-eval` and `eval-corpus` run inside the
+agent as evaluation jobs (`scripts/Invoke-CortexEval.ps1`): their corpus copies are encrypted with a dedicated
+evaluation key, datasets and seeds are sealed, and reports hold ids and numbers only. Run through `docker exec`, the
+commands that copy stores refuse and point to the script; `history-smoke` keeps only its synthetic checks. See the
+[evaluation runbook](evaluation-runbook.md).
 
 The Bridge itself keeps no message history. `%LOCALAPPDATA%\Cortex\messages.db`, if present, is an unused file
 from older versions. It is encrypted with the Bridge database key, so you can delete it.

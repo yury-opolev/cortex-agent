@@ -9,10 +9,10 @@ namespace Cortex.Contained.Contracts.Hub;
 /// interfaces (<see cref="IChatHub"/>, <see cref="IMemoryHub"/>,
 /// <see cref="IHistoryHub"/>, <see cref="IVoiceIdHub"/>, <see cref="ICodingHub"/>,
 /// <see cref="IMcpHub"/>, <see cref="ISystemHub"/>, <see cref="ISubagentHub"/>, <see cref="IRecallHub"/>,
-/// <see cref="IStorageHub"/>) for
+/// <see cref="IStorageHub"/>, <see cref="IEvaluationHub"/>) for
 /// readability and to let consumers depend on the narrow slice they actually use. All
 /// methods still share a single SignalR hub connection and route by method name, so the
 /// wire protocol is unchanged.
 /// </remarks>
-public interface IAgentHub : IChatHub, IMemoryHub, IHistoryHub, IVoiceIdHub, ICodingHub, IMcpHub, ISystemHub, ISubagentHub, IRecallHub, IStorageHub{
+public interface IAgentHub : IChatHub, IMemoryHub, IHistoryHub, IVoiceIdHub, ICodingHub, IMcpHub, ISystemHub, ISubagentHub, IRecallHub, IStorageHub, IEvaluationHub{
 }

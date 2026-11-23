@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using Cortex.Contained.Agent.Host.Evaluation.Frozen;
 using Cortex.Contained.Agent.Host.Storage;
 using Cortex.Contained.Contracts.Hub;
 
@@ -79,6 +80,73 @@ public sealed class StorageInventoryTests : IDisposable
         Assert.DoesNotContain("other:memory", notCovered.Keys);
         Assert.Equal(1, evaluation!.Files);
         Assert.Equal(StorageItemStates.Plaintext, evaluation.State);
+        Assert.Equal(StorageItemStates.Plaintext, inventory.Evaluation(encryptedCopies: true)!.State);
+    }
+
+    [Fact]
+    public void Evaluation_EncryptedInstallWithOnlySealedFilesAndReports_IsEncrypted()
+    {
+        var cipher = new StorageFileCipher(RandomNumberGenerator.GetBytes(32), "eval-files/dataset.jsonl");
+        var eval = this.layout.EvaluationDirectory;
+        Write(Path.Combine(eval, "frozen", "v1", "messages.db"), RandomNumberGenerator.GetBytes(4096));
+        Write(Path.Combine(eval, "frozen", "v1", "history", "dataset.jsonl"), cipher.Encrypt("{}"u8.ToArray()));
+        Write(Path.Combine(eval, "frozen", "v1", "history", "dataset.example.jsonl"), "{}"u8.ToArray());
+        Write(Path.Combine(eval, "history", "runs", "r1", "report.json"), "{}"u8.ToArray());
+        new FrozenCorpusManifest { Version = "v1", Encrypted = true }.Write(Path.Combine(eval, "frozen", "v1", FrozenCorpusManifest.FileName));
+
+        var evaluation = new StorageInventory(this.layout).Evaluation(encryptedCopies: true)!;
+
+        Assert.Equal(StorageItemStates.Encrypted, evaluation.State);
+        Assert.DoesNotContain("erase", evaluation.Detail, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Evaluation_EncryptedInstallWithOnlyReports_IsEncrypted()
+    {
+        Write(Path.Combine(this.layout.EvaluationDirectory, "history", "runs", "r1", "report.json"), "{}"u8.ToArray());
+
+        Assert.Equal(StorageItemStates.Encrypted, new StorageInventory(this.layout).Evaluation(encryptedCopies: true)!.State);
+    }
+
+    [Fact]
+    public void Evaluation_EncryptedInstallWithLeftoverPlaintextCopies_IsPlaintextOrMixedWithAnEraseHint()
+    {
+        var eval = this.layout.EvaluationDirectory;
+        Write(Path.Combine(eval, "hybrid", "runs", "r1", "messages.db"), SqliteHeader);
+        var inventory = new StorageInventory(this.layout);
+
+        var plaintext = inventory.Evaluation(encryptedCopies: true)!;
+        Write(Path.Combine(eval, "frozen", "v1", "messages.db"), RandomNumberGenerator.GetBytes(4096));
+        var mixed = inventory.Evaluation(encryptedCopies: true)!;
+
+        Assert.Equal(StorageItemStates.Plaintext, plaintext.State);
+        Assert.Equal(StorageItemStates.Mixed, mixed.State);
+        Assert.Contains("erase", mixed.Detail, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("erase", plaintext.Detail, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("history/dataset.jsonl")]
+    [InlineData("memories.jsonl")]
+    [InlineData("secret.key")]
+    [InlineData("memory/abc.memory.data")]
+    public void Evaluation_EncryptedInstallWithAPlaintextTextFile_IsNotEncrypted(string name)
+    {
+        var eval = this.layout.EvaluationDirectory;
+        Write(Path.Combine(eval, "frozen", "v1", "messages.db"), RandomNumberGenerator.GetBytes(4096));
+        Write(Path.Combine(eval, "frozen", "v1", name), "plain text"u8.ToArray());
+
+        Assert.Equal(StorageItemStates.Mixed, new StorageInventory(this.layout).Evaluation(encryptedCopies: true)!.State);
+    }
+
+    [Fact]
+    public void Evaluation_FrozenManifestOfAPlaintextVersion_IsNotEncrypted()
+    {
+        var eval = this.layout.EvaluationDirectory;
+        Write(Path.Combine(eval, "frozen", "v1", "messages.db"), RandomNumberGenerator.GetBytes(4096));
+        new FrozenCorpusManifest { Version = "v1", Encrypted = false }.Write(Path.Combine(eval, "frozen", "v1", FrozenCorpusManifest.FileName));
+
+        Assert.Equal(StorageItemStates.Mixed, new StorageInventory(this.layout).Evaluation(encryptedCopies: true)!.State);
     }
 
     [Fact]

@@ -113,6 +113,39 @@ public static partial class EncryptedSqlite
         return match.Success ? Version.Parse(match.Value) : new Version(0, 0, 0);
     }
 
+    /// <summary>
+    /// Writes a consistent copy of <paramref name="source"/> (read with <paramref name="sourcePassword"/>, null for
+    /// plaintext; the database may be in use) to <paramref name="target"/>, encrypted with <paramref name="targetPassword"/>
+    /// (null: plaintext). <c>VACUUM INTO</c> writes the target pages already encrypted, so no other form of the copy
+    /// ever reaches the disk. Never overwrites: throws <see cref="IOException"/> when <paramref name="target"/> exists.
+    /// </summary>
+    public static void CopyDatabase(string source, string? sourcePassword, string target, string? targetPassword)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(source);
+        ArgumentException.ThrowIfNullOrWhiteSpace(target);
+        if (sourcePassword is not null)
+        {
+            EnsureHex(sourcePassword);
+        }
+
+        if (targetPassword is not null)
+        {
+            EnsureHex(targetPassword);
+        }
+
+        if (File.Exists(target))
+        {
+            throw new IOException($"{Path.GetFileName(target)} already exists.");
+        }
+
+        using var connection = new SqliteConnection(ConnectionString(source, sourcePassword, SqliteOpenMode.ReadOnly, pooling: false));
+        connection.Open();
+
+        // SQLite3 Multiple Ciphers gives a target without a key the source's key; an empty key makes it plaintext.
+        var into = ExportTarget(target, targetPassword ?? string.Empty);
+        Execute(connection, $"VACUUM main INTO '{into}';");
+    }
+
     /// <summary>A connection string for <paramref name="path"/>, encrypted when <paramref name="password"/> is set.</summary>
     public static string ConnectionString(string path, string? password, SqliteOpenMode mode, bool pooling) =>
         new SqliteConnectionStringBuilder

@@ -58,6 +58,15 @@
 | POST | `/api/tenants/{tenantId}/storage/encryption/enable` | Yes + password | Body `{ password, confirm: "ENCRYPT", eraseEvaluationArtifacts = true, acceptNoRecoveryKit = false }`. `403` wrong password; `400` without the confirmation or without an exported kit (unless accepted); `409` when the agent holds encrypted data the Bridge has no key for, or refuses the key. Pushes the key, then `202` with `{ accepted, alreadyEnabled, restartScheduled, errors[] }` (one-way; the agent restarts) |
 | POST | `/api/tenants/{tenantId}/storage/recovery-kit` | Yes + password | Body `{ password, passphrase }` (passphrase ≥ 12). Returns the kit file (`application/json`, `Cache-Control: no-store`) and records the export time |
 | POST | `/api/tenants/{tenantId}/storage/recovery-kit/restore` | Yes + password | Body `{ password, passphrase, kit }`. Installs the kit key only when the Bridge has no usable key or the agent reports its data belongs to the kit's key; `409` otherwise; `400` wrong passphrase or another tenant's kit. Returns `{ restored, fingerprint, applied, message }` |
+| POST | `/api/tenants/{tenantId}/eval/jobs` | Yes + password | Body `{ password, tool, args[], passphrase? }` (`tool`: `history-eval`, `memory-eval`, `eval-corpus`). Starts the command inside the agent: `202` with the job, `409` when refused (another job runs, storage locked, unknown tool, or `--dir`/`--source`/`--labels`/`--embedder`/`--reranker`), `403` wrong password. Rate limited (`reauth`) |
+| GET | `/api/tenants/{tenantId}/eval/jobs` | Yes | `{ jobs: [EvaluationJobDto] }`, newest first |
+| GET | `/api/tenants/{tenantId}/eval/jobs/{jobId}` | Yes | `{ id, tool, command, state, exitCode, encrypted, startedAt, finishedAt, output }` (`state`: `running`, `succeeded`, `failed`, `cancelled`, `refused`); `404` unknown |
+| POST | `/api/tenants/{tenantId}/eval/jobs/{jobId}/cancel` | Yes | `{ cancelled }` |
+| POST | `/api/tenants/{tenantId}/eval/files/read` | Yes + password | Body `{ password, tool, name }` (allow-listed workspace files). `{ exists, sealed, content }`, `Cache-Control: no-store`. Rate limited |
+| POST | `/api/tenants/{tenantId}/eval/files/write` | Yes + password | Body `{ password, tool, name, content }` (≤ 8 Mi characters). Seals datasets and the dictionary on an encrypted install; identical content is not rewritten. `{ written, unchanged, sealed }`. Rate limited |
+| GET | `/api/tenants/{tenantId}/eval/frozen` | Yes | `{ versions[], packages[], pendingOffsiteDeletions[] }` (ids, counts, file names) |
+| POST | `/api/tenants/{tenantId}/eval/frozen/packages/{name}` | Yes + password | Body `{ password }`. Streams a passphrase-encrypted `*.cxpkg` package (`application/octet-stream`, `Cache-Control: no-store`); `404` unknown, `400` not a package name. Rate limited |
+| POST | `/api/tenants/{tenantId}/eval/frozen/{version}/offsite-deleted` | Yes + password | Body `{ password }`. Records that the owner deleted the version's attachment from SafeExchange; `404` when none is pending. Rate limited |
 | POST | `/api/channels/{type}` | Yes | Update channel configuration |
 | GET | `/api/mcp/actions` | Yes | List approval-gated MCP mutation actions (filter by `serverKey`, `toolName`, `state`, `workerId`; paged with `before`/`limit`) |
 | GET | `/api/mcp/actions/{actionId}` | Yes | One action, including its canonical arguments (for review) and result |
@@ -192,6 +201,20 @@ same workflow (always `review`).
 | `GetStorageEncryptionStatus()` -> `StorageEncryptionStatusDto` | Mode and source (`off`/`config`/`marker`/`detected`), restart pending, key state and fingerprints, store states, every item (header-only inventory) |
 | `PreviewStorageEncryption()` -> `StorageEncryptionPreviewDto` | What enabling would encrypt, erase and leave alone; disk-space pre-flight; changes nothing |
 | `EnableStorageEncryption(StorageEncryptionEnableRequestDto)` -> `StorageEncryptionEnableResultDto` | Requires the pushed key with the given fingerprint; erases evaluation copies on request; writes the one-way marker; stops the agent so Docker restarts it encrypted |
+
+#### Evaluation (`IEvaluationHub`)
+
+| Method | Description |
+|--------|-------------|
+| `StartEvaluation(EvaluationStartRequestDto)` -> `EvaluationJobDto` | Runs `history-eval`, `memory-eval` or `eval-corpus` in the agent process (encrypted-workspace mode on an encrypted install); one job at a time; refusals come back as state `refused` |
+| `GetEvaluationJob(jobId)` / `ListEvaluationJobs()` / `CancelEvaluationJob(jobId)` | Job state and output (ids, numbers, paths; ≤ 64 KiB) |
+| `ReadEvaluationFile(EvaluationFileRequestDto)` / `WriteEvaluationFile(EvaluationFileWriteDto)` | Allow-listed workspace files, sealed ones decrypted / sealed |
+| `GetFrozenCorpusStatus()` -> `FrozenCorpusStatusDto` | Frozen versions, export packages, pending off-machine deletions |
+| `ReadEvaluationPackage(name, offset, count)` -> `EvaluationPackageChunkDto` | ≤ 4 MiB of a passphrase-encrypted package |
+| `AcknowledgeOffsiteDeletion(version)` -> `bool` | The owner deleted the version's SafeExchange attachment |
+
+`PreviewHistoryPurge` also returns `frozenCorpusVersions` (versions the purge destroys) and `GetRecallStatus` returns
+`pendingOffsiteDeletions`.
 
 #### `SetHistoryRecallTools(enabled)` -> `bool`
 

@@ -185,4 +185,49 @@ public sealed class MemoryEvalCorpusTests : IDisposable
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             MemoryEvalCorpus.CreateAsync(Path.Combine(this.root, "missing"), Path.Combine(this.root, "run"), this.live, new FakeMemoryEmbedder(), CancellationToken.None));
     }
+
+    /// <summary>Seeds an encrypted "live" store the way <c>EncryptedMemoryStore</c> keeps it.</summary>
+    internal static async Task SeedEncryptedAsync(MemoryMcpOptions options, Cortex.Contained.Agent.Host.Storage.StorageKeyRing keys, params (string Id, string? Title, string Content, string[] Tags)[] memories)
+    {
+        var cipher = new Cortex.Contained.Agent.Host.Storage.StorageFileCipher(
+            keys.KeyFor(Cortex.Contained.Agent.Host.Storage.EncryptedMemoryStore.ContentPurpose), Cortex.Contained.Agent.Host.Storage.EncryptedMemoryStore.ContentPurpose);
+        using var store = new SqliteVecMemoryStore(
+            Options.Create(options), cipher, NullLogger<SqliteVecMemoryStore>.Instance, keys.PasswordFor(Cortex.Contained.Agent.Host.Storage.EncryptedMemoryStore.DatabasePurpose));
+        await store.InitializeAsync(CancellationToken.None);
+        var now = DateTimeOffset.UtcNow;
+        foreach (var (id, title, content, tags) in memories)
+        {
+            var chunk = new ChunkRecord { MemoryId = id, ChunkIndex = 0, Length = content.Length, Title = title, Tags = [.. tags], CreatedAt = now, UpdatedAt = now };
+            await store.StoreMemoryAsync(id, content, [chunk], [FakeMemoryEmbedder.Embed(content)], CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task CreateAsync_EncryptedStore_CopyEncryptedWithTheEvaluationRingAndSearchable()
+    {
+        var keys = Cortex.Contained.Agent.Host.Tests.Evaluation.EvalTestKeys.Ring();
+        await SeedEncryptedAsync(this.live, keys, ("mem-invoice", null, "Invoice INV-2041 zqmemtext was paid in March", ["finance"]));
+        var runDirectory = Path.Combine(this.root, "run");
+        var protection = Cortex.Contained.Agent.Host.Evaluation.EvalProtection.Encrypted(keys);
+
+        await using (var corpus = await MemoryEvalCorpus.CreateAsync(this.live.DataDirectory, runDirectory, this.live, new FakeMemoryEmbedder(), CancellationToken.None, protection: protection))
+        {
+            var corpusFiles = Directory.EnumerateFiles(Path.Combine(runDirectory, "corpus"), "*", SearchOption.AllDirectories).ToList();
+            Assert.All(corpusFiles, f => Assert.DoesNotContain("zqmemtext", System.Text.Encoding.UTF8.GetString(ReadShared(f)), StringComparison.Ordinal));
+            var keyword = await corpus.SearchAsync(
+                new MemoryAblationConfig { Name = "keyword", Mode = MemorySearchMode.Keyword }, new MemoryEvalQuery { Id = "m1", Text = "INV-2041", Category = "identifier" }, CancellationToken.None);
+            Assert.Equal(["mem-invoice"], keyword.Memories.Select(m => m.MemoryId));
+            Assert.Contains("zqmemtext", (await corpus.ListMemoriesAsync(CancellationToken.None)).Single().Content, StringComparison.Ordinal);
+        }
+
+        Assert.False(Directory.Exists(Path.Combine(runDirectory, "corpus")));
+    }
+
+    private static byte[] ReadShared(string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var buffer = new MemoryStream();
+        stream.CopyTo(buffer);
+        return buffer.ToArray();
+    }
 }

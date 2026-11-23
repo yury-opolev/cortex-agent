@@ -29,4 +29,26 @@ public sealed class HistoryPurgeConfirmationTests
         Assert.EndsWith("No memories were created in that period.", HistoryPurgeConfirmation.Describe(new HistoryPurgePreviewDto { Messages = 1 }, DependentMemoryActions.Delete), StringComparison.Ordinal);
         Assert.Equal("Nothing matches: no messages would be deleted.", HistoryPurgeConfirmation.Describe(new HistoryPurgePreviewDto(), DependentMemoryActions.Review));
     }
+
+    [Fact]
+    public void Describe_OverlappingExportedFrozenCorpus_NamesTheOffMachineCopyToDelete()
+    {
+        var preview = new HistoryPurgePreviewDto
+        {
+            Messages = 2,
+            FrozenCorpusVersions =
+            [
+                new FrozenCorpusVersionDto { Version = "v1", PackageFileName = "cortex-eval-corpus-v1.cxpkg", ExportedAt = DateTimeOffset.UnixEpoch },
+                new FrozenCorpusVersionDto { Version = "v2", PackageFileName = "cortex-eval-corpus-v2.cxpkg" },
+            ],
+        };
+
+        var text = HistoryPurgeConfirmation.Describe(preview, DependentMemoryActions.Review);
+
+        Assert.EndsWith(
+            "No memories were created in that period. It also destroys the frozen evaluation corpus v1, v2 on this machine (freeze a new version afterwards). " +
+            "Its off-machine copy must be deleted by you: file cortex-eval-corpus-v1.cxpkg of the SafeExchange secret cortex-recovery-kit (Recall lists it until you confirm the deletion).",
+            text,
+            StringComparison.Ordinal);
+    }
 }

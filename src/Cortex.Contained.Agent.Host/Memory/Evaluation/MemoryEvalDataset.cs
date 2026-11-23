@@ -76,10 +76,13 @@ public static class MemoryEvalDataset
         ["lookup", "paraphrase", "cross_language", "identifier", "tag_filtered", "multi", "abstention"];
 
     /// <summary>Reads one query per line; blank lines are skipped.</summary>
-    public static IReadOnlyList<MemoryEvalQuery> Read(string path) =>
-        File.ReadLines(path)
+    public static IReadOnlyList<MemoryEvalQuery> Read(string path) => Parse(File.ReadLines(path), path);
+
+    /// <summary>Parses one query per line of <paramref name="source"/>; blank lines are skipped.</summary>
+    public static IReadOnlyList<MemoryEvalQuery> Parse(IEnumerable<string> lines, string source) =>
+        lines
             .Where(line => !string.IsNullOrWhiteSpace(line))
-            .Select(line => JsonSerializer.Deserialize<MemoryEvalQuery>(line, Json) ?? throw new InvalidDataException($"Bad line in {path}"))
+            .Select(line => JsonSerializer.Deserialize<MemoryEvalQuery>(line, Json) ?? throw new InvalidDataException($"Bad line in {source}"))
             .ToList();
 
     /// <summary>Serialises one query as a JSONL line.</summary>

@@ -1,4 +1,6 @@
 using System.Globalization;
+using Cortex.Contained.Agent.Host.Evaluation;
+using Cortex.Contained.Agent.Host.Evaluation.Frozen;
 using Cortex.Contained.Agent.Host.Reranking;
 using Cortex.Contained.Agent.Host.Reranking.Evaluation;
 using MemoryMcp.Core.Configuration;
@@ -18,7 +20,7 @@ public static class HistoryEvalCli
 {
     private const string Usage =
         "usage: history-eval <init|validate|guard|register|ablate|holdout|kappa|rerank-curve|gate-r> [--dir /app/state/eval/hybrid] [--source /app/state/messages.db] " +
-        "[--tz <IANA zone, default: local>] [--split dev|test|all] [--embedder http://embeddings:11434] [--labels judge-agreement.csv]\n" +
+        "[--tz <IANA zone, default: local>] [--split dev|test|all]         [--embedder http://embeddings:11434] [--labels judge-agreement.csv] [--corpus frozen:v1]\n" +
         "rerank-curve [--condition normal|embedder-busy|cold] [--base CONFIG] [--reranker http://reranker:8080] [--timeout-ms 30000]; " +
         "gate-r --config CONFIG [--timeout-ms 2000]; both read the reranker key from Reranker__ApiKey.";
 
@@ -62,6 +64,37 @@ public static class HistoryEvalCli
         return RunAsync(args, output, history => LiveEmbedder(Option(args, "--embedder"), history), cancellationToken);
     }
 
+    /// <summary>
+    /// Entry point inside the agent process (an evaluation job): the configured embedder and history options, the
+    /// live <paramref name="messagesDb"/>, the Bridge-granted reranker and <paramref name="protection"/> (encrypted
+    /// copies and sealed dataset on an encrypted install). The job service has already refused path options.
+    /// </summary>
+    public static Task<int> RunInAgentAsync(
+        IReadOnlyList<string> args,
+        TextWriter output,
+        EvalProtection protection,
+        HistoryOptions configured,
+        MemoryMcpOptions memory,
+        string messagesDb,
+        Func<RerankerOptions, IReranker> rerankerFactory,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(args);
+        ArgumentNullException.ThrowIfNull(memory);
+        return RunAsync(
+            [.. args, "--source", messagesDb],
+            output,
+            history =>
+            {
+                var memoryMonitor = new StaticOptionsMonitor<MemoryMcpOptions>(memory);
+                return new OllamaHistoryEmbedder(new OllamaEmbeddingService(memoryMonitor, NullLogger<OllamaEmbeddingService>.Instance), memoryMonitor, history);
+            },
+            cancellationToken,
+            configured,
+            rerankerFactory,
+            protection);
+    }
+
     /// <summary>Entry point with an injected embedder (tests use a deterministic fake).</summary>
     internal static async Task<int> RunAsync(
         IReadOnlyList<string> args,
@@ -69,7 +102,8 @@ public static class HistoryEvalCli
         Func<IOptionsMonitor<HistoryOptions>, IHistoryEmbedder> embedderFactory,
         CancellationToken cancellationToken,
         HistoryOptions? configured = null,
-        Func<RerankerOptions, IReranker>? rerankerFactory = null)
+        Func<RerankerOptions, IReranker>? rerankerFactory = null,
+        EvalProtection? protection = null)
     {
         ArgumentNullException.ThrowIfNull(args);
         ArgumentNullException.ThrowIfNull(output);
@@ -81,7 +115,7 @@ public static class HistoryEvalCli
 
         configured ??= HistoryCliConfiguration.Load();
         rerankerFactory ??= RerankEvalSetup.LiveReranker;
-        var workspace = new EvalWorkspace(Option(args, "--dir") ?? configured.EvalArtifactsDirectory);
+        var workspace = new EvalWorkspace(Option(args, "--dir") ?? configured.EvalArtifactsDirectory, protection);
         var source = Option(args, "--source") ?? "/app/state/messages.db";
         var baseline = new HistoryOptions { Enabled = true, TimeZone = Option(args, "--tz") ?? string.Empty };
         Directory.CreateDirectory(workspace.Directory);
@@ -91,6 +125,19 @@ public static class HistoryEvalCli
         }
         try
         {
+            if (Option(args, "--corpus") is { } corpus)
+            {
+                // The sanitised frozen copy (§4.2): its own registered workspace and corpus, read with the evaluation key.
+                if (args[0] is "init" or "register")
+                {
+                    throw new InvalidOperationException($"'{args[0]}' does not apply to a frozen corpus: it was registered when it was frozen.");
+                }
+
+                var version = FrozenCorpusStore.ResolveCorpusOption(corpus, workspace.Directory);
+                workspace = new EvalWorkspace(Path.Combine(version, "history"), (protection ?? EvalProtection.Plaintext).ForFrozenSource());
+                source = Path.Combine(version, "messages.db");
+            }
+
             switch (args[0])
             {
                 case "init":
@@ -151,7 +198,7 @@ public static class HistoryEvalCli
 
     private static async Task<int> ValidateAsync(EvalWorkspace workspace, TextWriter output)
     {
-        var queries = EvalDataset.Read(workspace.DatasetPath);
+        var queries = workspace.ReadDataset();
         var errors = EvalDataset.Validate(queries);
         foreach (var error in errors)
         {
@@ -167,10 +214,10 @@ public static class HistoryEvalCli
     private static async Task<int> GuardAsync(
         EvalWorkspace workspace, string source, HistoryOptions baseline, Func<IOptionsMonitor<HistoryOptions>, IHistoryEmbedder> embedderFactory, TextWriter output, CancellationToken cancellationToken)
     {
-        var queries = EvalDataset.Read(workspace.DatasetPath).Where(q => q.Category == "paraphrase").ToList();
+        var queries = workspace.ReadDataset().Where(q => q.Category == "paraphrase").ToList();
         var runDir = NewRunDirectory(workspace, "guard");
         AblationConfig[] keywordOnly = [new AblationConfig { Name = AblationGrid.Baseline, Mode = HistorySearchMode.Keyword }];
-        await using var corpus = await EvalCorpus.CreateAsync(source, runDir, baseline, keywordOnly, embedderFactory, cancellationToken).ConfigureAwait(false);
+        await using var corpus = await EvalCorpus.CreateAsync(source, runDir, baseline, keywordOnly, embedderFactory, cancellationToken, protection: workspace.Protection).ConfigureAwait(false);
         var segments = corpus.SegmentCount();
         var checks = new List<ParaphraseCheck>();
         foreach (var query in queries)
@@ -219,7 +266,7 @@ public static class HistoryEvalCli
         Func<IOptionsMonitor<HistoryOptions>, IHistoryEmbedder> embedderFactory,
         CancellationToken cancellationToken)
     {
-        var all = EvalDataset.Read(workspace.DatasetPath);
+        var all = workspace.ReadDataset();
         var errors = EvalDataset.Validate(all);
         if (errors.Count > 0)
         {
@@ -228,7 +275,7 @@ public static class HistoryEvalCli
 
         var queries = split == "all" ? all : all.Where(q => EvalSplits.Assign(q.Id) == split).ToList();
         var runDir = NewRunDirectory(workspace, kind + "-" + split);
-        await using var corpus = await EvalCorpus.CreateAsync(source, runDir, baseline, configs, embedderFactory, cancellationToken).ConfigureAwait(false);
+        await using var corpus = await EvalCorpus.CreateAsync(source, runDir, baseline, configs, embedderFactory, cancellationToken, protection: workspace.Protection).ConfigureAwait(false);
         var report = await AblationRunner.RunAsync(configs, queries, corpus.SearchAsync, baselineConfig, cancellationToken).ConfigureAwait(false);
         EvalWorkspace.WriteJson(Path.Combine(runDir, "results.json"), report);
         await File.WriteAllTextAsync(

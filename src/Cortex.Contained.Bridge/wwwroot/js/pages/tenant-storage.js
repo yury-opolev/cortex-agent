@@ -31,6 +31,10 @@ function tenantStoragePage() {
         enabling: false,
         restarting: false,
 
+        frozen: null,
+        frozenPassword: "",
+        downloading: "",
+
         async init() {
             await this.loadStatus();
             this.statusTimer = setInterval(() => this.loadStatus(), 5000);
@@ -53,6 +57,46 @@ function tenantStoragePage() {
                 this.restarting = false;
                 Alpine.store("toast").success("Encryption at rest is on and every encrypted store is open");
             }
+            try {
+                this.frozen = await api.get(`/api/tenants/${encodeURIComponent(this.tenantId)}/eval/frozen`);
+            } catch {
+                this.frozen = null;
+            }
+        },
+
+        hasPackage(version) {
+            return (this.frozen?.packages || []).includes(version.packageFileName);
+        },
+
+        /** Downloads a passphrase-encrypted evaluation package (Bridge password again); upload it to SafeExchange as described in the runbook. */
+        async downloadPackage(name) {
+            this.downloading = name;
+            try {
+                const resp = await fetch(`/api/tenants/${encodeURIComponent(this.tenantId)}/eval/frozen/packages/${encodeURIComponent(name)}`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ password: this.frozenPassword }),
+                });
+                if (resp.status === 401) {
+                    window.location.href = "/login.html";
+                    return;
+                }
+                if (!resp.ok) {
+                    const err = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
+                    throw new Error(err.error || `HTTP ${resp.status}`);
+                }
+                const url = URL.createObjectURL(await resp.blob());
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = name;
+                a.click();
+                URL.revokeObjectURL(url);
+                this.frozenPassword = "";
+                Alpine.store("toast").success(`${name} downloaded. Attach it to the SafeExchange secret cortex-recovery-kit under this file name.`);
+            } catch (e) {
+                Alpine.store("toast").error("Download: " + e.message);
+            }
+            this.downloading = "";
         },
 
         applyStatus(data) {
