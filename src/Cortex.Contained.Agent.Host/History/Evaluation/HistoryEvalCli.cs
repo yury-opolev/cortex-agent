@@ -63,6 +63,37 @@ public static class HistoryEvalCli
         return RunAsync(args, output, history => LiveEmbedder(Option(args, "--embedder"), history), cancellationToken);
     }
 
+    /// <summary>
+    /// Entry point inside the agent process (an evaluation job): the configured embedder and history options, the
+    /// live <paramref name="messagesDb"/>, the Bridge-granted reranker and <paramref name="protection"/> (encrypted
+    /// copies and sealed dataset on an encrypted install). The job service has already refused path options.
+    /// </summary>
+    public static Task<int> RunInAgentAsync(
+        IReadOnlyList<string> args,
+        TextWriter output,
+        EvalProtection protection,
+        HistoryOptions configured,
+        MemoryMcpOptions memory,
+        string messagesDb,
+        Func<RerankerOptions, IReranker> rerankerFactory,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(args);
+        ArgumentNullException.ThrowIfNull(memory);
+        return RunAsync(
+            [.. args, "--source", messagesDb],
+            output,
+            history =>
+            {
+                var memoryMonitor = new StaticOptionsMonitor<MemoryMcpOptions>(memory);
+                return new OllamaHistoryEmbedder(new OllamaEmbeddingService(memoryMonitor, NullLogger<OllamaEmbeddingService>.Instance), memoryMonitor, history);
+            },
+            cancellationToken,
+            configured,
+            rerankerFactory,
+            protection);
+    }
+
     /// <summary>Entry point with an injected embedder (tests use a deterministic fake).</summary>
     internal static async Task<int> RunAsync(
         IReadOnlyList<string> args,

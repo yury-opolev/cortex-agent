@@ -34,12 +34,25 @@ public sealed class PlaintextResidueTests : IDisposable
     public async Task EvaluationCommands_RefuseOnlyWhileEncryptionIsOn()
     {
         using var output = new StringWriter();
-        Assert.False(await EvaluationGuard.RefuseWhenEncryptedAsync(this.Configuration(), "history-eval", output));
+        Assert.False(await EvaluationGuard.RefuseWhenEncryptedAsync(this.Configuration(), ["history-eval", "ablate"], output));
 
         new StorageEncryptionMarker { KeyFingerprint = "fp" }.Write(Path.Combine(this.root, StorageEncryptionMarker.FileName));
 
-        Assert.True(await EvaluationGuard.RefuseWhenEncryptedAsync(this.Configuration(), "history-eval", output));
-        Assert.Contains("history-eval is unavailable while encryption at rest is on", output.ToString(), StringComparison.Ordinal);
+        Assert.True(await EvaluationGuard.RefuseWhenEncryptedAsync(this.Configuration(), ["history-eval", "ablate", "--split", "dev"], output));
+        Assert.Contains("Invoke-CortexEval.ps1 -Tool history-eval -- ablate --split dev", output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("history-eval", "kappa")]
+    [InlineData("memory-eval", "kappa")]
+    [InlineData("history-smoke", "embedder-check")]
+    [InlineData("history-smoke", "reranker-check")]
+    public async Task EvaluationCommands_StoreFreeCommandsRunWhileEncrypted(string tool, string command)
+    {
+        new StorageEncryptionMarker { KeyFingerprint = "fp" }.Write(Path.Combine(this.root, StorageEncryptionMarker.FileName));
+        using var output = new StringWriter();
+
+        Assert.False(await EvaluationGuard.RefuseWhenEncryptedAsync(this.Configuration(), [tool, command], output));
     }
 
     /// <summary>

@@ -19,9 +19,10 @@ using Microsoft.Extensions.Options;
 using OllamaSharp;
 using Serilog;
 
-// The evaluation CLIs copy the raw stores into run directories, so they refuse to run while encryption at rest is on.
+// The in-container evaluation CLIs never hold the storage key: on an encrypted install the commands that copy
+// stores run as evaluation jobs inside the agent process instead (scripts/Invoke-CortexEval.ps1).
 if (args.Length > 0 && args[0] is "history-smoke" or "history-eval" or "memory-eval"
-    && await EvaluationGuard.RefuseWhenEncryptedAsync(EvaluationGuard.CliConfiguration(), args[0], Console.Out).ConfigureAwait(false))
+    && await EvaluationGuard.RefuseWhenEncryptedAsync(EvaluationGuard.CliConfiguration(), args, Console.Out).ConfigureAwait(false))
 {
     Environment.ExitCode = EvaluationGuard.RefusedExitCode;
     return;
@@ -294,6 +295,9 @@ builder.Services.AddSingleton(sp => new StorageEncryptionService(
     storageEncryption.Enabled ? sp.GetRequiredService<EncryptedMemoryStore>() : null,
     // Inside the container Docker restarts the agent (restart: unless-stopped) after it stops itself.
     selfRestart: string.Equals(Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER"), "true", StringComparison.OrdinalIgnoreCase)));
+
+// --- Evaluation jobs (history-eval, memory-eval) inside the agent process, where the storage key lives ---
+Cortex.Contained.Agent.Host.Evaluation.EvaluationRegistration.AddEvaluation(builder.Services, storageEncryption);
 
 // --- Memory Settings Store (runtime-mutable overrides for memory options) ---
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Memory.MemorySettingsStore>();

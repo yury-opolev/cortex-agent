@@ -200,6 +200,26 @@ public static class MemoryEvalCli
     }
 
     /// <summary>
+    /// Entry point inside the agent process (an evaluation job): the agent's memory options, the Bridge-granted
+    /// reranker and <paramref name="protection"/> (encrypted copies, sealed dataset and seeds on an encrypted install).
+    /// </summary>
+    public static Task<int> RunInAgentAsync(
+        IReadOnlyList<string> args,
+        TextWriter output,
+        EvalProtection protection,
+        MemoryMcpOptions live,
+        Func<RerankerOptions, IReranker> rerankerFactory,
+        CancellationToken cancellationToken) =>
+        RunAsync(
+            args,
+            output,
+            live,
+            options => new OllamaEmbeddingService(new StaticOptionsMonitor(options), NullLogger<OllamaEmbeddingService>.Instance),
+            cancellationToken,
+            rerankerFactory,
+            protection);
+
+    /// <summary>
     /// The agent's <c>MemoryMcp</c> configuration, loaded like <c>Program.cs</c> (appsettings, environment,
     /// then <c>cortex.yml</c>), with the CLI overrides.
     /// </summary>
