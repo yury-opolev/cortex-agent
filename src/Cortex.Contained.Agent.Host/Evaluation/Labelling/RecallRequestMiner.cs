@@ -36,6 +36,9 @@ public static class RecallRequestMiner
             SELECT e.Ts, json_extract(e.Payload, '$.args'),
                    (SELECT m.Id FROM Messages m
                      WHERE m.ChannelId = e.ChannelId AND m.Role = 'user' AND m.Category = 0 AND m.Timestamp <= e.Ts
+                     ORDER BY m.Timestamp DESC, m.Id DESC LIMIT 1),
+                   (SELECT m.Timestamp FROM Messages m
+                     WHERE m.ChannelId = e.ChannelId AND m.Role = 'user' AND m.Category = 0 AND m.Timestamp <= e.Ts
                      ORDER BY m.Timestamp DESC, m.Id DESC LIMIT 1)
               FROM Events e
              WHERE e.Type = 'tool_call' AND e.ChannelId IS NOT NULL
@@ -61,7 +64,7 @@ public static class RecallRequestMiner
                 Category = "real",
                 Stratum = "real",
                 RequestMessageId = reader.GetInt64(2).ToString(CultureInfo.InvariantCulture),
-                RequestTime = SqliteDateTimeText.Parse(reader.GetString(0)),
+                RequestTime = SqliteDateTimeText.Parse(reader.GetString(3)),
                 ModelArgs = IsJsonObject(reader.GetString(1)) ? reader.GetString(1) : null,
             });
         }

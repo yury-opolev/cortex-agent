@@ -66,7 +66,7 @@ public sealed class RecallRequestMinerTests : IDisposable
         var seed = Assert.Single(seeds);
         Assert.Equal(asked.ToString(System.Globalization.CultureInfo.InvariantCulture), seed.RequestMessageId);
         Assert.Equal(("real", "real"), (seed.Category, seed.Stratum));
-        Assert.Equal(T0.AddSeconds(5), seed.RequestTime);
+        Assert.Equal(T0, seed.RequestTime);
         Assert.Equal("""{"query":"ferry booking","channel":"ch"}""", seed.ModelArgs);
         Assert.Empty(seed.SourceIds);
         Assert.Single(RecallRequestMiner.Read(this.db, null, "memory_search"));

@@ -27,7 +27,7 @@ public sealed record LabelSeed
     /// <summary>Real requests: the user message that asked.</summary>
     public string? RequestMessageId { get; init; }
 
-    /// <summary>Real requests: when the agent searched (candidates must be older).</summary>
+    /// <summary>Real requests: when the owner asked (the request message's time); it and everything after it is never pooled.</summary>
     public DateTimeOffset? RequestTime { get; init; }
 
     /// <summary>Real requests: the search arguments the agent wrote (JSON), i.e. the model-written query.</summary>
@@ -64,6 +64,9 @@ public sealed record DraftedQuery
 
     /// <summary>Real requests: candidates at or after this time are not pooled (they post-date the question).</summary>
     public DateTimeOffset? NotAfter { get; init; }
+
+    /// <summary>Real requests: the owner's request message, never pooled or judged.</summary>
+    public string? RequestMessageId { get; init; }
 }
 
 /// <summary>The resumable progress of one label job (sealed: it holds query text).</summary>

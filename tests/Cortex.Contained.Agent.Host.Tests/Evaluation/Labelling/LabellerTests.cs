@@ -112,6 +112,17 @@ public sealed partial class LabellerTests : IDisposable
     }
 
     [Fact]
+    public async Task RunAsync_RealRequest_NeverPoolsOrJudgesTheOwnersRequestMessage()
+    {
+        Assert.Equal(0, await this.Create(Options()).RunAsync(5, kappaItems: 4, CancellationToken.None));
+
+        var written = this.source.Written!;
+        Assert.Equal("real", written[0].Draft.Stratum);
+        Assert.DoesNotContain("99", written[0].Grades.Keys);
+        Assert.All(written.Skip(1), q => Assert.Contains("99", q.Grades.Keys));
+    }
+
+    [Fact]
     public async Task RunAsync_EstimateAboveTheCap_RefusedWithoutCalls()
     {
         Assert.Equal(2, await this.Create(Options(maxCalls: 5)).RunAsync(5, 4, CancellationToken.None));
@@ -123,7 +134,7 @@ public sealed partial class LabellerTests : IDisposable
     /// <summary>Ten items; seeds: one real request and lookups of items 1, 2, 3, ….</summary>
     private sealed class FakeSource : ILabelSource
     {
-        private readonly Dictionary<string, MaterialItem> items = Enumerable.Range(1, 10)
+        private readonly Dictionary<string, MaterialItem> items = Enumerable.Range(1, 10).Append(99)
             .ToDictionary(
                 i => i.ToString(CultureInfo.InvariantCulture),
                 i => new MaterialItem(i.ToString(CultureInfo.InvariantCulture), $"zqitem {i} text", "ch", T0.AddHours(i - 20), "user"));
@@ -146,7 +157,7 @@ public sealed partial class LabellerTests : IDisposable
                 : new SeedMaterial(seed.SourceIds.Select(id => this.items[id]).ToList()));
 
         public Task<IReadOnlyList<string>> PoolAsync(DraftedQuery query, int depth, CancellationToken cancellationToken) =>
-            Task.FromResult<IReadOnlyList<string>>(["4", "5", "6", "7"]);
+            Task.FromResult<IReadOnlyList<string>>(["4", "5", "6", "7", "99"]);
 
         public Task<IReadOnlyDictionary<string, MaterialItem>> ReadAsync(IReadOnlyCollection<string> ids, CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyDictionary<string, MaterialItem>>(ids.Where(this.items.ContainsKey).ToDictionary(id => id, id => this.items[id]));

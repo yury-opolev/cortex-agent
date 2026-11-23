@@ -51,7 +51,8 @@ spread over months): every `tool_call` event of `history_search`/`memory_search`
 the owner's preceding message in that channel (one seed per message). The writer rewrites the request as a standalone
 query from the request and its four preceding turns (same intent and language, no added facts) and classifies its
 category; the recorded arguments are its model-written query. A real request's oracle `until` is clamped to the moment
-it was asked and later messages are not pooled.
+it was asked (the time of the owner's request message, not of the agent's search); the request message itself and later messages are
+neither pooled nor judged.
 
 **L4 — Writer checks.** A draft is rejected and written again with the reason (up to `MaxDraftAttempts` = 3) when it
 repeats four consecutive folded words of the snippet (identifier queries excepted), when a paraphrase fails the

@@ -199,6 +199,7 @@ public sealed class Labeller
                     ModelFilters = model?.Filters,
                     ModelTags = model?.Tags,
                     NotAfter = seed.RequestTime,
+                    RequestMessageId = seed.RequestMessageId,
                 };
             }
 
@@ -219,7 +220,7 @@ public sealed class Labeller
         foreach (var draft in state.Drafts.Values.Where(d => !state.Pools.ContainsKey(d.Id)).ToList())
         {
             var pooled = await this.source.PoolAsync(draft, this.options.PoolDepth, cancellationToken).ConfigureAwait(false);
-            state.Pools[draft.Id] = draft.GoldSourceIds.Concat(pooled).Distinct(StringComparer.Ordinal).Take(this.options.MaxCandidatesPerQuery).ToList();
+            state.Pools[draft.Id] = draft.GoldSourceIds.Concat(pooled).Where(id => id != draft.RequestMessageId).Distinct(StringComparer.Ordinal).Take(this.options.MaxCandidatesPerQuery).ToList();
         }
 
         this.store.Save(state);
