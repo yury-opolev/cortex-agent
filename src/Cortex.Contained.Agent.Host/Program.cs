@@ -297,7 +297,7 @@ builder.Services.AddSingleton(sp => new StorageEncryptionService(
     selfRestart: string.Equals(Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER"), "true", StringComparison.OrdinalIgnoreCase)));
 
 // --- Evaluation jobs (history-eval, memory-eval) inside the agent process, where the storage key lives ---
-Cortex.Contained.Agent.Host.Evaluation.EvaluationRegistration.AddEvaluation(builder.Services, storageEncryption);
+Cortex.Contained.Agent.Host.Evaluation.EvaluationRegistration.AddEvaluation(builder.Services, storageEncryption, builder.Configuration);
 
 // --- Memory Settings Store (runtime-mutable overrides for memory options) ---
 builder.Services.AddSingleton<Cortex.Contained.Agent.Host.Memory.MemorySettingsStore>();
