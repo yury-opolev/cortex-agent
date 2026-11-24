@@ -34,7 +34,7 @@ public sealed record RunEnvironment(
     public string CorpusDirectory => Path.Combine(this.EvaluationDirectory, "corpus");
 
     /// <summary>The calibration root: archived κ samples, rubric variants and calibration reports.</summary>
-    public string CalibrationDirectory => Path.Combine(this.EvaluationDirectory, "calibration");
+    public string CalibrationDirectory => CalibrationArchive.RootIn(this.EvaluationDirectory);
 
     public string Workspace(string tool) => tool == "memory-eval" ? this.MemoryWorkspace : this.HistoryWorkspace;
 }

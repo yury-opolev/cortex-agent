@@ -178,7 +178,11 @@ builder.Services.AddSingleton<IErasureStep, IndexErasureStep>();
 builder.Services.AddSingleton<IErasureStep, MessagesWalErasureStep>();
 builder.Services.AddSingleton<IErasureStep>(new ToolOutputErasureStep(Path.Combine(sandboxRoot, "tool-output")));
 builder.Services.AddSingleton<IErasureStep, SubagentErasureStep>();
-builder.Services.AddSingleton<IErasureStep, SmokeArtifactErasureStep>();
+builder.Services.AddSingleton<IErasureStep>(sp => new SmokeArtifactErasureStep(
+    sp.GetRequiredService<IOptionsMonitor<HistoryOptions>>(),
+    sp.GetService<Cortex.Contained.Agent.Host.Evaluation.Frozen.FrozenCorpusStore>(),
+    sp.GetService<TimeProvider>(),
+    Cortex.Contained.Agent.Host.Evaluation.Calibration.CalibrationArchive.RootIn(storageEncryption.Layout.EvaluationDirectory)));
 builder.Services.AddSingleton<IErasureStep, VacuumErasureStep>();
 builder.Services.AddSingleton<IErasureStep, Cortex.Contained.Agent.Host.Memory.DependentMemoryErasureStep>();
 builder.Services.AddSingleton(sp =>

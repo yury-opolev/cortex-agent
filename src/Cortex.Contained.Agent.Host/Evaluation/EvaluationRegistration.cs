@@ -134,7 +134,7 @@ public static class EvaluationRegistration
             services.GetRequiredService<IOptionsMonitor<LabellingOptions>>().CurrentValue,
             services.GetRequiredService<ILlmClient>(),
             direct.ProviderFor,
-            Path.Combine(encryption.Layout.EvaluationDirectory, "calibration"),
+            CalibrationArchive.RootIn(encryption.Layout.EvaluationDirectory),
             Workspaces(services.GetRequiredService<IOptionsMonitor<HistoryOptions>>().CurrentValue, encryption.Layout),
             services.GetRequiredService<TimeProvider>(),
             () => direct.HasCredentials);

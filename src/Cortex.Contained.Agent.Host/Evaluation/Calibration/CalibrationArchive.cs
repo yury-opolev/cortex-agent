@@ -17,6 +17,9 @@ public sealed partial class CalibrationArchive
     /// <summary>The agreement file <see cref="GradingService.Submit"/> writes: its presence marks a locked sample.</summary>
     public const string AgreementFileName = "judge-agreement.csv";
 
+    /// <summary>The calibration root inside the evaluation root (<c>/app/state/eval</c>).</summary>
+    public static string RootIn(string evaluationDirectory) => Path.Combine(evaluationDirectory, "calibration");
+
     /// <param name="root">The calibration root (<c>/app/state/eval/calibration</c>).</param>
     public CalibrationArchive(string root)
     {
@@ -102,6 +105,28 @@ public sealed partial class CalibrationArchive
             .SelectMany(tool => KappaSampleFile.Read(workspaces[tool], protection))
             .Where(i => i.HumanGrade is not null);
         return [.. current, .. this.Load(protection)];
+    }
+
+    /// <summary>
+    /// Deletes every archived set (they hold message and memory text, so a history purge removes them all: which
+    /// messages the items came from is not known); rubrics and reports, which hold none, stay. False when some could not
+    /// be deleted.
+    /// </summary>
+    public bool DestroySets()
+    {
+        try
+        {
+            if (Directory.Exists(this.SetsDirectory))
+            {
+                Directory.Delete(this.SetsDirectory, recursive: true);
+            }
+
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     // The locked samples of every set, in run-id order.

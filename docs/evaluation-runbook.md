@@ -128,9 +128,9 @@ Every locked κ sample — passing or failing — is archived when the gate sees
 the workspaces: `/app/state/eval/calibration/sets/<runId>/<tool>/` holds the sealed `kappa-sample.json` and
 `judge-agreement.csv` copied byte for byte. The calibration set is every archived set plus the current locked sample
 unless it is already archived (each set is its own population: ids restart with every run, so nothing else is
-deduplicated), so it grows with every run. Purges do not touch these copies (as with the workspace's own
-`kappa-sample.json`); after deleting history you no longer want kept, remove them with
-`docker exec cortex-agent rm -rf /app/state/eval/calibration/sets`.
+deduplicated), so it grows with every run. A fresh run keeps the sets; every history purge (D3) removes all of them
+automatically, since their items hold message and memory text and which messages they came from is not known
+(rubrics and reports stay).
 
 ## Advanced: commands one by one
 
