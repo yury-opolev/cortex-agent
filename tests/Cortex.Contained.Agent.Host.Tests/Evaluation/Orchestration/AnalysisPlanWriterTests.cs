@@ -59,6 +59,7 @@ public sealed class AnalysisPlanWriterTests
             Strata = new Dictionary<string, int> { ["real"] = 120, ["synthetic"] = 360 },
             QueryModel = "gpt-6.1-sol",
             JudgeModel = "claude-opus-5.5",
+            JudgeRubric = "sha256:0123456789ab",
             PoolDepth = 10,
             Kappa = 0.71,
             ToolKappa = 0.68,
@@ -70,6 +71,7 @@ public sealed class AnalysisPlanWriterTests
 
         Assert.Contains("480 queries, 150 dev / 330 test", plan, StringComparison.Ordinal);
         Assert.Contains("lookup 200, temporal 80", plan, StringComparison.Ordinal);
+        Assert.Contains("by `claude-opus-5.5` (rubric `sha256:0123456789ab`)", plan, StringComparison.Ordinal);
         Assert.Contains("κ = 0.710 on 75", plan, StringComparison.Ordinal);
         Assert.Contains("(this dataset: 0.680)", plan, StringComparison.Ordinal);
         Assert.Contains("highest lower bound of the paired 95 % CI", plan, StringComparison.Ordinal);

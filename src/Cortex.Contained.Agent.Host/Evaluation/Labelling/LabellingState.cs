@@ -79,6 +79,9 @@ public sealed class LabellingState
 
     public string JudgeModel { get; set; } = string.Empty;
 
+    /// <summary>The judge rubric's id (<see cref="RelevanceJudge.RubricId"/>); empty in state saved before rubrics were recorded, which means <c>default</c>.</summary>
+    public string JudgeRubric { get; set; } = string.Empty;
+
     public string MainModel { get; set; } = string.Empty;
     public List<LabelSeed> Seeds { get; set; } = [];
 

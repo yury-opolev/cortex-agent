@@ -554,6 +554,7 @@ public sealed partial class EvaluationRunService : BackgroundService
                 Strata = strata,
                 QueryModel = options.QueryModel,
                 JudgeModel = options.JudgeModel,
+                JudgeRubric = RelevanceJudge.RubricId(options.JudgeRubric),
                 PoolDepth = options.PoolDepth,
                 Kappa = run.Kappa ?? 0,
                 ToolKappa = tool == "memory-eval" ? run.MemoryKappa : run.HistoryKappa,

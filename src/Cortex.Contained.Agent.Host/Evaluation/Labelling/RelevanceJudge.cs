@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Security.Cryptography;
 using System.Text;
 
 namespace Cortex.Contained.Agent.Host.Evaluation.Labelling;
@@ -17,32 +18,64 @@ public sealed record JudgeAnswer(Dictionary<string, int>? Grades);
 /// </summary>
 public sealed class RelevanceJudge
 {
-    private const string Rubric = """
+    /// <summary>
+    /// The grading guidance of the default judge (the replaceable part of the system prompt; the answer format is
+    /// always appended). A calibrated variant replaces it via <see cref="LabellingOptions.JudgeRubric"/>.
+    /// </summary>
+    public const string DefaultRubric = """
         For each item decide how well it answers the query:
         2 = the item directly answers the query or contains exactly the information asked for;
         1 = the item is related and partly answers it (part of the answer, one of several things asked for, or context needed to answer);
         0 = not relevant.
         Judge every item on its own text only and do not assume information that is not there. Items and queries may be in any language.
-        Return ONLY a JSON object {"grades": {"<item id>": 0, 1 or 2}} with every item id exactly once.
         """;
+
+    private const string AnswerFormat = """Return ONLY a JSON object {"grades": {"<item id>": 0, 1 or 2}} with every item id exactly once.""";
+
+    // The line break of the rubric literal (the source file's), so the default prompt stays byte-identical to the one-literal version.
+    private static readonly string LineBreak = DefaultRubric.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
 
     private readonly LabellingLlm llm;
     private readonly string model;
     private readonly int batchSize;
-    private readonly string subject;
+    private readonly string system;
 
     /// <param name="llm">The pinned client.</param>
     /// <param name="model">The judge model.</param>
     /// <param name="batchSize">Candidates per call.</param>
     /// <param name="tool"><c>history-eval</c> (messages) or <c>memory-eval</c> (memories).</param>
-    public RelevanceJudge(LabellingLlm llm, string model, int batchSize, string tool)
+    /// <param name="rubric">The grading guidance; null or blank is <see cref="DefaultRubric"/>.</param>
+    public RelevanceJudge(LabellingLlm llm, string model, int batchSize, string tool, string? rubric = null)
     {
         this.llm = llm;
         this.model = model;
         this.batchSize = batchSize;
-        this.subject = string.Equals(tool, "memory-eval", StringComparison.Ordinal)
+        var subject = string.Equals(tool, "memory-eval", StringComparison.Ordinal)
             ? "You judge search results over a person's curated memories (notes their assistant stored)."
             : "You judge search results over a person's chat history with their assistant; every item is one stored message.";
+        var guidance = string.IsNullOrWhiteSpace(rubric) ? DefaultRubric : rubric.TrimEnd();
+        this.system = subject + "\n" + guidance + LineBreak + AnswerFormat;
+    }
+
+    /// <summary>
+    /// Provenance of a rubric: <c>default</c> for null, blank or <see cref="DefaultRubric"/>, otherwise <c>sha256:</c> and
+    /// the first 12 hex digits of the SHA-256 of its UTF-8 text (line breaks normalised to LF, trailing white space trimmed,
+    /// so the same rubric edited on Windows or Linux keeps its id).
+    /// </summary>
+    public static string RubricId(string? rubric)
+    {
+        if (string.IsNullOrWhiteSpace(rubric))
+        {
+            return "default";
+        }
+
+        var text = rubric.ReplaceLineEndings("\n").TrimEnd();
+        if (string.Equals(text, DefaultRubric.ReplaceLineEndings("\n").TrimEnd(), StringComparison.Ordinal))
+        {
+            return "default";
+        }
+
+        return "sha256:" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(text)))[..12];
     }
 
     /// <summary>Grade per candidate id, or null when some candidate could not be graded.</summary>
@@ -76,7 +109,7 @@ public sealed class RelevanceJudge
         var expected = aliases.Select(a => a.Alias).ToHashSet(StringComparer.Ordinal);
         var answer = await this.llm.CompleteJsonAsync<JudgeAnswer>(
             this.model,
-            this.subject + "\n" + Rubric,
+            this.system,
             prompt.ToString(),
             400 + (20 * batch.Length),
             a => a.Grades is { } g && g.Count == expected.Count && g.Keys.All(expected.Contains) && g.Values.All(v => v is >= 0 and <= 2),
