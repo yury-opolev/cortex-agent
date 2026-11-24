@@ -211,7 +211,8 @@ public sealed partial class JudgeCalibrationCliTests : IDisposable
     }
 
     [Fact]
-    public async Task Calibrate_Estimate_CountsArchivedAndCurrentItemsWithoutCredentialsOrCalls()
+    // The archived run (75) plus the regraded, not yet archived history sample (51); the unchanged memory sample counts once.
+    public async Task Calibrate_Estimate_CountsArchivedSetsAndUnarchivedWorkspaceSamplesWithoutCredentialsOrCalls()
     {
         this.LockWorkspaces();
         new CalibrationArchive(this.CalibrationDirectory).Archive("run1", this.workspaces);
@@ -222,8 +223,8 @@ public sealed partial class JudgeCalibrationCliTests : IDisposable
         Assert.Equal(0, await this.RunAsync(context, "--models", "claude-opus-5.5,gpt-6.1-sol", "--estimate"));
 
         var text = this.output.ToString();
-        Assert.Contains("76 items (51 history, 25 memory)", text, StringComparison.Ordinal);
-        Assert.Contains("= 2 combinations, 152 LLM calls", text, StringComparison.Ordinal);
+        Assert.Contains("126 items (101 history, 25 memory)", text, StringComparison.Ordinal);
+        Assert.Contains("= 2 combinations, 252 LLM calls", text, StringComparison.Ordinal);
         Assert.Contains("note: gpt-6.1-sol is of the query writer's family", text, StringComparison.Ordinal);
         Assert.Empty(this.fake.Requests);
         Assert.False(Directory.Exists(Path.Combine(this.CalibrationDirectory, "reports")));

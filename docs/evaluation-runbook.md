@@ -126,8 +126,9 @@ boundary of **1** is ambiguous. Calibrate the judge on the items you already gra
 
 Every locked κ sample — passing or failing — is archived when the gate sees it and again before a fresh start wipes
 the workspaces: `/app/state/eval/calibration/sets/<runId>/<tool>/` holds the sealed `kappa-sample.json` and
-`judge-agreement.csv` copied byte for byte. The calibration set is all of them plus the current locked sample (the
-newest copy of an item wins), so it grows with every run. Purges do not touch these copies (as with the workspace's own
+`judge-agreement.csv` copied byte for byte. The calibration set is every archived set plus the current locked sample
+unless it is already archived (each set is its own population: ids restart with every run, so nothing else is
+deduplicated), so it grows with every run. Purges do not touch these copies (as with the workspace's own
 `kappa-sample.json`); after deleting history you no longer want kept, remove them with
 `docker exec cortex-agent rm -rf /app/state/eval/calibration/sets`.
 

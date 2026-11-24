@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text.RegularExpressions;
 using Cortex.Contained.Agent.Host.Evaluation.Labelling;
 using Cortex.Contained.Agent.Host.Evaluation.Orchestration;
@@ -71,43 +72,49 @@ public sealed partial class CalibrationArchive
     }
 
     /// <summary>
-    /// Every graded item of every archived set, deduplicated by (tool, query id, candidate id): the item of the newest
-    /// set wins, newest by the set directory's last-write time (the time it was archived), ties by run id.
+    /// Every graded item of every archived set (sets in run-id order). Each set is its own population: nothing is
+    /// deduplicated, since query ids restart with every run and the same ids can name different items.
     /// </summary>
     public IReadOnlyList<KappaItem> Load(EvalProtection protection)
     {
         ArgumentNullException.ThrowIfNull(protection);
-        if (!Directory.Exists(this.SetsDirectory))
-        {
-            return [];
-        }
-
-        var sets = new DirectoryInfo(this.SetsDirectory).EnumerateDirectories()
-            .OrderByDescending(d => d.LastWriteTimeUtc)
-            .ThenByDescending(d => d.Name, StringComparer.Ordinal);
-        return Dedupe(sets.SelectMany(set => GradingService.Tools
-            .Select(tool => Path.Combine(set.FullName, tool))
-            .Where(IsLocked)
-            .SelectMany(directory => KappaSampleFile.Read(directory, protection))));
+        return this.ArchivedSamples()
+            .SelectMany(s => KappaSampleFile.Read(s.Directory, protection))
+            .Where(i => i.HumanGrade is not null)
+            .ToList();
     }
 
-    /// <summary>The graded items of the workspaces whose sample is locked (submitted).</summary>
-    public static IReadOnlyList<KappaItem> Locked(IReadOnlyDictionary<string, string> workspaces, EvalProtection protection)
+    /// <summary>
+    /// The calibration set: the graded items of the locked workspace samples that are not archived yet, then every
+    /// archived set (<see cref="Load"/>). A workspace sample counts as archived when some set holds a byte-identical
+    /// <c>kappa-sample.json</c> for its tool (the archive copies byte for byte), so a run's sample never counts twice.
+    /// </summary>
+    public IReadOnlyList<KappaItem> CalibrationSet(IReadOnlyDictionary<string, string> workspaces, EvalProtection protection)
     {
         ArgumentNullException.ThrowIfNull(workspaces);
         ArgumentNullException.ThrowIfNull(protection);
-        return Dedupe(GradingService.Tools
-            .Where(tool => workspaces.TryGetValue(tool, out var directory) && IsLocked(directory))
-            .SelectMany(tool => KappaSampleFile.Read(workspaces[tool], protection)));
+        var archived = this.ArchivedSamples()
+            .Select(s => (s.Tool, Hash: Hash(Path.Combine(s.Directory, KappaSampleFile.FileName))))
+            .ToHashSet();
+        var current = GradingService.Tools
+            .Where(tool => workspaces.TryGetValue(tool, out var directory) && IsLocked(directory)
+                && !archived.Contains((tool, Hash(Path.Combine(directory, KappaSampleFile.FileName)))))
+            .SelectMany(tool => KappaSampleFile.Read(workspaces[tool], protection))
+            .Where(i => i.HumanGrade is not null);
+        return [.. current, .. this.Load(protection)];
     }
 
-    /// <summary>The graded items of <paramref name="newestFirst"/>, the first occurrence of each (tool, query id, candidate id) kept.</summary>
-    public static IReadOnlyList<KappaItem> Dedupe(IEnumerable<KappaItem> newestFirst)
-    {
-        ArgumentNullException.ThrowIfNull(newestFirst);
-        var seen = new HashSet<(string, string, string)>();
-        return newestFirst.Where(i => i.HumanGrade is not null && seen.Add((i.Tool, i.QueryId, i.CandidateId))).ToList();
-    }
+    // The locked samples of every set, in run-id order.
+    private List<(string Tool, string Directory)> ArchivedSamples() =>
+        !Directory.Exists(this.SetsDirectory)
+            ? []
+            : Directory.EnumerateDirectories(this.SetsDirectory)
+                .Order(StringComparer.Ordinal)
+                .SelectMany(set => GradingService.Tools.Select(tool => (Tool: tool, Directory: Path.Combine(set, tool))))
+                .Where(s => IsLocked(s.Directory))
+                .ToList();
+
+    private static string Hash(string path) => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path)));
 
     private static bool IsLocked(string directory) =>
         File.Exists(Path.Combine(directory, KappaSampleFile.FileName)) && File.Exists(Path.Combine(directory, AgreementFileName));

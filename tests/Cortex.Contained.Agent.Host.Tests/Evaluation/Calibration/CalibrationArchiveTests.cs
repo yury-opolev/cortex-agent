@@ -74,21 +74,19 @@ public sealed class CalibrationArchiveTests : IDisposable
         Assert.Throws<ArgumentException>(() => this.archive.Archive(runId, this.workspaces));
 
     [Fact]
-    public void Load_EncryptedSets_ReturnsGradedItemsAndTheNewestSetWins()
+    public void Load_SetsOfDifferentRunsWithCollidingIds_EveryItemCounts()
     {
         this.Lock("history-eval", this.protection, Item("history-eval", "h1", "7", 2, 1), Item("history-eval", "h2", "8", 0, 0));
         this.Lock("memory-eval", this.protection, Item("memory-eval", "m1", "a", 1, 2));
-        this.archive.Archive("old", this.workspaces);
+        this.archive.Archive("runa", this.workspaces);
         this.Lock("history-eval", this.protection, Item("history-eval", "h1", "7", 1, 2), Item("history-eval", "h3", "9", 0, 1));
         File.Delete(Path.Combine(this.workspaces["memory-eval"], CalibrationArchive.AgreementFileName));
-        this.archive.Archive("new", this.workspaces);
-        Directory.SetLastWriteTimeUtc(Path.Combine(this.archive.SetsDirectory, "old"), new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc));
-        Directory.SetLastWriteTimeUtc(Path.Combine(this.archive.SetsDirectory, "new"), new DateTime(2026, 6, 1, 0, 0, 0, DateTimeKind.Utc));
+        this.archive.Archive("runb", this.workspaces);
 
         var items = this.archive.Load(this.protection);
 
-        Assert.Equal(4, items.Count);
-        Assert.Equal((1, 2), items.Where(i => i.QueryId == "h1").Select(i => (i.LlmGrade, i.HumanGrade!.Value)).Single());
+        Assert.Equal(5, items.Count);
+        Assert.Equal([(1, 2), (2, 1)], items.Where(i => i.QueryId == "h1").Select(i => (i.LlmGrade, i.HumanGrade!.Value)).Order());
         Assert.Contains(items, i => i.QueryId == "h2");
         Assert.Contains(items, i => i.QueryId == "h3");
         Assert.Contains(items, i => i is { Tool: "memory-eval", QueryId: "m1", Query: "zqquery m1" });
@@ -106,14 +104,30 @@ public sealed class CalibrationArchiveTests : IDisposable
     }
 
     [Fact]
-    public void Locked_CurrentWorkspaces_OnlyTheSubmittedSamples()
+    public void CalibrationSet_WorkspaceSampleAlreadyArchived_CountedOnce()
+    {
+        this.Lock("history-eval", this.protection, Item("history-eval", "h1", "7", 2, 1), Item("history-eval", "h2", "8", 0, 0));
+        this.Lock("memory-eval", this.protection, Item("memory-eval", "m1", "a", 1, 2));
+        this.archive.Archive("runa", this.workspaces);
+
+        var items = this.archive.CalibrationSet(this.workspaces, this.protection);
+
+        Assert.Equal(3, items.Count);
+    }
+
+    [Fact]
+    public void CalibrationSet_WorkspaceSampleNotArchived_CountedEvenWithCollidingIds()
     {
         this.Lock("history-eval", this.protection, Item("history-eval", "h1", "7", 2, 1));
+        this.archive.Archive("runa", this.workspaces);
+        this.Lock("history-eval", this.protection, Item("history-eval", "h1", "7", 0, 0), Item("history-eval", "h2", "8", 1, 1));
         KappaSampleFile.Write(this.workspaces["memory-eval"], this.protection, [Item("memory-eval", "m1", "a", 1, 1)]);
 
-        var items = CalibrationArchive.Locked(this.workspaces, this.protection);
+        var items = this.archive.CalibrationSet(this.workspaces, this.protection);
 
-        Assert.Equal("h1", Assert.Single(items).QueryId);
+        Assert.Equal(3, items.Count);
+        Assert.Equal(2, items.Count(i => i.QueryId == "h1"));
+        Assert.DoesNotContain(items, i => i.Tool == "memory-eval");
     }
 
     [Fact]

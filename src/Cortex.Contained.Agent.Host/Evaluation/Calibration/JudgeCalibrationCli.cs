@@ -111,7 +111,7 @@ public static partial class JudgeCalibrationCli
         IReadOnlyList<KappaItem> items;
         try
         {
-            items = CalibrationArchive.Dedupe(CalibrationArchive.Locked(context.Workspaces, run.Protection).Concat(archive.Load(run.Protection)));
+            items = archive.CalibrationSet(context.Workspaces, run.Protection);
         }
         catch (InvalidOperationException ex)
         {
