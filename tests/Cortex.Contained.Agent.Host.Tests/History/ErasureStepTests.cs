@@ -197,6 +197,55 @@ public sealed class ErasureStepTests : IDisposable
     }
 
     [Fact]
+    public async Task KappaSamples_RangedPurge_DeletedInBothWorkspacesOwnerFilesKept()
+    {
+        var history = Path.Combine(this.dir, "hybrid");
+        var memory = Path.Combine(this.dir, "memory");
+        foreach (var workspace in new[] { history, memory })
+        {
+            Directory.CreateDirectory(workspace);
+            foreach (var name in new[] { "kappa-sample.json", "kappa-sample.json.tmp", "judge-agreement.csv", "dataset.jsonl" })
+            {
+                await File.WriteAllTextAsync(Path.Combine(workspace, name), "x");
+            }
+        }
+
+        var monitor = Substitute.For<IOptionsMonitor<HistoryOptions>>();
+        monitor.CurrentValue.Returns(new HistoryOptions { SmokeArtifactsDirectory = Path.Combine(this.dir, "none"), EvalArtifactsDirectory = history });
+
+        Assert.True(await new SmokeArtifactErasureStep(monitor, memoryEvalWorkspace: memory).RunAsync(Task(T0, T0.AddDays(1)), CancellationToken.None));
+
+        foreach (var workspace in new[] { history, memory })
+        {
+            Assert.Equal(["dataset.jsonl"], Directory.GetFiles(workspace).Select(Path.GetFileName));
+        }
+    }
+
+    [Fact]
+    public async Task KappaSamples_DeleteFails_NotDoneSoTheStepRetries()
+    {
+        // Only Windows refuses to delete a file that is open without sharing.
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var memory = Path.Combine(this.dir, "memory");
+        Directory.CreateDirectory(memory);
+        var sample = Path.Combine(memory, "kappa-sample.json");
+        await File.WriteAllTextAsync(sample, "x");
+        bool done;
+        using (File.Open(sample, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            done = await new SmokeArtifactErasureStep(this.NoWorkspaces(), memoryEvalWorkspace: memory).RunAsync(Task(T0, T0.AddDays(1)), CancellationToken.None);
+        }
+
+        Assert.False(done);
+        Assert.True(await new SmokeArtifactErasureStep(this.NoWorkspaces(), memoryEvalWorkspace: memory).RunAsync(Task(T0, T0.AddDays(1)), CancellationToken.None));
+        Assert.False(File.Exists(sample));
+    }
+
+    [Fact]
     public async Task SmokeArtifacts_RootWithoutRunsDirectory_DeletesNothing()
     {
         var root = Path.Combine(this.dir, "smoke");

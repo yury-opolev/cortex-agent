@@ -147,13 +147,16 @@ public sealed class SubagentErasureStep(SubagentSessionStore store) : IErasureSt
 /// one is recorded for deletion of its off-machine copy, which the owner removes from SafeExchange. With a
 /// calibration directory, every archived judge-calibration set (<c>calibration/sets</c>: locked κ samples with
 /// message and memory text) is destroyed on every ranged purge, since which messages its items came from is not
-/// known; rubric files and calibration reports hold no personal data and stay.
+/// known; rubric files and calibration reports hold no personal data and stay. The live κ samples
+/// (<c>kappa-sample.json</c>, <c>judge-agreement.csv</c>) of the <c>history-eval</c> workspace and, when given, the
+/// memory-eval workspace are deleted on every ranged purge too, or a fresh start would archive them again.
 /// </summary>
 public sealed class SmokeArtifactErasureStep(
     IOptionsMonitor<HistoryOptions> options,
     Cortex.Contained.Agent.Host.Evaluation.Frozen.FrozenCorpusStore? frozen = null,
     TimeProvider? time = null,
-    string? calibrationDirectory = null) : IErasureStep
+    string? calibrationDirectory = null,
+    string? memoryEvalWorkspace = null) : IErasureStep
 {
     private static readonly JsonSerializerOptions manifestJson = new(JsonSerializerDefaults.Web);
 
@@ -201,6 +204,8 @@ public sealed class SmokeArtifactErasureStep(
             }
         }
 
+        allGone &= Cortex.Contained.Agent.Host.Evaluation.Calibration.CalibrationArchive.DestroyWorkspaceSamples(
+            new[] { current.EvalArtifactsDirectory, memoryEvalWorkspace }.OfType<string>());
         if (calibrationDirectory is not null)
         {
             allGone &= new Cortex.Contained.Agent.Host.Evaluation.Calibration.CalibrationArchive(calibrationDirectory).DestroySets();

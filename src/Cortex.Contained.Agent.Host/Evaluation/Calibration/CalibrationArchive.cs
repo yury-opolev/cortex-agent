@@ -129,6 +129,33 @@ public sealed partial class CalibrationArchive
         }
     }
 
+    /// <summary>
+    /// Deletes the live κ sample of each workspace (<c>kappa-sample.json</c>, its pending <c>.tmp</c> write and
+    /// <c>judge-agreement.csv</c>), for the same reason as <see cref="DestroySets"/>: a sample left behind would be
+    /// archived again or piloted on. False when some file could not be deleted.
+    /// </summary>
+    public static bool DestroyWorkspaceSamples(IEnumerable<string> workspaces)
+    {
+        ArgumentNullException.ThrowIfNull(workspaces);
+        var allGone = true;
+        foreach (var path in workspaces.Where(w => !string.IsNullOrWhiteSpace(w)).SelectMany(w => new[] { KappaSampleFile.FileName, KappaSampleFile.FileName + ".tmp", AgreementFileName }.Select(n => Path.Combine(w, n))))
+        {
+            try
+            {
+                if (File.Exists(path))
+                {
+                    File.Delete(path);
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                allGone = false;
+            }
+        }
+
+        return allGone;
+    }
+
     // The locked samples of every set, in run-id order.
     private List<(string Tool, string Directory)> ArchivedSamples() =>
         !Directory.Exists(this.SetsDirectory)

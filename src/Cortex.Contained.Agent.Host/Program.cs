@@ -182,7 +182,8 @@ builder.Services.AddSingleton<IErasureStep>(sp => new SmokeArtifactErasureStep(
     sp.GetRequiredService<IOptionsMonitor<HistoryOptions>>(),
     sp.GetService<Cortex.Contained.Agent.Host.Evaluation.Frozen.FrozenCorpusStore>(),
     sp.GetService<TimeProvider>(),
-    Cortex.Contained.Agent.Host.Evaluation.Calibration.CalibrationArchive.RootIn(storageEncryption.Layout.EvaluationDirectory)));
+    Cortex.Contained.Agent.Host.Evaluation.Calibration.CalibrationArchive.RootIn(storageEncryption.Layout.EvaluationDirectory),
+    Cortex.Contained.Agent.Host.Memory.Evaluation.MemoryEvalWorkspace.DefaultDirectory));
 builder.Services.AddSingleton<IErasureStep, VacuumErasureStep>();
 builder.Services.AddSingleton<IErasureStep, Cortex.Contained.Agent.Host.Memory.DependentMemoryErasureStep>();
 builder.Services.AddSingleton(sp =>

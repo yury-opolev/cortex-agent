@@ -128,9 +128,10 @@ Every locked κ sample — passing or failing — is archived when the gate sees
 the workspaces: `/app/state/eval/calibration/sets/<runId>/<tool>/` holds the sealed `kappa-sample.json` and
 `judge-agreement.csv` copied byte for byte. The calibration set is every archived set plus the current locked sample
 unless it is already archived (each set is its own population: ids restart with every run, so nothing else is
-deduplicated), so it grows with every run. A fresh run keeps the sets; every history purge (D3) removes all of them
-automatically, since their items hold message and memory text and which messages they came from is not known
-(rubrics and reports stay).
+deduplicated), so it grows with every run. A fresh run keeps the sets; every history purge (D3) removes all κ samples
+automatically — the archived sets and the live `kappa-sample.json` / `judge-agreement.csv` of both workspaces —
+since their items hold message and memory text and which messages they came from is not known (rubrics and reports
+stay). A run waiting for your grading then has no items left to grade: cancel it and start a fresh run.
 
 ## Advanced: commands one by one
 
