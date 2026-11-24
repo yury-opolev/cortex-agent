@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Cortex.Contained.Agent.Host.Evaluation.Calibration;
 using Cortex.Contained.Agent.Host.Evaluation.Frozen;
 using Cortex.Contained.Agent.Host.Evaluation.Labelling;
 using Cortex.Contained.Agent.Host.Evaluation.Sanitising;
@@ -31,6 +32,9 @@ public sealed record RunEnvironment(
     public string RunDirectory => Path.Combine(this.EvaluationDirectory, "run");
 
     public string CorpusDirectory => Path.Combine(this.EvaluationDirectory, "corpus");
+
+    /// <summary>The calibration root: archived κ samples, rubric variants and calibration reports.</summary>
+    public string CalibrationDirectory => Path.Combine(this.EvaluationDirectory, "calibration");
 
     public string Workspace(string tool) => tool == "memory-eval" ? this.MemoryWorkspace : this.HistoryWorkspace;
 }
@@ -122,6 +126,12 @@ public sealed partial class EvaluationRunService : BackgroundService
 
             if (fresh)
             {
+                // The previous run's locked κ sample stays usable for judge calibration.
+                if (this.state is { } prior)
+                {
+                    this.ArchiveCalibration(prior.RunId);
+                }
+
                 this.ResetWorkspaces();
             }
 
@@ -489,6 +499,8 @@ public sealed partial class EvaluationRunService : BackgroundService
                     return;
                 }
 
+                // Passing or failing, the locked grades join the calibration set.
+                this.ArchiveCalibration(run.RunId);
                 if (progress.Kappa is not { } kappa || kappa < MinKappa)
                 {
                     // The gate failed on locked grades: reopen the grading panel (read-only) with the guidance; only a fresh run helps.
@@ -693,6 +705,20 @@ public sealed partial class EvaluationRunService : BackgroundService
         }
     }
 
+    private void ArchiveCalibration(string runId)
+    {
+        try
+        {
+            var workspaces = GradingService.Tools.ToDictionary(t => t, this.environment.Workspace, StringComparer.Ordinal);
+            new CalibrationArchive(this.environment.CalibrationDirectory).Archive(runId, workspaces);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            // Calibration is a convenience: a failed copy never stops the run.
+            this.LogArchiveFailed(runId, ex.GetType().Name);
+        }
+    }
+
     private static string KappaGuidance(double? kappa) => string.Create(CultureInfo.InvariantCulture,
         $"LLM-vs-human κ = {kappa ?? 0:F3} is below {MinKappa}: the judge's grades may not be used. Your grades are locked. Press Review grades to see the judge's grade next to yours, then calibrate the judge (docs/evaluation-runbook.md, 'Judge calibration') and start a fresh run.");
 
@@ -748,6 +774,9 @@ public sealed partial class EvaluationRunService : BackgroundService
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Evaluation run {RunId} stopped at {Phase}")]
     private partial void LogStopped(string runId, string phase);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Evaluation run {RunId}: archiving the locked κ sample for calibration failed ({Error})")]
+    private partial void LogArchiveFailed(string runId, string error);
 
     private sealed record CurveFile(IReadOnlyList<RerankCurveRow>? Rows);
 }

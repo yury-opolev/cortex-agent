@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using Cortex.Contained.Agent.Host.Evaluation;
+using Cortex.Contained.Agent.Host.Evaluation.Calibration;
 using Cortex.Contained.Agent.Host.Evaluation.Labelling;
 using Cortex.Contained.Agent.Host.Evaluation.Orchestration;
 using Cortex.Contained.Agent.Host.History;
@@ -289,6 +290,31 @@ public sealed class EvaluationRunServiceTests : IDisposable
         Assert.Null(this.service.Resume());
         state = await this.UntilAsync(s => s.Waiting == RunWait.Grading);
         Assert.Equal(4, this.calls.Count(c => c.StartsWith("history-eval label", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public async Task Start_FreshAfterALockedSample_ArchivesItBeforeTheReset()
+    {
+        this.service.Start(fresh: false);
+        await this.UntilAsync(s => s.Waiting == RunWait.Grading);
+        this.GradeAll(i => (i + 1) % 3);
+        Assert.Null(this.service.SubmitGrading());
+        var state = await this.UntilAsync(s => s.Kappa is not null);
+        var archive = new CalibrationArchive(this.environment.CalibrationDirectory);
+
+        // The κ gate archived the locked sample (passing or failing).
+        Assert.True(File.Exists(Path.Combine(archive.SetsDirectory, state.RunId, "history-eval", KappaSampleFile.FileName)));
+        Assert.True(File.Exists(Path.Combine(archive.SetsDirectory, state.RunId, "memory-eval", "judge-agreement.csv")));
+
+        // Without that copy, a fresh start archives the previous run's sample before it wipes the workspaces.
+        Directory.Delete(this.environment.CalibrationDirectory, recursive: true);
+        Assert.Null(this.service.Cancel());
+        Assert.Null(this.service.Start(fresh: true));
+
+        Assert.False(File.Exists(Path.Combine(this.environment.HistoryWorkspace, KappaSampleFile.FileName)));
+        var archived = archive.Load(this.protection);
+        Assert.Equal(5, archived.Count);
+        Assert.All(archived, i => Assert.NotNull(i.HumanGrade));
     }
 
     [Fact]
