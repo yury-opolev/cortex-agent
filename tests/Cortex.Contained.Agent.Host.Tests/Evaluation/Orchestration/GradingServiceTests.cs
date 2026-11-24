@@ -42,7 +42,35 @@ public sealed class GradingServiceTests : IDisposable
         Assert.Equal((0, 3, "history-eval", "zqtext ferry"), (first.Index, first.Total, first.Tool, first.Candidate));
         Assert.Equal(("memory-eval", "q m0001"), (last.Tool, last.Query));
         Assert.Null(this.service.Item(3));
-        Assert.DoesNotContain("LlmGrade", System.Text.Json.JsonSerializer.Serialize(first), StringComparison.Ordinal);
+        Assert.Null(first.LlmGrade);
+    }
+
+    [Fact]
+    public void ItemAndProgress_BeforeSubmit_HideTheJudgesGradeAndTheDisagreements()
+    {
+        this.service.Grade(0, 1);
+        this.service.Grade(1, 0);
+        this.service.Grade(2, 2);
+
+        Assert.All(Enumerable.Range(0, 3), i => Assert.Null(this.service.Item(i)!.LlmGrade));
+        Assert.Null(this.service.Progress().Disagreements);
+        Assert.Null(this.service.Grade(2, 1).Disagreements);
+    }
+
+    [Fact]
+    public void ItemAndProgress_AfterSubmit_ShowTheJudgesGradeAndTheDisagreeingIndices()
+    {
+        this.service.Grade(0, 1);
+        this.service.Grade(1, 0);
+        this.service.Grade(2, 2);
+
+        var submitted = this.service.Submit();
+
+        Assert.Equal([0, 2], submitted.Disagreements!);
+        Assert.Equal([0, 2], this.service.Progress().Disagreements!);
+        Assert.Equal((2, 1), (this.service.Item(0)!.LlmGrade, this.service.Item(0)!.HumanGrade));
+        Assert.Equal((0, 0), (this.service.Item(1)!.LlmGrade, this.service.Item(1)!.HumanGrade));
+        Assert.Equal((1, 2), (this.service.Item(2)!.LlmGrade, this.service.Item(2)!.HumanGrade));
     }
 
     [Fact]

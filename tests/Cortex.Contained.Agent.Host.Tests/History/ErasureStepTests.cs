@@ -130,6 +130,121 @@ public sealed class ErasureStepTests : IDisposable
         Assert.Equal((T0, T0.AddDays(1)), (purge.From, purge.To));
     }
 
+    private string CalibrationWithSets()
+    {
+        var calibration = Path.Combine(this.dir, "state-eval", "calibration");
+        foreach (var set in new[] { Path.Combine("sets", "runa", "history-eval"), Path.Combine("sets", "runb", "memory-eval"), "rubrics", "reports" })
+        {
+            Directory.CreateDirectory(Path.Combine(calibration, set));
+        }
+
+        File.WriteAllText(Path.Combine(calibration, "sets", "runa", "history-eval", "kappa-sample.json"), "sealed sample");
+        File.WriteAllText(Path.Combine(calibration, "sets", "runb", "memory-eval", "judge-agreement.csv"), "a,1,1");
+        File.WriteAllText(Path.Combine(calibration, "rubrics", "v2.txt"), "rubric");
+        File.WriteAllText(Path.Combine(calibration, "reports", "calibration-1.json"), "{}");
+        return calibration;
+    }
+
+    private IOptionsMonitor<HistoryOptions> NoWorkspaces()
+    {
+        var monitor = Substitute.For<IOptionsMonitor<HistoryOptions>>();
+        monitor.CurrentValue.Returns(new HistoryOptions { SmokeArtifactsDirectory = Path.Combine(this.dir, "none"), EvalArtifactsDirectory = Path.Combine(this.dir, "none") });
+        return monitor;
+    }
+
+    [Fact]
+    public async Task CalibrationSets_RangedPurge_DestroysEverySetAndKeepsRubricsAndReports()
+    {
+        var calibration = this.CalibrationWithSets();
+
+        Assert.True(await new SmokeArtifactErasureStep(this.NoWorkspaces(), calibrationDirectory: calibration).RunAsync(Task(T0, T0.AddDays(1)), CancellationToken.None));
+
+        Assert.False(Directory.Exists(Path.Combine(calibration, "sets")));
+        Assert.True(File.Exists(Path.Combine(calibration, "rubrics", "v2.txt")));
+        Assert.True(File.Exists(Path.Combine(calibration, "reports", "calibration-1.json")));
+        Assert.True(await new SmokeArtifactErasureStep(this.NoWorkspaces(), calibrationDirectory: calibration).RunAsync(Task(T0, T0.AddDays(1)), CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task CalibrationSets_UnrangedTask_Kept()
+    {
+        var calibration = this.CalibrationWithSets();
+
+        Assert.True(await new SmokeArtifactErasureStep(this.NoWorkspaces(), calibrationDirectory: calibration).RunAsync(Task(null, null), CancellationToken.None));
+
+        Assert.True(Directory.Exists(Path.Combine(calibration, "sets", "runa")));
+    }
+
+    [Fact]
+    public async Task CalibrationSets_DeleteFails_NotDoneSoTheStepRetries()
+    {
+        // Only Windows refuses to delete a file that is open without sharing.
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var calibration = this.CalibrationWithSets();
+        bool done;
+        using (File.Open(Path.Combine(calibration, "sets", "runa", "history-eval", "kappa-sample.json"), FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            done = await new SmokeArtifactErasureStep(this.NoWorkspaces(), calibrationDirectory: calibration).RunAsync(Task(T0, T0.AddDays(1)), CancellationToken.None);
+        }
+
+        Assert.False(done);
+        Assert.True(await new SmokeArtifactErasureStep(this.NoWorkspaces(), calibrationDirectory: calibration).RunAsync(Task(T0, T0.AddDays(1)), CancellationToken.None));
+        Assert.False(Directory.Exists(Path.Combine(calibration, "sets")));
+    }
+
+    [Fact]
+    public async Task KappaSamples_RangedPurge_DeletedInBothWorkspacesOwnerFilesKept()
+    {
+        var history = Path.Combine(this.dir, "hybrid");
+        var memory = Path.Combine(this.dir, "memory");
+        foreach (var workspace in new[] { history, memory })
+        {
+            Directory.CreateDirectory(workspace);
+            foreach (var name in new[] { "kappa-sample.json", "kappa-sample.json.tmp", "judge-agreement.csv", "dataset.jsonl" })
+            {
+                await File.WriteAllTextAsync(Path.Combine(workspace, name), "x");
+            }
+        }
+
+        var monitor = Substitute.For<IOptionsMonitor<HistoryOptions>>();
+        monitor.CurrentValue.Returns(new HistoryOptions { SmokeArtifactsDirectory = Path.Combine(this.dir, "none"), EvalArtifactsDirectory = history });
+
+        Assert.True(await new SmokeArtifactErasureStep(monitor, memoryEvalWorkspace: memory).RunAsync(Task(T0, T0.AddDays(1)), CancellationToken.None));
+
+        foreach (var workspace in new[] { history, memory })
+        {
+            Assert.Equal(["dataset.jsonl"], Directory.GetFiles(workspace).Select(Path.GetFileName));
+        }
+    }
+
+    [Fact]
+    public async Task KappaSamples_DeleteFails_NotDoneSoTheStepRetries()
+    {
+        // Only Windows refuses to delete a file that is open without sharing.
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var memory = Path.Combine(this.dir, "memory");
+        Directory.CreateDirectory(memory);
+        var sample = Path.Combine(memory, "kappa-sample.json");
+        await File.WriteAllTextAsync(sample, "x");
+        bool done;
+        using (File.Open(sample, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            done = await new SmokeArtifactErasureStep(this.NoWorkspaces(), memoryEvalWorkspace: memory).RunAsync(Task(T0, T0.AddDays(1)), CancellationToken.None);
+        }
+
+        Assert.False(done);
+        Assert.True(await new SmokeArtifactErasureStep(this.NoWorkspaces(), memoryEvalWorkspace: memory).RunAsync(Task(T0, T0.AddDays(1)), CancellationToken.None));
+        Assert.False(File.Exists(sample));
+    }
+
     [Fact]
     public async Task SmokeArtifacts_RootWithoutRunsDirectory_DeletesNothing()
     {

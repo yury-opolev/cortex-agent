@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using Cortex.Contained.Agent.Host.Evaluation;
+using Cortex.Contained.Agent.Host.Evaluation.Calibration;
 using Cortex.Contained.Agent.Host.Evaluation.Labelling;
 using Cortex.Contained.Agent.Host.Evaluation.Orchestration;
 using Cortex.Contained.Agent.Host.History;
@@ -177,6 +178,7 @@ public sealed class EvaluationRunServiceTests : IDisposable
         state = await this.UntilAsync(s => s.Waiting == RunWait.Dictionary);
         Assert.Equal(1.0, state.Kappa);
         Assert.Contains("pre-registered", await File.ReadAllTextAsync(Path.Combine(this.environment.HistoryWorkspace, "analysis-plan.md")), StringComparison.Ordinal);
+        Assert.Contains("(rubric `default`)", await File.ReadAllTextAsync(Path.Combine(this.environment.MemoryWorkspace, "analysis-plan.md")), StringComparison.Ordinal);
         Assert.Equal("hybrid-rrf20", new EvalWorkspace(this.environment.HistoryWorkspace).ReadPlan().Holdout!.Config);
         Assert.Equal("hybrid-rrf20", new MemoryEvalWorkspace(this.environment.MemoryWorkspace).ReadPlan().Holdout!.Config);
         Assert.True(this.calls.IndexOf("history-eval register") < this.calls.IndexOf("history-eval holdout"));
@@ -245,6 +247,8 @@ public sealed class EvaluationRunServiceTests : IDisposable
         Assert.Equal((RunStatus.Waiting, EvaluationRunPlan.Grading, RunWait.Grading), (state.Status, state.Phase, state.Waiting));
         Assert.Contains("below 0.6", state.Message, StringComparison.Ordinal);
         Assert.Contains("fresh run", state.Message, StringComparison.Ordinal);
+        Assert.Contains("Review grades", state.Message, StringComparison.Ordinal);
+        Assert.Contains("Judge calibration", state.Message, StringComparison.Ordinal);
         Assert.True(this.Grading().Progress().Submitted);
         Assert.Throws<InvalidOperationException>(() => this.Grading().Grade(0, 2));
         Assert.DoesNotContain(this.calls, c => c.Contains("ablate", StringComparison.Ordinal));
@@ -287,6 +291,81 @@ public sealed class EvaluationRunServiceTests : IDisposable
         Assert.Null(this.service.Resume());
         state = await this.UntilAsync(s => s.Waiting == RunWait.Grading);
         Assert.Equal(4, this.calls.Count(c => c.StartsWith("history-eval label", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public async Task Start_FreshAfterALockedSample_ArchivesItBeforeTheReset()
+    {
+        this.service.Start(fresh: false);
+        await this.UntilAsync(s => s.Waiting == RunWait.Grading);
+        this.GradeAll(i => (i + 1) % 3);
+        Assert.Null(this.service.SubmitGrading());
+        var state = await this.UntilAsync(s => s.Kappa is not null);
+        var archive = new CalibrationArchive(this.environment.CalibrationDirectory);
+
+        // The κ gate archived the locked sample (passing or failing).
+        Assert.True(File.Exists(Path.Combine(archive.SetsDirectory, state.RunId, "history-eval", KappaSampleFile.FileName)));
+        Assert.True(File.Exists(Path.Combine(archive.SetsDirectory, state.RunId, "memory-eval", "judge-agreement.csv")));
+
+        // Without that copy, a fresh start archives the previous run's sample before it wipes the workspaces.
+        Directory.Delete(this.environment.CalibrationDirectory, recursive: true);
+        Assert.Null(this.service.Cancel());
+        Assert.Null(this.service.Start(fresh: true));
+
+        Assert.False(File.Exists(Path.Combine(this.environment.HistoryWorkspace, KappaSampleFile.FileName)));
+        var archived = archive.Load(this.protection);
+        Assert.Equal(5, archived.Count);
+        Assert.All(archived, i => Assert.NotNull(i.HumanGrade));
+    }
+
+    private Task<bool> PurgeAsync()
+    {
+        var monitor = Substitute.For<Microsoft.Extensions.Options.IOptionsMonitor<HistoryOptions>>();
+        monitor.CurrentValue.Returns(new HistoryOptions { SmokeArtifactsDirectory = Path.Combine(this.root, "smoke"), EvalArtifactsDirectory = this.environment.HistoryWorkspace });
+        var now = DateTimeOffset.UtcNow;
+        return new SmokeArtifactErasureStep(monitor, memoryEvalWorkspace: this.environment.MemoryWorkspace, calibrationDirectory: this.environment.CalibrationDirectory)
+            .RunAsync(new ErasureTask { Id = "p", CreatedAt = now, RangeFrom = now.AddDays(-1), RangeTo = now, Steps = ["x"] }, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task Purge_AfterALockedSampleWasArchived_FreshStartArchivesNothingAndTheCalibrationSetIsEmpty()
+    {
+        this.service.Start(fresh: false);
+        await this.UntilAsync(s => s.Waiting == RunWait.Grading);
+        this.GradeAll(i => (i + 1) % 3);
+        Assert.Null(this.service.SubmitGrading());
+        await this.UntilAsync(s => s.Kappa is not null);
+        var archive = new CalibrationArchive(this.environment.CalibrationDirectory);
+        Assert.Equal(5, archive.Load(this.protection).Count);
+
+        Assert.True(await this.PurgeAsync());
+        Assert.Null(this.service.Cancel());
+        Assert.Null(this.service.Start(fresh: true));
+
+        Assert.False(Directory.Exists(archive.SetsDirectory));
+        var workspaces = new Dictionary<string, string> { ["history-eval"] = this.environment.HistoryWorkspace, ["memory-eval"] = this.environment.MemoryWorkspace };
+        Assert.Empty(archive.CalibrationSet(workspaces, this.protection));
+    }
+
+    [Fact]
+    public async Task Purge_WhileWaitingForTheGrading_RunKeepsWaitingAndSubmitRefuses()
+    {
+        this.service.Start(fresh: false);
+        await this.UntilAsync(s => s.Waiting == RunWait.Grading);
+        this.GradeAll(i => i % 3);
+
+        Assert.True(await this.PurgeAsync());
+        for (var i = 0; i < 3; i++)
+        {
+            this.service.Tick();
+        }
+
+        var state = this.service.Snapshot()!;
+        Assert.Equal((RunStatus.Waiting, RunWait.Grading), (state.Status, state.Waiting));
+        Assert.Equal(0, this.Grading().Progress().Total);
+        Assert.Contains("Grade every item", this.service.SubmitGrading(), StringComparison.Ordinal);
+        Assert.Null(this.service.Cancel());
+        Assert.Null(this.service.Start(fresh: true));
     }
 
     [Fact]

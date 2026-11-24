@@ -137,6 +137,7 @@ public sealed class Labeller
         }
 
         (state.QueryModel, state.JudgeModel, state.MainModel) = (this.options.QueryModel, this.options.JudgeModel, this.mainModel);
+        state.JudgeRubric = RelevanceJudge.RubricId(this.options.JudgeRubric);
 
         // A query the judge gave no valid answer for is graded again by the next run, until it has failed MaxJudgingRuns runs.
         state.FailedJudging.RemoveAll(id => state.JudgeFailures.GetValueOrDefault(id) < MaxJudgingRuns);
@@ -182,7 +183,7 @@ public sealed class Labeller
             : $"title: {item.Title ?? "-"} · tags: {(item.Tags.Count == 0 ? "-" : string.Join(", ", item.Tags))}\n{text}";
     }
 
-    // A resume with other models would mix two writers, judges or main models in one dataset.
+    // A resume with other models or another judge rubric would mix two writers, judges or main models in one dataset.
     private static string? Mismatch(LabellingState state, LabellingOptions options, string mainModel)
     {
         var differs = new List<string>();
@@ -197,9 +198,13 @@ public sealed class Labeller
         Check("query model", state.QueryModel, options.QueryModel);
         Check("judge model", state.JudgeModel, options.JudgeModel);
         Check("main model", state.MainModel, mainModel);
+
+        // Progress saved before rubrics were recorded was judged with the default rubric.
+        var savedRubric = state.JudgeModel.Length == 0 ? string.Empty : state.JudgeRubric is { Length: > 0 } rubric ? rubric : "default";
+        Check("judge rubric", savedRubric, RelevanceJudge.RubricId(options.JudgeRubric));
         return differs.Count == 0
             ? null
-            : $"error: the saved labelling progress was made with other models ({string.Join(", ", differs)}). Restore the configuration (Evaluation:Labelling, the agent's main model) to continue, or start a fresh run.";
+            : $"error: the saved labelling progress was made with other models or another judge rubric ({string.Join(", ", differs)}). Restore the configuration (Evaluation:Labelling, the agent's main model) to continue, or start a fresh run.";
     }
 
     // A real request's oracle filters never reach past the moment it was asked.
@@ -271,7 +276,7 @@ public sealed class Labeller
 
     private async Task JudgeAsync(LabellingState state, CancellationToken cancellationToken)
     {
-        var judge = new RelevanceJudge(this.llm, this.options.JudgeModel, this.options.JudgeBatchSize, this.source.Tool);
+        var judge = new RelevanceJudge(this.llm, this.options.JudgeModel, this.options.JudgeBatchSize, this.source.Tool, this.options.JudgeRubric);
         var done = 0;
         foreach (var draft in state.Drafts.Values.Where(d => !state.Grades.ContainsKey(d.Id) && !state.FailedJudging.Contains(d.Id)).ToList())
         {
@@ -414,6 +419,7 @@ public sealed class Labeller
             tool = this.source.Tool,
             queryModel = this.options.QueryModel,
             judgeModel = this.options.JudgeModel,
+            judgeRubric = RelevanceJudge.RubricId(this.options.JudgeRubric),
             mainModel = this.mainModel,
             seeds = state.Seeds.Count,
             realSeeds = state.Seeds.Count(s => s.Stratum == "real"),

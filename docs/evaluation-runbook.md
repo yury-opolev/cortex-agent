@@ -53,6 +53,7 @@ dictionary approval* → `freeze` → `holdout --corpus frozen:vN` → `compare`
 | Setting (`Evaluation:Labelling:…`) | Default | |
 |---|---|---|
 | `QueryModel` / `JudgeModel` | `gpt-6.1-sol` / `claude-opus-5.5` | Different model families are required; both must be listed by a configured provider (the Bridge's `llmProviders`) |
+| `JudgeRubric` | *(empty: the default rubric)* | The judge's grading guidance (text; the JSON answer format is always appended). Its id (`default` or `sha256:<12 hex>`) is recorded in the label state, `label-report.json` and the analysis plan; a label job refuses to resume with another rubric. See [Judge calibration](#judge-calibration) |
 | `HistoryQueries` / `MemoryQueries` | 520 / 270 | Drafted; a few are dropped after judging (Gate H for memory needs ≥ 250) |
 | `RealShare` | 0.3 | Largest share of real recall requests |
 | `KappaSample` | 75 | Items you grade, split by query count (50 history, 25 memory) |
@@ -67,7 +68,8 @@ and takes about 13–14 hours of LLM time plus the embedding runs: start it in t
 **When it stops** the page says why and what to do; *Resume* (password) continues from the same step:
 - *κ below 0.6*: the judge disagrees with you too often. You can change grades until you press **Done**, which
   computes κ and locks them (no κ is shown before, so it cannot be tuned); below the gate the grading panel stays open
-  read-only with κ and the guidance. Look at a few items, then cancel the run and start fresh with another `JudgeModel`.
+  read-only with κ and the guidance. Press *Review grades* to see the judge's grade next to yours and step through the
+  disagreements, then calibrate the judge ([Judge calibration](#judge-calibration)), cancel the run and start fresh.
 - *MaxCalls reached*: raise the cap and Resume; the label job continues where it stopped (its checkpoint is sealed).
 - *The LLM provider kept failing* (rate limit, outage, a model the provider no longer lists; label exit 4): nothing is
   marked failed. Labelling calls never fail over to another provider or model (that would change the model family) and
@@ -77,7 +79,7 @@ and takes about 13–14 hours of LLM time plus the embedding runs: start it in t
 - *Too few queries survived judging* (label exit 6; memory needs ≥ 250): the job already sampled extra seeds up to its
   top-up rounds; raise `MemoryQueries` (or add memories) and Resume.
 - *A command failed*: the last lines of its output (ids and numbers) are shown; fix the cause and Resume. A label job
-  that finds its saved progress was made with other models (query, judge or main model) refuses: restore the
+  that finds its saved progress was made with other models (query, judge or main model) or another judge rubric refuses: restore the
   configuration and Resume, or start a fresh run.
 - After an agent restart the run continues by itself once the storage key has arrived; an interrupted command runs again
   (a job that needs the LLM waits up to 2 minutes for the Bridge's credentials first).
@@ -87,6 +89,49 @@ Privacy: snippets, queries and candidates go only to the configured provider (D5
 text on disk is sealed (`label-state.json`, `dataset.jsonl`, `kappa-sample.json`, the dictionary); the run state,
 reports and logs hold ids and numbers only. Grading items are decrypted one at a time for a grading grant bound to your
 session (15 minutes idle).
+
+## Judge calibration
+
+When the κ gate fails, the judge's notion of a grade differs from yours — usually by one step (0↔1, 1↔2), i.e. the
+boundary of **1** is ambiguous. Calibrate the judge on the items you already graded, then measure it again on new ones:
+
+1. **See the disagreements.** In the grading panel press *Review grades* (password): after the grades are locked each
+   item shows `Judge: X · You: Y` (highlighted where you differ), and *◀ Prev disagreement* / *Next disagreement ▶*
+   step through the items where you differ (the panel opens on the first). Note the pattern — never copy item text
+   into chats, issues or rubric files.
+2. **Write rubric variants.** A rubric is the grading guidance only (what 2, 1 and 0 mean; the JSON answer format is
+   appended by the judge). Variants are plain-text files `/app/state/eval/calibration/rubrics/<name>.txt` (name:
+   lowercase letters, digits and dashes; at most 8 KB). They are **not** sealed, so they must hold no personal data:
+   invented examples only. Put one there with `docker exec cortex-agent mkdir -p /app/state/eval/calibration/rubrics`, then
+   `docker cp .\v2.txt cortex-agent:/app/state/eval/calibration/rubrics/v2.txt`.
+   `default` is the built-in rubric.
+3. **Pilot judges × rubrics** on the calibration set (password prompt):
+   ```powershell
+   .\scripts\Invoke-CortexEval.ps1 -Tool judge-calibration -- calibrate --models claude-opus-5.5,claude-sonnet-5.5,grok-4.7 --rubrics default,v2
+   ```
+   Add `--estimate` first to print the items, combinations and LLM calls (items × models × rubrics; at most 6 models and
+   4 rubrics; the whole calibration must fit `MaxCalls`, and every model must be listed by a provider — both are
+   checked before any call). Each item is judged on its own (one call per item), so the result can differ from the
+   run's batched judging; the row `stored judge (run)` shows the run's stored grades for comparison.
+4. **Read the table.** One line per model × rubric, best κ first: κ (unweighted, exactly as the gate computes it),
+   linear and quadratic weighted κ (one-step disagreements cost less), exact agreement, κ per tool, failed items and
+   calls; then the confusion matrices (rows the judge's grade, columns yours) with how often the judge graded higher or
+   lower than you. A JSON copy (ids and numbers only) is written to `/app/state/eval/calibration/reports/`.
+   Choose the judge (model and rubric) with the highest κ on the calibration set. The judge must be of another model
+   family than the query writer (`gpt-6.1-sol`): `gpt-*` models are informational only in the pilot.
+5. **Start a fresh run with it.** Set `Evaluation:Labelling:JudgeModel` and, for a rubric other than `default`,
+   `Evaluation:Labelling:JudgeRubric` (the file's text, e.g. a YAML block scalar in the agent configuration), restart
+   the agent, then cancel the failed run and *Run evaluation* with *Start fresh*. A fresh run draws a **new** κ sample,
+   so the gate is measured on items the judge was not tuned on.
+
+Every locked κ sample — passing or failing — is archived when the gate sees it and again before a fresh start wipes
+the workspaces: `/app/state/eval/calibration/sets/<runId>/<tool>/` holds the sealed `kappa-sample.json` and
+`judge-agreement.csv` copied byte for byte. The calibration set is every archived set plus the current locked sample
+unless it is already archived (each set is its own population: ids restart with every run, so nothing else is
+deduplicated), so it grows with every run. A fresh run keeps the sets; every history purge (D3) removes all κ samples
+automatically — the archived sets and the live `kappa-sample.json` / `judge-agreement.csv` of both workspaces —
+since their items hold message and memory text and which messages they came from is not known (rubrics and reports
+stay). A run waiting for your grading then has no items left to grade: cancel it and start a fresh run.
 
 ## Advanced: commands one by one
 

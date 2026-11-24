@@ -18,6 +18,12 @@ public sealed class LabellingOptions
     /// <summary>Grades pooled candidates 0–2; must be another model family than <see cref="QueryModel"/>.</summary>
     public string JudgeModel { get; set; } = "claude-opus-5.5";
 
+    /// <summary>
+    /// The judge's grading guidance (a calibrated rubric's text); null or blank is <see cref="RelevanceJudge.DefaultRubric"/>.
+    /// Its id (<see cref="RelevanceJudge.RubricId"/>) is recorded with the labels.
+    /// </summary>
+    public string? JudgeRubric { get; set; }
+
     /// <summary>History queries to draft (some are dropped after judging; §4.2 plans ~150 dev / 350 test).</summary>
     public int HistoryQueries { get; set; } = 520;
 

@@ -1,3 +1,4 @@
+using Cortex.Contained.Agent.Host.Evaluation.Calibration;
 using Cortex.Contained.Agent.Host.Evaluation.Frozen;
 using Cortex.Contained.Agent.Host.Evaluation.Labelling;
 using Cortex.Contained.Agent.Host.Evaluation.Orchestration;
@@ -39,6 +40,7 @@ public static class EvaluationRegistration
                 ["memory-eval"] = (run, ct) => IsLabel(run)
                     ? LabelCli.RunAsync("memory-eval", run, Labelling(sp, encryption), ct)
                     : MemoryEvalCli.RunInAgentAsync(run.Args, run.Output, run.Protection, memory.CurrentValue, reranker, ct),
+                ["judge-calibration"] = (run, ct) => JudgeCalibrationCli.RunAsync(run, Calibration(sp, encryption), ct),
                 ["eval-corpus"] = async (run, ct) =>
                 {
                     // suggest --llm needs the provider: after an agent restart the credentials arrive a little later.
@@ -118,6 +120,22 @@ public static class EvaluationRegistration
             memory,
             HistoryEvalCli.AgentEmbedder(memory),
             MemoryEvalCli.AgentEmbedder,
+            services.GetRequiredService<TimeProvider>(),
+            () => direct.HasCredentials);
+    }
+
+    /// <summary>What <c>judge-calibration</c> runs with: the labelling options and provider, the calibration root and the workspaces.</summary>
+    public static CalibrationContext Calibration(IServiceProvider services, StorageEncryptionContext encryption)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(encryption);
+        var direct = services.GetRequiredService<DirectLlmClient>();
+        return new CalibrationContext(
+            services.GetRequiredService<IOptionsMonitor<LabellingOptions>>().CurrentValue,
+            services.GetRequiredService<ILlmClient>(),
+            direct.ProviderFor,
+            CalibrationArchive.RootIn(encryption.Layout.EvaluationDirectory),
+            Workspaces(services.GetRequiredService<IOptionsMonitor<HistoryOptions>>().CurrentValue, encryption.Layout),
             services.GetRequiredService<TimeProvider>(),
             () => direct.HasCredentials);
     }

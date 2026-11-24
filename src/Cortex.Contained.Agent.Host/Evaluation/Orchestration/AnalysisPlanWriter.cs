@@ -24,6 +24,9 @@ public sealed record PlanFacts
 
     public required string JudgeModel { get; init; }
 
+    /// <summary>The judge rubric's id (<see cref="Labelling.RelevanceJudge.RubricId"/>).</summary>
+    public string JudgeRubric { get; init; } = "default";
+
     public required int PoolDepth { get; init; }
 
     public required double Kappa { get; init; }
@@ -61,7 +64,7 @@ public static class AnalysisPlanWriter
         text.AppendLine("## Data");
         text.AppendLine(CultureInfo.InvariantCulture, $"- Snapshot: {facts.Date:yyyy-MM-dd}. A result on a mostly pre-event-log snapshot is provisional (re-run after ≥ 4 weeks of live capture).");
         text.AppendLine(CultureInfo.InvariantCulture, $"- Dataset: {facts.Queries} queries, {facts.Dev} dev / {facts.Queries - facts.Dev} test (`EvalSplits.Assign`, seed 20261121, 30 % dev). Categories: {Counts(facts.Categories)}. Strata: {Counts(facts.Strata)} (`real` = real recall requests, co-primary).");
-        text.AppendLine(CultureInfo.InvariantCulture, $"- Queries written by `{facts.QueryModel}` from sampled snippets; graded 0–2 per {unit} by `{facts.JudgeModel}` on the union of the top {facts.PoolDepth} of every configuration in `ablation.json` plus the source (the model families differ).");
+        text.AppendLine(CultureInfo.InvariantCulture, $"- Queries written by `{facts.QueryModel}` from sampled snippets; graded 0–2 per {unit} by `{facts.JudgeModel}` (rubric `{facts.JudgeRubric}`) on the union of the top {facts.PoolDepth} of every configuration in `ablation.json` plus the source (the model families differ).");
         text.AppendLine(CultureInfo.InvariantCulture, $"- LLM-vs-human κ = {facts.Kappa:F3} on {facts.KappaItems} blind hand-graded items of both datasets{(facts.ToolKappa is { } k ? string.Create(CultureInfo.InvariantCulture, $" (this dataset: {k:F3})") : string.Empty)}; LLM labels are used only with κ ≥ 0.6.");
         text.AppendLine("- Paraphrase guard (Jaccard ≤ 0.2, no shared rare token): enforced while drafting and again against the judged gold.");
         text.AppendLine("- Finalisation (before any comparison): a synthetic query is dropped when the judge found its source irrelevant (every source graded 0 — other relevant candidates do not save it); a real request with no relevant item becomes an abstention query; an abstention query with a relevant item, an enumeration/multi query with fewer than two relevant items, a paraphrase failing the guard and tag_filtered without tags become `lookup`.");

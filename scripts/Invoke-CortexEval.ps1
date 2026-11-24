@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Runs an evaluation command (history-eval, memory-eval, eval-corpus) inside the agent process.
+    Runs an evaluation command (history-eval, memory-eval, eval-corpus, judge-calibration) inside the agent process.
 
 .DESCRIPTION
     Only the agent process holds the storage key, so on an encrypted install the evaluation commands run
@@ -14,11 +14,12 @@
     .\scripts\Invoke-CortexEval.ps1 -Tool history-eval -- ablate --split dev
     .\scripts\Invoke-CortexEval.ps1 -Tool memory-eval -- holdout
     .\scripts\Invoke-CortexEval.ps1 -Tool eval-corpus -PromptPassphrase -- export --version v1
+    .\scripts\Invoke-CortexEval.ps1 -Tool judge-calibration -- calibrate --models claude-opus-5.5,grok-4.7 --rubrics default,v2
 #>
 [CmdletBinding(PositionalBinding = $false)]
 param(
     [Parameter(Mandatory)]
-    [ValidateSet('history-eval', 'memory-eval', 'eval-corpus')]
+    [ValidateSet('history-eval', 'memory-eval', 'eval-corpus', 'judge-calibration')]
     [string]$Tool,
 
     [Parameter(ValueFromRemainingArguments)]

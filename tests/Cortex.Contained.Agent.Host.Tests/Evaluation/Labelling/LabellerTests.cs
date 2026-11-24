@@ -194,6 +194,7 @@ public sealed partial class LabellerTests : IDisposable
     [InlineData("query")]
     [InlineData("judge")]
     [InlineData("main")]
+    [InlineData("rubric")]
     public async Task RunAsync_SavedProgressMadeWithOtherModels_RefusesWithoutCalls(string changed)
     {
         this.fake.Respond = (model, system, user) => model == "claude-opus-5.5" ? "{}" : Respond(model, system, user);
@@ -210,6 +211,9 @@ public sealed partial class LabellerTests : IDisposable
             case "judge":
                 options.JudgeModel = "gemini-4-pro";
                 break;
+            case "rubric":
+                options.JudgeRubric = "Grade 2 only for an exact answer.";
+                break;
             default:
                 main = "other-main-model";
                 break;
@@ -221,7 +225,45 @@ public sealed partial class LabellerTests : IDisposable
         Assert.Equal(2, code);
         Assert.Empty(this.fake.Requests);
         Assert.Contains("fresh run", this.output.ToString(), StringComparison.Ordinal);
-        Assert.Contains(changed switch { "query" => "gpt-7.0-sol", "judge" => "gemini-4-pro", _ => "other-main-model" }, this.output.ToString(), StringComparison.Ordinal);
+        Assert.Contains(changed switch
+        {
+            "query" => "gpt-7.0-sol",
+            "judge" => "gemini-4-pro",
+            "rubric" => RelevanceJudge.RubricId(options.JudgeRubric),
+            _ => "other-main-model",
+        }, this.output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RunAsync_SavedProgressWithoutARubric_ResumesWithTheDefaultAndRefusesAnother()
+    {
+        this.fake.Respond = (model, system, user) => model == "claude-opus-5.5" ? "{}" : Respond(model, system, user);
+        Assert.Equal(3, await this.Create(Options(maxCalls: 30)).RunAsync(5, 4, CancellationToken.None));
+        var store = new LabellingStateStore(this.root, this.protection);
+        var saved = store.Load()!;
+        Assert.Equal("default", saved.JudgeRubric);
+        saved.JudgeRubric = string.Empty;
+        store.Save(saved);
+        this.fake.Respond = Respond;
+
+        var custom = Options();
+        custom.JudgeRubric = "Grade 2 only for an exact answer.";
+        Assert.Equal(2, await this.Create(custom).RunAsync(5, 4, CancellationToken.None));
+        Assert.Equal(0, await this.Create(Options()).RunAsync(5, 4, CancellationToken.None));
+        Assert.Contains("\"judgeRubric\": \"default\"", await File.ReadAllTextAsync(Path.Combine(this.root, Labeller.ReportFileName)), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RunAsync_CustomRubric_JudgesWithItAndRecordsItsId()
+    {
+        var options = Options();
+        options.JudgeRubric = "Grade 2 only for an exact answer, 1 for zqpartial context, 0 otherwise.";
+
+        Assert.Equal(0, await this.Create(options).RunAsync(5, kappaItems: 4, CancellationToken.None));
+
+        Assert.All(this.fake.Requests.Where(r => r.Model == "claude-opus-5.5"), r => Assert.Contains("Grade 2 only for an exact answer", r.System, StringComparison.Ordinal));
+        Assert.Equal(RelevanceJudge.RubricId(options.JudgeRubric), new LabellingStateStore(this.root, this.protection).Load()!.JudgeRubric);
+        Assert.Contains($"\"judgeRubric\": \"{RelevanceJudge.RubricId(options.JudgeRubric)}\"", await File.ReadAllTextAsync(Path.Combine(this.root, Labeller.ReportFileName)), StringComparison.Ordinal);
     }
 
     [Fact]
