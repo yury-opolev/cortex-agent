@@ -139,7 +139,8 @@ function evalRunPanel() {
                 const session = await api.post(`${this.base}/grading/session`, { password: this.grading.password });
                 this.grading.grant = session.grant;
                 this.grading.password = "";
-                await this.showItem(Math.min(this.run?.grading?.graded ?? 0, Math.max(0, (this.run?.grading?.total ?? 1) - 1)));
+                const first = this.gradingLocked ? this.disagreements[0] : undefined;
+                await this.showItem(first ?? Math.min(this.run?.grading?.graded ?? 0, Math.max(0, (this.run?.grading?.total ?? 1) - 1)));
             } catch (e) {
                 this.grading.error = e.body?.error || e.message;
             }
@@ -193,6 +194,20 @@ function evalRunPanel() {
 
         get gradingLocked() { return !!this.run?.grading?.submitted; },
 
+        // Indices of the items where the owner and the judge differ (sent only once the grades are locked).
+        get disagreements() { return this.grading.item?.progress?.disagreements ?? this.run?.grading?.disagreements ?? []; },
+
+        // Steps to the next (direction 1) or previous (-1) disagreement, wrapping around.
+        showDisagreement(direction) {
+            const list = this.disagreements;
+            if (!list.length || this.grading.busy) return;
+            const current = this.grading.item?.index ?? -1;
+            const target = direction > 0
+                ? (list.find((i) => i > current) ?? list[0])
+                : ([...list].reverse().find((i) => i < current) ?? list[list.length - 1]);
+            this.showItem(target);
+        },
+
         closeGrading() {
             this.grading.item = null;
             this.grading.grant = "";
@@ -201,7 +216,7 @@ function evalRunPanel() {
         onKey(event) {
             const item = this.grading.item;
             if (!item || ["INPUT", "TEXTAREA", "SELECT"].includes(event.target?.tagName)) return;
-            if (["0", "1", "2"].includes(event.key)) { event.preventDefault(); this.grade(Number(event.key)); }
+            if (["0", "1", "2"].includes(event.key)) { if (this.gradingLocked) return; event.preventDefault(); this.grade(Number(event.key)); }
             else if (event.key === "ArrowRight" || event.key === "s") { event.preventDefault(); this.showItem((item.index + 1) % item.total); }
             else if (event.key === "ArrowLeft" || event.key === "b") { event.preventDefault(); this.showItem(item.index - 1); }
             else if (event.key === "Escape") { this.closeGrading(); }

@@ -694,7 +694,7 @@ public sealed partial class EvaluationRunService : BackgroundService
     }
 
     private static string KappaGuidance(double? kappa) => string.Create(CultureInfo.InvariantCulture,
-        $"LLM-vs-human κ = {kappa ?? 0:F3} is below {MinKappa}: the judge's grades may not be used. Your grades are locked (a gate decision on grades that can still change would be worthless). Look at a few disagreements, then cancel this run and start a fresh run with another Evaluation:Labelling:JudgeModel.");
+        $"LLM-vs-human κ = {kappa ?? 0:F3} is below {MinKappa}: the judge's grades may not be used. Your grades are locked. Press Review grades to see the judge's grade next to yours, then calibrate the judge (docs/evaluation-runbook.md, 'Judge calibration') and start a fresh run.");
 
     private static void MoveTo(EvaluationRunState run, string phase)
     {

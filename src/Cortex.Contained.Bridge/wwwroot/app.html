@@ -1471,7 +1471,8 @@
                         <div x-show="run.waiting === 'grading'" class="border rounded p-2 mb-3">
                             <div class="fw-semibold mb-1">Grade the evaluation sample
                                 <span class="text-secondary fw-normal" x-text="'(' + (run.grading?.graded ?? 0) + ' of ' + (run.grading?.total ?? 0) + ' graded)'"></span></div>
-                            <p class="small text-secondary mb-2">For each query and found message or memory: <b>2</b> answers it, <b>1</b> partly or as needed context, <b>0</b> not relevant. The judge's grade is hidden. Keys: 0 1 2, → skip, ← back, Esc close. You can change grades until you press <b>Done</b>; then κ is computed and the grades are locked.</p>
+                            <p x-show="!gradingLocked" class="small text-secondary mb-2">For each query and found message or memory: <b>2</b> answers it, <b>1</b> partly or as needed context, <b>0</b> not relevant. The judge's grade is hidden. Keys: 0 1 2, → skip, ← back, Esc close. You can change grades until you press <b>Done</b>; then κ is computed and the grades are locked.</p>
+                            <p x-show="gradingLocked" class="small text-secondary mb-2">Your grades are submitted and locked. The judge's grade is shown after submitting, next to yours (highlighted where you differ); step through the disagreements with the buttons below the item. Keys: → next, ← back, Esc close.</p>
                             <template x-if="!grading.item">
                                 <div class="d-flex gap-2">
                                     <input type="password" class="form-control form-control-sm" style="max-width: 220px;" placeholder="Bridge password" x-model="grading.password">
@@ -1483,6 +1484,8 @@
                                     <div class="small text-secondary mb-1" x-text="'Item ' + ((grading.item?.index ?? 0) + 1) + ' of ' + grading.item?.total + ' · ' + (grading.item?.tool === 'memory-eval' ? 'memory' : 'history')"></div>
                                     <div class="mb-2"><span class="text-secondary small">Query</span><div class="fw-semibold" x-text="grading.item?.query"></div></div>
                                     <div class="mb-2"><span class="text-secondary small">Found</span><div class="border rounded p-2 small" style="white-space: pre-wrap; max-height: 260px; overflow: auto;" x-text="grading.item?.candidate"></div></div>
+                                    <div x-show="gradingLocked" class="small mb-2" :class="grading.item?.llmGrade !== grading.item?.humanGrade ? 'text-warning fw-semibold' : 'text-secondary'"
+                                         x-text="'Judge: ' + (grading.item?.llmGrade ?? '–') + ' · You: ' + (grading.item?.humanGrade ?? '–')"></div>
                                     <div class="d-flex gap-2 align-items-center">
                                         <template x-for="g in [0, 1, 2]" :key="g">
                                             <button class="btn btn-sm" :class="grading.item?.humanGrade === g ? 'btn-primary' : 'btn-outline-primary'" :disabled="grading.busy || gradingLocked" @click="grade(g)" x-text="g"></button>
@@ -1490,6 +1493,11 @@
                                         <button class="btn btn-sm btn-outline-secondary" :disabled="grading.busy || grading.item?.index === 0" @click="showItem(grading.item.index - 1)">Back</button>
                                         <button class="btn btn-sm btn-outline-secondary" :disabled="grading.busy" @click="showItem((grading.item.index + 1) % grading.item.total)">Skip</button>
                                         <button class="btn btn-sm btn-link ms-auto" @click="closeGrading()">Close</button>
+                                    </div>
+                                    <div x-show="gradingLocked" class="d-flex gap-2 align-items-center mt-2">
+                                        <button class="btn btn-sm btn-outline-warning" :disabled="grading.busy || disagreements.length === 0" @click="showDisagreement(-1)">◀ Prev disagreement</button>
+                                        <button class="btn btn-sm btn-outline-warning" :disabled="grading.busy || disagreements.length === 0" @click="showDisagreement(1)">Next disagreement ▶</button>
+                                        <span class="small text-secondary" x-text="disagreements.length + (disagreements.length === 1 ? ' disagreement' : ' disagreements')"></span>
                                     </div>
                                 </div>
                             </template>

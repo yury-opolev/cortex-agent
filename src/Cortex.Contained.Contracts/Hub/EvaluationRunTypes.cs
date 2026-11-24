@@ -135,6 +135,9 @@ public sealed record GradingProgressDto
     public double? HistoryKappa { get; init; }
 
     public double? MemoryKappa { get; init; }
+
+    /// <summary>0-based indices of the items where the owner and the judge differ (indices only), or null until submitted.</summary>
+    public IReadOnlyList<int>? Disagreements { get; init; }
 }
 
 /// <summary>One item of the κ sample (decrypted text: shown once, never cached or logged).</summary>
@@ -153,6 +156,9 @@ public sealed record GradingItemDto
     public string Candidate { get; init; } = string.Empty;
 
     public int? HumanGrade { get; init; }
+
+    /// <summary>The judge's grade, shown only once the owner submitted (locked) the grades; null before.</summary>
+    public int? LlmGrade { get; init; }
 
     public required GradingProgressDto Progress { get; init; }
 }

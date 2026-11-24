@@ -89,5 +89,22 @@ public sealed class EvaluationRunApiTests : IDisposable
         Assert.True(progress.Complete);
         Assert.False(progress.Submitted);
         Assert.Null(progress.Kappa);
+        Assert.Null(progress.Disagreements);
+        Assert.Null(this.api.Item(0).LlmGrade);
+    }
+
+    [Fact]
+    public void Item_AfterSubmit_MapsTheJudgesGradeAndTheDisagreements()
+    {
+        this.api.Grade(new GradeRequestDto(0, 2));
+        this.api.Grade(new GradeRequestDto(1, 1));
+        this.grading.Submit();
+
+        var first = this.api.Item(0);
+        var second = this.api.Item(1);
+
+        Assert.Equal((2, 2), (first.LlmGrade, first.HumanGrade));
+        Assert.Equal((0, 1), (second.LlmGrade, second.HumanGrade));
+        Assert.Equal([1], second.Progress.Disagreements!);
     }
 }

@@ -100,6 +100,7 @@ public sealed class EvaluationRunApi(EvaluationRunService runs, GradingService g
                 Query = item.Query,
                 Candidate = item.Candidate,
                 HumanGrade = item.HumanGrade,
+                LlmGrade = item.LlmGrade,
                 Progress = progress,
             };
     }
@@ -123,6 +124,7 @@ public sealed class EvaluationRunApi(EvaluationRunService runs, GradingService g
         Kappa = progress.Kappa,
         HistoryKappa = progress.HistoryKappa,
         MemoryKappa = progress.MemoryKappa,
+        Disagreements = progress.Disagreements,
     };
 
     private static string PhaseState(EvaluationRunState state, string phase, int index, int current)

@@ -245,6 +245,8 @@ public sealed class EvaluationRunServiceTests : IDisposable
         Assert.Equal((RunStatus.Waiting, EvaluationRunPlan.Grading, RunWait.Grading), (state.Status, state.Phase, state.Waiting));
         Assert.Contains("below 0.6", state.Message, StringComparison.Ordinal);
         Assert.Contains("fresh run", state.Message, StringComparison.Ordinal);
+        Assert.Contains("Review grades", state.Message, StringComparison.Ordinal);
+        Assert.Contains("Judge calibration", state.Message, StringComparison.Ordinal);
         Assert.True(this.Grading().Progress().Submitted);
         Assert.Throws<InvalidOperationException>(() => this.Grading().Grade(0, 2));
         Assert.DoesNotContain(this.calls, c => c.Contains("ablate", StringComparison.Ordinal));
