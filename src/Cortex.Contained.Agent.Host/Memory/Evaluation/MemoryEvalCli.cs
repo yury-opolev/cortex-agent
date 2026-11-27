@@ -43,7 +43,7 @@ public static class MemoryEvalCli
 
         For each seed, write one `dataset.jsonl` line (see `dataset.example.jsonl`):
         - `text`: the question as the user would ask it. `paraphrase`: no content word shared with the memory.
-          `cross_language`: another language than the memory. `identifier`: the exact identifier from the memory.
+          `cross_language`: an English query for a non-English memory. `identifier`: the exact identifier from the memory.
           `tag_filtered`: also set `tags` to the filter an ideal searcher would use. `multi`: a question answered only
           by several memories together.
         - `sourceMemoryId`: the seed's memory id; `stratum`: `synthetic` (or `real` for real past recall requests).

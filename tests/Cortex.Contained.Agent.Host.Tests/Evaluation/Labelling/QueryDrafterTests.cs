@@ -56,6 +56,28 @@ public sealed class QueryDrafterTests
     }
 
     [Fact]
+    public async Task DraftAsync_CrossLanguageOnEnglishSnippet_BecomesLookup()
+    {
+        this.fake.Respond = (_, _, _) => """{"text":"which crossing did we reserve for March","category":"lookup"}""";
+
+        var answer = await this.Drafter().DraftAsync(Seed("cross_language"), Snippet, (_, _) => true, CancellationToken.None);
+
+        Assert.Equal("lookup", answer!.Category);
+        Assert.Contains("in English", this.fake.Requests[0].User, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task DraftAsync_CrossLanguageOnOtherLanguage_StaysCrossLanguage()
+    {
+        var danish = new SeedMaterial([new MaterialItem("43", "vi har bestilt natfærgen til TownB den fjortende marts", "discord-dm", T0, "user")]);
+        this.fake.Respond = (_, _, _) => """{"text":"which ferry did we book to TownB","category":"cross_language"}""";
+
+        var answer = await this.Drafter().DraftAsync(Seed("cross_language"), danish, (_, _) => true, CancellationToken.None);
+
+        Assert.Equal("cross_language", answer!.Category);
+    }
+
+    [Fact]
     public async Task DraftAsync_TemporalFilterMissesTheMessageTime_Rejected()
     {
         this.fake.Respond = (_, _, _) => """{"text":"what did we plan in February","category":"temporal","goldFilters":{"since":"2026-02-01T00:00:00Z","until":"2026-03-01T00:00:00Z"}}""";
