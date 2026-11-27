@@ -78,6 +78,18 @@ public sealed class ComposeFileSyncTests : IDisposable
     }
 
     [Fact]
+    public void Refresh_BundledHostOverride_IsCopiedNextToTheStableCompose()
+    {
+        File.WriteAllText(Path.Combine(this.bundle, "docker-compose.yml"), "services: {}");
+        File.WriteAllText(Path.Combine(this.bundle, "docker-compose.embeddings-host.yml"), "services: { embeddings: { ports: [] } }");
+
+        ComposeFileSync.Refresh(this.bundle, this.dataDirectory);
+
+        var copied = Path.Combine(this.dataDirectory, "docker-compose.embeddings-host.yml");
+        Assert.Contains("ports", File.ReadAllText(copied), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Refresh_NoBundledCompose_ReturnsNullAndKeepsTheStableCopy()
     {
         Directory.CreateDirectory(this.dataDirectory);

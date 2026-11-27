@@ -96,6 +96,23 @@ the Bridge `cortex.yml` (`Embeddings:Gpu`, default false; environment `Embedding
   embedding history in bulk.- **Same GPU as the other sidecars.** The embedder, the reranker and the speech sidecars all reserve the
   same GPU; each keeps its model resident, so mind the total VRAM on a small card.
 
+### Sharing the embedder with host-side tools (opt-in)
+
+The sidecar publishes no port by default, so only the agent reaches it. To let a tool on the Windows host use
+the same embedder (for example the standalone memory MCP server, which expects Ollama at
+`http://localhost:11434`), set `embeddings: publishToHost: true` in the Bridge `cortex.yml`
+(`Embeddings:PublishToHost`, default false; environment `Embeddings__PublishToHost=true`) and restart the Bridge.
+
+- **Mechanism.** `docker-compose.embeddings-host.yml` adds `127.0.0.1:11434:11434` to `embeddings`. The Bridge
+  adds it to its embeddings commands when the setting is on (together with the GPU override when both are on);
+  the Launcher keeps it next to the stable compose file, like the GPU override. The reconcile at Bridge start
+  recreates the container when its published ports differ from the setting, in either direction.
+- **Exposure.** The port is bound to the loopback interface only: every process on this machine can call the
+  embedder (including Ollama's model-management API), the network cannot. Only the embedder is shared; the
+  host tool and the agent keep separate stores. The setting is file-only: there is no switch on the Recall page.
+- **No extra memory.** Host tools reuse the model the sidecar already keeps loaded. They must request the same
+  context size (`num_ctx` 4096), otherwise Ollama reloads the model on every change of caller.
+
 ## Coverage, health and fallback
 
 Every `history_search` response states `mode: hybrid (keyword + semantic)` or `mode: keyword` and a

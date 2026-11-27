@@ -88,6 +88,37 @@ public sealed class ComposeExposureTests
     }
 
     [Fact]
+    public void EmbeddingsHostOverride_OnlyPublishesTheLoopbackPortOfEmbeddings()
+    {
+        var stream = new YamlStream();
+        using (var reader = new StreamReader(Path.Combine(RepositoryRoot(), "docker-compose.embeddings-host.yml")))
+        {
+            stream.Load(reader);
+        }
+
+        var root = (YamlMappingNode)stream.Documents[0].RootNode;
+        Assert.Equal(["services"], root.Children.Keys.Select(k => ((YamlScalarNode)k).Value!).ToList());
+        var services = (YamlMappingNode)root.Children[new YamlScalarNode("services")];
+        Assert.Equal(["embeddings"], services.Children.Keys.Select(k => ((YamlScalarNode)k).Value!).ToList());
+
+        var service = (YamlMappingNode)services.Children[new YamlScalarNode("embeddings")];
+        Assert.Equal(["ports"], service.Children.Keys.Select(k => ((YamlScalarNode)k).Value!).ToList());
+        var ports = ((YamlSequenceNode)service.Children[new YamlScalarNode("ports")]).Children.Select(n => ((YamlScalarNode)n).Value!).ToList();
+
+        // Loopback only: the embedder must never be reachable from the network.
+        Assert.Equal(["127.0.0.1:11434:11434"], ports);
+    }
+
+    [Fact]
+    public void LauncherAndBuildScript_BundleTheHostOverrideNextToTheCompose()
+    {
+        var root = RepositoryRoot();
+
+        Assert.Contains("docker-compose.embeddings-host.yml", File.ReadAllText(Path.Combine(root, "src", "Cortex.Contained.Launcher", "Cortex.Contained.Launcher.csproj")), StringComparison.Ordinal);
+        Assert.Contains("docker-compose.embeddings-host.yml", File.ReadAllText(Path.Combine(root, "scripts", "Build-Launcher.ps1")), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Agent_TakesTheHistoryTimeZoneFromTheHostViaCortexTimezone()
     {
         // Empty (the default) keeps TimeZoneInfo.Local, i.e. the container's own zone.

@@ -154,6 +154,7 @@ Per tenant, under **Tenants → *tenant* → Recall** (no restart, no compose or
 | Reranker budget | top 15, 1200 chars, 2000 ms | How many hybrid results the reranker reorders and how long it may take. |
 | Reranker (shared) | off | Starts the `cortex-reranker` sidecar for all tenants; needs the image (`scripts\Build-RerankerImage.ps1`). |
 | Run embeddings on the GPU (shared) | off (CPU) | Recreates the `embeddings` sidecar with `docker-compose.embeddings-gpu.yml` (NVIDIA GPU + Docker GPU support); falls back to the CPU and says so if the GPU start fails. Stored as `embeddings: gpu` in the Bridge `cortex.yml`. See [history-hybrid-search.md](history-hybrid-search.md#running-the-embedder-on-the-gpu-opt-in). |
+| Publish embeddings to the host (shared, `cortex.yml` only) | off | `embeddings: publishToHost: true` recreates the `embeddings` sidecar with `docker-compose.embeddings-host.yml`, publishing it on `127.0.0.1:11434` so host-side tools (the standalone memory MCP server) can share the embedder. Local processes only. |
 
 Your choices are stored in the agent's state volume (`recall-settings.json`), so they survive restarts
 and updates; values you never changed keep following the shipped defaults, and **Reset to defaults**

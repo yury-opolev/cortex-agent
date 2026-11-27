@@ -153,6 +153,12 @@ llmProxy:
 #     # sileroVoice: xenia                           # Silero voice name (engine=silero)
 #     # sileroModelPath: ${LOCALAPPDATA}/Cortex/models/silero  # Directory containing Silero model subdirs
 
+# Embeddings sidecar (cortex-embeddings). Both switches recreate the container when they change.
+# embeddings:
+#   gpu: false             # true = run on the NVIDIA GPU (needs Docker GPU support); falls back to the CPU
+#   publishToHost: false   # true = also publish on 127.0.0.1:11434 so host-side tools (the standalone
+#                          # memory MCP server) can share the embedder; local processes only, never the network
+
 channels:
   # Voice (Windows audio capture + STT/TTS from speech: section)
   # STT/TTS engine settings are configured in the shared speech: section above.

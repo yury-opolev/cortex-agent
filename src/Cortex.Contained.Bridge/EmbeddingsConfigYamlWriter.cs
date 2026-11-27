@@ -6,7 +6,7 @@ namespace Cortex.Contained.Bridge;
 
 /// <summary>
 /// Serializes <see cref="EmbeddingsSettingsConfig"/> (<c>embeddings:</c>) into the bridge YAML file, so the
-/// Recall page's GPU switch survives restarts and every other settings save keeps it.
+/// Recall page's GPU switch and the host-port switch survive restarts and every other settings save keeps them.
 /// </summary>
 internal static class EmbeddingsConfigYamlWriter
 {
@@ -17,5 +17,6 @@ internal static class EmbeddingsConfigYamlWriter
         sb.AppendLine();
         sb.AppendLine("embeddings:");
         sb.AppendLine(embeddings.Gpu ? "  gpu: true" : "  gpu: false");
+        sb.AppendLine(embeddings.PublishToHost ? "  publishToHost: true" : "  publishToHost: false");
     }
 }

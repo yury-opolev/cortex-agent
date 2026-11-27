@@ -5,8 +5,8 @@ namespace Cortex.Contained.Bridge.Tests.Speech;
 
 public sealed class EmbeddingsSidecarLifecycleTests
 {
-    private static EmbeddingsSidecarLifecycle Sut(IEmbeddingsComposeRunner runner, bool gpu = false) =>
-        new(runner, () => gpu, NullLogger<EmbeddingsSidecarLifecycle>.Instance);
+    private static EmbeddingsSidecarLifecycle Sut(IEmbeddingsComposeRunner runner, bool gpu = false, bool publishToHost = false) =>
+        new(runner, () => gpu, NullLogger<EmbeddingsSidecarLifecycle>.Instance, publishToHost: () => publishToHost);
 
     [Fact]
     public async Task Enabled_NotRunning_StartsOnTheCpu()
@@ -16,7 +16,7 @@ public sealed class EmbeddingsSidecarLifecycleTests
 
         await Sut(runner).ReconcileAsync(enabled: true, CancellationToken.None);
 
-        await runner.Received(1).StartEmbeddingsAsync(false, false, Arg.Any<CancellationToken>());
+        await runner.Received(1).StartEmbeddingsAsync(false, false, false, Arg.Any<CancellationToken>());
         await runner.DidNotReceive().StopEmbeddingsAsync(Arg.Any<CancellationToken>());
     }
 
@@ -28,7 +28,7 @@ public sealed class EmbeddingsSidecarLifecycleTests
 
         await Sut(runner).ReconcileAsync(enabled: true, CancellationToken.None);
 
-        await runner.DidNotReceiveWithAnyArgs().StartEmbeddingsAsync(default, default, default);
+        await runner.DidNotReceiveWithAnyArgs().StartEmbeddingsAsync(default, default, default, default);
     }
 
     [Fact]
@@ -40,7 +40,7 @@ public sealed class EmbeddingsSidecarLifecycleTests
         await Sut(runner).ReconcileAsync(enabled: false, CancellationToken.None);
 
         await runner.Received(1).StopEmbeddingsAsync(Arg.Any<CancellationToken>());
-        await runner.DidNotReceiveWithAnyArgs().StartEmbeddingsAsync(default, default, default);
+        await runner.DidNotReceiveWithAnyArgs().StartEmbeddingsAsync(default, default, default, default);
     }
 
     [Fact]
@@ -75,8 +75,8 @@ public sealed class EmbeddingsSidecarLifecycleTests
 
         await sut.ReconcileAsync(enabled: true, CancellationToken.None);
 
-        await runner.Received(1).StartEmbeddingsAsync(true, false, Arg.Any<CancellationToken>());
-        await runner.DidNotReceive().StartEmbeddingsAsync(Arg.Is<bool>(g => !g), Arg.Any<bool>(), Arg.Any<CancellationToken>());
+        await runner.Received(1).StartEmbeddingsAsync(true, false, false, Arg.Any<CancellationToken>());
+        await runner.DidNotReceive().StartEmbeddingsAsync(Arg.Is<bool>(g => !g), Arg.Any<bool>(), Arg.Any<bool>(), Arg.Any<CancellationToken>());
         Assert.Equal("running", sut.Status.State);
         Assert.Null(sut.Status.Problem);
     }
@@ -88,7 +88,7 @@ public sealed class EmbeddingsSidecarLifecycleTests
 
         await Sut(runner, gpu: true).ReconcileAsync(enabled: true, CancellationToken.None);
 
-        await runner.Received(1).StartEmbeddingsAsync(true, true, Arg.Any<CancellationToken>());
+        await runner.Received(1).StartEmbeddingsAsync(true, true, false, Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -98,7 +98,7 @@ public sealed class EmbeddingsSidecarLifecycleTests
 
         await Sut(runner, gpu: false).ReconcileAsync(enabled: true, CancellationToken.None);
 
-        await runner.Received(1).StartEmbeddingsAsync(false, true, Arg.Any<CancellationToken>());
+        await runner.Received(1).StartEmbeddingsAsync(false, true, false, Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -108,19 +108,19 @@ public sealed class EmbeddingsSidecarLifecycleTests
 
         await Sut(runner, gpu: true).ReconcileAsync(enabled: true, CancellationToken.None);
 
-        await runner.DidNotReceiveWithAnyArgs().StartEmbeddingsAsync(default, default, default);
+        await runner.DidNotReceiveWithAnyArgs().StartEmbeddingsAsync(default, default, default, default);
     }
 
     [Fact]
     public async Task Gpu_StartFails_FallsBackToTheCpuAndSaysSo()
     {
         var runner = RunnerWhere(running: false, startSucceeds: true);
-        runner.StartEmbeddingsAsync(Arg.Is<bool>(g => g), Arg.Any<bool>(), Arg.Any<CancellationToken>()).Returns(false);
+        runner.StartEmbeddingsAsync(Arg.Is<bool>(g => g), Arg.Any<bool>(), Arg.Any<bool>(), Arg.Any<CancellationToken>()).Returns(false);
         var sut = Sut(runner, gpu: true);
 
         await sut.ReconcileAsync(enabled: true, CancellationToken.None);
 
-        await runner.Received(1).StartEmbeddingsAsync(false, true, Arg.Any<CancellationToken>());
+        await runner.Received(1).StartEmbeddingsAsync(false, true, false, Arg.Any<CancellationToken>());
         Assert.Equal("running", sut.Status.State);
         Assert.Equal(EmbeddingsSidecarLifecycle.GpuFallbackProblem, sut.Status.Problem);
     }
@@ -145,7 +145,7 @@ public sealed class EmbeddingsSidecarLifecycleTests
 
         await sut.ReconcileAsync(enabled: true, CancellationToken.None);
 
-        await runner.Received(1).StartEmbeddingsAsync(false, false, Arg.Any<CancellationToken>());
+        await runner.Received(1).StartEmbeddingsAsync(false, false, false, Arg.Any<CancellationToken>());
         Assert.Equal("failed", sut.Status.State);
     }
 
@@ -158,17 +158,71 @@ public sealed class EmbeddingsSidecarLifecycleTests
         await sut.ReconcileAsync(enabled: false, CancellationToken.None);
 
         Assert.Equal("stopped", sut.Status.State);
-        await runner.DidNotReceiveWithAnyArgs().StartEmbeddingsAsync(default, default, default);
+        await runner.DidNotReceiveWithAnyArgs().StartEmbeddingsAsync(default, default, default, default);
     }
 
-    private static IEmbeddingsComposeRunner RunnerWhere(bool running, bool startSucceeds, bool onGpu = false)
+    [Fact]
+    public async Task PublishToHost_NotRunning_StartsWithTheHostOverride()
+    {
+        var runner = RunnerWhere(running: false, startSucceeds: true);
+
+        await Sut(runner, publishToHost: true).ReconcileAsync(enabled: true, CancellationToken.None);
+
+        await runner.Received(1).StartEmbeddingsAsync(false, false, true, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task PublishToHost_RunningUnpublished_RecreatesWithTheHostOverride()
+    {
+        var runner = RunnerWhere(running: true, startSucceeds: true, published: false);
+
+        await Sut(runner, publishToHost: true).ReconcileAsync(enabled: true, CancellationToken.None);
+
+        await runner.Received(1).StartEmbeddingsAsync(false, true, true, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task PublishToHostOff_RunningPublished_RecreatesWithoutThePort()
+    {
+        var runner = RunnerWhere(running: true, startSucceeds: true, published: true);
+
+        await Sut(runner, publishToHost: false).ReconcileAsync(enabled: true, CancellationToken.None);
+
+        await runner.Received(1).StartEmbeddingsAsync(false, true, false, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task PublishToHost_RunningPublishedOnTheWantedProcessor_NoOp()
+    {
+        var runner = RunnerWhere(running: true, startSucceeds: true, onGpu: true, published: true);
+
+        await Sut(runner, gpu: true, publishToHost: true).ReconcileAsync(enabled: true, CancellationToken.None);
+
+        await runner.DidNotReceiveWithAnyArgs().StartEmbeddingsAsync(default, default, default, default);
+    }
+
+    [Fact]
+    public async Task PublishToHost_GpuStartFails_TheCpuFallbackKeepsTheHostPort()
+    {
+        var runner = RunnerWhere(running: false, startSucceeds: true);
+        runner.StartEmbeddingsAsync(Arg.Is<bool>(g => g), Arg.Any<bool>(), Arg.Any<bool>(), Arg.Any<CancellationToken>()).Returns(false);
+        var sut = Sut(runner, gpu: true, publishToHost: true);
+
+        await sut.ReconcileAsync(enabled: true, CancellationToken.None);
+
+        await runner.Received(1).StartEmbeddingsAsync(false, true, true, Arg.Any<CancellationToken>());
+        Assert.Equal(EmbeddingsSidecarLifecycle.GpuFallbackProblem, sut.Status.Problem);
+    }
+
+    private static IEmbeddingsComposeRunner RunnerWhere(bool running, bool startSucceeds, bool onGpu = false, bool published = false)
     {
         var runner = Substitute.For<IEmbeddingsComposeRunner>();
         var isRunning = running;
         runner.IsEmbeddingsRunningAsync(Arg.Any<CancellationToken>()).Returns(_ => isRunning);
         runner.IsEmbeddingsOnGpuAsync(Arg.Any<CancellationToken>()).Returns(onGpu);
+        runner.IsEmbeddingsPublishedToHostAsync(Arg.Any<CancellationToken>()).Returns(published);
         runner.StopEmbeddingsAsync(Arg.Any<CancellationToken>()).Returns(true);
-        runner.StartEmbeddingsAsync(Arg.Any<bool>(), Arg.Any<bool>(), Arg.Any<CancellationToken>()).Returns(_ =>
+        runner.StartEmbeddingsAsync(Arg.Any<bool>(), Arg.Any<bool>(), Arg.Any<bool>(), Arg.Any<CancellationToken>()).Returns(_ =>
         {
             isRunning = startSucceeds;
             return startSucceeds;

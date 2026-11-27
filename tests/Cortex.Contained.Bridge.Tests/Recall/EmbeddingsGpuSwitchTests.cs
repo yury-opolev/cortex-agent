@@ -22,7 +22,7 @@ public sealed class EmbeddingsGpuSwitchTests
     {
         this.runner.IsEmbeddingsRunningAsync(Arg.Any<CancellationToken>()).Returns(_ => this.running);
         this.runner.IsEmbeddingsOnGpuAsync(Arg.Any<CancellationToken>()).Returns(_ => this.onGpu);
-        this.runner.StartEmbeddingsAsync(Arg.Any<bool>(), Arg.Any<bool>(), Arg.Any<CancellationToken>()).Returns(call =>
+        this.runner.StartEmbeddingsAsync(Arg.Any<bool>(), Arg.Any<bool>(), Arg.Any<bool>(), Arg.Any<CancellationToken>()).Returns(call =>
         {
             this.calls.Add($"compose-up gpu={call.ArgAt<bool>(0)} recreate={call.ArgAt<bool>(1)}");
             this.onGpu = call.ArgAt<bool>(0);
@@ -84,7 +84,7 @@ public sealed class EmbeddingsGpuSwitchTests
     [Fact]
     public async Task TurnOn_NoNvidiaRuntime_FallsBackToTheCpuAndReportsIt()
     {
-        this.runner.StartEmbeddingsAsync(Arg.Is<bool>(g => g), Arg.Any<bool>(), Arg.Any<CancellationToken>()).Returns(call =>
+        this.runner.StartEmbeddingsAsync(Arg.Is<bool>(g => g), Arg.Any<bool>(), Arg.Any<bool>(), Arg.Any<CancellationToken>()).Returns(call =>
         {
             this.calls.Add("compose-up gpu=True failed");
             return false;
@@ -182,6 +182,50 @@ public sealed class EmbeddingsGpuSwitchTests
         EmbeddingsConfigYamlWriter.AppendEmbeddingsSection(sb, new EmbeddingsSettingsConfig());
 
         Assert.Contains("  gpu: false", sb.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PublishToHost_DefaultsToOff()
+    {
+        Assert.False(new BridgeConfig().Embeddings.PublishToHost);
+    }
+
+    [Theory]
+    [InlineData(false, "  publishToHost: false")]
+    [InlineData(true, "  publishToHost: true")]
+    public void AppendEmbeddingsSection_WritesPublishToHost(bool publishToHost, string expectedLine)
+    {
+        var sb = new StringBuilder();
+
+        EmbeddingsConfigYamlWriter.AppendEmbeddingsSection(sb, new EmbeddingsSettingsConfig { PublishToHost = publishToHost });
+
+        Assert.Contains(expectedLine, sb.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PersistedYaml_LoadedBack_KeepsPublishToHost()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "cortex-" + Guid.NewGuid().ToString("N") + ".yml");
+        try
+        {
+            Cortex.Contained.Bridge.Setup.BridgeSettingsWriter.PersistSettingsToYaml(new BridgeConfig { Embeddings = { PublishToHost = true } }, path);
+
+            var loaded = new BridgeConfig();
+            new ConfigurationBuilder()
+                .AddYamlFile(path, optional: false)
+                .Build()
+                .Bind(loaded);
+
+            Assert.True(loaded.Embeddings.PublishToHost);
+            Assert.False(loaded.Embeddings.Gpu);
+        }
+        finally
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
     }
 
     [Fact]

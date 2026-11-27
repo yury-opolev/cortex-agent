@@ -13,9 +13,10 @@ public sealed record EmbeddingsSidecarStatus(string State, string? Problem, Date
 }
 
 /// <summary>
-/// Converges the cortex-embeddings sidecar with the built-in-memory enable flag and the GPU switch:
-/// start-if-down when enabled, stop-if-up when disabled, and a recreate when the running container's
-/// placement (CPU or GPU) differs from the switch. When the GPU start fails (no NVIDIA runtime) it falls
+/// Converges the cortex-embeddings sidecar with the built-in-memory enable flag, the GPU switch and the
+/// host-port switch: start-if-down when enabled, stop-if-up when disabled, and a recreate when the running
+/// container's placement (CPU or GPU) or exposure (internal only, or also published on the host's loopback
+/// interface) differs from the switches. When the GPU start fails (no NVIDIA runtime) it falls
 /// back to the CPU so memory keeps working, and says so in <see cref="Status"/>. Failures are logged and
 /// reported, never propagated.
 /// </summary>
@@ -33,16 +34,22 @@ public sealed partial class EmbeddingsSidecarLifecycle : IDisposable
 
     private readonly IEmbeddingsComposeRunner runner;
     private readonly Func<bool> useGpu;
+    private readonly Func<bool> publishToHost;
     private readonly ILogger<EmbeddingsSidecarLifecycle> logger;
     private readonly TimeProvider time;
     private readonly SemaphoreSlim gate = new(1, 1);
     private volatile EmbeddingsSidecarStatus status = EmbeddingsSidecarStatus.Unknown;
 
     public EmbeddingsSidecarLifecycle(
-        IEmbeddingsComposeRunner runner, Func<bool> useGpu, ILogger<EmbeddingsSidecarLifecycle> logger, TimeProvider? time = null)
+        IEmbeddingsComposeRunner runner,
+        Func<bool> useGpu,
+        ILogger<EmbeddingsSidecarLifecycle> logger,
+        TimeProvider? time = null,
+        Func<bool>? publishToHost = null)
     {
         this.runner = runner;
         this.useGpu = useGpu;
+        this.publishToHost = publishToHost ?? (() => false);
         this.logger = logger;
         this.time = time ?? TimeProvider.System;
     }
@@ -86,15 +93,18 @@ public sealed partial class EmbeddingsSidecarLifecycle : IDisposable
         }
 
         var wantGpu = this.useGpu();
-        if (running && await this.runner.IsEmbeddingsOnGpuAsync(cancellationToken).ConfigureAwait(false) == wantGpu)
+        var wantHostPort = this.publishToHost();
+        if (running
+            && await this.runner.IsEmbeddingsOnGpuAsync(cancellationToken).ConfigureAwait(false) == wantGpu
+            && await this.runner.IsEmbeddingsPublishedToHostAsync(cancellationToken).ConfigureAwait(false) == wantHostPort)
         {
             this.Record("running", null);
             return;
         }
 
         this.Record("starting", null);
-        this.LogStarting(wantGpu ? "GPU" : "CPU");
-        if (await this.StartAsync(wantGpu, recreate: running, cancellationToken).ConfigureAwait(false))
+        this.LogStarting(wantGpu ? "GPU" : "CPU", wantHostPort ? "published on 127.0.0.1" : "internal only");
+        if (await this.StartAsync(wantGpu, recreate: running, wantHostPort, cancellationToken).ConfigureAwait(false))
         {
             this.Record("running", null);
             return;
@@ -103,7 +113,7 @@ public sealed partial class EmbeddingsSidecarLifecycle : IDisposable
         if (wantGpu)
         {
             this.LogGpuStartFailed();
-            if (await this.StartAsync(useGpu: false, recreate: true, cancellationToken).ConfigureAwait(false))
+            if (await this.StartAsync(useGpu: false, recreate: true, wantHostPort, cancellationToken).ConfigureAwait(false))
             {
                 this.Record("running", GpuFallbackProblem);
                 return;
@@ -114,8 +124,8 @@ public sealed partial class EmbeddingsSidecarLifecycle : IDisposable
         this.Record("failed", StartFailedProblem);
     }
 
-    private async Task<bool> StartAsync(bool useGpu, bool recreate, CancellationToken cancellationToken) =>
-        await this.runner.StartEmbeddingsAsync(useGpu, recreate, cancellationToken).ConfigureAwait(false)
+    private async Task<bool> StartAsync(bool useGpu, bool recreate, bool publishToHost, CancellationToken cancellationToken) =>
+        await this.runner.StartEmbeddingsAsync(useGpu, recreate, publishToHost, cancellationToken).ConfigureAwait(false)
         && await this.runner.IsEmbeddingsRunningAsync(cancellationToken).ConfigureAwait(false);
 
     private void Record(string state, string? problem) =>
@@ -124,8 +134,8 @@ public sealed partial class EmbeddingsSidecarLifecycle : IDisposable
     /// <inheritdoc />
     public void Dispose() => this.gate.Dispose();
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "memory enabled — converging cortex-embeddings on the {Placement}")]
-    private partial void LogStarting(string placement);
+    [LoggerMessage(Level = LogLevel.Information, Message = "memory enabled — converging cortex-embeddings on the {Placement} ({Exposure})")]
+    private partial void LogStarting(string placement, string exposure);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "memory disabled — stopping cortex-embeddings")]
     private partial void LogStopping();

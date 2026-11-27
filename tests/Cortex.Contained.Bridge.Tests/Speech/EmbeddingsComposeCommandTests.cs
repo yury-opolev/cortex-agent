@@ -10,7 +10,7 @@ public sealed class EmbeddingsComposeCommandTests
     [Fact]
     public void UpArguments_Cpu_UsesOnlyTheBaseFileAndWaitsForHealth()
     {
-        var args = DockerComposeCommandRunner.EmbeddingsUpArguments(Base, useGpu: false, recreate: false);
+        var args = DockerComposeCommandRunner.EmbeddingsUpArguments(Base, useGpu: false, recreate: false, publishToHost: false);
 
         Assert.Equal(
             $"compose -f \"{Base}\" --profile memory up -d --wait --wait-timeout {DockerComposeCommandRunner.EmbeddingsWaitSeconds} embeddings",
@@ -20,7 +20,7 @@ public sealed class EmbeddingsComposeCommandTests
     [Fact]
     public void UpArguments_Gpu_AddsTheOverrideFileNextToTheBaseFile()
     {
-        var args = DockerComposeCommandRunner.EmbeddingsUpArguments(Base, useGpu: true, recreate: false);
+        var args = DockerComposeCommandRunner.EmbeddingsUpArguments(Base, useGpu: true, recreate: false, publishToHost: false);
 
         Assert.StartsWith($"compose -f \"{Base}\" -f \"C:\\c\\docker-compose.embeddings-gpu.yml\" --profile memory up -d", args, StringComparison.Ordinal);
         Assert.EndsWith(" embeddings", args, StringComparison.Ordinal);
@@ -29,7 +29,7 @@ public sealed class EmbeddingsComposeCommandTests
     [Fact]
     public void UpArguments_Recreate_ForcesANewContainer()
     {
-        var args = DockerComposeCommandRunner.EmbeddingsUpArguments(Base, useGpu: false, recreate: true);
+        var args = DockerComposeCommandRunner.EmbeddingsUpArguments(Base, useGpu: false, recreate: true, publishToHost: false);
 
         Assert.Contains(" up -d --force-recreate --wait ", args, StringComparison.Ordinal);
     }
@@ -37,10 +37,30 @@ public sealed class EmbeddingsComposeCommandTests
     [Fact]
     public void UpArguments_AreScopedToTheEmbeddingsService()
     {
-        var args = DockerComposeCommandRunner.EmbeddingsUpArguments(Base, useGpu: true, recreate: true);
+        var args = DockerComposeCommandRunner.EmbeddingsUpArguments(Base, useGpu: true, recreate: true, publishToHost: false);
 
         Assert.DoesNotContain("reranker", args, StringComparison.Ordinal);
         Assert.DoesNotContain("--profile reranker", args, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void UpArguments_PublishToHost_AddsTheHostOverrideFileNextToTheBaseFile()
+    {
+        var args = DockerComposeCommandRunner.EmbeddingsUpArguments(Base, useGpu: false, recreate: false, publishToHost: true);
+
+        Assert.StartsWith($"compose -f \"{Base}\" -f \"C:\\c\\docker-compose.embeddings-host.yml\" --profile memory up -d", args, StringComparison.Ordinal);
+        Assert.DoesNotContain("embeddings-gpu", args, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void UpArguments_GpuAndPublishToHost_AddBothOverrideFiles()
+    {
+        var args = DockerComposeCommandRunner.EmbeddingsUpArguments(Base, useGpu: true, recreate: false, publishToHost: true);
+
+        Assert.StartsWith(
+            $"compose -f \"{Base}\" -f \"C:\\c\\docker-compose.embeddings-gpu.yml\" -f \"C:\\c\\docker-compose.embeddings-host.yml\" --profile memory up -d",
+            args,
+            StringComparison.Ordinal);
     }
 
     [Theory]

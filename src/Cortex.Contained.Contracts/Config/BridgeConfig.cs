@@ -72,6 +72,15 @@ public sealed class EmbeddingsSettingsConfig
     /// sidecar, and falls back to the CPU (reporting why) when the GPU start fails.
     /// </summary>
     public bool Gpu { get; set; }
+
+    /// <summary>
+    /// Publish the <c>cortex-embeddings</c> sidecar on the host's loopback interface, <c>127.0.0.1:11434</c>
+    /// (<c>Embeddings:PublishToHost</c>, default false = reachable from the cortex-internal network only).
+    /// When true the Bridge adds <c>docker-compose.embeddings-host.yml</c> to the compose commands for the
+    /// sidecar, so host-side tools (the standalone memory MCP server) can share the embedder. Every local
+    /// process can then call it; it is never published to the network.
+    /// </summary>
+    public bool PublishToHost { get; set; }
 }
 
 /// <summary>Reranker settings persisted on the Bridge host.</summary>
