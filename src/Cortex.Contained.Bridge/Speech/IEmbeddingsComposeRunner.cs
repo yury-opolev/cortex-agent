@@ -5,10 +5,11 @@ public interface IEmbeddingsComposeRunner
 {
     /// <summary>
     /// `docker compose [-f override] --profile memory up -d [--force-recreate] --wait embeddings`: the NVIDIA
-    /// override file is added only when <paramref name="useGpu"/> is true, <paramref name="recreate"/> forces a
-    /// new container (a changed placement). Waits for the container's healthcheck. Returns true on exit 0.
+    /// override file is added only when <paramref name="useGpu"/> is true, the loopback-port override only
+    /// when <paramref name="publishToHost"/> is true, <paramref name="recreate"/> forces a new container
+    /// (a changed placement or exposure). Waits for the container's healthcheck. Returns true on exit 0.
     /// </summary>
-    Task<bool> StartEmbeddingsAsync(bool useGpu, bool recreate, CancellationToken cancellationToken);
+    Task<bool> StartEmbeddingsAsync(bool useGpu, bool recreate, bool publishToHost, CancellationToken cancellationToken);
 
     /// <summary>`docker compose --profile memory stop embeddings`. Returns true on exit 0.</summary>
     Task<bool> StopEmbeddingsAsync(CancellationToken cancellationToken);
@@ -18,6 +19,9 @@ public interface IEmbeddingsComposeRunner
 
     /// <summary>True if the running container was created with a GPU device request (`docker inspect`).</summary>
     Task<bool> IsEmbeddingsOnGpuAsync(CancellationToken cancellationToken);
+
+    /// <summary>True if the running container was created with a published host port (`docker inspect`).</summary>
+    Task<bool> IsEmbeddingsPublishedToHostAsync(CancellationToken cancellationToken);
 
     /// <summary>
     /// The PROCESSOR column of `ollama ps` inside the container (for example <c>100% GPU</c>), or null when

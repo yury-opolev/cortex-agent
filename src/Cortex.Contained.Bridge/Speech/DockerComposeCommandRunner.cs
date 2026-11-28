@@ -33,6 +33,9 @@ public sealed partial class DockerComposeCommandRunner : IComposeCommandRunner, 
     /// <summary>The override that adds the NVIDIA device reservation to the embeddings service.</summary>
     internal const string EmbeddingsGpuOverrideFileName = "docker-compose.embeddings-gpu.yml";
 
+    /// <summary>The override that publishes the embeddings service on the host's loopback interface.</summary>
+    internal const string EmbeddingsHostOverrideFileName = "docker-compose.embeddings-host.yml";
+
     /// <summary>The compose wait plus headroom for the container to be created.</summary>
     private static readonly TimeSpan EmbeddingsStartTimeout = TimeSpan.FromSeconds(EmbeddingsWaitSeconds + 30);
 
@@ -113,23 +116,29 @@ public sealed partial class DockerComposeCommandRunner : IComposeCommandRunner, 
             cancellationToken);
 
     /// <inheritdoc />
-    public Task<bool> StartEmbeddingsAsync(bool useGpu, bool recreate, CancellationToken cancellationToken)
+    public Task<bool> StartEmbeddingsAsync(bool useGpu, bool recreate, bool publishToHost, CancellationToken cancellationToken)
         => this.RunCommandAsync(
-            EmbeddingsUpArguments(this.composeFilePath, useGpu, recreate),
+            EmbeddingsUpArguments(this.composeFilePath, useGpu, recreate, publishToHost),
             EmbeddingsStartTimeout,
             cancellationToken);
 
     /// <summary>
-    /// <c>up -d --wait</c> returns once the container's HEALTHCHECK (<c>ollama list</c>) passes. The GPU
-    /// override file lives next to the compose file (the Launcher syncs both) and is added only for the GPU.
+    /// <c>up -d --wait</c> returns once the container's HEALTHCHECK (<c>ollama list</c>) passes. The override
+    /// files live next to the compose file (the Launcher syncs them): the GPU one is added only for the GPU,
+    /// the host one only when the embedder is published on the host's loopback interface.
     /// </summary>
-    internal static string EmbeddingsUpArguments(string composeFilePath, bool useGpu, bool recreate)
+    internal static string EmbeddingsUpArguments(string composeFilePath, bool useGpu, bool recreate, bool publishToHost)
     {
+        var directory = Path.GetDirectoryName(composeFilePath) ?? string.Empty;
         var files = $"-f \"{composeFilePath}\"";
         if (useGpu)
         {
-            var overridePath = Path.Combine(Path.GetDirectoryName(composeFilePath) ?? string.Empty, EmbeddingsGpuOverrideFileName);
-            files += $" -f \"{overridePath}\"";
+            files += $" -f \"{Path.Combine(directory, EmbeddingsGpuOverrideFileName)}\"";
+        }
+
+        if (publishToHost)
+        {
+            files += $" -f \"{Path.Combine(directory, EmbeddingsHostOverrideFileName)}\"";
         }
 
         var force = recreate ? " --force-recreate" : string.Empty;
@@ -154,6 +163,15 @@ public sealed partial class DockerComposeCommandRunner : IComposeCommandRunner, 
             $"inspect {EmbeddingsContainerName} --format \"{{{{len .HostConfig.DeviceRequests}}}}\"",
             cancellationToken).ConfigureAwait(false);
         return int.TryParse(output?.Trim(), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var requests) && requests > 0;
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> IsEmbeddingsPublishedToHostAsync(CancellationToken cancellationToken)
+    {
+        var output = await this.CaptureAsync(
+            $"inspect {EmbeddingsContainerName} --format \"{{{{len .HostConfig.PortBindings}}}}\"",
+            cancellationToken).ConfigureAwait(false);
+        return int.TryParse(output?.Trim(), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var bindings) && bindings > 0;
     }
 
     /// <inheritdoc />

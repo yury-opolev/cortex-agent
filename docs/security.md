@@ -91,8 +91,9 @@ provider-side copies.
 
 With `History:Dense:Enabled` (on by default since 2026-11-22), transcript chunks of the history are sent to
 the embeddings sidecar. Only
-the in-compose `embeddings` service may receive them (no published host port, `OLLAMA_DEBUG=0`, internal
-network only); a remote embedder needs HTTPS and an API key, otherwise nothing is sent and dense search
+the in-compose `embeddings` service may receive them (no published host port unless the owner opts in with
+`embeddings: publishToHost: true`, which publishes it on `127.0.0.1` for host-side tools; `OLLAMA_DEBUG=0`,
+internal network only otherwise); a remote embedder needs HTTPS and an API key, otherwise nothing is sent and dense search
 reports `unavailable`. To stop history text leaving the agent process for the embedder, set
 `History__Dense__Enabled=false` (or switch **Dense embeddings for history** off on the Recall page);
 search then stays keyword-only. Inputs are sent with an explicit `num_ctx` and `truncate=false`. Vectors can leak

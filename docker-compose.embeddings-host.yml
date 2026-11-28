@@ -1,0 +1,10 @@
+# Opt-in loopback port for the embeddings sidecar. The Bridge adds this file with
+#   docker compose -f docker-compose.yml -f docker-compose.embeddings-host.yml ...
+# only when `embeddings: publishToHost: true` is set in cortex.yml. Host-side tools that share the
+# embedder (the standalone memory MCP server, which expects Ollama at http://localhost:11434) need it.
+# It binds 127.0.0.1 only: every local process can then call the embedder, the network never can.
+# The base file stays unpublished, so a normal install keeps the embedder on cortex-internal.
+services:
+  embeddings:
+    ports:
+      - "127.0.0.1:11434:11434"

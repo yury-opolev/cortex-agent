@@ -150,8 +150,9 @@ services:
         max-size: "10m"
         max-file: "3"
     # No published port: only containers on cortex-internal (the agent) reach the
-    # embedder. For a host-side debug session add a compose override that publishes
-    # 127.0.0.1:11434, and remove it again afterwards.
+    # embedder. The opt-in docker-compose.embeddings-host.yml publishes 127.0.0.1:11434
+    # for host-side tools; the Bridge layers it on only when `embeddings: publishToHost: true`
+    # is set in cortex.yml.
 
   # Cross-encoder reranker for hybrid history and memory search (episodic history,
   # increment 5). Built locally from docker/reranker by scripts/Build-RerankerImage.ps1

@@ -1100,7 +1100,8 @@ builder.Services.AddSingleton<Cortex.Contained.Bridge.Speech.SttSidecarLifecycle
 builder.Services.AddSingleton(sp => new Cortex.Contained.Bridge.Speech.EmbeddingsSidecarLifecycle(
     sp.GetRequiredService<Cortex.Contained.Bridge.Speech.IEmbeddingsComposeRunner>(),
     () => sp.GetRequiredService<BridgeConfig>().Embeddings.Gpu,
-    sp.GetRequiredService<ILogger<Cortex.Contained.Bridge.Speech.EmbeddingsSidecarLifecycle>>()));
+    sp.GetRequiredService<ILogger<Cortex.Contained.Bridge.Speech.EmbeddingsSidecarLifecycle>>(),
+    publishToHost: () => sp.GetRequiredService<BridgeConfig>().Embeddings.PublishToHost));
 // Recall page embeddings GPU switch: persists Embeddings:Gpu to cortex.yml, then recreates the sidecar on the chosen processor.
 builder.Services.AddSingleton(sp => new Cortex.Contained.Bridge.Recall.EmbeddingsGpuSwitch(
     sp.GetRequiredService<BridgeConfig>(),

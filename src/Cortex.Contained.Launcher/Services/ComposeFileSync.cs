@@ -10,8 +10,8 @@ internal static class ComposeFileSync
 {
     private const string FileName = "docker-compose.yml";
 
-    /// <summary>Compose overrides the Bridge layers on top of the base file (opt-in embeddings GPU).</summary>
-    private static readonly string[] OverrideFileNames = ["docker-compose.embeddings-gpu.yml"];
+    /// <summary>Compose overrides the Bridge layers on top of the base file (opt-in embeddings GPU, opt-in embeddings host port).</summary>
+    private static readonly string[] OverrideFileNames = ["docker-compose.embeddings-gpu.yml", "docker-compose.embeddings-host.yml"];
 
     /// <summary>
     /// Copies the bundled compose file and the bundled overrides over the stable copies; returns the path of

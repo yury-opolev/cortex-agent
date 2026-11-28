@@ -34,6 +34,9 @@
     <Content Include="..\..\docker-compose.embeddings-gpu.yml" Link="docker-compose.embeddings-gpu.yml">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+    <Content Include="..\..\docker-compose.embeddings-host.yml" Link="docker-compose.embeddings-host.yml">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 
   <ItemGroup>
