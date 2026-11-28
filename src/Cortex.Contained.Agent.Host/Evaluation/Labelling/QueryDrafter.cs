@@ -57,7 +57,7 @@ public sealed class QueryDrafter
     {
         ["lookup"] = "Write a question whose answer is in the snippet, in the snippet's language.",
         ["paraphrase"] = "Write a question whose answer is in the snippet but that shares NO content word with it: use synonyms and describe things indirectly.",
-        ["cross_language"] = "Write a question whose answer is in the snippet, in another language than the snippet (English if the snippet is not in English, otherwise Danish or Russian).",
+        ["cross_language"] = "Write a question in English whose answer is in the snippet. If the snippet is not in English, set category to cross_language (the assistant searches in English, so this is the realistic cross-language case); if the snippet is in English, write an ordinary question and set category to lookup.",
         ["temporal"] = "Write a question that asks about the snippet's content by when it happened (a period such as 'last spring' or 'in March'); set goldFilters.since and goldFilters.until to the period the question names, which must contain the message time.",
         ["identifier"] = "Write a question that uses the exact identifier from the snippet (a code, number with letters, file name or similar) as written.",
         ["enumeration"] = "Write a question that asks for all of several things mentioned across these messages (e.g. 'which … did we …'), so that at least two of the messages are needed for a complete answer.",
@@ -125,6 +125,7 @@ public sealed class QueryDrafter
         var allowed = this.memory ? RealMemoryCategories : RealHistoryCategories;
         var category = seed.Stratum == "real"
             ? (allowed.Contains(answer.Category ?? string.Empty, StringComparer.Ordinal) ? answer.Category! : "lookup")
+            : seed.Category == "cross_language" && answer.Category == "lookup" ? "lookup"
             : seed.Category;
         return answer with { Text = answer.Text!.Trim(), Category = category };
     }

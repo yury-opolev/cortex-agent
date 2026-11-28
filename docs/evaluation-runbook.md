@@ -53,17 +53,17 @@ dictionary approval* → `freeze` → `holdout --corpus frozen:vN` → `compare`
 | Setting (`Evaluation:Labelling:…`) | Default | |
 |---|---|---|
 | `QueryModel` / `JudgeModel` | `gpt-6.1-sol` / `claude-opus-5.5` | Different model families are required; both must be listed by a configured provider (the Bridge's `llmProviders`) |
-| `JudgeRubric` | *(empty: the default rubric)* | The judge's grading guidance (text; the JSON answer format is always appended). Its id (`default` or `sha256:<12 hex>`) is recorded in the label state, `label-report.json` and the analysis plan; a label job refuses to resume with another rubric. See [Judge calibration](#judge-calibration) |
+| `JudgeRubric` | calibrated rubric v3 (`sha256:b66795c09b47`, `JudgeRubrics.CalibratedV3`) | The judge's grading guidance (empty: the original default rubric) (text; the JSON answer format is always appended). Its id (`default` or `sha256:<12 hex>`) is recorded in the label state, `label-report.json` and the analysis plan; a label job refuses to resume with another rubric. See [Judge calibration](#judge-calibration) |
 | `HistoryQueries` / `MemoryQueries` | 520 / 270 | Drafted; a few are dropped after judging (Gate H for memory needs ≥ 250) |
 | `RealShare` | 0.3 | Largest share of real recall requests |
 | `KappaSample` | 75 | Items you grade, split by query count (50 history, 25 memory) |
-| `PoolDepth`, `JudgeBatchSize`, `MaxCandidatesPerQuery` | 10, 10, 60 | judged@10 coverage and judge batching |
-| `MaxCalls`, `MinCallIntervalMs`, `MaxAttempts` | 5000, 500, 4 | Hard cap per label job, pacing, retries with backoff |
+| `PoolDepth`, `JudgeBatchSize`, `MaxCandidatesPerQuery` | 10, 5, 60 | judged@10 coverage and judge batching (the first calibration found batches of 10 graded worse than single items) |
+| `MaxCalls`, `MinCallIntervalMs`, `MaxAttempts` | 8000, 500, 4 | Hard cap per label job, pacing, retries with backoff |
 
 Set them like any agent option (environment `Evaluation__Labelling__MaxCalls=8000`, or the agent's configuration file).
-`… -Tool history-eval -- label --estimate` prints the expected calls and hours. With the defaults a full run makes about 4,200 LLM
-calls (≈ 1,030 query-writer, ≈ 550 main-model and ≈ 2,600 judge calls; more judge calls when the pools are larger, up to the cap)
-and takes about 13–14 hours of LLM time plus the embedding runs: start it in the evening.
+`… -Tool history-eval -- label --estimate` prints the expected calls and hours. With the defaults a full run makes about 6,800 LLM
+calls (≈ 1,030 query-writer, ≈ 550 main-model and ≈ 5,200 judge calls; more judge calls when the pools are larger, up to the cap).
+The first run (batches of 10, about 4,600 calls) labelled in about 3 hours; with batches of 5 expect about 5–6 hours.
 
 **When it stops** the page says why and what to do; *Resume* (password) continues from the same step:
 - *κ below 0.6*: the judge disagrees with you too often. You can change grades until you press **Done**, which
@@ -107,7 +107,7 @@ boundary of **1** is ambiguous. Calibrate the judge on the items you already gra
    `default` is the built-in rubric.
 3. **Pilot judges × rubrics** on the calibration set (password prompt):
    ```powershell
-   .\scripts\Invoke-CortexEval.ps1 -Tool judge-calibration -- calibrate --models claude-opus-5.5,claude-sonnet-5.5,grok-4.7 --rubrics default,v2
+   .\scripts\Invoke-CortexEval.ps1 -Tool judge-calibration -- calibrate --models 'claude-opus-5.5,claude-sonnet-5.5,grok-4.7' --rubrics 'default,v2'
    ```
    Add `--estimate` first to print the items, combinations and LLM calls (items × models × rubrics; at most 6 models and
    4 rubrics; the whole calibration must fit `MaxCalls`, and every model must be listed by a provider — both are

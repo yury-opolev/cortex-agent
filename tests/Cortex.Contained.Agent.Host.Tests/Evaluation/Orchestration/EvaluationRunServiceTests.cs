@@ -178,7 +178,7 @@ public sealed class EvaluationRunServiceTests : IDisposable
         state = await this.UntilAsync(s => s.Waiting == RunWait.Dictionary);
         Assert.Equal(1.0, state.Kappa);
         Assert.Contains("pre-registered", await File.ReadAllTextAsync(Path.Combine(this.environment.HistoryWorkspace, "analysis-plan.md")), StringComparison.Ordinal);
-        Assert.Contains("(rubric `default`)", await File.ReadAllTextAsync(Path.Combine(this.environment.MemoryWorkspace, "analysis-plan.md")), StringComparison.Ordinal);
+        Assert.Contains("(rubric `sha256:b66795c09b47`)", await File.ReadAllTextAsync(Path.Combine(this.environment.MemoryWorkspace, "analysis-plan.md")), StringComparison.Ordinal);
         Assert.Equal("hybrid-rrf20", new EvalWorkspace(this.environment.HistoryWorkspace).ReadPlan().Holdout!.Config);
         Assert.Equal("hybrid-rrf20", new MemoryEvalWorkspace(this.environment.MemoryWorkspace).ReadPlan().Holdout!.Config);
         Assert.True(this.calls.IndexOf("history-eval register") < this.calls.IndexOf("history-eval holdout"));
