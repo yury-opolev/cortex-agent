@@ -49,8 +49,9 @@ public sealed partial class LabellerTests : IDisposable
         new(this.source, new LabellingLlm(this.fake, FakeLabellingLlm.ServesAll, options, new LabellingStateStore(this.root, this.protection).Load()?.Calls ?? 0, (_, _) => Task.CompletedTask),
             options, "main-model", this.root, this.protection, this.output);
 
+    // The original default rubric, so the provenance tests can tell "default" from a configured rubric.
     private static LabellingOptions Options(int maxCalls = 1000) =>
-        new() { MinCallIntervalMs = 0, MaxCalls = maxCalls, PoolDepth = 3, JudgeBatchSize = 2, MaxCandidatesPerQuery = 6, RealShare = 0.2 };
+        new() { MinCallIntervalMs = 0, MaxCalls = maxCalls, PoolDepth = 3, JudgeBatchSize = 2, MaxCandidatesPerQuery = 6, RealShare = 0.2, JudgeRubric = null };
 
     [Fact]
     public async Task RunAsync_Pipeline_WritesSealedDatasetKappaSampleAndCountsOnlyOutput()

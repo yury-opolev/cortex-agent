@@ -20,9 +20,10 @@ public sealed class LabellingOptions
 
     /// <summary>
     /// The judge's grading guidance (a calibrated rubric's text); null or blank is <see cref="RelevanceJudge.DefaultRubric"/>.
-    /// Its id (<see cref="RelevanceJudge.RubricId"/>) is recorded with the labels.
+    /// Its id (<see cref="RelevanceJudge.RubricId"/>) is recorded with the labels. Defaults to the calibrated
+    /// <see cref="JudgeRubrics.CalibratedV3"/>.
     /// </summary>
-    public string? JudgeRubric { get; set; }
+    public string? JudgeRubric { get; set; } = JudgeRubrics.CalibratedV3;
 
     /// <summary>History queries to draft (some are dropped after judging; §4.2 plans ~150 dev / 350 test).</summary>
     public int HistoryQueries { get; set; } = 520;
@@ -42,14 +43,14 @@ public sealed class LabellingOptions
     /// <summary>Most candidates graded per query.</summary>
     public int MaxCandidatesPerQuery { get; set; } = 60;
 
-    /// <summary>Candidates graded per judge call.</summary>
-    public int JudgeBatchSize { get; set; } = 10;
+    /// <summary>Candidates graded per judge call (5: the first calibration found batches of 10 graded worse than single items).</summary>
+    public int JudgeBatchSize { get; set; } = 5;
 
     /// <summary>Drafts per seed before it is given up (paraphrase guard, copy check, filters).</summary>
     public int MaxDraftAttempts { get; set; } = 3;
 
     /// <summary>Hard cap on LLM calls of one label job (all models); the job stops, resumable, when reached.</summary>
-    public int MaxCalls { get; set; } = 5000;
+    public int MaxCalls { get; set; } = 8000;
 
     /// <summary>Minimum time between two LLM calls (provider rate limits).</summary>
     public int MinCallIntervalMs { get; set; } = 500;

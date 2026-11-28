@@ -106,4 +106,8 @@ public sealed partial class RelevanceJudgeTests
         Assert.Equal(id, RelevanceJudge.RubricId("Grade 2 only for an exact answer."));
         Assert.NotEqual(id, RelevanceJudge.RubricId("Grade 2 only for a full answer."));
     }
+
+    [Fact]
+    public void RubricId_CalibratedV3_IsTheRubricThePilotMeasured() =>
+        Assert.Equal("sha256:b66795c09b47", RelevanceJudge.RubricId(JudgeRubrics.CalibratedV3));
 }
