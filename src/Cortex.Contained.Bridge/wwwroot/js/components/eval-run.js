@@ -100,14 +100,14 @@ function evalRunPanel() {
         },
 
         async startRun() {
-            if (this.start.fresh && !confirm("Delete the previous evaluation's datasets, registrations and runs (frozen versions and the dictionary stay)?")) return;
+            if (this.start.fresh && !(await Alpine.store("confirm").ask({ title: "Start fresh", message: "Delete the previous evaluation's datasets, registrations and runs? Frozen versions, the dictionary and the calibration sets stay.", confirmText: "Delete and start", danger: true }))) return;
             this.summary = null;
             await this.control("start", { password: this.start.password, fresh: this.start.fresh }, "Evaluation started");
             this.start.password = "";
         },
 
         async cancelRun() {
-            if (!confirm("Cancel the evaluation run? Its progress is kept; Resume continues it.")) return;
+            if (!(await Alpine.store("confirm").ask({ title: "Cancel evaluation", message: "Cancel the evaluation run? Its progress is kept; Resume continues it.", confirmText: "Cancel run", cancelText: "Keep running", danger: true }))) return;
             await this.control("cancel", {}, "Evaluation cancelled");
         },
 
@@ -179,7 +179,7 @@ function evalRunPanel() {
         // "Done": κ is computed and the grades are locked, so nothing can be tuned towards the gate afterwards.
         async submitGrading() {
             if (this.grading.busy || !this.run?.grading?.complete) return;
-            if (!confirm("Submit your grades? κ is computed now and your grades are locked: they cannot be changed afterwards.")) return;
+            if (!(await Alpine.store("confirm").ask({ title: "Submit grades", message: "Submit your grades? κ is computed now and your grades are locked: they cannot be changed afterwards.", confirmText: "Submit and lock" }))) return;
             this.grading.busy = true;
             try {
                 await this.gradingCall("submit");
@@ -215,7 +215,7 @@ function evalRunPanel() {
 
         onKey(event) {
             const item = this.grading.item;
-            if (!item || ["INPUT", "TEXTAREA", "SELECT"].includes(event.target?.tagName)) return;
+            if (!item || Alpine.store("confirm").open || ["INPUT", "TEXTAREA", "SELECT"].includes(event.target?.tagName)) return;
             if (["0", "1", "2"].includes(event.key)) { if (this.gradingLocked) return; event.preventDefault(); this.grade(Number(event.key)); }
             else if (event.key === "ArrowRight" || event.key === "s") { event.preventDefault(); this.showItem((item.index + 1) % item.total); }
             else if (event.key === "ArrowLeft" || event.key === "b") { event.preventDefault(); this.showItem(item.index - 1); }

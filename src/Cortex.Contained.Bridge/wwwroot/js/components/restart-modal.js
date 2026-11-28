@@ -43,9 +43,10 @@
 
         const modalEl = $modal();
         if (!modalEl || !window.bootstrap) {
-            // Fallback: confirm() if Bootstrap isn't loaded yet (shouldn't happen
-            // in production, but keeps unit-mode dev pages usable).
-            return Promise.resolve(window.confirm(reason + "\n\nRestart now?"));
+            // Fallback: the shared in-page dialog if Bootstrap isn't loaded yet (shouldn't happen in production).
+            return window.Alpine
+                ? window.Alpine.store("confirm").ask({ title: "Restart required", message: reason + "\n\nRestart now?", confirmText: "Restart" })
+                : Promise.resolve(false);
         }
 
         return new Promise((resolve) => {

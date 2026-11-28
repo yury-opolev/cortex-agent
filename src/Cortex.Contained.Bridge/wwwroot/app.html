@@ -178,6 +178,28 @@
             </div>
         </div>
 
+        <!-- Confirmation dialog (shared; js/components/confirm-dialog.js) -->
+        <div x-data x-show.important="$store.confirm.open" class="modal d-block" tabindex="-1" style="background: rgba(0,0,0,0.5); z-index: 1090;"
+             role="dialog" aria-modal="true" aria-labelledby="cortexConfirmTitle"
+             @keydown.escape.window="$store.confirm.open && $store.confirm.cancel()"
+             @click.self="$store.confirm.cancel()">
+            <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title" id="cortexConfirmTitle" x-text="$store.confirm.title"></h5>
+                        <button type="button" class="btn-close" aria-label="Close" @click="$store.confirm.cancel()"></button>
+                    </div>
+                    <div class="modal-body" style="white-space: pre-line;" x-text="$store.confirm.message"></div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary btn-sm" @click="$store.confirm.cancel()" x-text="$store.confirm.cancelText"></button>
+                        <button type="button" class="btn btn-sm" :class="$store.confirm.danger ? 'btn-danger' : 'btn-primary'"
+                                x-effect="$store.confirm.open && $nextTick(() => $el.focus())"
+                                @click="$store.confirm.accept()" x-text="$store.confirm.confirmText"></button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- ── Tenant Sub-Nav (shared across all /tenants/{id}/* pages) ── -->
         <template x-if="['tenant-settings','tenant-history','tenant-channel-history','tenant-memory','tenant-recall','tenant-storage'].includes($store.router.page)">
             <div x-data="tenantTabs()" class="container pt-3 pb-3" style="max-width: 860px;">
@@ -3340,6 +3362,7 @@
 <!-- Alpine components and stores (must load before Alpine) -->
 <script src="/js/components/api-helper.js"></script>
 <script src="/js/components/toast.js"></script>
+<script src="/js/components/confirm-dialog.js"></script>
 <script src="/js/components/layout.js"></script>
 <script src="/js/components/channel-helpers.js"></script>
 <script src="/js/components/recall-purge.js"></script>

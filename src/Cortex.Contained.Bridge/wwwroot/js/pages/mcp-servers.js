@@ -217,7 +217,7 @@ function mcpServersPage() {
         },
 
         async deleteServer(s) {
-            if (!confirm("Delete MCP server '" + s.key + "'? Its stored secret is removed too.")) {
+            if (!(await Alpine.store("confirm").ask({ title: "Delete MCP server", message: "Delete MCP server '" + s.key + "'? Its stored secret is removed too.", confirmText: "Delete", danger: true }))) {
                 return;
             }
             try {
