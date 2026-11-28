@@ -85,7 +85,7 @@ function connectorsPage() {
         },
 
         async revoke(c) {
-            if (!confirm("Revoke connector '" + c.channelId + "'? The connector will need to pair again.")) {
+            if (!(await Alpine.store("confirm").ask({ title: "Revoke connector", message: "Revoke connector '" + c.channelId + "'? The connector will need to pair again.", confirmText: "Revoke", danger: true }))) {
                 return;
             }
             try {

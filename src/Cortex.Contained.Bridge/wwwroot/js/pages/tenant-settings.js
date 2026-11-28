@@ -390,7 +390,7 @@ function tenantSettingsPage() {
         },
 
         async resetVoiceIdEnrollment() {
-            if (!window.confirm("Wipe the voiceprint and stop verification for this tenant?")) {
+            if (!(await Alpine.store("confirm").ask({ title: "Wipe voiceprint", message: "Wipe the voiceprint and stop verification for this tenant?", confirmText: "Wipe", danger: true }))) {
                 return;
             }
             this.savingVoiceId = true;

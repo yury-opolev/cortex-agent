@@ -215,7 +215,7 @@ function tenantRecallPage() {
         },
 
         async runBackfill() {
-            if (!confirm("Run the event backfill now? Recall and history deletions pause while it runs (usually seconds).")) return;
+            if (!(await Alpine.store("confirm").ask({ title: "Event backfill", message: "Run the event backfill now? Recall and history deletions pause while it runs (usually seconds).", confirmText: "Run backfill" }))) return;
             this.backfillRunning = true;
             try {
                 const r = await api.post(`/api/tenants/${encodeURIComponent(this.tenantId)}/history/event-backfill`);
